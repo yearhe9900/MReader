@@ -1,4 +1,7 @@
-// 入口：选择本地 EPUB -> 解析 -> 纵向滚动阅读。
+// 入口：两条互相独立的链路。
+//
+// 1. 阅读链路：选择本地 EPUB -> 解析 -> 纵向滚动阅读。
+// 2. 书源链路：导入 legado 书源 JSON -> 静态体检 -> 查看规则结构。
 //
 // 纯 Flutter 自绘：不使用 WebView / foliate-js，也不使用任何平台特定 API，
 // 因此同一份代码可以跑在 Android / iOS / Windows / macOS / Linux / Web 上。
@@ -8,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'epub/epub_parser.dart';
 import 'model/epub_book.dart';
 import 'ui/reader_page.dart';
+import 'ui/source/source_list_page.dart';
 
 void main() {
   runApp(const MReaderApp());
@@ -28,7 +32,7 @@ class MReaderApp extends StatelessWidget {
   }
 }
 
-/// 首页：一个「选择 EPUB」按钮 + 加载指示 + 可读的错误提示。
+/// 首页（验证台）：EPUB 阅读链路 + 书源解析链路，两个入口并列。
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -91,7 +95,7 @@ class _HomePageState extends State<HomePage> {
     final ThemeData theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('阅读M · EPUB 可行性验证')),
+      appBar: AppBar(title: const Text('阅读M · 可行性验证')),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -124,6 +128,23 @@ class _HomePageState extends State<HomePage> {
                   style: TextStyle(color: theme.colorScheme.error),
                 ),
               ],
+              const SizedBox(height: 40),
+              const Divider(),
+              const SizedBox(height: 16),
+              const Text(
+                '导入 legado 书源 JSON，静态体检 + 查看规则结构',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const SourceListPage(),
+                  ),
+                ),
+                icon: const Icon(Icons.rule_folder_outlined),
+                label: const Text('书源解析'),
+              ),
             ],
           ),
         ),
