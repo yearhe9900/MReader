@@ -1,0 +1,196 @@
+classDiagram
+    %% 阅读M · Rust 加速层集成架构 —— 类图（数据模型 + 服务类）
+    %% 对应 docs/architecture-rust-integration.md §A / §C / §D / §F
+
+    %% ============ 抽象层（纯 Dart，零平台依赖，契约唯一来源）============
+
+    class BookSource {
+        <<abstract>>
+        +String implId
+        +load() BookMeta
+        +chapters() List~Chapter~
+        +content(int chapterIndex) ChapterContent
+        +capabilities() SourceCapabilities
+        +search(String query, CancelToken cancel) Stream~SearchEvent~
+        +dispose() void
+    }
+
+    class BookMeta {
+        +String title
+        +String author
+        +String language
+        +Uint8List coverBytes
+        +String titleOrigin
+        +String authorOrigin
+        +String coverOrigin
+    }
+    class Chapter {
+        +String href
+        +String title
+        +int level
+        +String locate
+    }
+    class ChapterContent {
+        +List~String~ paragraphs
+        +List~String~ imagePages
+    }
+    class SourceCapabilities {
+        +bool hasImages
+        +bool hasFootnotes
+        +bool reflowable
+        +bool searchable
+        +bool charCountSupported
+    }
+    class CancelToken {
+        +bool isCancelled
+        +cancel() void
+    }
+    class SearchEvent {
+        <<union>>
+    }
+
+    BookSource ..> BookMeta : produces
+    BookSource ..> Chapter : produces
+    BookSource ..> ChapterContent : produces
+    BookSource ..> SourceCapabilities : produces
+    BookSource ..> SearchEvent : streams
+    BookSource ..> CancelToken : consumes
+
+    %% ============ 纯 Dart 实现（永久基线 + 回落路径）============
+
+    class DartEpubSource {
+        +parseEpub(bytes) EpubBook
+        +extractSection(bytes) ExtractedSection
+    }
+    class DartTxtSource {
+        +decodeText(bytes) String
+    }
+
+    BookSource <|.. DartEpubSource : implements
+    BookSource <|.. DartTxtSource : implements
+
+    %% ============ 加速层抽象（形制源自 lib/source/capability/，本文 §A.4）============
+
+    class HighPerfEngine {
+        <<abstract>>
+        +String id
+        +bool isAvailable
+        +probe() bool
+        +openSource(String path) OpenedBookHandle
+        +readChapterChunk(int handle, int idx, int offset, int maxLen) Uint8List
+        +search(int handle, String query) Stream~SearchEvent~
+        +cancel(int taskId) void
+        +dispose() void
+    }
+    class NullHighPerfEngine {
+        +id = "none"
+        +isAvailable = false
+        +probe() false
+    }
+    class RustHighPerfEngine {
+        +id = "rust"
+        +load() String
+    }
+    class HighPerfRegistry {
+        +bool? _probeOk
+        +Set~HighPerfCapability~ _degraded
+        +Map~HighPerfCapability,String~ _unavailableReasons
+        +fallback() HighPerfRegistry
+        +has(HighPerfCapability c) bool
+        +reasonFor(HighPerfCapability c) String
+        +warmUp() void
+        +describe() Map
+    }
+    class HighPerfCapability {
+        <<enumeration>>
+        mobiDecompress
+        epubDecompress
+        txtChapterize
+        fullTextSearch
+        bm25Index
+    }
+    class HighPerfError {
+        +HighPerfErrorKind kind
+        +String messageZh
+    }
+    class HighPerfErrorKind {
+        <<enumeration>>
+        io
+        encrypted
+        formatInvalid
+        missingContainer
+        cancelled
+        internal
+    }
+
+    HighPerfEngine <|.. NullHighPerfEngine : implements
+    HighPerfEngine <|.. RustHighPerfEngine : implements
+    HighPerfRegistry o-- HighPerfEngine : holds
+    HighPerfRegistry ..> HighPerfCapability : keyed by
+    HighPerfEngine ..> HighPerfError : raises
+    HighPerfError o-- HighPerfErrorKind
+
+    %% ============ Rust 实现的 BookSource（按探测结果分发）============
+
+    class RustEpubSource
+    class RustTxtSource
+    BookSource <|.. RustEpubSource : implements
+    BookSource <|.. RustTxtSource : implements
+    RustEpubSource --> RustHighPerfEngine : delegates
+    RustTxtSource --> RustHighPerfEngine : delegates
+
+    %% ============ 分发点 ============
+
+    class BookRegistry {
+        +open(String path, Uint8List head) BookSource
+        +sniff(String path, Uint8List head) FormatKind
+    }
+    BookRegistry --> HighPerfRegistry : queries has()
+    BookRegistry ..> BookSource : returns abstract
+    BookRegistry ..> DartEpubSource
+    BookRegistry ..> RustEpubSource
+    BookRegistry ..> DartTxtSource
+    BookRegistry ..> RustTxtSource
+
+    %% ============ 统一后台任务抽象（避免两套并发模型，§F）============
+
+    class BackgroundRunner {
+        <<abstract>>
+        +String id
+        +bool isAvailable
+        +run(BackgroundTask task)*
+    }
+    class IsolateBackgroundRunner {
+        +id = "isolate"
+        +isAvailable = true
+    }
+    class RustBackgroundRunner {
+        +id = "rust"
+        +isAvailable = HighPerfRegistry.has()
+    }
+    class BackgroundTask~T~ {
+        <<abstract>>
+        +String label
+        +int totalUnits
+        +run(TaskContext ctx) T
+    }
+    class TaskContext {
+        +bool isCancelled
+        +reportProgress(int done) void
+    }
+    class TaskHandle {
+        +Stream~double~ progress
+        +bool isCancelled
+        +cancel() void
+    }
+    class TaskRunnerRegistry {
+        +fallback() TaskRunnerRegistry
+    }
+    class TaskCancelledException
+
+    BackgroundRunner <|.. IsolateBackgroundRunner : implements
+    BackgroundRunner <|.. RustBackgroundRunner : implements
+    TaskRunnerRegistry o-- BackgroundRunner : selects
+    BackgroundTask ..> TaskContext : receives
+    TaskContext --> TaskHandle : drives
+    BackgroundTask ..> TaskCancelledException : throws

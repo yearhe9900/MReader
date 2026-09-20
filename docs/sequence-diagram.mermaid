@@ -1,0 +1,67 @@
+sequenceDiagram
+    autonumber
+    %% 阅读M · Rust 加速层 —— 关键调用时序（含回落路径）
+    %% 对应 docs/architecture-rust-integration.md §A / §C / §D / §G
+    participant U as 用户
+    participant UI as ReaderPage
+    participant REG as BookRegistry
+    participant HP as HighPerfRegistry
+    participant RUST as RustHighPerfEngine
+    participant LIB as librust_lib_mreader.so/.dll/.dylib
+    participant DART as DartEpubSource
+
+    Note over HP,LIB: ① 启动阶段（main.dart，仅探测一次，RUST-01）
+    UI->>HP: warmUp()
+    HP->>RUST: probe()
+    RUST->>LIB: DynamicLibrary.open()
+    alt 库存在 + 符号齐 + ABI 版本匹配
+        LIB-->>RUST: "mreader-ffi/1"
+        RUST-->>HP: true → _probeOk = true
+    else 未编译 / 符号缺失 / 版本不匹配 / 超时
+        LIB--xRUST: ArgumentError / 版本不符
+        RUST-->>HP: false → reasonFor 记中文原因
+    end
+
+    Note over U,DART: ② 打开一本书（运行期，不再探测）
+    U->>UI: 选择文件
+    UI->>REG: open(path, head)
+    REG->>REG: sniff() → FormatKind.epub
+    alt has(epubDecompress)
+        REG-->>UI: RustEpubSource
+        UI->>RUST: openSource(path)
+        RUST->>LIB: open_source(path) [ffi_guard/catch_unwind]
+        LIB-->>RUST: Ok(OpenedBook) / Err(HighPerfError) / panic
+        opt Err 或 panic
+            RUST-->>UI: HighPerfException（中文，不暴露给用户）
+            UI->>REG: 回落重试
+            REG-->>UI: DartEpubSource
+            UI->>DART: parseEpub()
+        end
+    else !has(...) 或 MRUN_FORCE_PURE_DART
+        REG-->>UI: DartEpubSource（RUST-01 ②）
+    end
+
+    Note over UI,DART: ③ 正文分块拉取（RUST-03，单块 ≤ 1MB）
+    loop 每块 256KB
+        UI->>RUST: readChapterChunk(handle, idx, offset, 256KB)
+        RUST-->>UI: Uint8List (assertChunkSize)
+    end
+
+    Note over UI,LIB: ④ 全书搜索：可取消 + 进度（RUST-05 / CNT-06）
+    UI->>RUST: search_start(handle, query)
+    RUST->>LIB: CancelFlag 创建
+    loop 章节边界（节流 ≥1% 或 ≥100ms）
+        LIB-->>RUST: Progress{done,total} / Hit{ snippet }
+        RUST-->>UI: Stream → TaskHandle.progress
+    end
+    U->>UI: 取消
+    UI->>RUST: cancel(taskId)
+    RUST->>LIB: AtomicBool.store(true)
+    LIB-->>RUST: 检查点命中 → Err(Cancelled)
+    Note over RUST,LIB: RAII 自动释放，不留后台线程
+    RUST-->>UI: Cancelled → UI 恢复可用
+
+    Note over UI,LIB: ⑤ 构建期（无 cargo 时）
+    UI->>LIB: flutter build
+    LIB-->>UI: 无 cargo → 平台 guard 跳过 Rust 编译
+    Note over UI,LIB: 产品仍可用：probe()=false → 走纯 Dart（RUST-07）
