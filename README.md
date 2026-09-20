@@ -4,12 +4,12 @@
 > **不用 WebView / foliate-js，纯 Dart 解析 EPUB + 纯 Flutter Widget 排版，能不能把一本本地 EPUB 打开、并纵向连续滚动读下去？**
 
 - 渲染路线：**纯 Flutter 自绘**（Dart 解析 + Flutter Widget 渲染），无 WebView。
-- 目标平台：**全平台**（Android / iOS / Windows / macOS / Linux / Web），**未使用任何平台特定 API**。
+- 目标平台：**五平台**（Android / iOS / Windows / macOS / Linux）。平台能力差异按 PRD §15.3 的「诚实降级表」处理，不再宣称「未使用任何平台特定 API」。
 - 交互：**纵向连续滚动**，无横向翻页 / 仿真翻页。
 - 状态管理：`StatefulWidget` + `setState`，无 Riverpod / Provider / Freezed / 代码生成。
 - 字体：使用系统默认字体，**未向工程内塞任何字体文件**（中文由系统字体提供）。
 
-> 📌 **工程骨架说明（仅工具链层面）**：平台目录（`android/` `ios/` `windows/` `macos/` `linux/` `web/`）
+> 📌 **工程骨架说明（仅工具链层面）**：平台目录（`android/` `ios/` `windows/` `macos/` `linux/`）
 > **已存在**，无需再 `flutter create`；Dart 包名 `mreader`，Android/iOS/macOS bundle id `com.mreader.app`。
 > 下文第三节的 `flutter create` 步骤仅作历史记录保留。
 >
@@ -50,7 +50,7 @@ MReader/
         └── analyze_fixtures.py        # 用真实字节独立复算关键算法（Python 参照模型）
 ```
 
-（`android/ ios/ windows/ macos/ linux/ web/` 等目录由 `flutter create` 生成，不属于源码。）
+（`android/ ios/ windows/ macos/ linux/` 等目录由 `flutter create` 生成，不属于源码。）
 
 ### 分层设计要点
 
@@ -65,17 +65,17 @@ MReader/
 
 | 依赖 | 版本 | 为什么需要它 |
 |---|---|---|
-| `file_picker` | `^8.1.2` | 选择本地文件。**全平台（含 Web）可用**。若直接用 `dart:io` 读路径，Web 端会编译失败，且各平台沙箱策略不同。 |
-| `archive` | `^3.6.1` | EPUB 本质是 zip，需要解压。**用 `archive/archive.dart` 分支**（不 import `dart:io`），Web 可用。**固定在 3.x**：4.x 改了 `ArchiveFile` 的 API（`content` 被 `readBytes()` 取代）。 |
+| `file_picker` | `^8.1.2` | 选择本地文件（Android/iOS/Windows/macOS/Linux）。不直接用 `dart:io` 读路径：各平台沙箱策略不同，统一走 bytes。 |
+| `archive` | `^3.6.1` | EPUB 本质是 zip，需要解压。**用 `archive/archive.dart` 分支**（不 import `dart:io`，让核心解析链路保持可纯 Dart 单测）。**固定在 3.x**：4.x 改了 `ArchiveFile` 的 API（`content` 被 `readBytes()` 取代）。 |
 | `xml` | `^6.5.0` | `META-INF/container.xml` 和 OPF 是**严格 XML**。虽然"容器"是 HTML 解析器也能糊弄，但 OPF 的命名空间/属性解析用真 XML 解析器才稳。 |
-| `path` | `^1.9.0` | 用 `p.posix` 做**包内路径归一化**（处理 `../`、`./`、重复斜杠）。纯字符串运算，Web 安全；不用手写字符串拼接。 |
+| `path` | `^1.9.0` | 用 `p.posix` 做**包内路径归一化**（处理 `../`、`./`、重复斜杠）。纯字符串运算；不用手写字符串拼接。 |
 | `html` | `^0.15.4` | 把 XHTML 解析成 DOM 好遍历。**它的"宽松解析"正是我们要的**：真实 EPUB 的 XHTML 常年不合法（未闭合标签、裸 `&`），`xml` 包遇到这种直接抛异常，`html` 包能扛过去。 |
 | `charset` | `^2.0.1` | 中文老 EPUB 大量用 **GBK/GB2312/GB18030**，Dart 标准库只有 UTF-8/Latin-1。用它做解码兜底（纯 Dart，全平台）。 |
 | `flutter_lints` | `^6.0.0` | 仅 dev 依赖，给 `analysis_options.yaml` 用。 |
 
 > 依赖闭包（`collection` / `meta` / `petitparser` / `csslib` / `source_span` / `win32` / `ffi` / `web` / `plugin_platform_interface` / `lints`）在本机 pub cache 中**均已存在**，`flutter pub get` 可离线成功。
 >
-> `test/epub_fixtures_test.dart` 会用 `dart:io` 读 `test/fixtures/` 下的文件。**这不违反"全平台"约束**：`dart:io` 只出现在 **test/**（仅在 VM 上跑），`lib/` 源码里没有 `dart:io`，Web 构建不受影响。
+> `test/epub_fixtures_test.dart` 会用 `dart:io` 读 `test/fixtures/` 下的文件。`dart:io` 只出现在 **test/**（仅在 VM 上跑），`lib/` 源码里没有 `dart:io`。
 
 ---
 
@@ -92,10 +92,10 @@ cd /d D:\Projects\MReader
 
 > `cmd` 里如果当前在别的盘符，必须带 `/d`。PowerShell 用 `cd D:\Projects\MReader` 即可。
 
-### 1) 生成全平台工程骨架（⚠️ 有两个坑）
+### 1) 生成五平台工程骨架（⚠️ 有两个坑）
 
 ```bat
-flutter create --project-name mreader --platforms=windows,android,ios,macos,linux,web .
+flutter create --project-name mreader --platforms=windows,android,ios,macos,linux .
 ```
 
 **坑 1 — 建议显式给 `--project-name`（避免依赖 pubspec 的隐式行为）。**
@@ -109,7 +109,7 @@ flutter create --project-name mreader --platforms=windows,android,ios,macos,linu
 - 因此：**显式 `--project-name mreader` 最稳**（无论 pubspec 在不在都不会踩坑），也是本文档推荐的写法。
 
 **坑 2 — `--platforms` 不能省。**
-省掉时，部分环境下只会生成 android/ios/web，桌面目录不会出现，后面 `flutter run -d windows` 就会报 `No supported devices`。
+省掉时，部分环境下只会生成 android/ios，桌面目录不会出现，后面 `flutter run -d windows` 就会报 `No supported devices`。
 
 **🔴 坑 3（最重要）— 千万不要加 `--overwrite`。**
 `flutter create` 对已存在的工程是"**只补缺失文件**"的语义（官方帮助原文：*If run on a project that already exists, this will repair the project, recreating any files that are missing*）。它**默认不会覆盖已存在的文件**。
@@ -227,10 +227,9 @@ flutter test
 | `Target of URI doesn't exist: package:flutter_lints/flutter_lints.yaml` | `analysis_options.yaml` 里的文件名写错了。**flutter_lints 的规则文件名是 `flutter.yaml`，不是 `flutter_lints.yaml`**（4.x 和 6.x 都叫 `flutter.yaml`）。本工程已写对。 |
 | 中文显示成 □□□ | 系统缺中文字体（Linux 常见）→ `sudo apt install fonts-noto-cjk`。Windows / macOS 自带。 |
 | `Because mreader requires SDK version ^3.12.2 ...` | Flutter 版本过旧 → 用 Flutter 3.44.9-stable（内置 Dart 3.12.2），本机在 `C:\src\flutter`。 |
-| 选文件后提示"未能读取文件内容（bytes 为空）" | 某些平台 `withData` 未生效。本工程已固定 `withData: true`（Web 必需）。若仍失败，可把 `FileType.custom` 换成 `FileType.any` 试试。 |
+| 选文件后提示"未能读取文件内容（bytes 为空）" | 某些平台 `withData` 未生效。本工程已固定 `withData: true`。若仍失败，可把 `FileType.custom` 换成 `FileType.any` 试试。 |
 | `flutter create` 之后 `lib/main.dart` 变成了计数器 demo | 你加了 `--overwrite`。删掉平台目录后，**去掉 `--overwrite`** 重跑；`lib/main.dart` 从本工程的副本还原。（注意 `--overwrite` 还会一起覆盖 `analysis_options.yaml`、`README.md`、`.gitignore`。） |
 | `error: "archive" ... version solving failed` | `archive` 被抬到了 4.x。本项目必须 `^3.6.1`（4.x 的 `ArchiveFile` API 不兼容）。 |
-| Web 上选中文件后 path 为 null | 正常现象。本工程只用 `bytes`，不依赖 `path`。 |
 
 ---
 

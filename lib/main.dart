@@ -3,8 +3,8 @@
 // 1. 阅读链路：选择本地 EPUB -> 解析 -> 纵向滚动阅读。
 // 2. 书源链路：导入 legado 书源 JSON -> 静态体检 -> 查看规则结构。
 //
-// 纯 Flutter 自绘：不使用 WebView / foliate-js，也不使用任何平台特定 API，
-// 因此同一份代码可以跑在 Android / iOS / Windows / macOS / Linux / Web 上。
+// 纯 Flutter 自绘：不使用 WebView / foliate-js。
+// 目标平台：Android / iOS / Windows / macOS / Linux（平台能力差异按 PRD §15.3 降级表处理）。
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -50,8 +50,7 @@ class _HomePageState extends State<HomePage> {
       final FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: const <String>['epub'],
-        // Web 没有真实文件路径，必须让插件把内容读进 bytes；
-        // 桌面/移动端也统一走 bytes，省得再引 dart:io（会导致 Web 编译失败）。
+        // 统一走 bytes：避免引 dart:io，让核心解析链路保持可纯 Dart 单测。
         withData: true,
       );
       if (result == null || result.files.isEmpty) {

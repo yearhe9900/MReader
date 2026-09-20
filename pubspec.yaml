@@ -11,14 +11,14 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # 选择本地 EPUB 文件。全平台（含 Web）可用，避免直接用 dart:io 导致 Web 编译失败。
+  # 选择本地 EPUB 文件（Android/iOS/Windows/macOS/Linux）。
   file_picker: ^8.1.2
-  # 解压 EPUB（本质就是 zip）。用 archive.dart 分支：不依赖 dart:io，Web 也能跑。
+  # 解压 EPUB（本质就是 zip）。
   # 注意：固定在 3.x，因为 4.x 改了 ArchiveFile 的 API。
   archive: ^3.6.1
   # 解析 META-INF/container.xml 与 OPF（严格 XML，必须用真 XML 解析器）。
   xml: ^6.5.0
-  # 路径拼接与 '../' 归一化（posix 语义，纯字符串处理，Web 安全）。
+  # 路径拼接与 '../' 归一化（posix 语义，纯字符串处理）。
   path: ^1.9.0
   # 解析 XHTML。真实 EPUB 的 XHTML 很脏，html 包的宽松解析比 xml 包更能扛。
   html: ^0.15.4
