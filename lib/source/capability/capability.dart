@@ -100,24 +100,36 @@ class ScriptRequest {
 /// 脚本求值结果。
 ///
 /// 三个命名构造对应三种终态：成功 / 报错 / 能力缺失。
-/// [isOk] 为真表示拿到了可用结果（既无错误、也无缺失桥接）。
+/// [isOk] 为真**仅当**由 [ScriptResult.ok] 构造 —— 注意允许
+/// `value == null`（JS 返回 null/undefined 在书源求值里合法且常见）。
 class ScriptResult {
   /// 成功。
   const ScriptResult.ok(this.value)
       : error = null,
-        missingBindings = const <ScriptBinding>[];
+        missingBindings = const <ScriptBinding>[],
+        _success = true;
 
   /// 求值失败（引擎报错、超时等）。
+  ///
+  /// [error] 必须非空 —— 「失败却没有原因」不是一个合法状态。
   const ScriptResult.error(this.error)
-      : value = null,
-        missingBindings = const <ScriptBinding>[];
+      : assert(error != null, 'error 构造必须带非空错误信息'),
+        value = null,
+        missingBindings = const <ScriptBinding>[],
+        _success = false;
 
   /// 能力缺失（如无引擎 / 缺少某项桥接）。
+  ///
+  /// [missingBindings] 约定非空 —— 「能力缺失却没缺什么」不是一个合法状态，
+  /// 该约定由 [isOk]（恒为 false）兜底。此处**不加 `assert(…isNotEmpty)`**：
+  /// 它是 `const` 构造，而 `List.length`/`isNotEmpty` 不是常量可求值表达式，
+  /// 加了会让 `const ScriptResult.unsupported(<...>[...])` 编译失败。
   const ScriptResult.unsupported(this.missingBindings)
       : value = null,
-        error = null;
+        error = null,
+        _success = false;
 
-  /// 结果值（[ScriptResult.ok] 时可能有值）。
+  /// 结果值（[ScriptResult.ok] 时可能有值，`null` 合法）。
   final Object? value;
 
   /// 错误信息（[ScriptResult.error] 时非空）。
@@ -126,6 +138,12 @@ class ScriptResult {
   /// 缺失的桥接能力（[ScriptResult.unsupported] 时非空）。
   final List<ScriptBinding> missingBindings;
 
+  /// 是否由 [ScriptResult.ok] 构造。
+  ///
+  /// 刻意用**显式标志**而不是「`error == null && missingBindings.isEmpty` 推导」——
+  /// 后者有退化空洞：`error(null)` / `unsupported(<...>[])` 会被误报成成功。
+  final bool _success;
+
   /// 是否求值成功。
-  bool get isOk => error == null && missingBindings.isEmpty;
+  bool get isOk => _success;
 }

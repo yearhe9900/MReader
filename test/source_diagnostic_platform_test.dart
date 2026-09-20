@@ -2,7 +2,8 @@
 //
 // 核心设计原则要在这里被**断言锁死**：
 //   换平台时第 1 层结果不变 —— 第 1 层是「事实」，第 2 层才是「当前环境下的结论」。
-// 夹具用真实书源 shenshi.json（25 个已配置字段中 10 个依赖 JS）。
+// 夹具用真实书源 shenshi.json（25 个已配置字段中 15 个依赖 JS：
+// 10 个「规则/URL 含 JS」+ 5 个 `kind==js`（内容直接就是 JS）字段）。
 import 'dart:convert';
 import 'dart:io';
 
@@ -58,9 +59,12 @@ ParsedField fieldOf(SourceDiagnostic d, String key) =>
 DiagnosticFinding jsBlockerOf(SourceDiagnostic d) => d.findings
     .firstWhere((DiagnosticFinding f) => f.title.contains('依赖 JS 引擎'));
 
-/// 只由「等级 + 标题」构成签名 —— 用来对比第 1 层是否被平台层改动。
+/// 由「等级 + 标题 + 详情」构成签名 —— 用来对比第 1 层是否被平台层改动。
+///
+/// 必须纳入 `detail`：只比 `level|title` 时，「detail 被平台层污染」根本测不出来，
+/// 断言会比看起来弱。
 String titleSig(SourceDiagnostic d) => d.findings
-    .map((DiagnosticFinding f) => '${f.level.index}|${f.title}')
+    .map((DiagnosticFinding f) => '${f.level.index}|${f.title}|${f.detail}')
     .join('\n');
 
 void main() {
@@ -70,8 +74,8 @@ void main() {
 
       expect(d.fields, hasLength(52));
       expect(d.configuredFieldCount, 25);
-      expect(d.jsFieldCount, 10);
-      expect(d.jsFreeFields, hasLength(15));
+      expect(d.jsFieldCount, 15);
+      expect(d.jsFreeFields, hasLength(10));
       expect(d.findings, hasLength(12));
       expect(d.findingsOf(DiagnosticLevel.blocker), hasLength(2));
       expect(d.legadoApis, hasLength(28));
@@ -93,7 +97,7 @@ void main() {
       final DiagnosticFinding f = jsBlockerOf(d);
 
       expect(f.level, DiagnosticLevel.blocker);
-      expect(f.title, '依赖 JS 引擎：10/25 个已配置字段含 JS');
+      expect(f.title, '依赖 JS 引擎：15/25 个已配置字段含 JS');
       expect(f.detail, contains('当前 demo 无 JS 引擎'));
       expect(f.detail, contains('参考实现用 flutter_js 承载'));
     });
@@ -108,15 +112,15 @@ void main() {
       CapabilityRegistry(script: _FakeEngine()),
     );
 
-    test('无引擎：10 个 JS 字段全部降级', () {
+    test('无引擎：15 个 JS 字段全部降级', () {
       expect(noEngine.hasPlatformLayer, isTrue);
       expect(noEngine.evaluations, hasLength(52));
-      expect(noEngine.jsUnavailableFieldCount, 10);
+      expect(noEngine.jsUnavailableFieldCount, 15);
       expect(noEngine.jsRequiredFieldCount, 0);
     });
 
-    test('有引擎：10 个 JS 字段变为 jsRequired', () {
-      expect(withEngine.jsRequiredFieldCount, 10);
+    test('有引擎：15 个 JS 字段变为 jsRequired', () {
+      expect(withEngine.jsRequiredFieldCount, 15);
       expect(withEngine.jsUnavailableFieldCount, 0);
     });
 
@@ -172,7 +176,7 @@ void main() {
       final DiagnosticFinding f = jsBlockerOf(d);
 
       expect(f.level, DiagnosticLevel.blocker);
-      expect(f.title, '依赖 JS 引擎：10/25 个已配置字段含 JS');
+      expect(f.title, '依赖 JS 引擎：15/25 个已配置字段含 JS');
       expect(f.detail, contains('本平台不可用'));
       expect(f.detail, contains('纯规则源'));
       expect(f.detail, contains('本平台无 JS 引擎'));

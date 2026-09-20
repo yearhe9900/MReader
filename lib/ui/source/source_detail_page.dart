@@ -317,14 +317,22 @@ class _PlatformCapabilityPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final bool jsAvailable = registry.has(Capability.script);
+
+    // **单一数据源**：优先用体检自带的 evaluator（它与 diagnostic.evaluations 同源），
+    // 仅当 diagnostic 只带第 1 层结果（evaluator 为 null）时才退回外部注入的 registry。
+    // 否则会出现「徽标按 evaluations 显示可跑、底部文案按另一个 registry 显示引擎缺失」
+    // 的自相矛盾。
+    final RuleEvaluator evaluator =
+        diagnostic.evaluator ?? RuleEvaluator(registry);
+    final CapabilityRegistry effectiveRegistry = evaluator.registry;
+    final bool jsAvailable = effectiveRegistry.has(Capability.script);
 
     // 优先用体检时算好的平台结论；若详情页拿到的是第 1 层结果
-    // （`inspect`，evaluations 为空），就地按注入的 registry 补算。
+    // （`inspect`，evaluations 为空），就地按同一个 evaluator 补算。
     final Map<ParsedField, FieldEvaluation> evaluations =
         diagnostic.evaluations.isNotEmpty
             ? diagnostic.evaluations
-            : _evaluateAll(RuleEvaluator(registry), diagnostic.fields);
+            : _evaluateAll(evaluator, diagnostic.fields);
 
     int countOf(EvaluationOutcome outcome) => evaluations.values
         .where((FieldEvaluation e) => e.outcome == outcome)
@@ -357,7 +365,7 @@ class _PlatformCapabilityPanel extends StatelessWidget {
             _Tag(text: overall, tone: tone),
             _Tag(
               text: jsAvailable
-                  ? '脚本引擎：${registry.script.label}'
+                  ? '脚本引擎：${effectiveRegistry.script.label}'
                   : '脚本引擎：缺失',
               tone: jsAvailable ? _TagTone.ok : _TagTone.warn,
             ),
@@ -381,7 +389,7 @@ class _PlatformCapabilityPanel extends StatelessWidget {
     );
   }
 
-  /// 按注入的 registry 逐字段求平台结论。
+  /// 按给定 evaluator 逐字段求平台结论。
   static Map<ParsedField, FieldEvaluation> _evaluateAll(
     RuleEvaluator evaluator,
     List<ParsedField> fields,

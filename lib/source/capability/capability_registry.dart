@@ -17,6 +17,8 @@
 //
 // 本文件不依赖 Flutter。
 
+import 'dart:async';
+
 import 'capability.dart';
 import 'null_script_capability.dart';
 import 'script_capability.dart';
@@ -24,19 +26,24 @@ import 'script_capability.dart';
 /// 能力注册表。
 ///
 /// 它是一次「本平台有什么能力」的快照：脚本能力走注入的实现，
-/// 其余能力走静态集合。**不可变**（除 [warmUp] 写入的失败原因外），
-/// 也不提供全局单例 —— 由调用方显式持有并传递。
+/// 其余能力走静态集合。**除 [warmUp] 会写入探测结果与失败原因外，本类无可变行为**；
+/// [warmUp] 一旦执行即幂等（见其文档）。也不提供全局单例 —— 由调用方显式持有并传递。
 class CapabilityRegistry {
   /// 构造一个注册表。
   ///
   /// [script] 缺省为 [NullScriptCapability]（无引擎）；
   /// [extra] 缺省只含 [Capability.network]（纯 Dart 的 HTTP 六平台可用）。
+  ///
+  /// [extra] 会被**防御性拷贝**成不可变集合 —— 调用方之后再 mutate 自己传入的
+  /// 同一个 `Set` 不会影响本注册表，兑现「快照」语义。
   CapabilityRegistry({
     ScriptCapability? script,
     Set<Capability>? extra,
     Map<Capability, String>? unavailableReasons,
   })  : _script = script ?? const NullScriptCapability(),
-        _extra = extra ?? <Capability>{Capability.network} {
+        _extra = Set<Capability>.unmodifiable(
+          extra ?? const <Capability>{Capability.network},
+        ) {
     if (unavailableReasons != null && unavailableReasons.isNotEmpty) {
       _unavailableReasons.addAll(unavailableReasons);
     }
@@ -47,9 +54,17 @@ class CapabilityRegistry {
   /// 供默认值与测试使用；需要真实能力时请显式构造并注入实现。
   static CapabilityRegistry fallback() => CapabilityRegistry();
 
+  /// 引擎探测的超时上限。
+  ///
+  /// 取值理由：引擎初始化（加载 QuickJS/JSC、建运行时）在正常设备上是**毫秒级**；
+  /// 5s 已是极宽裕的上限，超时基本可判定为引擎卡死。设上限的目的正是兑现
+  /// 「绝不阻塞启动」的承诺 —— 鸿蒙 `flutter_js_ohos` 卡死是我们的实际风险场景。
+  static const Duration probeTimeout = Duration(seconds: 5);
+
   final ScriptCapability _script;
 
   final Set<Capability> _extra;
+
 
   /// 不可用原因（构造时预置 + [warmUp] 探测失败写入，探测成功时移除）。
   final Map<Capability, String> _unavailableReasons = <Capability, String>{};
@@ -86,21 +101,29 @@ class CapabilityRegistry {
   /// 探针：初始化引擎、**翻转可用状态**并记录失败原因。
   ///
   /// `main.dart` 启动时调用一次。**绝不抛异常、绝不阻塞启动**：
-  ///   · `probe()` 返回 false / 抛异常 → `_scriptProbeOk = false`
-  ///     （于是 [has]`(Capability.script)` 立即翻为 false，降级生效）并写原因；
-  ///   · `probe()` 通过 → `_scriptProbeOk = true` 并**移除**过时的不可用原因。
+  ///   · 幂等 —— 已探测过（`_scriptProbeOk != null`）则直接返回，重复调用不会
+  ///     再次探测，抖动探针也无法把结论翻回来（与「启动时调用一次」语义对齐）；
+  ///   · [ScriptCapability.isAvailable] 为 false 时直接返回（无可探测对象）；
+  ///   · `probe()` 通过 → `_scriptProbeOk = true` 并**移除**过时的不可用原因；
+  ///   · `probe()` 返回 false → `_scriptProbeOk = false`（[has] 立即翻为 false）并记原因；
+  ///   · `probe()` 超时 / 抛异常 → 同上，但原因分别记为「探测超时」/「初始化异常」。
   ///
   /// 所以它同时影响 [has] 与 [reasonFor] —— 调用方应在读取能力结论前调用它。
   Future<void> warmUp() async {
     if (!_script.isAvailable) return;
+    if (_scriptProbeOk != null) return; // 幂等：已探测过
     try {
-      if (await _script.probe()) {
+      if (await _script.probe().timeout(probeTimeout)) {
         _scriptProbeOk = true;
         _unavailableReasons.remove(Capability.script);
       } else {
         _scriptProbeOk = false;
         _unavailableReasons[Capability.script] = '引擎探测失败';
       }
+    } on TimeoutException {
+      _scriptProbeOk = false;
+      _unavailableReasons[Capability.script] =
+          '引擎探测超时（>${probeTimeout.inSeconds}s）';
     } catch (error) {
       _scriptProbeOk = false;
       _unavailableReasons[Capability.script] = '引擎初始化异常：$error';

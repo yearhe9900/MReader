@@ -142,7 +142,21 @@ class ParsedField {
   bool get isConfigured => raw.trim().isNotEmpty;
 
   /// 该字段是否依赖 JS。
-  bool get usesJs => (rule?.usesJs ?? false) || (url?.usesJs ?? false);
+  ///
+  /// 三种来源，任一成立即为真：
+  ///   1. `kind == SourceFieldKind.js` —— 字段「内容直接就是 JS 代码」
+  ///      （构造时 `needsRule/needsUrl` 皆 false，故 `rule`/`url` 均为 null，
+  ///      不显式计入就会被误判为「纯静态可跑」）；
+  ///   2. 规则含 JS；
+  ///   3. URL 含 JS。
+  ///
+  /// 与 `isConfigured` 的关系：未配置的字段不记为「依赖 JS」（它没有内容可依赖），
+  /// 这与 [SourceDiagnostic.jsFieldCount] / [jsFreeFields] 均按 `isConfigured` 过滤保持一致。
+  bool get usesJs =>
+      isConfigured &&
+      (kind == SourceFieldKind.js ||
+          (rule?.usesJs ?? false) ||
+          (url?.usesJs ?? false));
 
   /// 提取给 [RuleEvaluator] 判定的静态事实。
   ///
@@ -236,8 +250,10 @@ class SourceDiagnostic {
 
   /// 按字段的平台评估结果（第 2 层）。[inspect] 时为空表。
   ///
-  /// 键是 [fields] 中的**同一实例**（[ParsedField] 未定义值相等），
-  /// 因此用 `evaluations[field]` 查询时须传入来自 [fields] 的实例。
+  /// ⚠️ **键使用对象身份相等**（[ParsedField] 未覆写 `==`/`hashCode`）：
+  /// 查询时必须传入**来自本 [fields] 的同一实例**；用一个内容相同但**重建**的
+  /// `ParsedField` 去查会取不到值（返回 null）。当前实现内部同批实例，安全；
+  /// 若未来要把 key 交给外部构造，需先给 [ParsedField] 补值相等。
   final Map<ParsedField, FieldEvaluation> evaluations;
 
   /// 是否叠加了平台层（第 2 层）结论。
@@ -525,13 +541,14 @@ class SourceDiagnostic {
   ) {
     final String raw = field.raw;
 
-    // 字段类型决定的能力
+    // 字段类型决定的能力。
+    // `kind == js` 的字段其 JS 依赖由下方**统一判定**（基于 [ParsedField.usesJs]）覆盖，
+    // 这里不再重复添加，避免「能力探测」与「字段计数」两处口径打架。
     switch (field.kind) {
-      case SourceFieldKind.js:
-        capabilities.add(SourceCapability.js);
       case SourceFieldKind.url:
       case SourceFieldKind.urlResult:
         capabilities.add(SourceCapability.template);
+      case SourceFieldKind.js:
       case SourceFieldKind.rule:
       case SourceFieldKind.text:
         break;
@@ -562,7 +579,6 @@ class SourceDiagnostic {
       }
       if (rule.hasTemplates) capabilities.add(SourceCapability.template);
       if (rule.hasReplaceChain) capabilities.add(SourceCapability.replaceChain);
-      if (rule.usesJs) capabilities.add(SourceCapability.js);
       for (final RuleSegment segment in rule.segments) {
         if (segment.replaceRegex != null) capabilities.add(SourceCapability.regex);
       }
@@ -570,7 +586,6 @@ class SourceDiagnostic {
 
     final ParsedUrlRule? url = field.url;
     if (url != null) {
-      if (url.usesJs) capabilities.add(SourceCapability.js);
       if (url.kind == UrlRuleKind.dataUri) capabilities.add(SourceCapability.customProtocol);
       if (url.kind == UrlRuleKind.template) capabilities.add(SourceCapability.template);
       if (url.options?.specialNeeds.isNotEmpty ?? false) {
@@ -579,6 +594,10 @@ class SourceDiagnostic {
       }
       if (url.pageValues.isNotEmpty) capabilities.add(SourceCapability.template);
     }
+
+    // ★ JS 依赖的**统一判定**：口径与 [ParsedField.usesJs] 完全一致，一处生效。
+    //   覆盖「内容直接是 JS（kind==js）」「规则含 JS」「URL 含 JS」三种情形。
+    if (field.usesJs) capabilities.add(SourceCapability.js);
 
     // 文本层面的能力探测
     final String lower = raw.toLowerCase();
