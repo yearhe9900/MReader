@@ -1,0 +1,3 @@
+# 注意：flutter_lints 的规则文件名是 flutter.yaml（不是 flutter_lints.yaml）。
+# 写错文件名会让 flutter analyze 报 "Target of URI doesn't exist"。
+include: package:flutter_lints/flutter.yaml

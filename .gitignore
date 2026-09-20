@@ -1,0 +1,37 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# 平台目录下的生成物（平台目录本身要纳管：含 AndroidManifest / Info.plist 等配置）
+**/Pods/
+**/.symlinks/
+**/ephemeral/
+**/Flutter/ephemeral/
+**/Flutter/Generated.xcconfig
+**/Flutter/flutter_export_environment.sh
+ios/Runner/GeneratedPluginRegistrant.*
+macos/Flutter/GeneratedPluginRegistrant.swift
+linux/flutter/generated_*
+windows/flutter/generated_*
+android/local.properties
+android/app/.cxx/
+android/.gradle/
+android/key.properties
+
+# 杂项
+.DS_Store
+*.log
+
+# 本工程的 agent 工作数据（记忆、报告），不进源码历史
+.workbuddy/
+deliverables/

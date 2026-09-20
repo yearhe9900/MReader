@@ -1,0 +1,355 @@
+{
+  "baseline": {
+    "fx01_opf_in_item_dir.epub": {
+      "脏特征": "OPF 位于非标准的 item/standard.opf",
+      "预期书名": "标准外置OPF",
+      "预期作者": "作者甲",
+      "预期章节(href)": [
+        "item/text/ch1.xhtml"
+      ],
+      "预期每章文本": {
+        "item/text/ch1.xhtml": [
+          "第一章",
+          "OPF 放在 item 目录。",
+          "第二段。"
+        ]
+      },
+      "预期章标题": {
+        "item/text/ch1.xhtml": "第一章"
+      },
+      "预期结果": "正常打开"
+    },
+    "fx02a_percent_href_real_cjk_name.epub": {
+      "脏特征": "OPF 的 href 百分号编码，但 zip 内文件名是真实中文",
+      "预期书名": "百分号href_真实中文名",
+      "预期章节(href)": [
+        "OEBPS/第一章.xhtml"
+      ],
+      "预期每章文本": {
+        "OEBPS/第一章.xhtml": [
+          "第一章",
+          "href 是 %E7%AC%AC…，文件名是中文。"
+        ]
+      },
+      "预期结果": "正常打开"
+    },
+    "fx02b_percent_zip_entry_name.epub": {
+      "脏特征": "zip 条目名本身就是百分号编码（href 也是）",
+      "预期书名": "百分号zip内文件名",
+      "预期章节(href)": [
+        "OEBPS/%E7%AC%AC%E4%B8%80%E7%AB%A0.xhtml"
+      ],
+      "预期每章文本": {
+        "OEBPS/%E7%AC%AC%E4%B8%80%E7%AB%A0.xhtml": [
+          "第一章",
+          "zip 内的文件名本身就是 %E7%AC%AC…。"
+        ]
+      },
+      "预期结果": "按规范应能打开（href 与条目名解码后一致）"
+    },
+    "fx03_case_mismatch.epub": {
+      "脏特征": "container/OPF/href 与真实路径大小写均不一致",
+      "预期书名": "大小写不一致",
+      "预期章节(href)": [
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "预期每章文本": {
+        "OEBPS/text/ch1.xhtml": [
+          "第一章",
+          "container 写小写，实际大写目录。"
+        ]
+      },
+      "预期结果": "正常打开（应做大小写不敏感匹配）"
+    },
+    "fx04_gbk_no_decl.epub": {
+      "脏特征": "章节为 GBK 字节且无 encoding 声明",
+      "预期书名": "GBK无声明",
+      "预期章节(href)": [
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "预期每章文本": {
+        "OEBPS/text/ch1.xhtml": [
+          "第四章",
+          "这是 GBK 编码的中文正文，没有声明。",
+          "第二段：中文标点，。！？"
+        ]
+      },
+      "预期结果": "正常打开且中文可读（应走 GBK 兜底）",
+      "bytes_is_valid_utf8": "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>������ ��</title></head><body><h1>������</h1><p>���� GBK ������������ģ�û��������</p><p>�ڶ��Σ����ı�㣬������</p></body></html>"
+    },
+    "fx05_malformed_xhtml.epub": {
+      "脏特征": "未闭合标签 + 裸 & + 未定义实体 &foo;",
+      "预期书名": "非法XHTML",
+      "预期章节(href)": [
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "预期每章文本": {
+        "OEBPS/text/ch1.xhtml": [
+          "第五章 & 测试",
+          "Tom & Jerry & 未定义实体 &foo;",
+          "未闭合的段落",
+          "第二段开始",
+          "第三段",
+          "换行"
+        ]
+      },
+      "预期结果": "正常打开，不应抛异常（html 宽松解析或退化去标签）"
+    },
+    "fx06_linear_no.epub": {
+      "脏特征": "第二章 linear=\"no\"",
+      "预期书名": "linear_no跳过",
+      "预期章节(href)": [
+        "OEBPS/text/ch1.xhtml",
+        "OEBPS/text/ch3.xhtml"
+      ],
+      "预期每章文本": {
+        "OEBPS/text/ch1.xhtml": [
+          "第一章",
+          "第一段。"
+        ],
+        "OEBPS/text/ch3.xhtml": [
+          "第三章",
+          "第三段。"
+        ]
+      },
+      "预期结果": "正常打开，sections 数为 2，ch2 不出现"
+    },
+    "fx07a_cover_in_spine_with_media_type.epub": {
+      "脏特征": "封面 png（media-type=image/png）位于 spine 中间",
+      "预期书名": "封面在spine",
+      "预期章节(href)": [
+        "OEBPS/text/ch1.xhtml",
+        "OEBPS/text/ch2.xhtml"
+      ],
+      "预期每章文本": {
+        "OEBPS/text/ch1.xhtml": [
+          "第一章",
+          "正文一。"
+        ],
+        "OEBPS/text/ch2.xhtml": [
+          "第二章",
+          "正文二。"
+        ]
+      },
+      "预期结果": "封面被排除，sections 数为 2"
+    },
+    "fx07b_cover_in_spine_no_media_type.epub": {
+      "脏特征": "封面 png 在 spine 里，但 manifest 漏写 media-type",
+      "预期书名": "封面无media-type",
+      "预期章节(href)": [
+        "OEBPS/text/ch1.xhtml",
+        "OEBPS/text/ch2.xhtml"
+      ],
+      "预期每章文本": {
+        "OEBPS/text/ch1.xhtml": [
+          "第一章",
+          "正文一。"
+        ],
+        "OEBPS/text/ch2.xhtml": [
+          "第二章",
+          "正文二。"
+        ]
+      },
+      "预期结果": "理想情况：按扩展名/嗅探排除图片；至少不应把 PNG 当正文段落输出"
+    },
+    "fx08_empty_spine.epub": {
+      "脏特征": "spine 为空",
+      "预期结果": "抛出可读的 EpubParseException（spine 为空…），不崩溃"
+    },
+    "fx08b_missing_container.epub": {
+      "脏特征": "缺少 META-INF/container.xml",
+      "预期结果": "抛出可读的 EpubParseException（缺少 container.xml…），不崩溃"
+    },
+    "fx09_declared_utf8_actual_gbk.epub": {
+      "脏特征": "章节声明 charset=utf-8，字节实为 GBK",
+      "预期结果": "理想：识别为 GBK 正确解码；最低要求：不崩溃（可能乱码）"
+    },
+    "fx10_big5_no_decl.epub": {
+      "脏特征": "章节为 Big5 字节且无声明",
+      "预期结果": "文档已声明会乱码（退化为 GBK 猜测）；不应崩溃"
+    },
+    "fx11_declared_gbk_invalid_bytes.epub": {
+      "脏特征": "章节声明 charset=gbk，但字节含非法 GBK（0xFF）",
+      "预期结果": "理想：不应抛异常（decodeText 承诺绝不抛）；最低：不崩溃"
+    }
+  },
+  "probes": {
+    "fx01_opf_in_item_dir.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "item/standard.opf",
+        "item/text/ch1.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "item/text/ch1.xhtml": true
+      }
+    },
+    "fx02a_percent_href_real_cjk_name.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/第一章.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/第一章.xhtml": true
+      }
+    },
+    "fx02b_percent_zip_entry_name.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/%E7%AC%AC%E4%B8%80%E7%AB%A0.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/%E7%AC%AC%E4%B8%80%E7%AB%A0.xhtml": true
+      }
+    },
+    "fx03_case_mismatch.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": true
+      }
+    },
+    "fx04_gbk_no_decl.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": false
+      }
+    },
+    "fx05_malformed_xhtml.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": true
+      }
+    },
+    "fx06_linear_no.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml",
+        "OEBPS/text/ch2.xhtml",
+        "OEBPS/text/ch3.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": true,
+        "OEBPS/text/ch2.xhtml": true,
+        "OEBPS/text/ch3.xhtml": true
+      }
+    },
+    "fx07a_cover_in_spine_with_media_type.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml",
+        "OEBPS/text/ch2.xhtml",
+        "OEBPS/images/cover.png"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": true,
+        "OEBPS/text/ch2.xhtml": true
+      }
+    },
+    "fx07b_cover_in_spine_no_media_type.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml",
+        "OEBPS/text/ch2.xhtml",
+        "OEBPS/images/cover.png"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": true,
+        "OEBPS/text/ch2.xhtml": true
+      }
+    },
+    "fx08_empty_spine.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": true
+      }
+    },
+    "fx08b_missing_container.epub": {
+      "zip_entries": [
+        "mimetype",
+        "OEBPS/content.opf",
+        "OEBPS/c1.xhtml"
+      ],
+      "zip_declares_utf8_manifest": false,
+      "xhtml_utf8_valid": {
+        "OEBPS/c1.xhtml": true
+      }
+    },
+    "fx09_declared_utf8_actual_gbk.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": false
+      }
+    },
+    "fx10_big5_no_decl.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": false
+      }
+    },
+    "fx11_declared_gbk_invalid_bytes.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": false
+      }
+    }
+  }
+}

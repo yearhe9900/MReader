@@ -1,0 +1,184 @@
+// XHTML -> 纯文本段落。纯 Dart，不依赖 Flutter。
+//
+// 只做「够用」的块级结构保留：<p> / <div> / <br> / <h1..h6> / <li> 等视为段落边界。
+// 图片、CSS、脚注、ruby、SVG 一律优雅跳过，绝不因为脏 HTML 崩掉。
+import 'dart:typed_data';
+
+import 'package:html/dom.dart' as dom;
+import 'package:html/parser.dart' as html_parser;
+
+import 'text_codec.dart';
+
+/// 一章解析后的可显示内容。
+class ExtractedSection {
+  const ExtractedSection({this.title = '', this.paragraphs = const <String>[]});
+
+  /// 章标题：优先取正文里第一个 h1~h6，退而取 `<title>`（长度合理时）；取不到则为空串。
+  final String title;
+
+  /// 段落列表，按出现顺序。渲染时用 '\n\n' 连接即可保留段间距。
+  final List<String> paragraphs;
+
+  bool get isEmpty => paragraphs.isEmpty;
+}
+
+/// 会被当作「段落边界」的块级标签。
+const Set<String> _blockTags = <String>{
+  'p', 'div', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'li', 'ul', 'ol', 'blockquote', 'pre', 'section', 'article',
+  'header', 'footer', 'aside', 'figure', 'figcaption',
+  'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th',
+  'dd', 'dt', 'dl', 'hr', 'nav', 'main', 'address',
+};
+
+/// 直接整棵跳过的标签（不产生任何文本）。
+const Set<String> _skipTags = <String>{
+  'script', 'style', 'head', 'title', 'meta', 'link', 'svg', 'noscript',
+  'audio', 'video', 'iframe', 'object', 'embed',
+};
+
+/// 把一章 XHTML 的原始字节解析成 [ExtractedSection]。
+///
+/// 这是纯函数（无 IO、无 Flutter），可以直接单测。
+ExtractedSection extractSection(Uint8List bytes) {
+  final String? decoded = _tryDecodeText(bytes);
+  if (decoded == null) return const ExtractedSection();
+  final String source = decoded;
+
+  final dom.Document? doc = _tryParseHtml(source);
+  if (doc == null) {
+    // 连宽松解析都失败：退化为「粗暴去标签」，至少让用户看到字。
+    return ExtractedSection(paragraphs: _stripTags(source));
+  }
+
+  final dom.Element? body = doc.body ?? doc.documentElement;
+  if (body == null) return const ExtractedSection();
+
+  final List<String> paragraphs = <String>[];
+  final StringBuffer buffer = StringBuffer();
+  _walk(body, paragraphs, buffer);
+  _flush(buffer, paragraphs);
+
+  final _ResolvedTitle title = _resolveTitle(body, doc);
+
+  // 只有当「章标题取自正文里的 h1~h6」时，才把与之重复的首段去掉，
+  // 避免「UI 单独渲染的标题」与「正文首段」重复显示同一句话。
+  // 若标题其实来自 XHTML 的 `<title>`（正文里没有对应的标题块），
+  // 那么首段是**真正的正文**，绝不能删（回归 fixture 覆盖此点）。
+  final List<String> visible = (title.fromHeading &&
+          title.text.isNotEmpty &&
+          paragraphs.isNotEmpty &&
+          paragraphs.first == title.text)
+      ? paragraphs.sublist(1)
+      : paragraphs;
+
+  return ExtractedSection(title: title.text, paragraphs: visible);
+}
+
+/// 尝试解码；失败返回 null。
+String? _tryDecodeText(Uint8List bytes) {
+  try {
+    return decodeText(bytes);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 尝试用宽松 HTML 解析器解析；失败返回 null。
+dom.Document? _tryParseHtml(String source) {
+  try {
+    return html_parser.parse(source);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 深度优先遍历，遇到块级标签就切段。
+void _walk(dom.Node node, List<String> out, StringBuffer buffer) {
+  for (final dom.Node child in node.nodes) {
+    if (child is dom.Text) {
+      // HTML 规则：空白折叠成单个空格。
+      buffer.write(child.text.replaceAll(RegExp(r'\s+'), ' '));
+      continue;
+    }
+    if (child is! dom.Element) continue;
+
+    final String tag = child.localName?.toLowerCase() ?? '';
+    if (_skipTags.contains(tag)) continue;
+
+    // <br> / <hr>：直接作为段落分割，不再向下遍历。
+    if (tag == 'br' || tag == 'hr') {
+      _flush(buffer, out);
+      continue;
+    }
+
+    final bool isBlock = _blockTags.contains(tag);
+    if (isBlock) _flush(buffer, out);
+    _walk(child, out, buffer);
+    if (isBlock) _flush(buffer, out);
+  }
+}
+
+/// 把当前缓冲冲成一个段落（trim 后为空则丢弃）。
+void _flush(StringBuffer buffer, List<String> out) {
+  final String text = buffer.toString().trim();
+  buffer.clear();
+  if (text.isEmpty) return;
+  out.add(text);
+}
+
+/// 章标题及其来源。
+class _ResolvedTitle {
+  const _ResolvedTitle(this.text, {required this.fromHeading});
+
+  /// 标题文本；取不到为空串。
+  final String text;
+
+  /// 来源：取自正文里的 h1~h6（true）还是 XHTML 的 `<title>`（false）。
+  final bool fromHeading;
+}
+
+/// 章标题：h1~h6 -> `<title>`（长度 <= 60 才采用，避免那句「书名 - 出版社」）。
+///
+/// 返回值额外标注来源：只有来源是正文标题块（h1~h6）时，调用方才应把重复的首段去掉
+/// （见 [extractSection]）；来自 `<title>` 时首段是真正文，不能删。
+_ResolvedTitle _resolveTitle(dom.Element body, dom.Document doc) {
+  for (final String tag in const <String>['h1', 'h2', 'h3', 'h4', 'h5', 'h6']) {
+    final dom.Element? element = _firstElementByTag(body, tag);
+    if (element == null) continue;
+    final String text = _collapse(element.text);
+    if (text.isNotEmpty) return _ResolvedTitle(text, fromHeading: true);
+  }
+
+  final dom.Element? titleElement = _firstElementByTag(doc, 'title');
+  if (titleElement != null) {
+    final String text = _collapse(titleElement.text);
+    if (text.isNotEmpty && text.length <= 60) {
+      return _ResolvedTitle(text, fromHeading: false);
+    }
+  }
+  return const _ResolvedTitle('', fromHeading: false);
+}
+
+String _collapse(String value) => value.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+/// 按标签名找第一个后代元素（大小写不敏感）。
+dom.Element? _firstElementByTag(dom.Node root, String tag) {
+  for (final dom.Node node in root.nodes) {
+    if (node is! dom.Element) continue;
+    if (node.localName?.toLowerCase() == tag) return node;
+    final dom.Element? found = _firstElementByTag(node, tag);
+    if (found != null) return found;
+  }
+  return null;
+}
+
+/// 最后兜底：正则去标签。
+List<String> _stripTags(String source) {
+  final String text = source
+      .replaceAll(RegExp(r'<[^>]*>'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (text.isEmpty) return const <String>[];
+  return <String>[text];
+}
