@@ -6,6 +6,8 @@
 >
 > **时间基准**：本周 = 2026-09-20（周日）所在周 → **W1 = 2026-09-21（周一）～ 2026-09-27（周日）**，
 > 每周以周一为起始。全文周序均以此推出，无隐含偏移。
+>
+> **修订记录**：2026-09-20 · 对齐 **PRD v2.6**——`Q19`/`Q21`/`Q22`/`Q23` 拍板闭环；阈值 2 改「2a + 2b 合计触发、分层仅归因」；`RUST-10` 升级为设置页可配置（M35-T05 验收范围同步）；MOBI Kotlin 参考实现补录（M2b-T05 / M4-T07 评估维持现值，依据见对应行）；Linux/macOS 后台朗读与 PDF iOS/Linux 两处降级获负责人确认（M2b-T01 / M3-T07 措辞同步）。人天与周序**无变化**。
 
 ---
 
@@ -81,7 +83,7 @@ PRD §7.1 抽象、§12.1 页面清单与 §15.1 平台能力抽象推导）。*
 
 | 批次 | 起止周 | 日历区间 | 人天 | 累计人天 | 交付判定 |
 |---|---|---|---|---|---|
-| **M0** 工程整理批 | W1 | 2026-09-21 ~ 09-27 | 2 | 2 | ⚠️ §17 原未定义 → 本文 §2.0 给出建议判定，并已回写 §17 |
+| **M0** 工程整理批 | W1 | 2026-09-21 ~ 09-27 | 2 | 2 | ✅ §17 M0（PRD v2.6 `Q23` 已拍板：独立工程整理批、排在 M1 之前；判定已回写） |
 | **M1** 阅读地基 | W2 ~ W12（11 周） | 2026-09-28 ~ 2026-12-13 | 30 | 32 | ✅ §17 M1（7 条判定） |
 | **M2a** 排版与内容 | W13 ~ W17（5 周） | 2026-12-14 ~ 2027-01-17 | 13 | 45 | ✅ §17 M2（6 条判定，取其中第 2 / 第 6 条） |
 | **M2b** 格式与检索 | W18 ~ W27（10 周） | 2027-01-18 ~ 2027-03-28 | 25 | 70 | ✅ §17 M2（6 条判定，取其余 4 条） |
@@ -104,7 +106,7 @@ PRD §7.1 抽象、§12.1 页面清单与 §15.1 平台能力抽象推导）。*
 
 ### 2.0 M0 — 工程整理批（2 人天 · W1 · 2026-09）
 
-> 来源：PRD §16 `Q23`（Web 清理）+ `Q24`（`lib/source/**` 删除时点）+ 架构文档 §K 的 **14 条施工清单**。
+> 来源：PRD §16 `Q23`（Web 清理，**v2.6 已拍板**：独立工程整理批、排在 M1 之前）+ `Q24`（`lib/source/**` 删除时点，本排期按「删除」执行）+ 架构文档 §K 的 **14 条施工清单**。
 > **本批不占需求编号**（`Q23` 明确「不写进本文档的需求编号」），但它是 M1 的硬前置。
 
 | 任务ID | 任务名 | 主要文件（相对路径） | 依赖 | 人天 | 说明/风险 |
@@ -159,11 +161,11 @@ PRD §7.1 抽象、§12.1 页面清单与 §15.1 平台能力抽象推导）。*
 
 | 任务ID | 任务名 | 主要文件（相对路径） | 依赖 | 人天 | 说明/风险 |
 |---|---|---|---|---|---|
-| **M2b-T01** | PDF 支持（插件选型 + 伪分章 + 连续翻阅 + 缩放） | `lib/format/pdf_source.dart`、`lib/platform/pdf_renderer.dart`(接口)、`lib/platform/pdf_renderer_plugin.dart`、`lib/reader/page_view_pager.dart`、`test/format/pdf_test.dart` | M2a-T01 | 4 | 【**低**】`FMT-01`、`META-10`。**`Q4` 插件选型必须在本任务开工前定稿**，否则会反复。硬指标：① 能渲染指定页为位图（`META-10` 复用）；② Android + Windows 双平台覆盖。iOS / Linux 覆盖风险最高（§15.3） |
+| **M2b-T01** | PDF 支持（插件选型 + 伪分章 + 连续翻阅 + 缩放） | `lib/format/pdf_source.dart`、`lib/platform/pdf_renderer.dart`(接口)、`lib/platform/pdf_renderer_plugin.dart`、`lib/reader/page_view_pager.dart`、`test/format/pdf_test.dart` | M2a-T01 | 4 | 【**低**】`FMT-01`、`META-10`。**`Q4` 插件选型必须在本任务开工前定稿**，否则会反复。硬指标：① 能渲染指定页为位图（`META-10` 复用）；② Android + Windows 双平台覆盖。iOS / Linux 不支持时**已确认**可退化「识别 + 提示」（§15.3，PRD v2.6 拍板），选型风险集中在插件本身 |
 | **M2b-T02** | CBZ / CBR 支持 | `lib/format/cbz_source.dart`、`lib/format/cbr_source.dart`、`lib/platform/rar_extractor.dart`(接口)、`test/format/*` | M2a-T01 | 2.5 | 【中】`FMT-02`/`FMT-03`、`META-11`。Dart 生态无 rar → `FMT-03` 大概率退化为「识别 + 提示」（`Q5`），本任务已含 1 人天的「评估 + 退化」分支 |
 | **M2b-T03** | 格式嗅探与魔数纠偏 | `lib/format/sniffer.dart`、`lib/library/import_service.dart`(改)、`test/format/sniffer_test.dart` | M2a | 1 | 【中】`FMT-06`。与 `RD-05` 的中文错误文案共用一套口径 |
 | **M2b-T04** | 全书搜索（后台 isolate + 可取消 + 高亮跳转） | `lib/search/full_text_search.dart`、`lib/task/isolate_runner.dart`(改)、`lib/ui/search_sheet.dart`、`test/search/*` | M2a | 3.5 | 【中】`CNT-06`。**同时是 M3.5 阈值 4（50MB 书首屏 > 1.5s / 单帧 > 16ms）的基线被测对象** → 计时埋点必须一次做到位，否则 M3.5 要回补 |
-| **M2b-T05** | **MOBI/AZW3 纯 Dart 原型基线测**（不做正式实现） | `lib/format/mobi/baseline_probe.dart`、`tool/gen_perf_fixtures.dart`(扩)、`docs/perf-baseline/mobi.md`、`test/perf/*` | M2a | 2.5 | 【**低**】`FMT-04` 的门槛前置。只求「能否解出章节列表 + 耗时量级」，产出结论供 M3.5 **阈值 1**（20MB AZW3 > 3s）判定。**最大不确定性 = KF8 boundary 未证实（架构 §L1 / PRD `Q25`）**——本任务必须显式产出「KF8 能不能解出」的结论并留档 |
+| **M2b-T05** | **MOBI/AZW3 纯 Dart 原型基线测**（不做正式实现） | `lib/format/mobi/baseline_probe.dart`、`tool/gen_perf_fixtures.dart`(扩)、`docs/perf-baseline/mobi.md`、`test/perf/*` | M2a | 2.5 | 【**低**】`FMT-04` 的门槛前置。只求「能否解出章节列表 + 耗时量级」，产出结论供 M3.5 **阈值 1**（20MB AZW3 > 3s）判定。**最大不确定性 = KF8 boundary 未证实（架构 §L1 / PRD `Q25`）**——本任务必须显式产出「KF8 能不能解出」的结论并留档。**v2.6 补录**：567Reader 有**可直译的纯 Kotlin 参考实现**（`app/src/main/java/**/lib/mobi/`，33 文件约 1600 行）——「解出章节列表」的算法翻译成本下降，**余量转投 KF8 双入口验证**（`mobiHeader.version >= 8` 直入 / EXTH boundary 跳转，PRD §15.6.4）与计时埋点。**经评估维持 2.5 人天不下调**：本任务成本主体是验证与埋点而非算法翻译（§0.7 可追溯口径） |
 | **M2b-T06** | 书签 / 字体 / 亮度背景 / 全屏与进度指示 | `lib/reader/bookmark_store.dart`、`lib/typography/font_picker.dart`、`lib/typography/brightness_overlay.dart`、`lib/reader/immersive.dart`、`test/*` | M1 | 3.5 | 【高】`TYP-06~09`。四条形态都很标准；`TYP-07` 硬约束是 `pubspec.yaml` **不得出现 `fonts:` 段**（不内嵌字体） |
 | **M2b-T07** | 玻璃质量档位与性能预算降级 | `lib/ui/glass_quality.dart`、`lib/settings/settings_store.dart`(改)、`test/ui/*` | M2a-T04 | 1.5 | 【中】`UI-05`/`UI-06`。含「降低视觉特效」总开关 + 低端设备自动降级 + 状态持久化 |
 | **M2b-T08** | 阅读会话采集内核（**无 UI**） | `lib/stats/session_tracker.dart`、`lib/stats/session_store.dart`、`lib/stats/session.dart`、`lib/stats/stats_repository.dart`、`test/stats/*` | M1 | 4 | 【中】`STAT-01`/`STAT-02`。**时长数据无法事后回填**——越早落地，M3 的统计页越有真实数据可看。硬点：空闲超时 3 min（`Q12`）、跨 0 点拆天、`day_key` / `book_id` 双索引、按月分片原子写入、4 万条聚合 ≤ 300ms。**零平台插件、纯 Dart**（`STAT-02` ⑤） |
@@ -190,7 +192,7 @@ PRD §7.1 抽象、§12.1 页面清单与 §15.1 平台能力抽象推导）。*
 | 任务ID | 任务名 | 主要文件（相对路径） | 依赖 | 人天 | 说明/风险 |
 |---|---|---|---|---|---|
 | **M3-T06** | 系统 TTS 段落朗读 + 高亮跟随 + 跨章续读 | `lib/tts/tts_engine.dart`(接口)、`lib/tts/system_tts.dart`、`lib/tts/tts_controller.dart`、`lib/reader/highlight_follow.dart`、`test/tts/*` | M3-T02(选区浮层) | 4 | 【中】`TTS-01`/`TTS-02`。高亮复用 M3-T02 的段落定位设施（**这也是 AI 必须先于 TTS 的原因**）；`TTS-01` ③「纯标点/空白段跳过」要单独验 |
-| **M3-T07** | 后台播放与系统集成（通知栏 / 媒体键 / 音频焦点） | `lib/tts/audio_session.dart`、`lib/platform/audio_service.dart`(接口)、`android/app/src/main/AndroidManifest.xml`、`ios/Runner/Info.plist`、`test/tts/*` | M3-T06 | 3.5 | 【**低**】`TTS-03`。**平台工作量最易低估的一项**：Android 前台服务 + 媒体会话是主要成本。§15.3 允许 Linux / macOS 降级为「仅前台朗读」；**iOS 部分本机无法验证（见 §5 R3）** |
+| **M3-T07** | 后台播放与系统集成（通知栏 / 媒体键 / 音频焦点） | `lib/tts/audio_session.dart`、`lib/platform/audio_service.dart`(接口)、`android/app/src/main/AndroidManifest.xml`、`ios/Runner/Info.plist`、`test/tts/*` | M3-T06 | 3.5 | 【**低**】`TTS-03`。**平台工作量最易低估的一项**：Android 前台服务 + 媒体会话是主要成本。§15.3 **已确认** Linux / macOS 降级为「仅前台朗读」（PRD v2.6 拍板）；**iOS 部分本机无法验证（见 §5 R3）** |
 | **M3-T08** | 语速音色 / 定时停止 / 与进度联动 | `lib/tts/tts_settings.dart`、`lib/tts/sleep_timer.dart`、`lib/reader/progress_store.dart`(改) | M3-T06 | 2 | 【高】`TTS-04`/`05`/`06`。`TTS-06` 复用 `RD-04` 进度模型；缺失系统 TTS 引擎时必须给中文提示（§15.3 Linux） |
 | **M3-T09** | 在线 TTS（配置 + 流式播放 + 音频缓存） | `lib/tts/online_tts.dart`、`lib/tts/audio_cache.dart`、`lib/ui/tts_settings_page.dart`、`test/tts/*` | M3-T06 | 3 | 【中】`TTS-07`。配置形态复用 `AI-01` 的 Provider 配置页；失败重试有限次后自动暂停并提示 |
 
@@ -217,10 +219,10 @@ PRD §7.1 抽象、§12.1 页面清单与 §15.1 平台能力抽象推导）。*
 | 任务ID | 任务名 | 主要文件（相对路径） | 依赖 | 人天 | 说明/风险 |
 |---|---|---|---|---|---|
 | **M35-T01**（架构 T01） | 加速层脚手架与回落骨架（**纯 Dart，零 Rust**） | `lib/highperf/{high_perf_capability,high_perf_registry,null_high_perf_engine,high_perf_error}.dart`、`lib/format/book_registry.dart`、`lib/task/*`、`test/highperf_registry_test.dart` | M2b | 4 | 【中】`RUST-01`。**零 Rust 依赖**，是 T02/T03 的共同地基。三态探测 + 幂等 `warmUp` + 强制纯 Dart 开关；**UI 与业务层不得出现任何「是否为 Rust」的分支判断** |
-| **M35-T02**（架构 T02） | 门槛基线测量基建（**先测**，`RUST-06`） | `test/perf/*`、`tool/gen_perf_fixtures.dart`、`docs/perf-baseline/*`、`lib/format/dart_epub_source.dart`(改)、`lib/format/dart_txt_source.dart`(改) | M35-T01 | 3 | 【中】`RUST-06`。在 **Android 主力机**上用**真实脏书 + 生成的大文件样本**实测 6 项候选（2b 首版不纳入）；产出「超/未超阈值」结论**必须留档**——**未超阈值的结论同样是交付物**（`RUST-06` ④） |
-| **M35-T03**（架构 T03） | **★ GATE ★** 最小 FRB 通路 + 构建降级机制 | `rust/Cargo.toml`、`rust/src/{lib.rs,api/guard.rs,api/error.rs}`(**仅空实现 + probe**)、`rust/clippy.toml`、`rust_builder/**`、`flutter_rust_bridge.yaml`、`android/app/build.gradle.kts`、`pubspec.yaml`、`.gitignore`、`lib/src/rust/**`(**生成物入库**)、`test/rust_profile_guard_test.dart`、`test/generated_files_committed_test.dart` | M35-T01 | 5 | 【**低**】`RUST-07`/`RUST-08`/`RUST-04`、`Q20`、架构 §L4。**gate 语义：验证不通过 → 整条 Rust 线回退纯 Dart，T04/T05 不做，结论留档（同 §15.6.4 留证原则）**。含三项必做：① Cargokit × Flutter **3.44.9** 最小通路；② 无 Rust 工具链时 `flutter build`/`flutter test` 仍能通过；③ **`mobi` crate 的 KF8 最小验证**（架构 §L1 / `Q25`） |
-| **M35-T04**（架构 T04） | 五能力 Rust 实现（**逐项，超阈值才做**） | `rust/src/format/{epub,txt,mobi,encoding}.rs`、`rust/src/search/full_text.rs`、`rust/src/index/bm25.rs`、`rust/src/task.rs`、`rust/src/api/{book,search,index}.rs`、`lib/highperf/ffi/high_perf_ffi_engine.dart`、`lib/highperf/rust_{epub,txt}_source.dart`、`lib/task/rust_background_runner.dart`、`rust/vendor/mobi/**` | **M35-T03(gate)** | 12 | 【**低**】`RUST-03`/`RUST-05`。**每项开工前必须在 `docs/perf-baseline/` 指出其超过的阈值编号**，找不到 → 不实施（`RUST-06`）。**MOBI（阈值 1）与 EPUB 解压（阈值 2a）最先验证**。12 人天按「典型 2–3 项命中」估算；首版**只换解压层（L1）**，正文抽取层保持纯 Dart（`RUST-02` ⑤） |
-| **M35-T05**（架构 T05） | 等价性回归 + 可观测 + 交付验收 | `lib/highperf/equivalence.dart`、`test/equivalence/*`、`lib/highperf/ffi/chunk_guard.dart`、`test/no_rust_write_guard_test.dart`、`docs/architecture-rust-integration.md`(回填实测) | M35-T04 | 4 | 【中】`RUST-01`/`02`/`05`/`10`。双实现对照回归全绿 = §17 M3.5 判定第 3 条；`RUST-09` 六类能力不得入 Rust，用静态扫描护栏机械检查 |
+| **M35-T02**（架构 T02） | 门槛基线测量基建（**先测**，`RUST-06`） | `test/perf/*`、`tool/gen_perf_fixtures.dart`、`docs/perf-baseline/*`、`lib/format/dart_epub_source.dart`(改)、`lib/format/dart_txt_source.dart`(改) | M35-T01 | 3 | 【中】`RUST-06`。在 **Android 主力机**上用**真实脏书 + 生成的大文件样本**实测六项候选（2b 首版**不实施** Rust，但仍须**分层计时**——阈值 2 按「2a + 2b 合计」触发、分层值仅作归因，PRD v2.6）；产出「超/未超阈值」结论**必须留档**——**未超阈值的结论同样是交付物**（`RUST-06` ④） |
+| **M35-T03**（架构 T03） | **★ GATE ★** 最小 FRB 通路 + 构建降级机制 | `rust/Cargo.toml`、`rust/src/{lib.rs,api/guard.rs,api/error.rs}`(**仅空实现 + probe**)、`rust/clippy.toml`、`rust_builder/**`、`flutter_rust_bridge.yaml`、`android/app/build.gradle.kts`、`pubspec.yaml`、`.gitignore`、`lib/src/rust/**`(**生成物入库**)、`test/rust_profile_guard_test.dart`、`test/generated_files_committed_test.dart` | M35-T01 | 5 | 【**低**】`RUST-07`/`RUST-08`/`RUST-04`、`Q20`、架构 §L4。**gate 语义：验证不通过 → 整条 Rust 线回退纯 Dart，T04/T05 不做，结论留档（同 §15.6.4 留证原则）**。含三项必做：① Cargokit × Flutter **3.44.9** 最小通路；② 无 Rust 工具链时 `flutter build`/`flutter test` 仍能通过；③ **`mobi` crate 的 KF8 最小验证**（架构 §L1 / `Q25`；按 PRD §15.6.4 v2.6 判据，**两种入口文件各测一次**） |
+| **M35-T04**（架构 T04） | 五能力 Rust 实现（**逐项，超阈值才做**） | `rust/src/format/{epub,txt,mobi,encoding}.rs`、`rust/src/search/full_text.rs`、`rust/src/index/bm25.rs`、`rust/src/task.rs`、`rust/src/api/{book,search,index}.rs`、`lib/highperf/ffi/high_perf_ffi_engine.dart`、`lib/highperf/rust_{epub,txt}_source.dart`、`lib/task/rust_background_runner.dart`、`rust/vendor/mobi/**` | **M35-T03(gate)** | 12 | 【**低**】`RUST-03`/`RUST-05`。**每项开工前必须在 `docs/perf-baseline/` 指出其超过的阈值编号**，找不到 → 不实施（`RUST-06`）。**MOBI（阈值 1）与 EPUB（阈值 2 = 2a + 2b 合计，分层值仅归因）最先验证（PRD v2.6）**。12 人天按「典型 2–3 项命中」估算；首版**只换解压层（L1）**，正文抽取层保持纯 Dart（`RUST-02` ⑤） |
+| **M35-T05**（架构 T05） | 等价性回归 + 可观测 + 交付验收 | `lib/highperf/equivalence.dart`、`test/equivalence/*`、`lib/highperf/ffi/chunk_guard.dart`、`test/no_rust_write_guard_test.dart`、`docs/architecture-rust-integration.md`(回填实测) | M35-T04 | 4 | 【中】`RUST-01`/`02`/`05`/`10`。双实现对照回归全绿 = §17 M3.5 判定第 3 条；`RUST-09` 六类能力不得入 Rust，用静态扫描护栏机械检查；**`RUST-10`（v2.6 升级为「加速参数设置页」）的两项开关（加速层总开关 / 强制回落纯 Dart）及其持久化纳入本任务验收范围** |
 
 **两条时间线的 gate 语义（重要）**：
 
@@ -247,8 +249,8 @@ PRD §7.1 抽象、§12.1 页面清单与 §15.1 平台能力抽象推导）。*
 | **M4-T04** | 全量备份与恢复 + 可选上传书籍文件 | `lib/sync/backup.dart`、`lib/sync/restore.dart`、`lib/sync/book_upload.dart`、`test/sync/*` | M4-T01 | 5 | 【中】`SYNC-04`/`SYNC-05`。备份包内容按 §10.3 约定；**书籍文件上传默认关闭**；大文件可取消且有进度 |
 | **M4-T05** | 自动触发时机与失败可见 | `lib/sync/sync_trigger.dart`、`lib/ui/sync_status_page.dart`、`test/sync/*` | M4-T01 | 2.5 | 【高】`SYNC-06`/`SYNC-07`。启动拉取 / 退出阅读页上报 / 退出 App 上报；全量备份按「距上次超过 N 天」 |
 | **M4-T06** | 统计数据跨设备同步（**会话 `id` 并集**） | `lib/stats/stats_sync.dart`、`lib/sync/entry_sync.dart`(改)、`test/sync/stats_sync_test.dart` | M4-T01、M2b-T08 | 3 | 【中】`STAT-08`。**并集必须幂等**：同一批数据连续同步 3 次总时长不变；同 `id` 时长不一致取较大值。默认开启、可单独关闭 |
-| **M4-T07** | **MOBI/AZW3 正式实现与元数据** | `lib/format/dart_mobi_source.dart`(A 线) 或 `lib/highperf/rust_mobi_source.dart`(B 线)、`lib/format/mobi/{pdb,kf6,kf8,huff_cdic}.dart`、`lib/meta/mobi_meta.dart`、`test/format/mobi_test.dart` | **M3.5 gate 结论** | **8（A）** / **2（B）** | 【**低**】`FMT-04`/`META-12`。**PRD 原文：全项目成本最高的单项**。A 线需自研 PDB 容器 + KF6/KF8 双格式 + Huff/CDIC 位级解压；B 线（若阈值 1 被超过）已在 M3.5 落地，此处只做验收收尾 + `META-12`。**风险见 §5 R1** |
-| **M4-T08** | 五平台适配与诚实降级落实 | `android/**`、`windows/**`、`ios/**`、`macos/**`、`linux/**`、`README.md`、`docs/perf-baseline/README.md` | 全部 | 3 | 【**低**】§15.3 逐项落实（Linux TTS / 凭据、Windows 玻璃、Linux CJK 字体…）。**iOS / macOS 需要 Mac 环境，本机 (Windows) 无法构建或真机验证 —— 见 §5 R3 与 §8 决策点 1** |
+| **M4-T07** | **MOBI/AZW3 正式实现与元数据** | `lib/format/dart_mobi_source.dart`(A 线) 或 `lib/highperf/rust_mobi_source.dart`(B 线)、`lib/format/mobi/{pdb,kf6,kf8,huff_cdic}.dart`、`lib/meta/mobi_meta.dart`、`test/format/mobi_test.dart` | **M3.5 gate 结论** | **8（A）** / **2（B）** | 【**低**】`FMT-04`/`META-12`。**PRD 原文：全项目成本最高的单项**。A 线需自研 PDB 容器 + KF6/KF8 双格式 + Huff/CDIC 位级解压（**v2.6 补录：存在可直译的 Kotlin 参考实现**，`lib/mobi/` 约 1600 行；**经评估维持 8 人天现值**——成本主体为 KF8 边界联调与回归，直译收益已由 §0.6 低置信度 ±60% 区间吸收；若 M2b-T05 双入口验证顺利，可在开工前按 §7.3 复核下调 1–2 人天）；B 线（若阈值 1 被超过）已在 M3.5 落地，此处只做验收收尾 + `META-12`。**风险见 §5 R1** |
+| **M4-T08** | 五平台适配与诚实降级落实 | `android/**`、`windows/**`、`ios/**`、`macos/**`、`linux/**`、`README.md`、`docs/perf-baseline/README.md` | 全部 | 3 | 【**低**】§15.3 逐项落实（Linux TTS / 凭据、Windows 玻璃、Linux CJK 字体…）。**B 线发布包须随包分发 Rust 动态库**（`Q21`，PRD v2.6 拍板：不做运行时下载）。**iOS / macOS 需要 Mac 环境，本机 (Windows) 无法构建或真机验证 —— 见 §5 R3 与 §8 决策点 1** |
 | **M4-T09** | M4 交付验收与两台设备联调 | 全量回归 + 双设备联调 | 全部 M4 | 2 | 【高】过 §17 M4 的 5 条判定；备份包内搜不到 API Key 与 WebDAV 密码 |
 
 ---
@@ -330,12 +332,12 @@ M0 ──► M1 ──► M2a ──► M2b ──► M3 ──► M3.5 ──�
 
 | # | 风险 | 概率 | 对工期影响 | 应对 | **触发重排的信号** |
 |---|---|---|---|---|---|
-| **R1** 🔴 | **MOBI/AZW3（`FMT-04`）= 全项目成本最高的单项，且 KF8 边界未证实**（架构 §L1 / PRD `Q25`） | **高（≈60%）** | **+3 ~ +8 周**。若 `mobi` crate 处理不了 KF8 boundary，退化为「crate 的 HUFF/CDIC + 自写 KF8 boundary」，移植工作量部分回来 | ① **M2b-T05 先做纯 Dart 原型基线测**，同时产出「KF8 能不能解出」的结论并留档；② **M35-T03 内做 `mobi` crate 的 KF8 最小验证**（架构 §L1 建议「早验证」）；③ 若两者都不利 → 按 `Q25` **重估阈值 1**（须与项目负责人讨论）并把 `FMT-04` 降级为「识别 + 提示」 | M2b-T05 结论为「KF8 读不出」→ **立即**重估 M4-T07 的 8 人天，可能需要 +4 人天或降级 |
+| **R1** 🔴 | **MOBI/AZW3（`FMT-04`）= 全项目成本最高的单项，且 KF8 边界未证实**（架构 §L1 / PRD `Q25`） | **高（≈60%）** | **+3 ~ +8 周**。若 `mobi` crate 处理不了 KF8 boundary，退化为「crate 的 HUFF/CDIC + 从 Kotlin 参考实现直译 KF8 boundary / SKEL/FRAG 拼段」（比按规范自写便宜一个量级，PRD §15.6.4 v2.6），移植工作量不再从零回来 | ① **M2b-T05 先做纯 Dart 原型基线测**，同时产出「KF8 能不能解出」的结论并留档；② **M35-T03 内做 `mobi` crate 的 KF8 最小验证**（架构 §L1 建议「早验证」）；③ 若两者都不利 → 按 `Q25` **重估阈值 1**（须与项目负责人讨论）并把 `FMT-04` 降级为「识别 + 提示」 | M2b-T05 结论为「KF8 读不出」→ **立即**重估 M4-T07 的 8 人天，可能需要 +4 人天或降级 |
 | **R2** 🔴 | **Cargokit × Flutter 3.44.9 未验证**（`Q20` / 架构 §L4）—— **Rust 线唯一可能整体失败的点** | **中（≈35%）** | A 线：0（本来就不上）；B 线：**导致整条 Rust 线归零，M3.5 从 28 人天缩到 12 人天（−5 周），但 M4-T07 从 2 涨到 8 人天（+2 周）** → 净 −3 周 | ① **M35-T03 必须先做最小通路验证**（空实现 + 纯 Dart 回落分支）再写任何 Rust 业务代码；② 验证不通过 → 整条线回退纯 Dart 并**留档**（同 §15.6.4 留证原则）；③ 本机已装 Rust 1.89.0 + 5 个 target，具备立即验证的条件 | M35-T03 的构建验证失败 → 切换到时间线 A，重排 §6 日历 |
 | **R3** 🔴 | **本机是 Windows：iOS / macOS（P1）无法在本机构建或真机验证** | **确定发生（100%）** | 若处理不当：**+4 ~ +6 周**且留下「声称支持实则未验」的合规问题（违反 §15.3 红线） | 见 **§8 决策点 1**：三条方案（借/租 Mac 或云 Mac 集中适配窗口 3–5 人天 / 只交付 Android+Windows 并诚实标注 / 找人代验）。**必须在 W12 末（M1 结束）前决定**，因为方案 A 需要提前预约资源 | W12 末仍未拿到 Mac 资源 → 自动降级为方案 B，M4-T08 的 3 人天改为 1.5 人天 + 文档标注 |
 | **R4** 🟡 | **单人业余的上下文切换成本与长任务被打断** | **高** | 隐性 **+10% ~ +20%**（已部分计入有效系数 0.75） | ① **任务粒度 ≤ 5 人天**（§0.4）；② 每批次开工前写一份「本批任务卡」（10 分钟），收工时写三行「做到哪 / 下一步 / 卡在哪」；③ 长任务（如 M4-T07）**必须先切成 ≤ 1.5 人天的子步骤**再开工 | 连续 2 周进度 < 50% → 触发「任务再切分」或「裁剪评审」 |
-| **R5** 🟡 | **PRD §16 仍有条件性未决项**（`Q24` 删除口径已由本排期按推荐方案取值；`Q25` 为条件性触发） | **中** | `Q24`：**0**（M0 已按「删除」执行，2 人天已含）；`Q25`：**+2 ~ +4 周**（见 R1） | `Q24`：M0-T02 按 `Q24` 推荐方案「删除」执行，形制知识已在架构 §A.4 固化，删代码不丢知识；`Q25`：**仅在 M2b-T05 的最小验证失败时触发**，触发后必须重估阈值 1 并回写 PRD §15.6.3 | `Q25` 被触发 → 同 R1 |
-| **R6** 🟡 | **PDF 插件选型（`Q4`）可能反复** | **中（≈40%）** | **+2 ~ +4 周**（M2b-T01） | 开工前按两条硬指标定稿：① 能否渲染指定页为位图（`META-10` 复用）；② Android + Windows 双平台覆盖。iOS / Linux 覆盖风险最高，按 §15.3 降级为「识别 + 提示」 | 选型 2 周内未定稿 → M2b-T01 后移，先做 M2b-T06/T08 |
+| **R5** 🟡 | **PRD §16 仍有条件性未决项**（v2.6 已闭环 `Q19`/`Q21`/`Q22`/`Q23`；`Q24` 删除口径已由本排期按推荐方案取值；`Q20`/`Q25` 为待验证 / 条件性触发） | **中** | `Q24`：**0**（M0 已按「删除」执行，2 人天已含）；`Q25`：**+2 ~ +4 周**（见 R1） | `Q24`：M0-T02 按 `Q24` 推荐方案「删除」执行，形制知识已在架构 §A.4 固化，删代码不丢知识；`Q25`：**仅在 M2b-T05 的最小验证失败时触发**，触发后必须重估阈值 1 并回写 PRD §15.6.3 | `Q25` 被触发 → 同 R1 |
+| **R6** 🟡 | **PDF 插件选型（`Q4`）可能反复** | **中（≈40%）** | **+2 ~ +4 周**（M2b-T01） | 开工前按两条硬指标定稿：① 能否渲染指定页为位图（`META-10` 复用）；② Android + Windows 双平台覆盖。iOS / Linux 覆盖风险最高，按 §15.3 降级为「识别 + 提示」（v2.6 已确认该降级） | 选型 2 周内未定稿 → M2b-T01 后移，先做 M2b-T06/T08 |
 | **R7** 🟡 | **`TTS-03` 后台播放（Android 前台服务 + 媒体会话）平台工作量易低估** | **中（≈45%）** | **+1 ~ +3 周**（M3-T07） | 留出 3.5 人天（已高于纯 Dart 业务项的估算）；若 Android 侧卡住，先把 iOS/桌面降级路径做掉，保住 `TTS-01/02` 的可用性 | M3-T07 进行到第 2 周仍无端到端通路 → 拆出「仅前台朗读」中间版本先交付 |
 | **R8** 🟡 | **玻璃态视觉反复（`Q1`）** | **中** | **+2 ~ +4 周**（分散在 M1-T08 / M2a-T04 / M3-T10） | 按 `Q1` 推荐方案：**先按已定分界实现 P0，把「特效强度」做成运行时开关**；正文区保持永久红线；**不在本机 Windows 上反复调视觉**（Skia 轻量路径与 Android 不一致） | 视觉返工超过 2 轮 → 冻结视觉，转入功能推进 |
 | **R9** 🟢 | **依赖版本锁定与 Flutter 升级的两难**（`archive` 锁 3.x、`liquid_glass_widgets` 锁 1.6.2、FRB 锁 2.13.0；`Q3` 是否升 Flutter ≥ 3.47） | **低** | 若中途升级 Flutter：**+3 ~ +6 周**（全工程依赖兼容性回归） | **本期不升级**（`Q3` 推荐方案），接受 Windows 玻璃走 Skia 轻量路径。**升级只能放在 M4 之后**作为独立动作，不得混进任何批次 | 出现「不升 Flutter 就无法继续」的硬阻塞 → 单独立项评估，不并入现有批次 |
