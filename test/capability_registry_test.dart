@@ -196,4 +196,72 @@ void main() {
       expect(e.reason, 'JS 可求值');
     });
   });
+
+  group('warmUp 翻转 has(script)：降级失效修复', () {
+    const FieldUsage jsField = FieldUsage(isConfigured: true, usesJs: true);
+
+    test('probe 返回 false：has 由 true 翻 false，判定由 jsRequired 翻 jsUnavailable',
+        () async {
+      final CapabilityRegistry registry =
+          CapabilityRegistry(script: _FakeEngine(probeResult: false));
+      final RuleEvaluator evaluator = RuleEvaluator(registry);
+
+      // warmUp 之前：乐观，仅按 isAvailable 判可用
+      expect(registry.has(Capability.script), isTrue);
+      expect(evaluator.evaluate(jsField).outcome, EvaluationOutcome.jsRequired);
+
+      await registry.warmUp();
+
+      // warmUp 之后：探测失败 → 降级生效
+      expect(registry.has(Capability.script), isFalse);
+      expect(
+        evaluator.evaluate(jsField).outcome,
+        EvaluationOutcome.jsUnavailable,
+      );
+      expect(registry.reasonFor(Capability.script), isNotNull);
+    });
+
+    test('probe 抛异常：同样翻为不可用并记录原因', () async {
+      final CapabilityRegistry registry =
+          CapabilityRegistry(script: _FakeEngine(throwOnProbe: true));
+      final RuleEvaluator evaluator = RuleEvaluator(registry);
+
+      expect(registry.has(Capability.script), isTrue);
+      await expectLater(registry.warmUp(), completes);
+
+      expect(registry.has(Capability.script), isFalse);
+      expect(
+        evaluator.evaluate(jsField).outcome,
+        EvaluationOutcome.jsUnavailable,
+      );
+      expect(
+        registry.reasonFor(Capability.script),
+        startsWith('引擎初始化异常'),
+      );
+    });
+
+    test('probe 通过：has 保持 true，并清除过时原因', () async {
+      final CapabilityRegistry registry = CapabilityRegistry(
+        script: _FakeEngine(probeResult: true),
+        unavailableReasons: <Capability, String>{
+          Capability.script: '过时原因',
+        },
+      );
+
+      await registry.warmUp();
+
+      expect(registry.has(Capability.script), isTrue);
+      expect(registry.reasonFor(Capability.script), isNull);
+      expect(
+        RuleEvaluator(registry).evaluate(jsField).outcome,
+        EvaluationOutcome.jsRequired,
+      );
+    });
+
+    test('未调用 warmUp 时保持乐观（按 isAvailable 判断）', () {
+      final CapabilityRegistry registry =
+          CapabilityRegistry(script: _FakeEngine());
+      expect(registry.has(Capability.script), isTrue);
+    });
+  });
 }
