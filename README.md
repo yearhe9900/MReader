@@ -9,10 +9,16 @@
 - 状态管理：`StatefulWidget` + `setState`，无 Riverpod / Provider / Freezed / 代码生成。
 - 字体：使用系统默认字体，**未向工程内塞任何字体文件**（中文由系统字体提供）。
 
-> ⚠️ 本工程已从 `D:\Projects\567Reader\Reader567`（包名 `qreader_demo`）整体复制并改名为
-> **阅读M / MReader**（Dart 包名 `mreader`，Android/iOS/macOS bundle id `com.mreader.app`），
-> 平台目录（android/ ios/ windows/ macos/ linux/ web/）**已存在**，无需再 `flutter create`。
+> 📌 **工程骨架说明（仅工具链层面）**：平台目录（`android/` `ios/` `windows/` `macos/` `linux/` `web/`）
+> **已存在**，无需再 `flutter create`；Dart 包名 `mreader`，Android/iOS/macOS bundle id `com.mreader.app`。
 > 下文第三节的 `flutter create` 步骤仅作历史记录保留。
+>
+> ⚠️ **本项目为独立立项的全新项目，产品需求独立定义，与任何既有工程无关**
+> （见 `docs/PRD.md` §1.3）。工程骨架早期由既有工程复制改名而来，**只复用工具链配置，
+> 不构成需求来源**；实现层面可借鉴成熟开源代码的算法与协议，但需求必须重新定义。
+>
+> ➡️ **需求以 `docs/PRD.md` 为准**。本 README 只描述**当前代码的实际状态**（含已知限制），
+> 不是需求文档；两者不一致时以 PRD 为准。
 
 ---
 
