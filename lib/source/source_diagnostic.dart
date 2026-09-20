@@ -9,6 +9,9 @@
 // 本文件不依赖 Flutter。
 
 import 'book_source.dart';
+import 'capability/capability.dart';
+import 'capability/capability_registry.dart';
+import 'capability/rule_evaluator.dart';
 import 'source_rule.dart';
 import 'url_rule.dart';
 
@@ -141,6 +144,12 @@ class ParsedField {
   /// 该字段是否依赖 JS。
   bool get usesJs => (rule?.usesJs ?? false) || (url?.usesJs ?? false);
 
+  /// 提取给 [RuleEvaluator] 判定的静态事实。
+  ///
+  /// 由体检层负责转换，从而断开 `capability/` 对体检层的反向依赖
+  /// （避免循环 import）。
+  FieldUsage toUsage() => FieldUsage(isConfigured: isConfigured, usesJs: usesJs);
+
   /// 该字段是否是列表规则（行首可带 `-` / `+` 顺序修饰）。
   bool get isListRule => rule?.isListRule ?? false;
 
@@ -201,6 +210,8 @@ class SourceDiagnostic {
     required this.capabilities,
     required this.findings,
     required this.legadoApis,
+    this.evaluator,
+    this.evaluations = const <ParsedField, FieldEvaluation>{},
   });
 
   /// 被体检的书源。
@@ -217,6 +228,34 @@ class SourceDiagnostic {
 
   /// 引用到的 legado 私有 API，如 `java.ajax`、`source.putLoginInfo`。
   final List<String> legadoApis;
+
+  /// 第 2 层（平台相对）的判定器。
+  ///
+  /// [inspect] 时为 null（只有第 1 层）；[inspectFor] 时非空。
+  final RuleEvaluator? evaluator;
+
+  /// 按字段的平台评估结果（第 2 层）。[inspect] 时为空表。
+  ///
+  /// 键是 [fields] 中的**同一实例**（[ParsedField] 未定义值相等），
+  /// 因此用 `evaluations[field]` 查询时须传入来自 [fields] 的实例。
+  final Map<ParsedField, FieldEvaluation> evaluations;
+
+  /// 是否叠加了平台层（第 2 层）结论。
+  bool get hasPlatformLayer => evaluator != null;
+
+  /// 依赖 JS 但本平台不可用（降级）的字段数。
+  int get jsUnavailableFieldCount => evaluations.values
+      .where((FieldEvaluation e) =>
+          e.outcome == EvaluationOutcome.jsUnavailable)
+      .length;
+
+  /// 依赖 JS 且本平台可求值的字段数。
+  int get jsRequiredFieldCount => evaluations.values
+      .where((FieldEvaluation e) => e.outcome == EvaluationOutcome.jsRequired)
+      .length;
+
+  /// 某字段的平台结论；未叠加平台层或字段不存在时返回 null。
+  FieldEvaluation? evaluationOf(ParsedField field) => evaluations[field];
 
   /// 已配置的字段数。
   int get configuredFieldCount =>
@@ -247,8 +286,31 @@ class SourceDiagnostic {
       .where((DiagnosticFinding f) => f.level == level)
       .toList(growable: false);
 
-  /// 对一条书源做体检。
-  static SourceDiagnostic inspect(BookSource source) {
+  /// 对一条书源做体检（**第 1 层：源固有、平台无关**）。
+  ///
+  /// 结论只回答「这条源依赖什么」，与运行平台无关 ——
+  /// 换平台时本方法的结果**不变**。平台可用性请用 [inspectFor]。
+  static SourceDiagnostic inspect(BookSource source) => _inspect(source);
+
+  /// 在 [inspect] 的第 1 层结论之上，叠加**第 2 层「本平台能力」**结论。
+  ///
+  /// 设计原则：**第 1 层是「事实」，第 2 层是「当前环境下的结论」**。
+  /// 本方法不改写 [SourceDiagnostic.fields] / [SourceDiagnostic.capabilities] /
+  /// [SourceDiagnostic.legadoApis]，只在 [SourceDiagnostic.evaluations] 上叠加
+  /// 按字段的平台判定，并把「依赖 JS 引擎」的 blocker 文案按平台分流。
+  ///
+  /// [registry] 由调用方显式注入（本项目不使用全局单例）。
+  static SourceDiagnostic inspectFor(
+    BookSource source,
+    CapabilityRegistry registry,
+  ) =>
+      _inspect(source, registry: registry);
+
+  /// 体检主流程。`registry` 为 null 时只产第 1 层结论（等价于 [inspect]）。
+  static SourceDiagnostic _inspect(
+    BookSource source, {
+    CapabilityRegistry? registry,
+  }) {
     final List<ParsedField> fields = _parseFields(source);
     final Set<SourceCapability> capabilities = <SourceCapability>{
       SourceCapability.network,
@@ -280,7 +342,18 @@ class SourceDiagnostic {
       capabilities: capabilities,
       apis: apis,
       unmodeledGroups: unmodeledGroups,
+      registry: registry,
     );
+
+    // ---- 第 2 层：按字段的平台评估 ----
+    final RuleEvaluator? evaluator =
+        registry == null ? null : RuleEvaluator(registry);
+    final Map<ParsedField, FieldEvaluation> evaluations = evaluator == null
+        ? const <ParsedField, FieldEvaluation>{}
+        : <ParsedField, FieldEvaluation>{
+            for (final ParsedField field in fields)
+              field: evaluator.evaluate(field.toUsage()),
+          };
 
     return SourceDiagnostic(
       source: source,
@@ -288,6 +361,8 @@ class SourceDiagnostic {
       capabilities: Set<SourceCapability>.unmodifiable(capabilities),
       findings: List<DiagnosticFinding>.unmodifiable(findings),
       legadoApis: apis.toList(growable: false)..sort(),
+      evaluator: evaluator,
+      evaluations: Map<ParsedField, FieldEvaluation>.unmodifiable(evaluations),
     );
   }
 
@@ -573,6 +648,7 @@ class SourceDiagnostic {
     required Set<SourceCapability> capabilities,
     required Set<String> apis,
     required List<String> unmodeledGroups,
+    CapabilityRegistry? registry,
   }) {
     final List<DiagnosticFinding> findings = <DiagnosticFinding>[];
     final List<ParsedField> configured =
@@ -612,14 +688,14 @@ class SourceDiagnostic {
     }
 
     // ---- JS 依赖 ----
+    //
+    // 第 1 层（registry == null）文案逐字保持不变；叠加平台层（inspectFor）时
+    // 按平台分流：能力齐备 → 引导去实现引擎；能力缺失 → 本平台不可用。
     if (capabilities.contains(SourceCapability.js)) {
-      findings.add(DiagnosticFinding(
-        level: DiagnosticLevel.blocker,
-        title: '依赖 JS 引擎：$jsFields/${configured.length} 个已配置字段含 JS',
-        detail: 'legado 用 QuickJS/JS 沙箱执行规则里的 JavaScript，并提供 '
-            '`java.*`（网络、字符串、编解码）、`source.*`（登录态、变量）、'
-            '`cache.*`（内存缓存）等私有 API。当前 demo 无 JS 引擎，'
-            '这些字段**无法求值**。参考实现用 flutter_js 承载。',
+      findings.add(_jsDependencyFinding(
+        registry: registry,
+        jsFields: jsFields,
+        configuredCount: configured.length,
       ));
     } else if (configured.isNotEmpty) {
       findings.add(DiagnosticFinding(
@@ -787,5 +863,54 @@ class SourceDiagnostic {
       return a.title.compareTo(b.title);
     });
     return findings;
+  }
+
+  /// 「依赖 JS 引擎」的 blocker。
+  ///
+  /// · [registry] 为 null（[inspect]）→ 输出第 1 层原文案，逐字不变；
+  /// · 能力齐备（Android / iOS）→ 引导去实现引擎；
+  /// · 能力缺失（鸿蒙未适配 / 无引擎）→ 说明「本平台不可用，请用纯规则源或换平台」。
+  static DiagnosticFinding _jsDependencyFinding({
+    required CapabilityRegistry? registry,
+    required int jsFields,
+    required int configuredCount,
+  }) {
+    final String title = '依赖 JS 引擎：$jsFields/$configuredCount 个已配置字段含 JS';
+
+    // 第 1 层：平台中性的原文案。
+    if (registry == null) {
+      return DiagnosticFinding(
+        level: DiagnosticLevel.blocker,
+        title: title,
+        detail: 'legado 用 QuickJS/JS 沙箱执行规则里的 JavaScript，并提供 '
+            '`java.*`（网络、字符串、编解码）、`source.*`（登录态、变量）、'
+            '`cache.*`（内存缓存）等私有 API。当前 demo 无 JS 引擎，'
+            '这些字段**无法求值**。参考实现用 flutter_js 承载。',
+      );
+    }
+
+    // 第 2 层 · 能力齐备：引导去实现引擎。
+    if (registry.has(Capability.script)) {
+      return DiagnosticFinding(
+        level: DiagnosticLevel.blocker,
+        title: title,
+        detail: '本平台脚本能力可用（${registry.script.label}），'
+            '但这些字段仍需接入 JS 引擎才能求值 —— '
+            '请实现 `ScriptCapability` 实现类并在 `main.dart` 注入 '
+            '`CapabilityRegistry`。接入之前，这些字段**无法求值**。',
+      );
+    }
+
+    // 第 2 层 · 能力缺失：本平台不可用。
+    final String reason =
+        registry.reasonFor(Capability.script) ?? '本平台无 JS 引擎';
+    return DiagnosticFinding(
+      level: DiagnosticLevel.blocker,
+      title: title,
+      detail: '本平台不可用（$reason）—— '
+          '请改用纯规则源，或切换到具备 JS 能力的平台。'
+          'legado 原用 QuickJS/JS 沙箱承载这些字段，并提供 `java.*` / '
+          '`source.*` / `cache.*` 等私有 API。',
+    );
   }
 }

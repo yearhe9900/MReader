@@ -8,6 +8,9 @@
 import 'package:flutter/material.dart' hide DiagnosticLevel;
 
 import '../../source/book_source.dart';
+import '../../source/capability/capability.dart';
+import '../../source/capability/capability_registry.dart';
+import '../../source/capability/rule_evaluator.dart';
 import '../../source/rule_analyzer.dart';
 import '../../source/source_diagnostic.dart';
 import '../../source/source_rule.dart';
@@ -19,6 +22,7 @@ class SourceDetailPage extends StatelessWidget {
     super.key,
     required this.source,
     required this.diagnostic,
+    this.capabilityRegistry,
   });
 
   /// 书源。
@@ -27,11 +31,19 @@ class SourceDetailPage extends StatelessWidget {
   /// 已算好的体检结果（由列表页传入，避免每次 build 重算）。
   final SourceDiagnostic diagnostic;
 
+  /// 本平台能力注册表。
+  ///
+  /// 可选：未注入时退化为 [CapabilityRegistry.fallback]（无引擎）。
+  /// 由 `main.dart` 装配真实能力后逐层显式传递（本项目不使用全局单例）。
+  final CapabilityRegistry? capabilityRegistry;
+
   @override
   Widget build(BuildContext context) {
     final List<ParsedField> configured = diagnostic.fields
         .where((ParsedField f) => f.isConfigured)
         .toList(growable: false);
+    final CapabilityRegistry registry =
+        capabilityRegistry ?? CapabilityRegistry.fallback();
 
     return Scaffold(
       appBar: AppBar(
@@ -66,6 +78,14 @@ class SourceDetailPage extends StatelessWidget {
                 for (final DiagnosticFinding finding in diagnostic.findings)
                   _FindingTile(finding: finding),
               ],
+            ),
+          ),
+          _Section(
+            title: '本平台能力',
+            subtitle: '第 1 层（源固有）+ 第 2 层（当前平台）合成结论',
+            child: _PlatformCapabilityPanel(
+              diagnostic: diagnostic,
+              registry: registry,
             ),
           ),
           _Section(
@@ -274,6 +294,102 @@ class _FindingTile extends StatelessWidget {
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// 本平台能力
+// ---------------------------------------------------------------------------
+
+/// 「本平台能力」面板：把第 1 层（源固有）与第 2 层（平台相对）合成三态呈现。
+///
+/// · ✅ 可跑 —— 已配置字段全部可求值；
+/// · ⚠️ 降级 —— 有依赖 JS 的字段在本平台不可用（纯规则字段仍可跑）；
+/// · ❌ 不可用 —— 无脚本引擎且该源强依赖 JS。
+class _PlatformCapabilityPanel extends StatelessWidget {
+  const _PlatformCapabilityPanel({
+    required this.diagnostic,
+    required this.registry,
+  });
+
+  final SourceDiagnostic diagnostic;
+  final CapabilityRegistry registry;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final bool jsAvailable = registry.has(Capability.script);
+
+    // 优先用体检时算好的平台结论；若详情页拿到的是第 1 层结果
+    // （`inspect`，evaluations 为空），就地按注入的 registry 补算。
+    final Map<ParsedField, FieldEvaluation> evaluations =
+        diagnostic.evaluations.isNotEmpty
+            ? diagnostic.evaluations
+            : _evaluateAll(RuleEvaluator(registry), diagnostic.fields);
+
+    int countOf(EvaluationOutcome outcome) => evaluations.values
+        .where((FieldEvaluation e) => e.outcome == outcome)
+        .length;
+
+    final int jsUnavailable = countOf(EvaluationOutcome.jsUnavailable);
+    final int jsRequired = countOf(EvaluationOutcome.jsRequired);
+    final int staticOk = diagnostic.fields
+        .where((ParsedField f) =>
+            f.isConfigured &&
+            evaluations[f]?.outcome == EvaluationOutcome.staticOk)
+        .length;
+
+    final (String overall, _TagTone tone) = switch ((
+      jsUnavailable,
+      jsRequired,
+    )) {
+      (> 0, _) => ('本平台降级：$jsUnavailable 个 JS 字段不可求值', _TagTone.warn),
+      (_, > 0) => ('可跑：$jsRequired 个 JS 字段由本平台引擎执行', _TagTone.ok),
+      _ => ('可跑：已配置字段均为纯静态求值', _TagTone.ok),
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: <Widget>[
+            _Tag(text: overall, tone: tone),
+            _Tag(
+              text: jsAvailable
+                  ? '脚本引擎：${registry.script.label}'
+                  : '脚本引擎：缺失',
+              tone: jsAvailable ? _TagTone.ok : _TagTone.warn,
+            ),
+            _Tag(text: '静态可跑 $staticOk', tone: _TagTone.ok),
+            if (jsUnavailable > 0)
+              _Tag(text: '降级 $jsUnavailable', tone: _TagTone.warn),
+            if (jsRequired > 0)
+              _Tag(text: 'JS 可跑 $jsRequired', tone: _TagTone.ok),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          jsAvailable
+              ? '本平台具备 JS 执行能力，依赖 JS 的字段可求值。'
+              : '本平台无 JS 引擎：依赖 JS 的字段会降级，纯规则字段照常可跑。'
+                  '请改用纯规则源，或切换到具备 JS 能力的平台。',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+      ],
+    );
+  }
+
+  /// 按注入的 registry 逐字段求平台结论。
+  static Map<ParsedField, FieldEvaluation> _evaluateAll(
+    RuleEvaluator evaluator,
+    List<ParsedField> fields,
+  ) =>
+      <ParsedField, FieldEvaluation>{
+        for (final ParsedField field in fields)
+          field: evaluator.evaluate(field.toUsage()),
+      };
 }
 
 // ---------------------------------------------------------------------------
