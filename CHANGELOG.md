@@ -7,6 +7,7 @@
 
 ### 新增
 
+- M1-T02B 测试：dispose 契约用例（两源，释放后空结果 + 竞态不抛）`be1838f`
 - M1-T02B TXT 源：DartTxtSource 照译 TextFile.kt 分章算法（RD-02）`bd2466d`
 - M1-T02B 编码名缝：text_codec.detectEncodingName（NF-C4，供 Rust 只探测编码名）`f39deb1`
 - M1-T02B 应用接线：首页/阅读页改吃 BookSource，支持 EPUB + TXT `0da0c5b`
@@ -23,6 +24,7 @@
 
 ### 变更
 
+- M1-T02B 分章阈值口径升格为本项目 canonical 定义（字符级；Rust 不得照抄参考实现字节口径）`4c1c849`
 - M1-T02B 择优性能：TXT 规则择优只跑首个 512KB 块，20MB 由分钟级降到百毫秒级 `bd2466d`
 - M1-T02B 文件名兜底：`.txt` 这类无书名的名字回落「未命名」`bd2466d`
 - §15.4 依赖清单补录 path_provider（应用数据目录）`9194a89`
@@ -35,6 +37,7 @@
 
 ### 修复
 
+- M1-T02B dispose 竞态：两源释放后/竞态中返回空结果、不抛（RUST-01）`4c1c849`
 - Android 构建：插件模块 compileSdk 统一提升到 36 `11c5198`
 
 ## 2026-09-20
