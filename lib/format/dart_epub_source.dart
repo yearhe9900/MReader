@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import '../epub/epub_parser.dart';
 import '../epub/section_extractor.dart';
 import '../epub/zip_paths.dart';
+import '../meta/epub_meta.dart';
 import '../model/epub_book.dart';
 import 'book_source.dart';
 
@@ -29,8 +30,8 @@ class DartEpubSource implements BookSource {
   /// EPUB 的完整字节。
   final Uint8List bytes;
 
-  EpubBook? _book;
-  Future<EpubBook>? _loading;
+  EpubParseResult? _parsed;
+  Future<EpubParseResult>? _loading;
   List<Chapter>? _chapters;
   int? _totalChars;
   bool _disposed = false;
@@ -54,41 +55,30 @@ class DartEpubSource implements BookSource {
 
   /// 惰性解析一次并缓存：构造**不解析**（打开的响应速度由调用方掌控）。
   ///
+  /// 返回 [EpubParseResult]（结构 + `OpfView`，**同一次解压**）。
   /// **已释放时返回 `null`**（不再触发解析）；竞态中若解析在 dispose 之后才完成，
-  /// 也返回 `null` 且**不写回** [_book]。
-  Future<EpubBook?> _bookOnce() async {
+  /// 也返回 `null` 且**不写回** [_parsed]。
+  Future<EpubParseResult?> _parsedOnce() async {
     if (_disposed) return null;
-    final EpubBook? cached = _book;
+    final EpubParseResult? cached = _parsed;
     if (cached != null) return cached;
-    final EpubBook book = await (_loading ??= parseEpub(bytes, fileName: fileName));
+    final EpubParseResult parsed =
+        await (_loading ??= parseEpubResult(bytes, fileName: fileName));
     if (_disposed) return null;
-    _book = book;
-    return book;
+    _parsed = parsed;
+    return parsed;
   }
+
+  Future<EpubBook?> _bookOnce() async => (await _parsedOnce())?.book;
 
   @override
   Future<BookMeta> load() async {
-    final EpubBook? book = await _bookOnce();
-    if (book == null) return _disposedMeta; // 已释放 / 竞态
-    // 说明：本提交只把**类型**从细粒度串换成 `MetaOrigin`（语义不变）；
-    // 下一个提交（M1-T05 提交 2）会改为经 `lib/meta/epub_meta.dart` 产 meta——
-    // 接入 `META-02` 四来源优先级链、`META-03` 多作者整体保留与 `intro`/`auto`。
-    return BookMeta(
-      title: book.title,
-      titleOrigin: book.title.isEmpty ? MetaOrigin.none : MetaOrigin.metadata,
-      author: book.author,
-      authorOrigin: book.author.isEmpty ? MetaOrigin.none : MetaOrigin.metadata,
-      intro: '',
-      introOrigin: MetaOrigin.none,
-      cover: const NoCover(),
-      coverOrigin: MetaOrigin.none,
-      language: book.language,
-      auto: BookMetaAuto(
-        title: book.title,
-        author: book.author,
-        intro: '',
-      ),
-    );
+    final EpubParseResult? parsed = await _parsedOnce();
+    if (parsed == null) return _disposedMeta; // 已释放 / 竞态
+    // `META-02/03`：经 `lib/meta/epub_meta.dart` 产 meta——四来源优先级链（命中即停）、
+    // 多作者稳定顺序整体保留、封面候选 -> `PendingCover`（真实字节 + 真实格式）。
+    // 纯 Dart：可进 `compute()`（`PERF-01`）。
+    return buildEpubMeta(opfView: parsed.opfView, fileName: fileName);
   }
 
   @override
@@ -216,7 +206,7 @@ class DartEpubSource implements BookSource {
   @override
   Future<void> dispose() async {
     _disposed = true;
-    _book = null;
+    _parsed = null;
     _loading = null;
     _chapters = null;
     _totalChars = null;

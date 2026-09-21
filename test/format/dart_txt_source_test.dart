@@ -72,10 +72,12 @@ void main() {
       await source.dispose();
     });
 
-    test('文件名无有效书名时 title 为「未命名」而非空串', () async {
+    test('文件名无有效书名时 title 为「未命名书籍」而非空串', () async {
       final DartTxtSource source =
           DartTxtSource(fileName: '.txt', bytes: _utf8(_twoChaptersText()));
-      expect((await source.load()).title, '未命名');
+      final BookMeta meta = await source.load();
+      expect(meta.title, '未命名书籍');
+      expect(meta.titleOrigin, MetaOrigin.none);
       await source.dispose();
     });
   });

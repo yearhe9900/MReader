@@ -44,6 +44,7 @@
 import 'dart:typed_data';
 
 import '../epub/text_codec.dart';
+import '../meta/txt_meta.dart';
 import 'book_source.dart';
 
 // `Chapter` / `ChapterContent` / `MReaderFormatException` 经 `book_source.dart`
@@ -121,27 +122,9 @@ class DartTxtSource implements BookSource {
   Future<BookMeta> load() async {
     await _ensurePrepared();
     if (_disposed) return _disposedMeta;
-    final String stem = _stemOf(fileName);
-    // 本提交只把**类型**从细粒度串换成 `MetaOrigin`（语义不变）；
-    // 下一个提交（M1-T05 提交 2）会改为经 `lib/meta/txt_meta.dart` 产 meta——
-    // 接入 `META-04` 文件名规则链（命中即停）、作者兜底「未知作者」与 `intro`/`auto`。
+    // `META-04` + `META-01`：书名 / 作者经文件名规则链（命中即停）+ 统一兜底。
     // TXT 无内嵌封面：`cover` 恒为 `NoCover`（`META-07` 的合成封面是运行时绘制）。
-    return BookMeta(
-      title: stem.isNotEmpty ? stem : '未命名',
-      titleOrigin: MetaOrigin.filename,
-      author: '',
-      authorOrigin: MetaOrigin.none,
-      intro: '',
-      introOrigin: MetaOrigin.none,
-      cover: const NoCover(),
-      coverOrigin: MetaOrigin.none,
-      language: '',
-      auto: BookMetaAuto(
-        title: stem.isNotEmpty ? stem : '未命名',
-        author: '',
-        intro: '',
-      ),
-    );
+    return buildTxtMeta(fileName: fileName);
   }
 
   @override
@@ -469,26 +452,6 @@ class DartTxtSource implements BookSource {
   /// 是否空白字符（与 `String.trim` 的口径接近；另含全角空格 U+3000）。
   static bool _isWhitespaceUnit(int c) =>
       c == 0x20 || (c >= 0x09 && c <= 0x0D) || c == 0x3000 || c == 0x00A0;
-
-  /// 文件名去目录、去扩展名（不含 `dart:io`；兼容 Windows 的 `\`）。
-  ///
-  /// 口径：`红楼梦.txt` → `红楼梦`；`noext` → `noext`；`.txt`（**只有扩展名、无书名**）
-  /// → 空串，交给调用方回落「未命名」；`a.b.txt` → `a.b`（只去最后一段）。
-  static String _stemOf(String fileName) {
-    final String name = fileName.replaceAll('\\', '/');
-    final int slash = name.lastIndexOf('/');
-    final String base = slash >= 0 ? name.substring(slash + 1) : name;
-    final int dot = base.lastIndexOf('.');
-    final String stem;
-    if (dot < 0) {
-      stem = base; // 无扩展名
-    } else if (dot == 0) {
-      stem = ''; // 形如 `.txt`：点前没有书名
-    } else {
-      stem = base.substring(0, dot);
-    }
-    return stem.trim();
-  }
 }
 
 /// 一章的字符区间与章名（内部结构）。

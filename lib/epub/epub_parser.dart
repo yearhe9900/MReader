@@ -1,9 +1,10 @@
 // 纯 Dart 的 EPUB 解析层。
 //
-// 对外只暴露一个纯函数式入口：`字节流 -> EpubBook`，不与 UI 耦合，
-// 这样单测可以直接在内存里造一本 EPUB 来验证，后续也能直接丢进 isolate。
+// 对外入口：
+//   · `parseEpub(bytes) -> EpubBook`——结构（元数据 / manifest / spine / 目录 / 加密标记）；
+//   · `parseEpubResult(bytes) -> EpubParseResult`——额外带上 `OpfView`（供 `lib/meta/epub_meta.dart`
+//     做 `META-02/03`，**与 EpubBook 同一次解压产出，不重复解压**）。
 //
-// 注意：这里只解析「结构」（元数据 / manifest / spine / 目录 / 加密标记）。
 // 章节正文的 XHTML -> 文本转换在 section_extractor.dart 里按需调用。
 //
 // 错误口径：一律抛 [MReaderFormatException]（文案唯一来源 `lib/format/error_messages.dart`），
@@ -40,6 +41,66 @@ class EpubParseException extends MReaderFormatException {
   String toString() => rawMessage;
 }
 
+/// 一个封面候选（`META-02` 四来源，**已按优先级排序**）。
+///
+/// 见架构 §N.4 动作项 D1。[source] 是**非契约的调试标签**（哪一路来源），
+/// 不参与等价性判定、不落盘（§N.2 的 `debugTag` 思想）。
+class CoverCandidate {
+  const CoverCandidate({required this.href, required this.source});
+
+  /// 包内路径（已归一化）。
+  final String href;
+
+  /// 来源标签（仅调试 / 排障）。
+  final String source;
+}
+
+/// `lib/meta/epub_meta.dart`（纯 Dart）消费的 OPF 视图（架构 §N.4 动作项 D1）。
+///
+/// 与 [EpubBook] **同一次解析**产出——复用已打开的 zip 归档，**不重复解压**。
+/// 它只承载「元数据提取所需的少量信息」，不持有整本条目表：
+/// [readEntry] 只覆盖封面候选相关的少量条目字节（最多 4 张图），
+/// 避免 `PERF-01` 下把整本解压结果钉在内存里。
+class OpfView {
+  const OpfView({
+    required this.title,
+    required this.creators,
+    required this.language,
+    required this.description,
+    required this.coverCandidates,
+    required this.readEntry,
+  });
+
+  /// `dc:title`（首个非空）；无则 `null`。
+  final String? title;
+
+  /// `dc:creator` **多值**，**稳定顺序整体保留**（`META-03` / `Q17`）；不切分。
+  final List<String> creators;
+
+  /// `dc:language`；无则 `null`。
+  final String? language;
+
+  /// `dc:description`（简介；`META-01` 的 `intro` 字段来源）。
+  ///
+  /// **§N.4 的代码草案未列本字段——属显式增补**：§N.3 要求 `BookMeta.intro`
+  /// 在导入时一次性写入并给出来源标记，而 intro 的内嵌来源正是 OPF 的 `dc:description`。
+  final String? description;
+
+  /// 封面候选（`META-02` 四来源，**已按优先级排序**，命中即停）。
+  final List<CoverCandidate> coverCandidates;
+
+  /// 读包内条目字节（封面命中即停时用）。
+  final Uint8List? Function(String href)? readEntry;
+}
+
+/// `parseEpubResult` 的返回：结构与元数据视图**同一次解压**产出。
+class EpubParseResult {
+  const EpubParseResult({required this.book, required this.opfView});
+
+  final EpubBook book;
+  final OpfView opfView;
+}
+
 /// 把一个 EPUB 字节流解析成 [EpubBook]。
 ///
 /// 步骤：
@@ -52,6 +113,16 @@ class EpubParseException extends MReaderFormatException {
 ///
 /// 失败一律抛 [MReaderFormatException]，消息可读。
 Future<EpubBook> parseEpub(Uint8List bytes, {String fileName = ''}) async {
+  final EpubParseResult result =
+      await parseEpubResult(bytes, fileName: fileName);
+  return result.book;
+}
+
+/// 与 [parseEpub] 相同，但额外返回 [OpfView]（供 `lib/meta/epub_meta.dart` 消费）。
+Future<EpubParseResult> parseEpubResult(
+  Uint8List bytes, {
+  String fileName = '',
+}) async {
   if (bytes.isEmpty) {
     throw const MReaderFormatException(FormatErrorCode.emptyFile);
   }
@@ -119,6 +190,14 @@ Future<EpubBook> parseEpub(Uint8List bytes, {String fileName = ''}) async {
   final String title = firstLocalizedText(opfDoc, 'title');
   final String author = firstLocalizedText(opfDoc, 'creator');
   final String language = firstLocalizedText(opfDoc, 'language');
+  final String description = firstLocalizedText(opfDoc, 'description');
+
+  /// `dc:creator` 的**多值、稳定顺序**列表（`META-03` / `Q17`）。
+  final List<String> creators = <String>[];
+  for (final XmlElement el in findAllByLocalName(opfDoc, 'creator')) {
+    final String text = collapsedText(el);
+    if (text.isNotEmpty) creators.add(text);
+  }
 
   // 3) manifest：id -> href / media-type
   final Map<String, String> idToHref = <String, String>{};
@@ -167,7 +246,25 @@ Future<EpubBook> parseEpub(Uint8List bytes, {String fileName = ''}) async {
     throw const MReaderFormatException(FormatErrorCode.emptySpine);
   }
 
-  return EpubBook(
+  // 7) 封面候选（META-02 四来源，已按优先级排序）+ 只保留候选的字节。
+  final List<CoverCandidate> coverCandidates =
+      _buildCoverCandidates(opfDoc, opfDir, idToHref, idToMediaType);
+  final Map<String, Uint8List> candidateBytes = <String, Uint8List>{};
+  for (final CoverCandidate c in coverCandidates) {
+    final Uint8List? b = lookup(c.href);
+    if (b != null) candidateBytes[c.href] = b;
+  }
+
+  final OpfView opfView = OpfView(
+    title: title.isEmpty ? null : title,
+    creators: creators,
+    language: language.isEmpty ? null : language,
+    description: description.isEmpty ? null : description,
+    coverCandidates: coverCandidates,
+    readEntry: (String href) => candidateBytes[href],
+  );
+
+  final EpubBook book = EpubBook(
     title: title,
     author: author,
     language: language,
@@ -175,6 +272,96 @@ Future<EpubBook> parseEpub(Uint8List bytes, {String fileName = ''}) async {
     sections: sections,
     toc: toc,
   );
+
+  return EpubParseResult(book: book, opfView: opfView);
+}
+
+// ---------------------------------------------------------------------------
+// 封面候选（META-02 四来源，有序、命中即停）
+// ---------------------------------------------------------------------------
+
+/// 图片扩展名（④ 文件名兜底用）。
+const Set<String> _imageExtensions = <String>{
+  'jpg', 'jpeg', 'jpe', 'png', 'gif', 'bmp', 'webp',
+  'tif', 'tiff', 'avif', 'heic', 'apng', 'svg',
+};
+
+/// 按 `META-02` 的**显式优先级**收集封面候选（去重，命中即停由消费方保证）：
+/// ① OPF `<meta name="cover" content="id">` 指向的 manifest item；
+/// ② manifest item 的 `properties` 含 `cover-image`（EPUB3 最常见）；
+/// ③ guide `<reference type="cover" href>`；
+/// ④ 文件名含 `cover` 的图片项。
+///
+/// **禁止用无序集合存放多来源**（否则结果依赖遍历顺序，`META-02`）——
+/// 这里用**有序 List + 去重 Set**。
+List<CoverCandidate> _buildCoverCandidates(
+  XmlDocument opfDoc,
+  String opfDir,
+  Map<String, String> idToHref,
+  Map<String, String> idToMediaType,
+) {
+  final List<CoverCandidate> out = <CoverCandidate>[];
+  final Set<String> seen = <String>{};
+
+  void add(String? href, String source) {
+    final String key = (href ?? '').trim();
+    if (key.isEmpty) return;
+    if (!seen.add(key)) return;
+    out.add(CoverCandidate(href: key, source: source));
+  }
+
+  // ① <meta name="cover" content="id">
+  for (final XmlElement meta in findAllByLocalName(opfDoc, 'meta')) {
+    final String name = (meta.getAttribute('name') ?? '').trim().toLowerCase();
+    if (name != 'cover') continue;
+    final String? content = meta.getAttribute('content');
+    if (content == null) continue;
+    add(idToHref[content.trim()], 'opf-meta-cover');
+  }
+
+  // ② properties 含 cover-image
+  for (final XmlElement item in findAllByLocalName(opfDoc, 'item')) {
+    final String props = (item.getAttribute('properties') ?? '').toLowerCase();
+    if (props.isEmpty) continue;
+    final List<String> tokens = props.split(RegExp(r'\s+'));
+    if (!tokens.contains('cover-image')) continue;
+    final String? id = item.getAttribute('id');
+    if (id == null) continue;
+    add(idToHref[id], 'properties-cover-image');
+  }
+
+  // ③ guide <reference type="cover" href>
+  for (final XmlElement ref in findAllByLocalName(opfDoc, 'reference')) {
+    final String type = (ref.getAttribute('type') ?? '').trim().toLowerCase();
+    if (type != 'cover') continue;
+    final String? href = ref.getAttribute('href');
+    if (href == null) continue;
+    add(resolveHref(opfDir, href), 'guide-cover');
+  }
+
+  // ④ 文件名含 cover 的图片项
+  for (final XmlElement item in findAllByLocalName(opfDoc, 'item')) {
+    final String? id = item.getAttribute('id');
+    final String? href = item.getAttribute('href');
+    if (id == null || href == null) continue;
+    final String mediaType = (idToMediaType[id] ?? '').toLowerCase().trim();
+    final String path =
+        normalizeZipPath(decodePercentPath(href)).toLowerCase();
+    final String base = path.split('/').last;
+    if (!base.contains('cover')) continue;
+    if (!_looksImage(mediaType, path)) continue;
+    add(idToHref[id], 'filename-cover');
+  }
+
+  return out;
+}
+
+/// [mediaType] / [path]（小写）是否像图片。
+bool _looksImage(String mediaType, String path) {
+  if (mediaType.startsWith('image/')) return true;
+  final int dot = path.lastIndexOf('.');
+  if (dot < 0 || dot == path.length - 1) return false;
+  return _imageExtensions.contains(path.substring(dot + 1));
 }
 
 // ---------------------------------------------------------------------------

@@ -103,7 +103,7 @@ void main() {
         final BookSource source = sample.create();
         final BookMeta meta = await source.load();
         expect(meta.title, isNotEmpty, reason: 'META-01：书名缺失也要兜底为非空');
-        expect(meta.author, isA<String>());
+        expect(meta.author, isNotEmpty, reason: 'META-01：作者缺失也要兜底为非空');
         expect(meta.language, isA<String>());
         expect(meta.intro, isA<String>());
         // 枚举化后 `isNotEmpty` 失效：来源标记改为**闭合枚举**断言。

@@ -58,18 +58,21 @@ String opfXml({
   String version = '2.0',
   String extraMetadata = '',
   String spineAttrs = '',
+  String guide = '',
+  String? creators,
 }) =>
     '<?xml version="1.0" encoding="UTF-8"?>'
     '<package xmlns="http://www.idpf.org/2007/opf" version="$version" '
     'unique-identifier="uid">'
     '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
     '<dc:title>$title</dc:title>'
-    '<dc:creator>$author</dc:creator>'
+    '${creators ?? '<dc:creator>$author</dc:creator>'}'
     '<dc:language>$language</dc:language>'
     '$extraMetadata'
     '</metadata>'
     '<manifest>$manifest</manifest>'
     '<spine$spineAttrs>$spine</spine>'
+    '$guide'
     '</package>';
 
 /// manifest `<item>`。
