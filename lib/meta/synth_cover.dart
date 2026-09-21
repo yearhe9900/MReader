@@ -3,13 +3,34 @@
 // 按「书名 + 作者 + 主题」运行时绘制（背景取主题色，书名大字居中、作者小字居中于其下），
 // **按 cacheKey 缓存**，命中即复用、不重绘；书名 / 作者 / 主题任一变化即失效重建。
 //
+// ## 缓存**有界**（`META-05`「缓存上限」的另一半）
+//
+// 合成封面是本工程**唯一自建**的位图缓存：真实封面（`StoredCover`）只由
+// `CoverStore` 落盘 / 返回**字节**，其解码与去重上限交给 Flutter 内置 `ImageCache`；
+// 只有合成封面没有宿主缓存可依附，故**必须自带 LRU 上限**（见
+// [kSynthCoverCacheMaxEntries]）。
+//
+// 两条硬约束，缺一即退化成「有界但泄漏」：
+//   · 超限逐出的位图**必须 `ui.Image.dispose()`**；
+//   · 同 key 并发渲染经 in-flight 表**共享同一个 future**，只保一张图
+//     （失败路径同样从在途表移除，不把失败永久缓存）。
+//
 // 依赖 `dart:ui` + `lib/theme`（`CoverTheme`），属架构 §N.4 表的 Flutter 那半。
+import 'dart:collection';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
 import '../model/book_meta.dart';
 import '../theme/app_theme.dart';
+
+/// 合成封面内存缓存的**默认上限**（张）。
+///
+/// 算术：单张 `600 × 800 px × 4 B/px = 1,920,000 B ≈ 1.92 MB`；
+/// `32 × 1.92 MB ≈ 61.4 MB` 最坏常驻——**远高于书架同屏可见的封面数**
+/// （手机网格 2~3 列 × 4~6 行 ≈ 6~18 张，再加少量预取缓冲即可覆盖滚动窗口），
+/// 同时又给这块**全局唯一自建缓存**设了确定的内存边界。
+const int kSynthCoverCacheMaxEntries = 32;
 
 /// `META-07` 的合成封面渲染契约（架构 §N.7，**签名一字不改**）。
 abstract interface class SynthCoverRenderer {
@@ -35,14 +56,31 @@ String synthCoverCacheKey(String title, String author, CoverTheme theme) {
   return 'sc_${hash.toRadixString(16).padLeft(8, '0')}';
 }
 
-/// 默认实现：`dart:ui` 绘制 + 内存缓存（不自建额外字体 / 不引包）。
+/// 默认实现：`dart:ui` 绘制 + **有界 LRU** 内存缓存（不自建额外字体 / 不引包）。
 class CanvasSynthCoverRenderer implements SynthCoverRenderer {
-  /// `cacheKey -> 已渲染位图`。
-  final Map<String, ui.Image> _cache = <String, ui.Image>{};
+  /// [maxEntries] 上限可注入（缺省取 [kSynthCoverCacheMaxEntries]），仅作**测试缝**；
+  /// 生产路径一律走默认常量。小于 1 归一为 1。
+  CanvasSynthCoverRenderer({int maxEntries = kSynthCoverCacheMaxEntries})
+      : _maxEntries = maxEntries < 1 ? 1 : maxEntries;
+
+  final int _maxEntries;
+
+  /// `cacheKey -> 已渲染位图`。**保序**：最近使用在尾，最久未用在头（LRU 依据）。
+  final LinkedHashMap<String, ui.Image> _cache =
+      LinkedHashMap<String, ui.Image>();
+
+  /// `cacheKey -> 在途渲染`。同 key 并发调用共享同一个 future：既不重绘，
+  /// 也不产生第二张「后写覆盖、前者永不释放」的悬挂位图。
+  final Map<String, Future<ui.Image>> _inFlight = <String, Future<ui.Image>>{};
+
+  bool _disposed = false;
 
   /// 绘制尺寸（逻辑像素；书架上按容器缩放）。
   static const double _width = 600;
   static const double _height = 800;
+
+  /// 当前缓存张数（供测试观察，不必经 [imageOf] 反推）。
+  int get cachedCount => _cache.length;
 
   @override
   Future<SyntheticCover> render({
@@ -52,11 +90,26 @@ class CanvasSynthCoverRenderer implements SynthCoverRenderer {
   }) async {
     final SyntheticCover ref =
         SyntheticCover(synthCoverCacheKey(title, author, theme));
-    if (_cache.containsKey(ref.cacheKey)) {
-      return ref; // 命中即复用，不重绘
+
+    // ① 命中缓存：置为最近使用（LRU 尾），不重绘。
+    final ui.Image? cached = _cache.remove(ref.cacheKey);
+    if (cached != null) {
+      _cache[ref.cacheKey] = cached;
+      return ref;
     }
-    final ui.Image image = await _paint(title, author, theme);
-    _cache[ref.cacheKey] = image;
+
+    // ② 命中在途：await **同一个** future（不画第二张）。
+    Future<ui.Image>? pending = _inFlight[ref.cacheKey];
+    if (pending == null) {
+      pending = _renderAndCache(ref.cacheKey, title, author, theme);
+      _inFlight[ref.cacheKey] = pending;
+    }
+    await pending;
+
+    // ③ 完成后刷新 LRU 位置——在途命中同样适用，否则「刚渲染完」的项
+    //    会因插入点早于其它并发渲染而被当成最久未用。
+    final ui.Image? image = _cache.remove(ref.cacheKey);
+    if (image != null) _cache[ref.cacheKey] = image;
     return ref;
   }
 
@@ -70,10 +123,39 @@ class CanvasSynthCoverRenderer implements SynthCoverRenderer {
 
   /// 释放全部缓存位图（页面销毁时调用）。
   void dispose() {
+    _disposed = true;
     for (final ui.Image image in _cache.values) {
       image.dispose();
     }
     _cache.clear();
+  }
+
+  /// 绘制并写入缓存；**完成（含失败）后从在途表移除**。
+  Future<ui.Image> _renderAndCache(
+    String key,
+    String title,
+    String author,
+    CoverTheme theme,
+  ) async {
+    try {
+      final ui.Image image = await _paint(title, author, theme);
+      _put(key, image);
+      return image;
+    } finally {
+      _inFlight.remove(key);
+    }
+  }
+
+  /// 写入缓存并**逐出到上限**；逐出即 `dispose()`（否则有界却泄漏）。
+  void _put(String key, ui.Image image) {
+    if (_disposed) {
+      image.dispose(); // 渲染期间被 dispose：不留悬挂位图
+      return;
+    }
+    _cache[key] = image;
+    while (_cache.length > _maxEntries) {
+      _cache.remove(_cache.keys.first)?.dispose();
+    }
   }
 
   Future<ui.Image> _paint(String title, String author, CoverTheme theme) async {
