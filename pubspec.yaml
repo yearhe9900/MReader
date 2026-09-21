@@ -24,6 +24,9 @@ dependencies:
   html: ^0.15.4
   # 中文 EPUB 常见 GBK/GB18030 编码，Dart 标准库不支持，用它做解码兜底。
   charset: ^2.0.1
+  # SHA-256 哈希（LIB-05 内容摘要判重；Dart 官方包，纯 Dart，零 Flutter 依赖）。
+  # 精确锁定版本（不带 ^）：Dart 官方纯 Dart 包，版本锁定避免隐式升级引入差异。
+  crypto: 3.0.6
   # 定位应用私有数据目录（DATA-01 落盘根、TYP-03 设置持久化）。
   # Flutter 官方插件，五平台覆盖（Android/iOS/Windows/macOS/Linux）。
   # 仅在 lib/platform/app_paths.dart 的实现里使用；lib/ 业务代码只依赖 AppPaths 抽象。
