@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 
 import 'settings/settings_store.dart';
+import 'theme/app_theme.dart';
 
 /// 应用根组件。
 class MReaderApp extends StatefulWidget {
@@ -43,32 +44,18 @@ class _MReaderAppState extends State<MReaderApp> {
   }
 
   /// 把持久化的主题三态映射为 Flutter 的 [ThemeMode]（`TYP-03`）。
-  ThemeMode get _themeMode {
-    switch (widget.settings.settings.themeMode) {
-      case AppThemeMode.light:
-        return ThemeMode.light;
-      case AppThemeMode.dark:
-        return ThemeMode.dark;
-      case AppThemeMode.system:
-        return ThemeMode.system;
-    }
-  }
+  ///
+  /// 映射本身在 `lib/theme/app_theme.dart`（纯函数，便于单测）——`UI-01` ② 的有效亮度
+  /// 解析同处一地，避免「一处主题两处口径」。
+  ThemeMode get _themeMode => resolveThemeMode(widget.settings.settings.themeMode);
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'MReader',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: Colors.indigo,
-        brightness: Brightness.light,
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: Colors.indigo,
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
       themeMode: _themeMode,
       // 玻璃态组件库（M1-T08 接入）自身不提供 Material 祖先，缺省时其下的
       // 文本会渲染成黄色双下划线（PRD §11.4 已知限制）；这里统一补一层透明

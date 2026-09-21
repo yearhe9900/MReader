@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'app.dart';
 import 'format/book_registry.dart';
@@ -18,13 +19,40 @@ Future<void> main() async {
   // path_provider 等插件在访问前需要先初始化绑定。
   WidgetsFlutterBinding.ensureInitialized();
 
+  // `UI-01` ①：在 `runApp` **之前**预热玻璃着色器。失败**不阻塞启动**——
+  // 降级为「无玻璃效果但仍可运行」，与项目「诚实降级、不得崩」的口径一致。
+  await _warmUpGlassShaders();
+
   // 平台能力经抽象注入（PRD §15.1）：解析应用数据目录 → 构建设置服务 → 加载。
   final AppPaths appPaths = PathProviderAppPaths();
   final Directory dataDir = await appPaths.dataDir();
   final SettingsStore settings = SettingsStore(dataDir);
   await settings.load();
 
-  runApp(MReaderApp(settings: settings, home: const HomePage()));
+  // `UI-01` ②：`brightnessResolver: Theme.maybeBrightnessOf` 让玻璃控件跟随
+  // **应用 ThemeMode**（light / dark / system），而非仅系统亮度。
+  // 包裹位置在 `MReaderApp` **之外**，`app.dart` 里 builder 的透明 Material 地基一字不动。
+  runApp(
+    LiquidGlassWidgets.wrap(
+      child: MReaderApp(settings: settings, home: const HomePage()),
+      brightnessResolver: Theme.maybeBrightnessOf,
+    ),
+  );
+}
+
+/// 预热玻璃着色器（`UI-01` ①）。
+///
+/// `LiquidGlassWidgets.initialize()` 是库的真入口（1.6.2 源码
+/// `lib/liquid_glass_setup.dart`）：预编译 lightweight / interactive 着色器，并在支持的
+/// 平台上预编译多趟着色器，从而避免首帧白闪。这里只负责「调用 + 诚实降级」：
+/// 预热失败仅记录，不抛出、不阻塞启动。
+Future<void> _warmUpGlassShaders() async {
+  try {
+    await LiquidGlassWidgets.initialize();
+  } catch (error, stackTrace) {
+    debugPrint('[MReader] 玻璃着色器预热失败，降级为无玻璃效果：$error');
+    debugPrint('$stackTrace');
+  }
 }
 
 /// 首页（验证台）：EPUB / TXT 阅读链路入口。
