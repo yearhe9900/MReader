@@ -7,7 +7,9 @@
 > **时间基准**：本周 = 2026-09-20（周日）所在周 → **W1 = 2026-09-21（周一）～ 2026-09-27（周日）**，
 > 每周以周一为起始。全文周序均以此推出，无隐含偏移。
 >
-> **修订记录**：2026-09-20 · 对齐 **PRD v2.6**——`Q19`/`Q21`/`Q22`/`Q23` 拍板闭环；阈值 2 改「2a + 2b 合计触发、分层仅归因」；`RUST-10` 升级为设置页可配置（M35-T05 验收范围同步）；MOBI Kotlin 参考实现补录（M2b-T05 / M4-T07 评估维持现值，依据见对应行）；Linux/macOS 后台朗读与 PDF iOS/Linux 两处降级获负责人确认（M2b-T01 / M3-T07 措辞同步）。人天与周序**无变化**。
+> **修订记录**：
+> - 2026-09-20 · 对齐 **PRD v2.6**——`Q19`/`Q21`/`Q22`/`Q23` 拍板闭环；阈值 2 改「2a + 2b 合计触发、分层仅归因」；`RUST-10` 升级为设置页可配置（M35-T05 验收范围同步）；MOBI Kotlin 参考实现补录（M2b-T05 / M4-T07 评估维持现值，依据见对应行）；Linux/macOS 后台朗读与 PDF iOS/Linux 两处降级获负责人确认（M2b-T01 / M3-T07 措辞同步）。人天与周序**无变化**。
+> - 2026-09-21 · **567Reader 全流程调研**：研究 `D:\Projects\567Reader\567Reader`（Kotlin 原生 / legado 架构）的添加书籍→书架→打开阅读→进度保存全流程，产出 10 项可移植优化清单（见 `docs/进度表.md` 底部）。**排期决策**：① Tier A 已交付（`d1fc20c`，书架 `_openBook` 移除 eager load + `_opening` 防双击）；② **Tier B：`PERF-01`（`compute()` 化 `source.load()`）从 M3.5 前移到 M2a**（理由：567Reader 三招之首「重活下沉 IO 线程」，MReader 的 `DartEpubSource` 已声明可进 `compute()`，纯 Dart 改动，剩余最大收益）；③ Tier C 惰性 unzip 保持 M3.5 / 按需。M1-T07 说明列补充 567Reader 参考点。
 
 ---
 
@@ -134,15 +136,22 @@ PRD §7.1 抽象、§12.1 页面清单与 §15.1 平台能力抽象推导）。*
 | **M1-T04** | 阅读页产品化 / 进度持久化 / 目录 | `lib/reader/reader_page.dart`(由 `lib/ui/reader_page.dart` 重构)、`lib/reader/reader_controller.dart`、`lib/reader/progress_store.dart`、`lib/reader/toc_sheet.dart`、`lib/reader/control_bar.dart`、`test/reader/*` | M1-T02、M1-T03 | 4 | 【中】`RD-03`/`RD-04`/`NAV-01`。**`RD-04` 的进度模型（章节索引 + 章内 0.0~1.0）会被 `STAT-01`、`TTS-06`、`SYNC-02` 三方复用**，模型一次定对，否则 M2b / M3 / M4 都要迁移 |
 | **M1-T05** | 元数据模型与封面链路 | `lib/meta/book_meta.dart`、`lib/meta/meta_source.dart`、`lib/meta/epub_meta.dart`、`lib/meta/txt_meta.dart`、`lib/meta/cover_store.dart`、`lib/meta/synth_cover.dart`、`test/meta/*` | M1-T01、M1-T02 | 4.5 | 【中】`META-01~07`。`META-02` 的四来源优先级链必须用 fixture 固化（`Q16`）；`META-05` 的解码像素上限与 `NF-M5` 对齐；`META-07` 合成封面按「书名+作者+主题」缓存。这是 **M1 内第二重的任务** |
 | **M1-T06** | 排版与阅读设置（**含位置锚定**） | `lib/typography/reader_settings.dart`、`lib/typography/typeset.dart`、`lib/typography/anchor.dart`、`lib/typography/text_style_resolver.dart`、`test/typography/*` | M1-T04 | 4.5 | 【中】`TYP-01~05`。**`TYP-02` 位置锚定是 M1 最易低估的一项**——需在第 1 章 / 末章 / 大字号 / 换主题四种组合下各验一次；`TYP-04` 的 14 本脏书不崩是硬验收 |
-| **M1-T07** | 性能：isolate / 分段渲染 / 内存收敛 | `lib/task/isolate_runner.dart`、`lib/reader/chunk_renderer.dart`、`lib/format/resource_guard.dart`、`test/perf/*`、`tool/gen_perf_fixtures.dart` | M1-T02、M1-T04 | 2.5 | 【中】`PERF-01~03`。50MB 样本用脚本本地生成（不入库，架构 §L8 建议）；`PERF-02` 的「开-关-开 5 次内存不单调增长」需要 DevTools 快照对比，验证本身要占时间 |
+| **M1-T07** | 性能：isolate / 分段渲染 / 内存收敛 | `lib/task/isolate_runner.dart`、`lib/reader/chunk_renderer.dart`、`lib/format/resource_guard.dart`、`test/perf/*`、`tool/gen_perf_fixtures.dart` | M1-T02、M1-T04 | 2.5 | 【中】`PERF-01~03`。50MB 样本用脚本本地生成（不入库，架构 §L8 建议）；`PERF-02` 的「开-关-开 5 次内存不单调增长」需要 DevTools 快照对比，验证本身要占时间。**567Reader 参考**：① TXT 8MB 滑动缓冲区（`TextFile.kt:32-77`）可移植——章节目录解析只读 512KB 块，正文按章滑动读 8MB 缓冲区，对大 TXT（几百MB）打开极慢有直接改善；② EPUB 章节目录与正文分离加载（`loadChapterListAwait` 只解析结构不读正文）——MReader 的 `load()` 时已把所有条目字节读入内存，可改为只解析 container/OPF/TOC 结构、content() 时才按需读对应条目 |
 | **M1-T08** | 玻璃态基础设施与内容层不透明红线 | `lib/theme/app_theme.dart`、`lib/ui/glass_kit.dart`、`lib/ui/glass_scope.dart`、`test/ui/*` | M1-T01 | 1.5 | 【中】`UI-01`/`UI-04`。`liquid_glass_widgets` **锁定 1.6.2** + `main()` 内预热；**Windows 本机只有 Skia 轻量路径（`Q3`）**，本机调出来的观感与 Android 不一致 → 不要在本机反复调视觉 |
 | **M1-T09** | M1 交付验收与脏书回归 | `test/fixtures/**`(补样本)、`docs/perf-baseline/README.md`、全量回归 | 全部 M1 | 1.5 | 【高】逐条过 §17 M1 的 7 条判定；14 本脏书 fixture 全绿；记录 50MB 大书打开时间与峰值内存（进入性能基线） |
 
 ---
 
-### 2.2 M2a — 排版与内容（13 人天 · W13 ~ W17 · 2026-12-14 ~ 2027-01-17）
+### 2.2 M2a — 排版与内容（14.5 人天 · W13 ~ W17 · 2026-12-14 ~ 2027-01-17）
 
-**覆盖需求**：`CNT-01~05`、`META-08`、`META-09`、`UI-02`、`UI-03`（共 9 条）
+**覆盖需求**：`CNT-01~05`、`META-08`、`META-09`、`UI-02`、`UI-03`、`PERF-01`（共 10 条）
+
+> **PERF-01 前移说明（2026-09-21 排期决策 Tier B）**：原排在 M3.5 的 `PERF-01`（`compute()` 化 `source.load()`）前移至 M2a。
+> 理由：① 567Reader 调研显示「重活下沉 IO 线程」是开书快的首招（`Dispatchers.IO`）；② MReader 的 `DartEpubSource`
+> 已声明纯 Dart 形状（`dart_epub_source.dart:3` 注释：「可直接丢进 compute」），`parseEpubResult(bytes)` 入参 `Uint8List`
+> 可序列化，改动范围可控；③ 书架快修（`d1fc20c`）消除了双击/冻结观感，但 `ReaderPage._open()` 里 `load()` 仍在主 isolate，
+> 20MB 大书在 spinner 背后仍会冻主线程——`compute()` 彻底消除此残留。
+> 人天 +1.5（从 M1-T07 的 PERF-01 拆出），M2a 总人天 13→14.5，M1-T07 人天 2.5 不变（PERF-02/03 仍在 M1）。
 
 | 任务ID | 任务名 | 主要文件（相对路径） | 依赖 | 人天 | 说明/风险 |
 |---|---|---|---|---|---|
@@ -150,7 +159,8 @@ PRD §7.1 抽象、§12.1 页面清单与 §15.1 平台能力抽象推导）。*
 | **M2a-T02** | `<br>` / 表格 / 脚注 / `linear="no"` 四项内容语义 | `lib/typography/typeset.dart`(改)、`lib/format/dart_epub_source.dart`(改)、`lib/reader/link_navigator.dart`、`test/typography/*` | M1 | 3.5 | 【中】`CNT-02`/`03`/`04`/`05`。四条各约 0.8 人天；脚注「返回原位置」需复用 `M1-T04` 的位置模型，`CNT-05` 的 `linear="no"` 要同时改目录与章节总数统计 |
 | **M2a-T03** | 书籍详情页与元数据手动编辑 | `lib/ui/book_detail_page.dart`、`lib/meta/meta_editor.dart`、`lib/ui/cover_picker.dart`、`test/meta/detail_test.dart` | M1、M1-T05 | 3 | 【中】`META-08`/`META-09`。顶栏玻璃、**封面区与简介文本区必须不透明**（`UI-04` 红线）；「恢复自动值」要把来源标记回退到 `metadata`/`filename` 而非 `user` |
 | **M2a-T04** | 导航层与浮层玻璃化 | `lib/ui/glass_kit.dart`(扩)、`lib/ui/shelf_page.dart`(改)、`lib/ui/glass_dialog.dart`、`lib/ui/glass_sheet.dart`、`test/ui/*` | M1、M1-T08 | 2 | 【中】`UI-02`/`UI-03`。滚动区内用 `standard`、固定表面用 `premium`（`UI-05` 在 M2b） |
-| **M2a-T05** | M2a 交付验收与回归 | 全量回归 + 补 fixture | 全部 M2a | 1.5 | 【高】过 §17 M2 判定第 2 条（排版语义）与第 6 条（详情页） |
+| **M2a-T06** | **PERF-01：解析移出主 isolate**（`compute()` 化 `source.load()`） | `lib/format/dart_epub_source.dart`(改)、`lib/format/dart_txt_source.dart`(改)、`lib/format/book_registry.dart`(改)、`lib/ui/reader_page.dart`(改)、`test/format/*` | M1-T02、M1-T07 | 1.5 | 【中】`PERF-01`（**前移自 M3.5，见上方说明**）。核心改动：① `parseEpubResult(bytes)` 与 `_prepare()` 包进 `compute()`，入参 `Uint8List` 可序列化；② `ReaderPage._open()` 的 `await source.load()` 改为 `await compute(source.load, ...)`, spinner 在 compute 期间仍可见（主 isolate 不冻）；③ 等价性回归：EPUB/TXT 各 3 本，`load()` + `chapters()` + `content(0)` 结果与 compute 前逐字节一致。**567Reader 参考**：等价于其 `Dispatchers.IO` + `Coroutine.async` 默认 IO 调度器（`BaseViewModel.kt:23`） |
+| **M2a-T05** | M2a 交付验收与回归 | 全量回归 + 补 fixture | 全部 M2a | 1.5 | 【高】过 §17 M2 判定第 2 条（排版语义）与第 6 条（详情页）+ **PERF-01 回归：50MB 书打开期间 UI 无超过 1 秒无响应** |
 
 ---
 
