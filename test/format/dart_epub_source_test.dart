@@ -641,17 +641,18 @@ void main() {
       await source.dispose();
     });
 
-    test('load()：本批 origin 只填 OPF 来源，coverBytes 为 null', () async {
+    test('load()：origin 为闭合枚举，封面为 NoCover（本提交只改类型不改语义）', () async {
       final BookSource source =
           await openBook(fileName: 'nav3.epub', bytes: _epub3WithNav());
       final BookMeta meta = await source.load();
       expect(meta.title, '三级目录');
       expect(meta.author, '作者');
       expect(meta.language, 'zh');
-      expect(meta.coverBytes, isNull, reason: '封面链路属 M1-T05');
-      expect(meta.titleOrigin, 'opf:dc:title');
-      expect(meta.authorOrigin, 'opf:dc:creator');
-      expect(meta.coverOrigin, 'none');
+      expect(meta.cover, isA<NoCover>(), reason: 'nav3 无封面候选');
+      expect(meta.titleOrigin, MetaOrigin.metadata);
+      expect(meta.authorOrigin, MetaOrigin.metadata);
+      expect(meta.coverOrigin, MetaOrigin.none);
+      expect(meta.auto, isNotNull, reason: 'M1 阶段 auto 由解析写入、恒非空');
       await source.dispose();
     });
 
@@ -710,9 +711,10 @@ void main() {
 
       final BookMeta meta = await source.load();
       expect(meta.title, '未命名');
-      expect(meta.titleOrigin, 'none');
-      expect(meta.authorOrigin, 'none');
-      expect(meta.coverOrigin, 'none');
+      expect(meta.titleOrigin, MetaOrigin.none);
+      expect(meta.authorOrigin, MetaOrigin.none);
+      expect(meta.coverOrigin, MetaOrigin.none);
+      expect(meta.cover, isA<NoCover>());
       expect(await source.chapters(), isEmpty);
       expect((await source.content(0)).isEmpty, isTrue);
       expect(await source.totalCharCount(), isNull);

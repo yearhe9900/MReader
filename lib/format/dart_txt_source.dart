@@ -103,12 +103,15 @@ class DartTxtSource implements BookSource {
   /// 已释放 / 竞态时 `load()` 的最小返回（title 不空、origins 全 `none`）。
   static const BookMeta _disposedMeta = BookMeta(
     title: '未命名',
+    titleOrigin: MetaOrigin.none,
     author: '',
+    authorOrigin: MetaOrigin.none,
+    intro: '',
+    introOrigin: MetaOrigin.none,
+    cover: NoCover(),
+    coverOrigin: MetaOrigin.none,
     language: '',
-    coverBytes: null,
-    titleOrigin: 'none',
-    authorOrigin: 'none',
-    coverOrigin: 'none',
+    auto: BookMetaAuto(title: '未命名', author: '', intro: ''),
   );
 
   @override
@@ -119,16 +122,25 @@ class DartTxtSource implements BookSource {
     await _ensurePrepared();
     if (_disposed) return _disposedMeta;
     final String stem = _stemOf(fileName);
-    // M1-T05（META-02）会在此接入四来源优先级链（文件名 -> 内嵌 -> 合成 -> 用户）：
-    // TXT 无内嵌元数据，故当前只有「文件名」来源，author / language / cover 一律空。
+    // 本提交只把**类型**从细粒度串换成 `MetaOrigin`（语义不变）；
+    // 下一个提交（M1-T05 提交 2）会改为经 `lib/meta/txt_meta.dart` 产 meta——
+    // 接入 `META-04` 文件名规则链（命中即停）、作者兜底「未知作者」与 `intro`/`auto`。
+    // TXT 无内嵌封面：`cover` 恒为 `NoCover`（`META-07` 的合成封面是运行时绘制）。
     return BookMeta(
       title: stem.isNotEmpty ? stem : '未命名',
+      titleOrigin: MetaOrigin.filename,
       author: '',
+      authorOrigin: MetaOrigin.none,
+      intro: '',
+      introOrigin: MetaOrigin.none,
+      cover: const NoCover(),
+      coverOrigin: MetaOrigin.none,
       language: '',
-      coverBytes: null,
-      titleOrigin: 'filename',
-      authorOrigin: 'none',
-      coverOrigin: 'none',
+      auto: BookMetaAuto(
+        title: stem.isNotEmpty ? stem : '未命名',
+        author: '',
+        intro: '',
+      ),
     );
   }
 

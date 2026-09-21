@@ -16,7 +16,7 @@ import 'book_source.dart';
 /// ## dispose 契约（与 [DartTxtSource] 一致，`RUST-01` 上层无感）
 ///
 /// [dispose] 之后、以及「调用与 dispose 竞态」时，所有公开方法都**返回优雅空结果、
-/// 绝不抛异常**：`load()` → 最小 [BookMeta]（title `'未命名'`、origins 全 `'none'`）；
+/// 绝不抛异常**：`load()` → 最小 [BookMeta]（title `'未命名'`、origins 全 `MetaOrigin.none`）；
 /// `chapters()` / `content()` → 空；`search()` → 流立即结束；`totalCharCount()` → `null`。
 /// 实现方式：**每个 `await` 恢复后重查 [_disposed]**（并让 [_bookOnce] 释放后返回 `null`
 /// 而不重新触发解析），不依赖 `!` 断言。
@@ -38,12 +38,15 @@ class DartEpubSource implements BookSource {
   /// 已释放 / 竞态时 `load()` 的最小返回（title 不空、origins 全 `none`）。
   static const BookMeta _disposedMeta = BookMeta(
     title: '未命名',
+    titleOrigin: MetaOrigin.none,
     author: '',
+    authorOrigin: MetaOrigin.none,
+    intro: '',
+    introOrigin: MetaOrigin.none,
+    cover: NoCover(),
+    coverOrigin: MetaOrigin.none,
     language: '',
-    coverBytes: null,
-    titleOrigin: 'none',
-    authorOrigin: 'none',
-    coverOrigin: 'none',
+    auto: BookMetaAuto(title: '未命名', author: '', intro: ''),
   );
 
   @override
@@ -67,18 +70,24 @@ class DartEpubSource implements BookSource {
   Future<BookMeta> load() async {
     final EpubBook? book = await _bookOnce();
     if (book == null) return _disposedMeta; // 已释放 / 竞态
-    // 说明：本批（M1-T02A）只做「OPF 优先」这一来源。
-    // M1-T05（META-02）会在这里接入**四来源优先级链**
-    // （OPF -> 文件名 -> 合成 -> 用户），并按来源回填 titleOrigin / authorOrigin；
-    // coverBytes 亦由 M1-T05 的封面链路填充，本批恒为 null。
+    // 说明：本提交只把**类型**从细粒度串换成 `MetaOrigin`（语义不变）；
+    // 下一个提交（M1-T05 提交 2）会改为经 `lib/meta/epub_meta.dart` 产 meta——
+    // 接入 `META-02` 四来源优先级链、`META-03` 多作者整体保留与 `intro`/`auto`。
     return BookMeta(
       title: book.title,
+      titleOrigin: book.title.isEmpty ? MetaOrigin.none : MetaOrigin.metadata,
       author: book.author,
+      authorOrigin: book.author.isEmpty ? MetaOrigin.none : MetaOrigin.metadata,
+      intro: '',
+      introOrigin: MetaOrigin.none,
+      cover: const NoCover(),
+      coverOrigin: MetaOrigin.none,
       language: book.language,
-      coverBytes: null,
-      titleOrigin: book.title.isEmpty ? 'none' : 'opf:dc:title',
-      authorOrigin: book.author.isEmpty ? 'none' : 'opf:dc:creator',
-      coverOrigin: 'none',
+      auto: BookMetaAuto(
+        title: book.title,
+        author: book.author,
+        intro: '',
+      ),
     );
   }
 

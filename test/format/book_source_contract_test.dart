@@ -102,12 +102,16 @@ void main() {
       test('load() 返回元数据，字段不为 null', () async {
         final BookSource source = sample.create();
         final BookMeta meta = await source.load();
-        expect(meta.title, isA<String>());
+        expect(meta.title, isNotEmpty, reason: 'META-01：书名缺失也要兜底为非空');
         expect(meta.author, isA<String>());
         expect(meta.language, isA<String>());
-        expect(meta.titleOrigin, isNotEmpty);
-        expect(meta.authorOrigin, isNotEmpty);
-        expect(meta.coverOrigin, isNotEmpty);
+        expect(meta.intro, isA<String>());
+        // 枚举化后 `isNotEmpty` 失效：来源标记改为**闭合枚举**断言。
+        // 契约样本必有书名，故 titleOrigin 一定不是 none；author/cover 可为 none（缺失）。
+        expect(meta.titleOrigin, isNot(MetaOrigin.none));
+        expect(meta.authorOrigin, isA<MetaOrigin>());
+        expect(meta.coverOrigin, isA<MetaOrigin>());
+        expect(meta.cover, isA<CoverRef>());
         await source.dispose();
       });
 

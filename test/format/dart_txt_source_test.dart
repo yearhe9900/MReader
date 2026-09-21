@@ -64,11 +64,11 @@ void main() {
       );
       final BookMeta meta = await source.load();
       expect(meta.title, '红楼梦');
-      expect(meta.titleOrigin, 'filename');
+      expect(meta.titleOrigin, MetaOrigin.filename);
       expect(meta.author, '');
-      expect(meta.authorOrigin, 'none');
-      expect(meta.coverBytes, isNull);
-      expect(meta.coverOrigin, 'none');
+      expect(meta.authorOrigin, MetaOrigin.none);
+      expect(meta.cover, isA<NoCover>());
+      expect(meta.coverOrigin, MetaOrigin.none);
       await source.dispose();
     });
 

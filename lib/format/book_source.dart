@@ -11,39 +11,14 @@
 // 分发点 `BookRegistry` / `sniffFormat` / `openBook` 都在 `book_registry.dart`——
 // 把 `dart_epub_source.dart` / `dart_txt_source.dart` 加进来会破坏该铁律，
 // 并让本文件变成所有实现（含未来的 Rust 实现）的汇聚点。**请不要加回去。**
-import 'dart:typed_data';
-
+import '../model/book_meta.dart';
 import '../model/chapter.dart';
 import '../model/chapter_content.dart';
 
 export 'error_messages.dart';
+export '../model/book_meta.dart';
 export '../model/chapter.dart';
 export '../model/chapter_content.dart';
-
-/// 书籍元数据（含来源标记，对应 `META-01`）。
-class BookMeta {
-  const BookMeta({
-    required this.title,
-    required this.author,
-    required this.language,
-    required this.coverBytes,
-    required this.titleOrigin,
-    required this.authorOrigin,
-    required this.coverOrigin,
-  });
-
-  final String title;
-  final String author;
-  final String language;
-
-  /// 封面字节；本批（M1-T02A）恒为 `null`，封面链路属 `M1-T05`。
-  final Uint8List? coverBytes;
-
-  /// 来源标记（`META-01`）：如 `'opf:dc:title'` / `'exth:100'` / `'filename'` / `'none'`。
-  final String titleOrigin;
-  final String authorOrigin;
-  final String coverOrigin;
-}
 
 /// 本格式支持哪些能力。
 class SourceCapabilities {
