@@ -44,6 +44,7 @@
 import 'dart:typed_data';
 
 import '../epub/text_codec.dart';
+import '../meta/meta_source.dart' show kUnknownAuthor;
 import '../meta/txt_meta.dart';
 import 'book_source.dart';
 
@@ -101,18 +102,21 @@ class DartTxtSource implements BookSource {
   int? _totalChars;
   bool _disposed = false;
 
-  /// 已释放 / 竞态时 `load()` 的最小返回（title 不空、origins 全 `none`）。
+  /// 已释放 / 竞态时 `load()` 的最小返回（title 不空、author 不空、origins 全 `none`）。
+  ///
+  /// **满足 [BookMeta] 自身的不变式**：`author` 不得留空字符串（`META-01`），
+  /// 故沿用统一兜底常量 [kUnknownAuthor]，而非 `''`。
   static const BookMeta _disposedMeta = BookMeta(
     title: '未命名',
     titleOrigin: MetaOrigin.none,
-    author: '',
+    author: kUnknownAuthor,
     authorOrigin: MetaOrigin.none,
     intro: '',
     introOrigin: MetaOrigin.none,
     cover: NoCover(),
     coverOrigin: MetaOrigin.none,
     language: '',
-    auto: BookMetaAuto(title: '未命名', author: '', intro: ''),
+    auto: BookMetaAuto(title: '未命名', author: kUnknownAuthor, intro: ''),
   );
 
   @override

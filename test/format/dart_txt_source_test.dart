@@ -269,9 +269,17 @@ void main() {
 
       final BookMeta meta = await source.load();
       expect(meta.title, '未命名');
-      expect(meta.titleOrigin, 'none');
-      expect(meta.authorOrigin, 'none');
-      expect(meta.coverOrigin, 'none');
+      expect(meta.titleOrigin, MetaOrigin.none);
+      expect(meta.authorOrigin, MetaOrigin.none);
+      expect(meta.coverOrigin, MetaOrigin.none);
+      expect(meta.cover, isA<NoCover>());
+      // 释放后 load() 的返回须满足 BookMeta 自身的不变式（META-01）：
+      // author 不得留空（统一兜底「未知作者」），且三个 origin 均为合法 MetaOrigin。
+      expect(meta.author.isNotEmpty, isTrue);
+      expect(
+        <MetaOrigin>[meta.titleOrigin, meta.authorOrigin, meta.introOrigin],
+        everyElement(isIn(MetaOrigin.values)),
+      );
       expect(await source.chapters(), isEmpty);
       expect((await source.content(0)).isEmpty, isTrue);
       expect(await source.totalCharCount(), isNull);
