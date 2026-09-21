@@ -55,6 +55,8 @@
 - M1-T02B dispose 竞态：两源释放后/竞态中返回空结果、不抛（RUST-01）`4c1c849`
 - Android 构建：插件模块 compileSdk 统一提升到 36 `11c5198`
 - M1-T05 dispose 占位 BookMeta：两源释放态作者统一改用兜底「未知作者」，满足 `author` 非空不变式（并补测试断言；附带修正 TXT dispose 用例把 `MetaOrigin` 误比作字符串 `'none'` 的既有断言）`a153313`
+- M1-T05 合成封面缓存有界化：`_cache` 改保序 LRU，上限 `kSynthCoverCacheMaxEntries`=32（≈61 MB 最坏），逐出即 `ui.Image.dispose()`（`META-05` 缓存上限）`d645fea`
+- M1-T05 合成封面并发渲染去重：同 key 共享 in-flight future 只保一张图，防「后写覆盖、前者永不释放」`d645fea`
 
 ## 2026-09-20
 
