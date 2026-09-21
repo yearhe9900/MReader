@@ -7,6 +7,12 @@
 
 ### 新增
 
+- M1-T02A 格式抽象：BookSource + 分发点 openBook/sniffFormat `c9827fe`
+- M1-T02A EPUB 目录：nav/ncx 双路径，level 取真实嵌套深度 `c9827fe`
+- M1-T02A 加密拒绝：encryption.xml 判定，字体混淆不误杀（RD-05）`c9827fe`
+- M1-T02A 错误文案：MReaderFormatException 唯一中文来源 `c9827fe`
+- M1-T02A 纯 Dart EPUB 源：惰性解析 + 搜索 + 字符数（STAT-14）`c9827fe`
+- M1-T02A 测试：9 个 fixture 对齐 + 契约骨架 + 文案护栏 `38fcb2f`
 - M1-T01 落盘通道：原子写入 + JSON 四态回退（DATA-01）`8ed83f3`
 - M1-T01 平台抽象：应用路径、凭据接口与设置持久化 `6a63b59`
 - M1-T01 应用骨架：构造注入与透明 Material 地基 `dbf3bfa`
@@ -14,6 +20,7 @@
 ### 变更
 
 - §15.4 依赖清单补录 path_provider（应用数据目录）`9194a89`
+- M1-T02A EpubParseException 退休为 @Deprecated 子类，异常统一收敛 `c9827fe`
 
 ### 移除
 
