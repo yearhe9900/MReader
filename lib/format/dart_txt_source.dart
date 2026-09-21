@@ -82,7 +82,7 @@ final RegExp _lineBreak = RegExp(r'\r\n|\r|\n');
 /// ## dispose 契约（与 [DartEpubSource] 一致，`RUST-01` 上层无感）
 ///
 /// [dispose] 之后、以及「调用与 dispose 竞态」时，所有公开方法都**返回优雅空结果、
-/// 绝不抛异常**：`load()` → 最小 [BookMeta]（title `'未命名'`、origins 全 `'none'`）；
+/// 绝不抛异常**：`load()` → 最小 [BookMeta]（title `'未命名'`、origins 全 `MetaOrigin.none`）；
 /// `chapters()` / `content()` → 空；`search()` → 流立即结束；`totalCharCount()` → `null`。
 /// 实现方式：**每个 `await` 恢复后重查 [_disposed]**，不依赖 `!` 断言。
 class DartTxtSource implements BookSource {

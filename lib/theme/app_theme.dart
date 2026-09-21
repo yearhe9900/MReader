@@ -49,6 +49,17 @@ ThemeMode resolveThemeMode(AppThemeMode mode) {
   }
 }
 
+/// 合成封面的主题（日 / 夜）。
+///
+/// `META-07` 的「书名 + 作者 + 主题 合成封面」需要一个**小枚举**承载主题维度；
+/// 本枚举由 `app_theme`（主题口径的**唯一出处**）暴露（架构 §N.7`SynthCoverRenderer.render`
+/// 的 `CoverTheme theme` 参数）。
+enum CoverTheme { day, night }
+
+/// 有效亮度 → 合成封面主题。
+CoverTheme coverThemeOf(Brightness brightness) =>
+    brightness == Brightness.dark ? CoverTheme.night : CoverTheme.day;
+
 /// 应用主题的具名出口（**只导出一个 `ThemeData` 是不够的**）。
 abstract final class AppTheme {
   /// 主题色种子。合成封面（`META-07` ①「背景取主题色」）直接取它。
