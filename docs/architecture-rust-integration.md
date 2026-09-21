@@ -1382,7 +1382,7 @@ flowchart TD
     D --> F{L1 章节骨架<br/>归一化 href 序列 + 数量 + level + locate + title}
     E --> F
     F -- 不等价 --> X[抛 EquivalenceViolation<br/>[层 L1][字段 href] fixture=? dart=? rust=? diff=?]
-    F -- 等价 --> G{L3 元数据<br/>title/author/language + 封面字节 + 来源标记}
+    F -- 等价 --> G{L3 元数据<br/>title/author/intro/language + 封面（PendingCover.bytes + format）+ 来源标记}
     G -- 不等价 --> X
     G -- 等价 --> H{命中集合 L4<br/>chapterIndex+charOffset+matchedText 集合相等<br/>（顺序允许不同）}
     H -- 集合不等 --> X
@@ -1550,7 +1550,9 @@ class BookMetaAuto {
 }
 ```
 
-> **破坏性变更清单（M1-T02 已交付代码受影响，M1-T05 落地时一并改）**：① `String *Origin` → `MetaOrigin`；② `Uint8List? coverBytes` → `CoverRef cover`；③ 新增 `intro`/`introOrigin`；④ 新增 `auto`。**爆炸半径仅 2 个实现文件**（`dart_epub_source.dart` / `dart_txt_source.dart`）+ 其单测——因为 M1-T03/T04 尚未开工。
+> **破坏性变更清单（M1-T05 落地时已全部执行，提交 `c8d06ca`）**：① `String *Origin` → `MetaOrigin`；② `Uint8List? coverBytes` → `CoverRef cover`；③ 新增 `intro`/`introOrigin`；④ 新增 `auto`。**实际爆炸半径 = 2 个实现文件**（`dart_epub_source.dart` / `dart_txt_source.dart`）**+ 3 个测试文件**（`book_source_contract_test.dart` / `dart_epub_source_test.dart` / `dart_txt_source_test.dart`）。
+>
+> ⚠️ **本清单已闭**——它的历史价值在于记下「为什么当时敢改」：M1-T03/T04 尚未开工，故改型不留迁移包袱。**M1-T03 之后任何同类改型都不再有这个条件**，须按 §N.9 的结论走评审。
 
 ---
 
@@ -1798,7 +1800,8 @@ await coverStore.purgeOrphans(
 | `c8d06ca` | **模型 + 兼容桥**：`lib/model/book_meta.dart`（`BookMeta` / `MetaOrigin` / `CoverRef` / `CoverFormat` / `BookMetaAuto`）；`lib/format/book_source.dart` 改「import + re-export」，`lib/meta/book_meta.dart` 一行 re-export（§N.1） |
 | `f168d1d` | **纯 Dart 提取**：`lib/meta/{meta_source,epub_meta,txt_meta}.dart` + `lib/epub/epub_parser.dart` 的 `OpfView`（含 `description`，§N.4） |
 | `e0d9a4c` | **封面落盘 + 合成封面**：`lib/meta/{cover_store,synth_cover}.dart`（§N.6 / §N.7） |
-| `8e11ae0` | **文档回写**（本批） |
+| `8e11ae0` | **M1-T05 技术记录**：`docs/tech-usage.md` §2.9 + `CHANGELOG.md` |
+| `ac655f3` | **§N 回写批（生成本节）**：§N.8 计数修正（**5 → 6 方法**）、§N.6 缩略图恒 `.thumb.png`、§N.7 `AtomicFile` 兄弟文件规则、§N.4 `OpfView.description`、§B.3 / §C.1 对齐、本节 §N.9 |
 
 **逐条对齐结果**：§N.8 冻结总表 **7 行全部落地**。其中第 ④ 行（纯 Dart / Flutter 边界）已经**只读核查**证实：
 
