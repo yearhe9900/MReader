@@ -128,5 +128,6 @@ void main() {
       MReaderApp(settings: settings, home: const HomePage()),
     );
     expect(find.textContaining('EPUB'), findsWidgets);
+    expect(find.textContaining('TXT'), findsWidgets);
   });
 }

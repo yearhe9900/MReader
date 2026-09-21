@@ -8,8 +8,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import 'app.dart';
-import 'epub/epub_parser.dart';
-import 'model/epub_book.dart';
+import 'format/book_registry.dart';
+import 'format/book_source.dart';
 import 'platform/app_paths.dart';
 import 'settings/settings_store.dart';
 import 'ui/reader_page.dart';
@@ -27,7 +27,7 @@ Future<void> main() async {
   runApp(MReaderApp(settings: settings, home: const HomePage()));
 }
 
-/// 首页（验证台）：EPUB 阅读链路入口。
+/// 首页（验证台）：EPUB / TXT 阅读链路入口。
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -41,10 +41,11 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _pickAndOpen() async {
     setState(() => _error = null);
+    BookSource? source;
     try {
       final FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: const <String>['epub'],
+        allowedExtensions: const <String>['epub', 'txt'],
         // 统一走 bytes：避免引 dart:io，让核心解析链路保持可纯 Dart 单测。
         withData: true,
       );
@@ -62,20 +63,30 @@ class _HomePageState extends State<HomePage> {
       }
 
       setState(() => _loading = true);
-      final EpubBook book = await parseEpub(bytes, fileName: picked.name);
+      // 按扩展名 + 魔数分发（`BookRegistry`）；返回的永远是 [BookSource] 抽象，
+      // 本页不区分 EPUB / TXT。
+      source = await openBook(fileName: picked.name, bytes: bytes);
+      // 主动触发一次解析，把格式错误（`RD-05`）暴露在首页——与 M1-T02A 用
+      // `parseEpub` 时的口径一致。结果被 source 缓存，阅读页不会重复解析。
+      await source.load();
       if (!mounted) return;
       setState(() => _loading = false);
 
+      final BookSource opened = source;
+      // 所有权移交给阅读页：它在 `dispose()` 里释放，此处不再持有。
       await Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => ReaderPage(book: book)),
+        MaterialPageRoute<void>(builder: (_) => ReaderPage(source: opened)),
       );
-    } on EpubParseException catch (error) {
+    } on MReaderFormatException catch (error) {
+      await source?.dispose();
       if (!mounted) return;
       setState(() {
         _loading = false;
+        // 面向用户的中文文案（`message` 已中文化，`detail` 不进 UI）。
         _error = error.message;
       });
     } catch (error) {
+      await source?.dispose();
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -99,7 +110,7 @@ class _HomePageState extends State<HomePage> {
               const Icon(Icons.menu_book_outlined, size: 72),
               const SizedBox(height: 16),
               const Text(
-                '打开本地 EPUB，纵向滚动阅读',
+                '打开本地 EPUB / TXT，纵向滚动阅读',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
@@ -112,7 +123,7 @@ class _HomePageState extends State<HomePage> {
                 FilledButton.icon(
                   onPressed: _pickAndOpen,
                   icon: const Icon(Icons.folder_open),
-                  label: const Text('选择 EPUB 文件'),
+                  label: const Text('选择 EPUB / TXT 文件'),
                 ),
               if (_error != null) ...<Widget>[
                 const SizedBox(height: 20),

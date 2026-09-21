@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/format/book_registry.dart';
 import 'package:mreader/format/book_source.dart';
 import 'package:mreader/format/dart_epub_source.dart';
+import 'package:mreader/format/dart_txt_source.dart';
 
 import 'epub_builder.dart';
 
@@ -43,9 +44,21 @@ Uint8List _minimalEpub() => zipEntries(<EpubEntry>[
           xhtmlDoc(title: '一 起', heading: '第一章', paragraphs: <String>['正文一。', '正文二。'])),
     ]);
 
+/// 一段最小 TXT 样本：两章（标题可被「第X章 …」类规则命中）+ 含「正文」的段落。
+///
+/// 之所以刻意带上「正文」二字：契约里 `capabilities().searchable` 为真时，
+/// 会拿 `'正文'` 去搜，必须能命中样本内容。
+Uint8List _minimalTxt() => Uint8List.fromList(utf8.encode(
+      '第一章 起\n'
+      '正文一。\n'
+      '\n'
+      '第二章 承\n'
+      '正文二。\n',
+    ));
+
 /// 已注册的实现清单。
 ///
-/// **新增格式实现时在这里追加**（M1-T02B 会加 `dart-txt`）。
+/// **新增格式实现时在这里追加**（M1-T02B 已加 `dart-txt`）。
 List<BookSourceSample> registeredSources() => <BookSourceSample>[
       BookSourceSample(
         label: 'dart-epub',
@@ -53,6 +66,14 @@ List<BookSourceSample> registeredSources() => <BookSourceSample>[
         create: () => DartEpubSource(
           fileName: 'contract.epub',
           bytes: _minimalEpub(),
+        ),
+      ),
+      BookSourceSample(
+        label: 'dart-txt',
+        fileName: 'contract.txt',
+        create: () => DartTxtSource(
+          fileName: 'contract.txt',
+          bytes: _minimalTxt(),
         ),
       ),
     ];
@@ -149,6 +170,19 @@ void main() {
       bytes: _minimalEpub(),
     );
     expect(source.implId, 'dart-epub');
+    final bool declared = samples.any(
+      (BookSourceSample s) => s.label == source.implId,
+    );
+    expect(declared, isTrue, reason: 'openBook 选出的实现必须在契约清单里');
+    await source.dispose();
+  });
+
+  test('openBook 分发的实现与注册清单一致（txt）', () async {
+    final BookSource source = await openBook(
+      fileName: 'contract.txt',
+      bytes: _minimalTxt(),
+    );
+    expect(source.implId, 'dart-txt');
     final bool declared = samples.any(
       (BookSourceSample s) => s.label == source.implId,
     );
