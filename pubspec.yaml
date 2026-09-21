@@ -24,6 +24,10 @@ dependencies:
   html: ^0.15.4
   # 中文 EPUB 常见 GBK/GB18030 编码，Dart 标准库不支持，用它做解码兜底。
   charset: ^2.0.1
+  # 定位应用私有数据目录（DATA-01 落盘根、TYP-03 设置持久化）。
+  # Flutter 官方插件，五平台覆盖（Android/iOS/Windows/macOS/Linux）。
+  # 仅在 lib/platform/app_paths.dart 的实现里使用；lib/ 业务代码只依赖 AppPaths 抽象。
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:
