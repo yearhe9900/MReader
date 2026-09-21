@@ -25,6 +25,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/epub/epub_parser.dart';
 import 'package:mreader/epub/section_extractor.dart';
 import 'package:mreader/epub/text_codec.dart';
+import 'package:mreader/format/error_messages.dart';
 import 'package:mreader/model/epub_book.dart';
 
 /// fixtures 目录（相对包根；`flutter test` 的工作目录即包根）。
@@ -162,17 +163,24 @@ void main() {
   // =====================================================================
   // B. 应抛可读错误的 fixture
   // =====================================================================
-  group('脏书应抛出可读的 EpubParseException', () {
-    for (final String name in const <String>[
-      'fx08_empty_spine.epub',
-      'fx08b_missing_container.epub',
-    ]) {
+  group('脏书应抛出可读的 MReaderFormatException', () {
+    // 期望的**错误码**（比只断言类型更严：同时锁住「可读原因」的唯一口径）。
+    const Map<String, FormatErrorCode> cases = <String, FormatErrorCode>{
+      'fx08_empty_spine.epub': FormatErrorCode.emptySpine,
+      'fx08b_missing_container.epub': FormatErrorCode.missingContainer,
+    };
+    for (final MapEntry<String, FormatErrorCode> entry in cases.entries) {
+      final String name = entry.key;
       test(name, () async {
         final Uint8List bytes = readFixture(name)!;
         await expectLater(
           parseEpub(bytes, fileName: name),
-          throwsA(isA<EpubParseException>()),
-          reason: '$name 应抛出可读异常而非崩溃 / 白屏',
+          throwsA(isA<MReaderFormatException>().having(
+            (MReaderFormatException e) => e.code,
+            'code',
+            entry.value,
+          )),
+          reason: '$name 应抛出可读异常（含错误码）而非崩溃 / 白屏',
         );
       }, skip: skipIfMissing(name));
     }

@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/app.dart';
 import 'package:mreader/epub/epub_parser.dart';
 import 'package:mreader/epub/section_extractor.dart';
+import 'package:mreader/format/error_messages.dart';
 import 'package:mreader/main.dart';
 import 'package:mreader/model/epub_book.dart';
 import 'package:mreader/settings/settings_store.dart';
@@ -88,17 +89,28 @@ void main() {
       expect(section.paragraphs, <String>['你好，世界。', '第二段。']);
     });
 
-    test('缺 container.xml 时抛出可读的 EpubParseException', () async {
+    test('缺 container.xml 时抛出可读的 MReaderFormatException', () async {
       final Uint8List broken = _zip(<String, String>{
         'mimetype': 'application/epub+zip',
       });
-      await expectLater(parseEpub(broken), throwsA(isA<EpubParseException>()));
+      await expectLater(
+        parseEpub(broken),
+        throwsA(isA<MReaderFormatException>().having(
+          (MReaderFormatException e) => e.code,
+          'code',
+          FormatErrorCode.missingContainer,
+        )),
+      );
     });
 
-    test('非 zip 字节流抛出可读的 EpubParseException', () async {
+    test('非 zip 字节流抛出可读的 MReaderFormatException', () async {
       await expectLater(
         parseEpub(Uint8List.fromList(<int>[1, 2, 3, 4, 5])),
-        throwsA(isA<EpubParseException>()),
+        throwsA(isA<MReaderFormatException>().having(
+          (MReaderFormatException e) => e.code,
+          'code',
+          FormatErrorCode.notZip,
+        )),
       );
     });
   });
