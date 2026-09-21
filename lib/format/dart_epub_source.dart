@@ -12,6 +12,14 @@ import '../model/epub_book.dart';
 import 'book_source.dart';
 
 /// 打开本地 EPUB（纯字节入口）。
+///
+/// ## dispose 契约（与 [DartTxtSource] 一致，`RUST-01` 上层无感）
+///
+/// [dispose] 之后、以及「调用与 dispose 竞态」时，所有公开方法都**返回优雅空结果、
+/// 绝不抛异常**：`load()` → 最小 [BookMeta]（title `'未命名'`、origins 全 `'none'`）；
+/// `chapters()` / `content()` → 空；`search()` → 流立即结束；`totalCharCount()` → `null`。
+/// 实现方式：**每个 `await` 恢复后重查 [_disposed]**（并让 [_bookOnce] 释放后返回 `null`
+/// 而不重新触发解析），不依赖 `!` 断言。
 class DartEpubSource implements BookSource {
   DartEpubSource({required this.fileName, required this.bytes});
 
@@ -27,24 +35,38 @@ class DartEpubSource implements BookSource {
   int? _totalChars;
   bool _disposed = false;
 
+  /// 已释放 / 竞态时 `load()` 的最小返回（title 不空、origins 全 `none`）。
+  static const BookMeta _disposedMeta = BookMeta(
+    title: '未命名',
+    author: '',
+    language: '',
+    coverBytes: null,
+    titleOrigin: 'none',
+    authorOrigin: 'none',
+    coverOrigin: 'none',
+  );
+
   @override
   String get implId => 'dart-epub';
 
   /// 惰性解析一次并缓存：构造**不解析**（打开的响应速度由调用方掌控）。
-  Future<EpubBook> _bookOnce() {
+  ///
+  /// **已释放时返回 `null`**（不再触发解析）；竞态中若解析在 dispose 之后才完成，
+  /// 也返回 `null` 且**不写回** [_book]。
+  Future<EpubBook?> _bookOnce() async {
+    if (_disposed) return null;
     final EpubBook? cached = _book;
-    if (cached != null) return Future<EpubBook>.value(cached);
-    return _loading ??= parseEpub(bytes, fileName: fileName).then(
-      (EpubBook book) {
-        _book = book;
-        return book;
-      },
-    );
+    if (cached != null) return cached;
+    final EpubBook book = await (_loading ??= parseEpub(bytes, fileName: fileName));
+    if (_disposed) return null;
+    _book = book;
+    return book;
   }
 
   @override
   Future<BookMeta> load() async {
-    final EpubBook book = await _bookOnce();
+    final EpubBook? book = await _bookOnce();
+    if (book == null) return _disposedMeta; // 已释放 / 竞态
     // 说明：本批（M1-T02A）只做「OPF 优先」这一来源。
     // M1-T05（META-02）会在这里接入**四来源优先级链**
     // （OPF -> 文件名 -> 合成 -> 用户），并按来源回填 titleOrigin / authorOrigin；
@@ -65,7 +87,9 @@ class DartEpubSource implements BookSource {
     final List<Chapter>? cached = _chapters;
     if (cached != null) return cached;
 
-    final EpubBook book = await _bookOnce();
+    final EpubBook? book = await _bookOnce();
+    if (book == null) return const <Chapter>[]; // 已释放 / 竞态
+
     final List<Chapter> result;
 
     if (book.toc.isNotEmpty) {
@@ -88,6 +112,7 @@ class DartEpubSource implements BookSource {
       result = List<Chapter>.unmodifiable(flat);
     }
 
+    if (_disposed) return const <Chapter>[]; // 竞态：算完已释放
     _chapters = result;
     return result;
   }
@@ -100,7 +125,8 @@ class DartEpubSource implements BookSource {
     }
 
     final Chapter chapter = chapterList[chapterIndex];
-    final EpubBook book = await _bookOnce();
+    final EpubBook? book = await _bookOnce();
+    if (book == null) return const ChapterContent.paragraphs(<String>[]);
     final EpubSection? section = _sectionFor(book, chapter, chapterIndex);
     if (section == null) return const ChapterContent.paragraphs(<String>[]);
 
@@ -126,13 +152,15 @@ class DartEpubSource implements BookSource {
     if (cached != null) return cached;
 
     // 刻意**不在 load() 里算**：20MB 的书会把打开动作拖慢。
-    final EpubBook book = await _bookOnce();
+    final EpubBook? book = await _bookOnce();
+    if (book == null) return null; // 已释放 / 竞态
     int sum = 0;
     for (final EpubSection section in book.sections) {
       for (final String paragraph in extractSection(section.rawBytes).paragraphs) {
         sum += paragraph.length;
       }
     }
+    if (_disposed) return null; // 竞态：算完已释放
     _totalChars = sum;
     return sum;
   }
@@ -142,12 +170,13 @@ class DartEpubSource implements BookSource {
     if (query.isEmpty) return;
 
     final List<Chapter> chapterList = await chapters();
-    if (chapterList.isEmpty) return;
-    final EpubBook book = await _bookOnce();
+    if (_disposed || chapterList.isEmpty) return;
+    final EpubBook? book = await _bookOnce();
+    if (_disposed || book == null) return;
     final int total = chapterList.length;
 
     for (int i = 0; i < total; i++) {
-      if (cancel.isCancelled) return;
+      if (cancel.isCancelled || _disposed) return;
       final Chapter chapter = chapterList[i];
       final EpubSection? section = _sectionFor(book, chapter, i);
       final List<String> paragraphs =

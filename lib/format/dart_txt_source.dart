@@ -77,6 +77,13 @@ const int _minTailChars = 100;
 final RegExp _lineBreak = RegExp(r'\r\n|\r|\n');
 
 /// 打开本地 TXT（纯字节入口）。
+///
+/// ## dispose 契约（与 [DartEpubSource] 一致，`RUST-01` 上层无感）
+///
+/// [dispose] 之后、以及「调用与 dispose 竞态」时，所有公开方法都**返回优雅空结果、
+/// 绝不抛异常**：`load()` → 最小 [BookMeta]（title `'未命名'`、origins 全 `'none'`）；
+/// `chapters()` / `content()` → 空；`search()` → 流立即结束；`totalCharCount()` → `null`。
+/// 实现方式：**每个 `await` 恢复后重查 [_disposed]**，不依赖 `!` 断言。
 class DartTxtSource implements BookSource {
   DartTxtSource({required this.fileName, required this.bytes});
 
@@ -93,12 +100,24 @@ class DartTxtSource implements BookSource {
   int? _totalChars;
   bool _disposed = false;
 
+  /// 已释放 / 竞态时 `load()` 的最小返回（title 不空、origins 全 `none`）。
+  static const BookMeta _disposedMeta = BookMeta(
+    title: '未命名',
+    author: '',
+    language: '',
+    coverBytes: null,
+    titleOrigin: 'none',
+    authorOrigin: 'none',
+    coverOrigin: 'none',
+  );
+
   @override
   String get implId => 'dart-txt';
 
   @override
   Future<BookMeta> load() async {
     await _ensurePrepared();
+    if (_disposed) return _disposedMeta;
     final String stem = _stemOf(fileName);
     // M1-T05（META-02）会在此接入四来源优先级链（文件名 -> 内嵌 -> 合成 -> 用户）：
     // TXT 无内嵌元数据，故当前只有「文件名」来源，author / language / cover 一律空。
@@ -116,24 +135,35 @@ class DartTxtSource implements BookSource {
   @override
   Future<List<Chapter>> chapters() async {
     await _ensurePrepared();
-    return _chapters!;
+    if (_disposed) return const <Chapter>[];
+    return _chapters ?? const <Chapter>[];
   }
 
   @override
   Future<ChapterContent> content(int chapterIndex) async {
     await _ensurePrepared();
-    final List<_Segment> segments = _segments!;
+    // dispose 竞态：`await` 恢复后可能已被释放（`_text` / `_segments` 已清空）。
+    // 用局部变量取快照 + 判空，**不用 `!` 断言**（那是竞态崩溃的根因）。
+    final List<_Segment>? segments = _segments;
+    final String? text = _text;
+    if (_disposed || segments == null || text == null) {
+      return const ChapterContent.paragraphs(<String>[]);
+    }
     if (chapterIndex < 0 || chapterIndex >= segments.length) {
       return const ChapterContent.paragraphs(<String>[]); // 越界不抛异常
     }
 
     final _Segment segment = segments[chapterIndex];
     final List<String> paragraphs =
-        _splitParagraphs(_text!.substring(segment.start, segment.end));
+        _splitParagraphs(text.substring(segment.start, segment.end));
 
     // 首行与章名重复时剥掉——与 EPUB 侧 `extractSection` 的既有口径一致
     // （UI 单独渲染标题，正文不该再重复一遍）。
-    if (paragraphs.isNotEmpty && paragraphs.first == _chapters![chapterIndex].title) {
+    final List<Chapter>? chapterList = _chapters;
+    if (paragraphs.isNotEmpty &&
+        chapterList != null &&
+        chapterIndex < chapterList.length &&
+        paragraphs.first == chapterList[chapterIndex].title) {
       paragraphs.removeAt(0);
     }
     return ChapterContent.paragraphs(paragraphs);
@@ -154,6 +184,7 @@ class DartTxtSource implements BookSource {
     if (cached != null) return cached;
     // 刻意**不在 load() 里算**：20MB 的书会把打开动作拖慢。
     final String text = await _textOnce();
+    if (_disposed) return null; // dispose 竞态：优雅返回 null
     int count = 0;
     for (int i = 0; i < text.length; i++) {
       if (!_isWhitespaceUnit(text.codeUnitAt(i))) count++;
@@ -169,15 +200,17 @@ class DartTxtSource implements BookSource {
   Stream<SearchEvent> search(String query, {required CancelToken cancel}) async* {
     if (query.isEmpty) return;
     await _ensurePrepared();
-    final List<Chapter> chapterList = _chapters!;
-    if (chapterList.isEmpty) return;
+    if (_disposed) return; // dispose 竞态：立即结束流
+    final List<Chapter>? chapterList = _chapters;
+    if (chapterList == null || chapterList.isEmpty) return;
     final int total = chapterList.length;
 
     // 朴素子串扫描（与 `DartEpubSource.search` 同一形状）：逐章逐段 indexOf。
     // **不建索引**——索引属 M2b；本实现同时是 Rust 阈值 3 的纯 Dart 基线。
     for (int i = 0; i < total; i++) {
-      if (cancel.isCancelled) return;
+      if (cancel.isCancelled || _disposed) return;
       final ChapterContent chapterContent = await content(i);
+      if (_disposed) return; // `content` 的 await 期间可能已被释放
 
       int offset = 0;
       for (final String paragraph in chapterContent.paragraphList) {
@@ -218,14 +251,19 @@ class DartTxtSource implements BookSource {
   // 准备（解码 + 分章），Future 去重
   // ---------------------------------------------------------------------------
 
-  Future<void> _ensurePrepared() => _preparing ??= _prepare();
+  Future<void> _ensurePrepared() {
+    if (_disposed) return Future<void>.value(); // 已释放：不再触发解析
+    return _preparing ??= _prepare();
+  }
 
   Future<void> _prepare() async {
     final String text = await _textOnce();
+    if (_disposed) return; // 竞态：准备完成时已释放，不再写回
     if (text.trim().isEmpty) {
       throw const MReaderFormatException(FormatErrorCode.txtNoContent);
     }
     final List<_Segment> segments = _analyze(text);
+    if (_disposed) return;
     _segments = segments;
     _chapters = List<Chapter>.unmodifiable(<Chapter>[
       for (final _Segment s in segments)
@@ -240,7 +278,7 @@ class DartTxtSource implements BookSource {
     final String decoded = decodeText(bytes);
     final String text =
         decoded.startsWith('\uFEFF') ? decoded.substring(1) : decoded;
-    _text = text;
+    if (!_disposed) _text = text;
     return text;
   }
 
