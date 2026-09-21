@@ -39,6 +39,10 @@ class _ShelfPageState extends State<ShelfPage> {
   bool _importing = false;
   List<String> _importErrors = <String>[];
 
+  /// 防重复开书：首击进入开书流程后置 true，流程结束（或提前 return）复位。
+  /// 避免首击 UI 冻结期间用户补点的第二次点击再触发一次 push（导致开重）。
+  bool _opening = false;
+
   @override
   void initState() {
     super.initState();
@@ -142,30 +146,37 @@ class _ShelfPageState extends State<ShelfPage> {
   }
 
   Future<void> _openBook(BookRecord record) async {
-    final Uint8List? bytes = await widget.repository.readBookBytes(record);
-    if (bytes == null || bytes.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('文件已丢失：${record.fileName}')),
-        );
+    if (_opening) return; // 防双击重复开书
+    _opening = true;
+    try {
+      final Uint8List? bytes = await widget.repository.readBookBytes(record);
+      if (bytes == null || bytes.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('文件已丢失：${record.fileName}')),
+          );
+        }
+        return;
       }
-      return;
+
+      final BookSource source = await openBook(
+        fileName: record.fileName,
+        bytes: bytes,
+      );
+      // 不在导航前 eager 解析：全量 load() 在主 isolate 同步执行会冻结 UI，
+      // 导致首击「无响应」、用户补点第二次（PERF）。解析与 loading 交给
+      // ReaderPage._open() 承担（其自带 spinner + 错误态，RD-05 仍满足）。
+
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => ReaderPage(source: source)),
+      );
+
+      // 阅读页关闭后刷新（lastReadAt 会在 M1-T04 更新）
+      await _loadBooks();
+    } finally {
+      _opening = false;
     }
-
-    final BookSource source = await openBook(
-      fileName: record.fileName,
-      bytes: bytes,
-    );
-    // 触发一次解析（格式错误暴露在首页，RD-05）
-    await source.load();
-
-    if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => ReaderPage(source: source)),
-    );
-
-    // 阅读页关闭后刷新（lastReadAt 会在 M1-T04 更新）
-    await _loadBooks();
   }
 
   @override
