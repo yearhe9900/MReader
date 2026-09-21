@@ -74,7 +74,13 @@ void main() {
 
     testWidgets('LIB-01 导入后：书卡显示在网格中', (WidgetTester tester) async {
       // 先通过仓库导入一本书
-      await repo.importFile(bytes: _txtBytes('三体的内容'), fileName: '三体.txt');
+      // ⚠️ 测试体里的真异步 IO 必须包在 `tester.runAsync` 里：`testWidgets` 的测试体
+      // 运行在 FakeAsync 区（`fake_async` 覆盖 `scheduleMicrotask`），直接
+      // `await repo.importFile(...)` 会让文件 IO 的完成回调排进 fake 队列后再无人排空，
+      // 测试体永久挂起 → 10 分钟超时。`setUp` / `tearDown` 在 FakeAsync 之外，可照常 await。
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('三体的内容'), fileName: '三体.txt'),
+      );
 
       await tester.pumpWidget(buildApp());
       await tester.pumpAndSettle();
@@ -88,9 +94,11 @@ void main() {
     });
 
     testWidgets('LIB-05 多本书：网格显示多个书卡', (WidgetTester tester) async {
-      await repo.importFile(bytes: _txtBytes('内容A'), fileName: 'a.txt');
-      await repo.importFile(bytes: _txtBytes('内容B'), fileName: 'b.txt');
-      await repo.importFile(bytes: _txtBytes('内容C'), fileName: 'c.txt');
+      await tester.runAsync(() async {
+        await repo.importFile(bytes: _txtBytes('内容A'), fileName: 'a.txt');
+        await repo.importFile(bytes: _txtBytes('内容B'), fileName: 'b.txt');
+        await repo.importFile(bytes: _txtBytes('内容C'), fileName: 'c.txt');
+      });
 
       await tester.pumpWidget(buildApp());
       await tester.pumpAndSettle();
@@ -99,7 +107,9 @@ void main() {
     });
 
     testWidgets('LIB-06 长按弹出删除确认对话框', (WidgetTester tester) async {
-      await repo.importFile(bytes: _txtBytes('要删的书'), fileName: '删我.txt');
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('要删的书'), fileName: '删我.txt'),
+      );
 
       await tester.pumpWidget(buildApp());
       await tester.pumpAndSettle();
@@ -115,7 +125,9 @@ void main() {
     });
 
     testWidgets('LIB-06 点击删除后书从列表移除', (WidgetTester tester) async {
-      await repo.importFile(bytes: _txtBytes('要删的书'), fileName: '删我.txt');
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('要删的书'), fileName: '删我.txt'),
+      );
 
       await tester.pumpWidget(buildApp());
       await tester.pumpAndSettle();
@@ -133,11 +145,13 @@ void main() {
       expect(find.text('书架空空如也'), findsOneWidget);
 
       // 后端确认已删除
-      expect(await repo.loadBooks(), isEmpty);
+      expect(await tester.runAsync(() => repo.loadBooks()), isEmpty);
     });
 
     testWidgets('LIB-06 取消删除不影响列表', (WidgetTester tester) async {
-      await repo.importFile(bytes: _txtBytes('不该删的书'), fileName: '留我.txt');
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('不该删的书'), fileName: '留我.txt'),
+      );
 
       await tester.pumpWidget(buildApp());
       await tester.pumpAndSettle();
@@ -151,7 +165,7 @@ void main() {
 
       // 书卡仍在
       expect(find.byType(BookCard), findsOneWidget);
-      expect(await repo.loadBooks(), hasLength(1));
+      expect(await tester.runAsync(() => repo.loadBooks()), hasLength(1));
     });
   });
 }

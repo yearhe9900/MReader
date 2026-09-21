@@ -15,11 +15,14 @@ import 'package:mreader/settings/settings_store.dart';
 void main() {
   testWidgets('app.dart 的透明 Material 地基仍在，首屏不命中黄底双下划线',
       (WidgetTester tester) async {
+    // ⚠️ 测试体在 FakeAsync 区里运行，真实文件 IO 必须走**同步** API：
+    // 换成 `await Directory.systemTemp.createTemp()` 会让测试体永久挂起
+    // （真异步 future 的完成回调排进 fake microtask 队列后无人排空）→ 10 分钟超时。
     final Directory dir =
-        await Directory.systemTemp.createTemp('mreader_ui_material_');
-    addTearDown(() async {
-      if (await dir.exists()) {
-        await dir.delete(recursive: true);
+        Directory.systemTemp.createTempSync('mreader_ui_material_');
+    addTearDown(() {
+      if (dir.existsSync()) {
+        dir.deleteSync(recursive: true);
       }
     });
 

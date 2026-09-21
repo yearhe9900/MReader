@@ -12,9 +12,29 @@ import 'package:mreader/app.dart';
 import 'package:mreader/epub/epub_parser.dart';
 import 'package:mreader/epub/section_extractor.dart';
 import 'package:mreader/format/error_messages.dart';
-import 'package:mreader/main.dart';
+import 'package:mreader/library/library_repository.dart';
+import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/model/epub_book.dart';
+import 'package:mreader/platform/app_paths.dart';
 import 'package:mreader/settings/settings_store.dart';
+import 'package:mreader/ui/shelf_page.dart';
+
+/// 临时目录实现 [AppPaths]（与 `test/ui/shelf_page_test.dart` 同形），仅用于测试。
+class _TestAppPaths implements AppPaths {
+  _TestAppPaths(this._root);
+  final Directory _root;
+
+  @override
+  Future<Directory> dataDir() async => _root;
+
+  @override
+  Future<Directory> subDir(String name) async {
+    final Directory dir =
+        Directory('${_root.path}${Platform.pathSeparator}$name');
+    await dir.create(recursive: true);
+    return dir;
+  }
+}
 
 /// 把若干「路径 -> 文本内容」打成 zip 字节流。
 Uint8List _zip(Map<String, String> entries) {
@@ -116,18 +136,35 @@ void main() {
   });
 
   testWidgets('首页可以正常渲染（冒烟）', (WidgetTester tester) async {
+    // ⚠️ 真实文件 IO 必须用**同步** API（`createTempSync` / `deleteSync`）：
+    // `testWidgets` 的测试体跑在 `AutomatedTestWidgetsFlutterBinding` 的 FakeAsync
+    // 区里（`fake_async` 覆盖了 `scheduleMicrotask`，队列只由 `flushMicrotasks()`
+    // 排空），测试体一旦 `await` 真异步 IO，其完成回调排进队列后再无人在测试体之外
+    // 排空队列 → 测试体永不恢复 → 10 分钟超时。实测见 `.scratch` 探针。
     final Directory dir =
-        await Directory.systemTemp.createTemp('mreader_widget_test_');
-    addTearDown(() async {
-      if (await dir.exists()) {
-        await dir.delete(recursive: true);
+        Directory.systemTemp.createTempSync('mreader_widget_test_');
+    addTearDown(() {
+      if (dir.existsSync()) {
+        dir.deleteSync(recursive: true);
       }
     });
-    final SettingsStore settings = SettingsStore(dir);
+
+    final AppPaths paths = _TestAppPaths(dir);
+    final FileCoverStore coverStore = FileCoverStore(paths);
+    final LibraryRepository repository =
+        LibraryRepository(paths: paths, coverStore: coverStore);
+
     await tester.pumpWidget(
-      MReaderApp(settings: settings, home: const HomePage()),
+      MReaderApp(
+        settings: SettingsStore(dir),
+        home: ShelfPage(repository: repository, coverStore: coverStore),
+      ),
     );
-    expect(find.textContaining('EPUB'), findsWidgets);
-    expect(find.textContaining('TXT'), findsWidgets);
+
+    // 断言「首屏由书架页承载」——AppBar 标题在 loading / 空态 / 有书三态**恒存在**，
+    // 因此不依赖 `ShelfPage` 在 `initState` 里发起的异步加载是否已完成，
+    // 测试结果与真实 IO 调度无关（M1-T03 起 `HomePage` 已被书架页取代）。
+    expect(find.byType(ShelfPage), findsOneWidget);
+    expect(find.text('书架'), findsOneWidget);
   });
 }
