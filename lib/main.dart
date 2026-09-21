@@ -1,31 +1,30 @@
-// 入口：选择本地 EPUB -> 解析 -> 纵向滚动阅读。
+// 入口：初始化平台能力 → 加载设置 → runApp。
 //
 // 纯 Flutter 自绘：不使用 WebView / foliate-js。
 // 目标平台：Android / iOS / Windows / macOS / Linux（平台能力差异按 PRD §15.3 降级表处理）。
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import 'app.dart';
 import 'epub/epub_parser.dart';
 import 'model/epub_book.dart';
+import 'platform/app_paths.dart';
+import 'settings/settings_store.dart';
 import 'ui/reader_page.dart';
 
-void main() {
-  runApp(const MReaderApp());
-}
+Future<void> main() async {
+  // path_provider 等插件在访问前需要先初始化绑定。
+  WidgetsFlutterBinding.ensureInitialized();
 
-/// 应用根。刻意保持最简：不需要任何状态管理库。
-class MReaderApp extends StatelessWidget {
-  const MReaderApp({super.key});
+  // 平台能力经抽象注入（PRD §15.1）：解析应用数据目录 → 构建设置服务 → 加载。
+  final AppPaths appPaths = PathProviderAppPaths();
+  final Directory dataDir = await appPaths.dataDir();
+  final SettingsStore settings = SettingsStore(dataDir);
+  await settings.load();
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'MReader',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
-      home: const HomePage(),
-    );
-  }
+  runApp(MReaderApp(settings: settings, home: const HomePage()));
 }
 
 /// 首页（验证台）：EPUB 阅读链路入口。

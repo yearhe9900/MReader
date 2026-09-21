@@ -3,14 +3,17 @@
 // 注意文件名叫 widget_test.dart：`flutter create` 只在文件缺失时才生成模板，
 // 这样就不会注入它自带的 counter 测试（那会让 `flutter test` 编译失败）。
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mreader/app.dart';
 import 'package:mreader/epub/epub_parser.dart';
 import 'package:mreader/epub/section_extractor.dart';
 import 'package:mreader/main.dart';
 import 'package:mreader/model/epub_book.dart';
+import 'package:mreader/settings/settings_store.dart';
 
 /// 把若干「路径 -> 文本内容」打成 zip 字节流。
 Uint8List _zip(Map<String, String> entries) {
@@ -101,7 +104,17 @@ void main() {
   });
 
   testWidgets('首页可以正常渲染（冒烟）', (WidgetTester tester) async {
-    await tester.pumpWidget(const MReaderApp());
+    final Directory dir =
+        await Directory.systemTemp.createTemp('mreader_widget_test_');
+    addTearDown(() async {
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
+    });
+    final SettingsStore settings = SettingsStore(dir);
+    await tester.pumpWidget(
+      MReaderApp(settings: settings, home: const HomePage()),
+    );
     expect(find.textContaining('EPUB'), findsWidgets);
   });
 }
