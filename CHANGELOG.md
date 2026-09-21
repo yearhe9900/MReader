@@ -7,6 +7,12 @@
 
 ### 新增
 
+- M1-T08 依赖接入：`liquid_glass_widgets` 1.6.2 + `cupertino_icons`（玻璃图标强制依赖）`348ce23`
+- M1-T08 主题基建：`AppTheme` 浅/深主题 + 有效亮度解析（`UI-01` ②）`08c2b65`
+- M1-T08 玻璃基建：`GlassKit` 档位唯一出口 + `OpaqueContentSurface` 内容层不透明唯一出口（`UI-04`）`08c2b65`
+- M1-T08 玻璃作用域：`GlassScope` 收敛有效亮度 / 档位 / 玻璃隔离范围 `08c2b65`
+- M1-T08 着色器预热：`main()` 内 `LiquidGlassWidgets.initialize()`，失败不阻塞启动 `08c2b65`
+- M1-T08 测试：主题三态 / 玻璃档位 / 透明 Material 地基三组单测 `46810eb`
 - M1-T02B 测试：dispose 契约用例（两源，释放后空结果 + 竞态不抛）`be1838f`
 - M1-T02B TXT 源：DartTxtSource 照译 TextFile.kt 分章算法（RD-02）`bd2466d`
 - M1-T02B 编码名缝：text_codec.detectEncodingName（NF-C4，供 Rust 只探测编码名）`f39deb1`
@@ -24,6 +30,9 @@
 
 ### 变更
 
+- M1-T08 玻璃库精确锁定 1.6.2（不带 `^`）：§11.4 限制均针对 1.6.2 实测，`^1.6.2` 会解析到 1.7.0 `348ce23`
+- M1-T08 档位策略：固定表面不手传 `premium`（由库自动提升），浮层与滚动区固定 `standard` `08c2b65`
+- M1-T08 亮度口径：玻璃亮度跟随**应用 ThemeMode**（三态），而非仅系统亮度（`UI-01` ②）`08c2b65`
 - M1-T02B 分章阈值口径升格为本项目 canonical 定义（字符级；Rust 不得照抄参考实现字节口径）`4c1c849`
 - M1-T02B 择优性能：TXT 规则择优只跑首个 512KB 块，20MB 由分钟级降到百毫秒级 `bd2466d`
 - M1-T02B 文件名兜底：`.txt` 这类无书名的名字回落「未命名」`bd2466d`
