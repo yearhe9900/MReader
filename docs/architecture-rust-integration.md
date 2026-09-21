@@ -340,7 +340,7 @@ factory HighPerfRegistry.fromEnvironment({HighPerfEngine? engine}) {
 |---|---|---|---|---|
 | **L1 章节骨架** | `chapters()` 的返回序列 | ① 数量相等；② 归一化后 `href` 序列**顺序相等**；③ `level` 相等；④ `locate` 相等；⑤ `title` 字符串相等 | `Chapter` 的**内部 id**（Rust 句柄序号）允许不同 | id 是内部实现细节，用户不可见；href/顺序/标题是用户可见的目录契约 |
 | **L2 正文块** | `content(i)` 的返回 | ① `ExtractedSection.title` 字符串相等；② `paragraphs` **逐条字符串 `==`** 且顺序相等；③ 图片页模式下 `imagePages` 序列相等 | **无**（这是最严的一层） | 正文是「用户读到的字」，任何差异都是缺陷。**不允许「Rust 结果更少但更快」**（`RUST-02` 原文） |
-| **L3 元数据** | `load()` 的返回 | ① `title`/`author`/`language` 字符串相等；② `coverBytes` **字节相等**（`Uint8List ==` 语义比较，非同一性）；③ `*Origin` 来源标记相等 | **无** | 来源标记（META-01）是需求，来源不同即行为不同 |
+| **L3 元数据** | `load()` 的返回 | ① `title`/`author`/`language`/`intro` 字符串相等；② 封面按 **`PendingCover`** 比对：`bytes` **字节相等**（`Uint8List ==` 语义比较，非同一性）**且 `format` 相等**；③ `*Origin` 按 **`MetaOrigin` 枚举值相等** | **无** | `load()` 阶段封面在**解析期未落盘**，必为 `PendingCover`（§N.5）；来源标记（META-01）是需求，值不同即行为不同 |
 | **L4 搜索命中** | `search()` 的事件集合 | ① 命中**集合**相等（键 = `chapterIndex + charOffset + matchedText`）；② 命中总数相等 | **命中顺序**允许不同 | `RUST-02 ②` 明文：「顺序可不同，命中集合必须一致」 |
 | **L5 错误分类** | 失败时的终态 | **错误类别枚举**相等（`Encrypted` / `FormatInvalid` / `Io` / `MissingContainer` …） | **中文文案措辞**允许不同（但必须都是中文、可读、同类） | `RUST-02 ③`「给出**同一类**中文原因」；措辞属表达，类别属契约 |
 
@@ -455,6 +455,8 @@ T02B 把 TXT 分章按 PRD 附录 A 直译了参考实现 `TextFile.kt`，其中
 | 5 | RAG/BM25 索引构建 | `handle: u32`、`buildConfig{…小结构…}` | **Stream**：`Progress{done,total}` / `Chunk{Vec<u8>}`（索引分块，≤ 1MB/块）/ `Done{chunkCount}` | 索引**分块流出**，由 Dart 落盘（见 §C.4） |
 
 **共同点**：入参恒为「路径 / 句柄 / 索引 / 范围 / 小结构」；出参恒为「小结构 / 分块字节 / 流」。
+
+> **`BookMeta` 的封面跨边界口径（与 §N.5 对齐）**：第 1/2 项出参里的 `OpenedBook.meta`，其封面以 **`PendingCover`（原始字节 + `CoverFormat`）** 过边界——因为 `load()` 阶段封面在**解析期未落盘**。**Rust 侧同样只产「字节 + 真实格式」，绝不落盘**；真实格式落盘（`covers/`）始终归 Dart `CoverStore`（§N.7）。因此 **`NF-D8`（Rust 只读链路）自动满足**——跨边界数据里不含任何写操作所需的信息。
 
 ### C.2 大文件走路径（不走字节）—— 为什么，以及例外
 
@@ -1429,7 +1431,7 @@ flowchart LR
 M1-T05 的 6 个文件分布在**纯 Dart 层**与**Flutter 层**两侧，若依赖方向不定、「BookMeta 放哪」就会反复摇摆。冻结的方向（**无环**）：
 
 ```
-lib/model/**          ← 叶子数据（chapter / chapter_content / epub_book / book_meta[新增]）
+lib/model/**          ← 叶子数据（chapter / chapter_content / epub_book / book_meta）
      ▲
 lib/epub/**, lib/meta/**（纯 Dart 那半：meta_source / epub_meta / txt_meta）
      ▲
@@ -1575,10 +1577,14 @@ class BookMetaAuto {
 >   final String? title;
 >   final List<String> creators;              // 稳定顺序整体保留（META-03 / Q17）
 >   final String? language;
+>   final String? description;                // ← **相对 §N 草案的显式增补**：OPF `dc:description`
+>                                             //   → `BookMeta.intro`（§N.3 要求 intro 在导入时一次性写入
+>                                             //   并带来源标记，草案漏了它的内嵌来源）
 >   final List<CoverCandidate> coverCandidates; // META-02 四来源，**已按优先级排序**
 >   final Uint8List? Function(String href)? readEntry; // 读包内图片字节（命中即停时用）
 > }
 > ```
+> → 实现已按上表落地（含 `description`）；`lib/meta/epub_meta.dart` 消费它产出 `BookMeta.intro`。
 
 ---
 
@@ -1656,8 +1662,10 @@ const int kCoverThumbMaxEdge = 320; // px
 
 | 用途 | 文件名 | 说明 |
 |---|---|---|
-| 原图 | `covers/<bookId>.cover.<真实扩展名>` | 保留源字节、真实格式，**不重编码**（`META-05`） |
-| 缩略图 | `covers/<bookId>.thumb.<真实扩展名>` | 独立文件，书架只解码它（`META-05`） |
+| 原图 | `covers/<bookId>.cover.<真实扩展名>` | 保留源字节、真实格式，**不重编码**（`META-05`）；`CoverFormat.unknown` → `.img`（中性扩展名，**不谎报**为已知格式） |
+| 缩略图 | `covers/<bookId>.thumb.png` | **恒为 `.png`**——`dart:ui` **只能编码 PNG**；若沿用源格式扩展名会「后缀名与内容不符」，而 `META-05` 明令禁止。独立文件，书架只解码它 |
+
+> **为什么缩略图不跟随源格式**：原图要求「真实格式落盘」是为**保真**（透明通道、避免重编码）；缩略图是**新生成的位图**，`dart:ui` 编码器只有 PNG，硬套源扩展名只会制造「后缀与内容不符」——正是 `META-05` 要消灭的现象。故缩略图**一律 `.png`**，与源格式解耦。
 
 **降采样的落地形态**（`dart:ui`，先量后算再解码）：
 
@@ -1709,6 +1717,13 @@ abstract interface class CoverStore {
   /// [referencedFileNames] 由**书库（M1-T03）**汇总所有在库书籍的 `StoredCover.fileName`。
   /// **安全规则（写死）**：只删 `covers/` 内、且**不在** [referencedFileNames] 中的文件；
   /// 返回删除数；**幂等**；`covers/` 之外的任何路径**永不触碰**。
+  ///
+  /// **兄弟文件规则（`AtomicFile` 配套，必须遵守）**：`AtomicFile` 会在目标文件旁留
+  /// `.tmp` / `.bak` / `.corrupt` **兄弟文件**（见 `lib/storage/atomic_file.dart:31-37`）。
+  /// GC 必须**同基名的兄弟文件随其基文件一同处置**——**基文件被引用 → 兄弟保留**；
+  /// **基文件是孤儿 → 兄弟一起删**。否则会误删「主文件损坏时唯一可回退的 `.bak`」，
+  /// 破坏 `AtomicFile` 的降级路径。同理 **`.thumb.png` 随其基封面一同处置**（含缩略图自身的兄弟文件）。
+  /// 落地形态：以 `bookId` 为**处置单元**，一个单元的「封面原图 + 其兄弟 + 缩略图 + 其兄弟」**同生共死**。
   Future<int> purgeOrphans({required Set<String> referencedFileNames});
 }
 
@@ -1760,15 +1775,42 @@ await coverStore.purgeOrphans(
 | ③ | 简介字段 | 补 `intro`+`introOrigin`；加 `auto` 快照（M2a 不破） | 同上 |
 | ④ | 纯 Dart / Flutter 边界 | 前 4 个文件纯 Dart（可进 `compute()`）；`cover_store`/`synth_cover` 为 Flutter | §N.4 表 |
 | ⑤ | 封面引用 | `sealed class CoverRef{NoCover,PendingCover,StoredCover,SyntheticCover}`；持久化禁 `PendingCover` | `lib/model/book_meta.dart` |
-| ⑥ | 缩略图 / 限幅 | 魔数嗅探纯 Dart；`kCoverDecodeMaxPixels`=4,194,304；`kCoverThumbMaxEdge`=320；`covers/<bookId>.{cover,thumb}.<ext>` | `meta_source` / `cover_store` |
-| ⑦ | M1-T03 契约 | `CoverStore`(5 方法) + `SynthCoverRenderer`(2 方法)；GC 安全规则写死 | `cover_store` / `synth_cover` |
+| ⑥ | 缩略图 / 限幅 | 魔数嗅探纯 Dart；`kCoverDecodeMaxPixels`=4,194,304；`kCoverThumbMaxEdge`=320；命名 `covers/<bookId>.cover.<ext>` + `covers/<bookId>.thumb.png` | `meta_source` / `cover_store` |
+| ⑦ | M1-T03 契约 | `CoverStore`(**6 方法**) + `SynthCoverRenderer`(2 方法)；GC 安全规则 + `AtomicFile` 兄弟文件规则写死 | `cover_store` / `synth_cover` |
 
 **需回写的既有小节（一致性）**：
 
-- **§A.1 `BookMeta`**：本轮已就地纠正来源标记注释并加指向 §N 的说明（见 §A.1）。
-- **§B.3 L3（元数据等价）**：`*Origin` 比对改 `MetaOrigin` **值相等**；`coverBytes` 比对改为 **`PendingCover.bytes` 字节相等 + `format` 相等**——因为 `load()` 阶段封面在**解析期（未落盘）**，正是 `PendingCover`。
-- **§C.1（跨边界类型表）**：若列了 `BookMeta`，须注明「封面以 `PendingCover`（**原始字节**）过边界；Rust 侧同样只产字节 + 真实格式，落盘仍归 Dart `CoverStore`」——`NF-D8`（Rust 只读）自动满足。
-- **`docs/class-diagram.mermaid`**：本轮已同步（`BookMeta` 形状 + `CoverRef` 一族）。
+- **§A.1 `BookMeta`**：✅ 已就地纠正来源标记注释并加指向 §N 的说明（见 §A.1）。
+- **§B.3 L3（元数据等价）**：✅ 已回写——`*Origin` 按 **`MetaOrigin` 枚举值相等**；封面比对改为 **`PendingCover.bytes` 字节相等 + `format` 相等**，`coverBytes` 字样已清零（`load()` 阶段封面在解析期未落盘，正是 `PendingCover`）；顺带把新增的 `intro` 纳入 L3 字符串比对。
+- **§C.1（跨边界类型表）**：✅ 已回写——`OpenedBook.meta` 的封面以 `PendingCover`（**原始字节 + 真实格式**）过边界；Rust 侧只产字节 + 格式、**绝不落盘**，落盘仍归 Dart `CoverStore` —— `NF-D8`（Rust 只读）自动满足。
+- **`docs/class-diagram.mermaid`**：已同步（`BookMeta` 形状 + `CoverRef` 一族）。
+
+---
+
+### N.9 落地状态与复核结论（M1-T05 已完成）
+
+> 本节把 §N 的**冻结接口**与**已落地实现**对上，供 M1-T03 / M1-T04 / M2a-T03 直接开工——不必再去猜实现是否已按 §N 落。
+
+**落地提交链**（时间序）：
+
+| 提交 | 内容 |
+|---|---|
+| `c8d06ca` | **模型 + 兼容桥**：`lib/model/book_meta.dart`（`BookMeta` / `MetaOrigin` / `CoverRef` / `CoverFormat` / `BookMetaAuto`）；`lib/format/book_source.dart` 改「import + re-export」，`lib/meta/book_meta.dart` 一行 re-export（§N.1） |
+| `f168d1d` | **纯 Dart 提取**：`lib/meta/{meta_source,epub_meta,txt_meta}.dart` + `lib/epub/epub_parser.dart` 的 `OpfView`（含 `description`，§N.4） |
+| `e0d9a4c` | **封面落盘 + 合成封面**：`lib/meta/{cover_store,synth_cover}.dart`（§N.6 / §N.7） |
+| `8e11ae0` | **文档回写**（本批） |
+
+**逐条对齐结果**：§N.8 冻结总表 **7 行全部落地**。其中第 ④ 行（纯 Dart / Flutter 边界）已经**只读核查**证实：
+
+- `lib/model/book_meta.dart`、`lib/meta/{meta_source,epub_meta,txt_meta}.dart` **零 `package:flutter`、零 `dart:io`**（故可进 `compute()`）；
+- `lib/meta/**` **零 `lib/format/**` import** —— 依赖方向**无环**，§N.0 的口诀成立。
+
+**主理人独立探针实测**（探针已删，结论留档）：
+
+- **纯 Dart 侧 55 条断言全绿**：含 `sniffCoverFormat` **10 例**（覆盖截断输入、`RIFF+WAVE` 反例——**不被误判为 WebP**）、`META-04` 四条内置规则 + 兜底、`META-01` 兜底串（「未知作者」/「未命名书籍」）、codec round-trip、以及 **`PendingCover` 序列化抛 `StateError`**（守住 §N.5 的不变式）。
+- **端到端 EPUB 侧 16 条断言全绿**，关键结论：**`META-02` 四来源实测顺序 = `opf-meta-cover` → `properties-cover-image` → `guide-cover` → `filename-cover`**（与 §N.4 / §N.7 冻死的**有序**优先级一致）、**命中即停**；**重复解析 10 次签名唯一**（`META-02 ②`）；**仅用 `properties="cover-image"` 的 EPUB3 能取到封面**（PRD 点名的缺口**已补**）；四来源皆缺 → `NoCover`，**不报错**（`META-02 ③`）。
+
+**结论（仍然成立）**：**§N 的接口已冻结且已实现；后续任何变更属破坏性变更，须走评审。**
 
 ---
 
