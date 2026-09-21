@@ -24,7 +24,7 @@ sequenceDiagram
 
     Note over U,DART: ② 打开一本书（运行期，不再探测）
     U->>UI: 选择文件
-    UI->>REG: open(path, head)
+    UI->>REG: open({fileName, bytes})
     REG->>REG: sniff() → FormatKind.epub
     alt has(epubDecompress)
         REG-->>UI: RustEpubSource

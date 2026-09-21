@@ -11,19 +11,67 @@ classDiagram
         +chapters() List~Chapter~
         +content(int chapterIndex) ChapterContent
         +capabilities() SourceCapabilities
+        +totalCharCount() int
         +search(String query, CancelToken cancel) Stream~SearchEvent~
         +dispose() void
     }
 
+    %% BookMeta 冻结形态见 architecture-rust-integration.md §N（M1-T05 接口冻结）
     class BookMeta {
         +String title
         +String author
+        +String intro
         +String language
-        +Uint8List coverBytes
-        +String titleOrigin
-        +String authorOrigin
-        +String coverOrigin
+        +CoverRef cover
+        +MetaOrigin titleOrigin
+        +MetaOrigin authorOrigin
+        +MetaOrigin introOrigin
+        +MetaOrigin coverOrigin
+        +BookMetaAuto auto
     }
+    class MetaOrigin {
+        <<enumeration>>
+        metadata
+        filename
+        user
+        none
+    }
+    class CoverFormat {
+        <<enumeration>>
+        jpeg
+        png
+        webp
+        gif
+        bmp
+        unknown
+    }
+    class CoverRef {
+        <<sealed>>
+    }
+    class NoCover
+    class PendingCover {
+        +Uint8List bytes
+        +CoverFormat format
+    }
+    class StoredCover {
+        +String fileName
+    }
+    class SyntheticCover {
+        +String cacheKey
+    }
+    class BookMetaAuto {
+        +String title
+        +String author
+        +String intro
+    }
+    CoverRef <|-- NoCover
+    CoverRef <|-- PendingCover
+    CoverRef <|-- StoredCover
+    CoverRef <|-- SyntheticCover
+    BookMeta --> CoverRef
+    BookMeta ..> MetaOrigin
+    BookMeta ..> BookMetaAuto
+    PendingCover ..> CoverFormat
     class Chapter {
         +String href
         +String title
@@ -142,8 +190,8 @@ classDiagram
     %% ============ 分发点 ============
 
     class BookRegistry {
-        +open(String path, Uint8List head) BookSource
-        +sniff(String path, Uint8List head) FormatKind
+        +open({String fileName, Uint8List bytes}) BookSource
+        +sniffFormat({String fileName, Uint8List bytes}) FormatKind
     }
     BookRegistry --> HighPerfRegistry : queries has()
     BookRegistry ..> BookSource : returns abstract
