@@ -7,6 +7,10 @@
 
 ### 新增
 
+- M1-T02B TXT 源：DartTxtSource 照译 TextFile.kt 分章算法（RD-02）`bd2466d`
+- M1-T02B 编码名缝：text_codec.detectEncodingName（NF-C4，供 Rust 只探测编码名）`f39deb1`
+- M1-T02B 应用接线：首页/阅读页改吃 BookSource，支持 EPUB + TXT `0da0c5b`
+- M1-T02B 测试：dart_txt_source 单测 + 契约追加 dart-txt 样本 `0da0c5b`
 - M1-T02A 格式抽象：BookSource + 分发点 openBook/sniffFormat `c9827fe`
 - M1-T02A EPUB 目录：nav/ncx 双路径，level 取真实嵌套深度 `c9827fe`
 - M1-T02A 加密拒绝：encryption.xml 判定，字体混淆不误杀（RD-05）`c9827fe`
@@ -19,6 +23,8 @@
 
 ### 变更
 
+- M1-T02B 择优性能：TXT 规则择优只跑首个 512KB 块，20MB 由分钟级降到百毫秒级 `bd2466d`
+- M1-T02B 文件名兜底：`.txt` 这类无书名的名字回落「未命名」`bd2466d`
 - §15.4 依赖清单补录 path_provider（应用数据目录）`9194a89`
 - M1-T02A EpubParseException 退休为 @Deprecated 子类，异常统一收敛 `c9827fe`
 - M1-T02A 收尾：目录项并入 Chapter、分发点移入 book_registry `449b135`
