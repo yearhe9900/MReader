@@ -10,6 +10,7 @@ import 'dart:typed_data';
 
 import 'book_source.dart';
 import 'dart_epub_source.dart';
+import 'dart_txt_source.dart';
 
 // `MReaderFormatException` / `FormatErrorCode` 经 `book_source.dart` 的
 // `export 'error_messages.dart';` 转出，不再单独 import（避免重复导入同一个库）。
@@ -28,7 +29,7 @@ class BookRegistry {
   /// 按一级（扩展名）+ 二级（魔数）选择实现。
   ///
   /// - `epub` → [DartEpubSource]；
-  /// - `txt`  → **本批（M1-T02A）尚未接入**，由 M1-T02B 的 `DartTxtSource` 绑定到此处；
+  /// - `txt`  → [DartTxtSource]（M1-T02B 接入）；
   /// - `unsupported` → 抛 [MReaderFormatException]（`RD-05`）。
   ///
   /// 返回的永远是 [BookSource] 抽象——调用方无法、也无需知道来源。
@@ -40,11 +41,7 @@ class BookRegistry {
       case FormatKind.epub:
         return DartEpubSource(fileName: fileName, bytes: bytes);
       case FormatKind.txt:
-        // M1-T02B 会在这里返回 DartTxtSource(fileName: fileName, bytes: bytes)。
-        throw const MReaderFormatException(
-          FormatErrorCode.unsupportedFormat,
-          detail: 'TXT 分支由 M1-T02B 接入',
-        );
+        return DartTxtSource(fileName: fileName, bytes: bytes);
       case FormatKind.unsupported:
         throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
     }
