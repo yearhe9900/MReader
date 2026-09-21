@@ -17,12 +17,13 @@ subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
-subprojects {
-    project.evaluationDependsOn(":app")
-}
 
 // ---------------------------------------------------------------------------
 // 统一提升插件模块的 compileSdk（全局 Gradle 配置，影响**所有**子工程）。
+//
+// ⚠️ 顺序敏感：本段必须注册在下方 `evaluationDependsOn(":app")` **之前**——
+//   Flutter 模板在 root 评估期就会强制评估 :app，若晚于它注册 afterEvaluate，
+//   会抛「Cannot run Project.afterEvaluate(Action) when the project is already evaluated」。
 //
 // 现象：`:jni_flutter:checkDebugAarMetadata` 失败——
 //   `Dependency ':jni' requires ... version 36 or later of the Android APIs.
@@ -57,6 +58,10 @@ subprojects {
             }
         }
     }
+}
+
+subprojects {
+    project.evaluationDependsOn(":app")
 }
 
 tasks.register<Delete>("clean") {
