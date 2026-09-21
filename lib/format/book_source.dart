@@ -3,14 +3,18 @@
 // 这是 `PERF-01`（解析移出主 isolate）的硬前提：本目录下的所有类型都只依赖
 // `dart:typed_data` / `dart:convert` 与纯 Dart 包，因此可以直接丢进 `compute()`。
 //
-// 各格式实现（EPUB / TXT / …）**互不感知**，由分发点按格式选择实现；
+// 各格式实现（EPUB / TXT / …）**互不感知**，由 [BookRegistry]（见 `book_registry.dart`）按格式选择；
 // Rust 加速层（M3.5）挂在本抽象**之后**，与纯 Dart 实现并存（PRD §15.6.1）。
+//
+// ⚠️ **本文件只放「纯类型 + export」，不得出现任何具体实现的 import**
+// （架构 §A.1 铁律第 3 条：「选择发生在 BookRegistry，实现类之间没有任何 import」）。
+// 分发点 `BookRegistry` / `sniffFormat` / `openBook` 都在 `book_registry.dart`——
+// 把 `dart_epub_source.dart` / `dart_txt_source.dart` 加进来会破坏该铁律，
+// 并让本文件变成所有实现（含未来的 Rust 实现）的汇聚点。**请不要加回去。**
 import 'dart:typed_data';
 
 import '../model/chapter.dart';
 import '../model/chapter_content.dart';
-import 'dart_epub_source.dart';
-import 'error_messages.dart';
 
 export 'error_messages.dart';
 export '../model/chapter.dart';
@@ -127,91 +131,4 @@ abstract class BookSource {
   Future<int?> totalCharCount() async => null;
 
   Future<void> dispose();
-}
-
-/// 格式种类。
-enum FormatKind { epub, txt, unsupported }
-
-/// 一级（扩展名）+ 二级（魔数）分发（PRD §7.3；`FMT-06` 的完整纠偏在 M2b）。
-///
-/// 规则：
-/// - **EPUB**：扩展名 `.epub`（**以扩展名为主**——`.zip` 改名 `.epub` 也要交给 EPUB 解析器，
-///   由它给出「不是有效 EPUB」的可读提示，而不是在这里静默拒绝）；
-/// - **TXT**：非 zip 且（扩展名 `.txt` 或字节可判为文本）；
-/// - 其余：`unsupported`。
-FormatKind sniffFormat({
-  required String fileName,
-  required Uint8List bytes,
-}) {
-  final String ext = _extensionOf(fileName);
-
-  if (ext == 'epub') return FormatKind.epub;
-  if (_looksLikeZip(bytes)) return FormatKind.unsupported;
-  if (ext == 'txt') return FormatKind.txt;
-  if (_looksLikeText(bytes)) return FormatKind.txt;
-  return FormatKind.unsupported;
-}
-
-/// 打开一本本地书（**纯字节入口**：不碰路径，才能在 isolate 里跑）。
-///
-/// - `epub` → [DartEpubSource]；
-/// - `txt`  → **本批（M1-T02A）尚未接入**，由 M1-T02B 的 `DartTxtSource` 绑定到此处；
-/// - `unsupported` → 抛 [MReaderFormatException]（`RD-05`）。
-///
-/// 这是架构文档 §A.2 的 `BookRegistry` 前身；M3.5 接 Rust 时由 `BookRegistry` 接管，
-/// **本函数签名不变**，上层调用点无需改动。
-Future<BookSource> openBook({
-  required String fileName,
-  required Uint8List bytes,
-}) async {
-  switch (sniffFormat(fileName: fileName, bytes: bytes)) {
-    case FormatKind.epub:
-      return DartEpubSource(fileName: fileName, bytes: bytes);
-    case FormatKind.txt:
-      // M1-T02B 会在这里返回 DartTxtSource(fileName: fileName, bytes: bytes)。
-      throw const MReaderFormatException(
-        FormatErrorCode.unsupportedFormat,
-        detail: 'TXT 分支由 M1-T02B 接入',
-      );
-    case FormatKind.unsupported:
-      throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
-  }
-}
-
-/// 取小写扩展名（不含点）；无扩展名返回空串。
-String _extensionOf(String fileName) {
-  final String name = fileName.replaceAll('\\', '/');
-  final int slash = name.lastIndexOf('/');
-  final String base = slash >= 0 ? name.substring(slash + 1) : name;
-  final int dot = base.lastIndexOf('.');
-  if (dot <= 0 || dot == base.length - 1) return '';
-  return base.substring(dot + 1).toLowerCase();
-}
-
-/// 是否是 zip 容器（PK 头的三种形态：本地文件头 / 空档案 / 分卷档案）。
-bool _looksLikeZip(Uint8List bytes) {
-  if (bytes.length < 4) return false;
-  if (bytes[0] != 0x50 || bytes[1] != 0x4B) return false;
-  return (bytes[2] == 0x03 && bytes[3] == 0x04) ||
-      (bytes[2] == 0x05 && bytes[3] == 0x06) ||
-      (bytes[2] == 0x07 && bytes[3] == 0x08);
-}
-
-/// 字节是否「看起来是文本」（`.txt` 之外的兜底；完整嗅探属 M2b 的 `FMT-06`）。
-///
-/// 判据（保守，宁可判为不支持也不误开二进制）：
-/// 1. 无 `0x00`（含 NUL 的几乎一定是二进制）；
-/// 2. 头部 512 字节里没有除 `\t \n \f \r` 之外的 C0 控制符；
-/// 3. 非 ASCII 字节视为文本（中文 TXT 必然是高位字节）。
-bool _looksLikeText(Uint8List bytes) {
-  if (bytes.isEmpty) return false;
-  final int head = bytes.length > 512 ? 512 : bytes.length;
-  for (int i = 0; i < head; i++) {
-    final int b = bytes[i];
-    if (b == 0x00) return false;
-    if (b < 0x20 && b != 0x09 && b != 0x0A && b != 0x0C && b != 0x0D) {
-      return false;
-    }
-  }
-  return true;
 }
