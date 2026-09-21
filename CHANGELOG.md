@@ -21,6 +21,7 @@
 
 - §15.4 依赖清单补录 path_provider（应用数据目录）`9194a89`
 - M1-T02A EpubParseException 退休为 @Deprecated 子类，异常统一收敛 `c9827fe`
+- M1-T02A 收尾：目录项并入 Chapter、分发点移入 book_registry `449b135`
 
 ### 移除
 
