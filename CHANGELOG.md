@@ -7,6 +7,12 @@
 
 ### 新增
 
+- M1-T05 元数据模型：BookMeta 落 lib/model/book_meta.dart（唯一）+ MetaOrigin/CoverRef/intro/auto `c8d06ca`
+- M1-T05 EPUB 元数据：OpfView 四来源封面链（命中即停）+ 多作者整体保留（META-02/03）`f168d1d`
+- M1-T05 TXT 元数据：文件名规则链 + 清洗 + 精确化兜底（META-04）`f168d1d`
+- M1-T05 封面存储：CoverStore 落盘 covers/ + 缩略图 + 孤儿 GC（META-05/06）`e0d9a4c`
+- M1-T05 合成封面：SynthCoverRenderer + CoverTheme 日/夜（META-07）`e0d9a4c`
+- M1-T05 封面序列化：CoverRef↔JSON 唯一出口，PendingCover 遇序列化抛 StateError `e0d9a4c`
 - M1-T08 依赖接入：`liquid_glass_widgets` 1.6.2 + `cupertino_icons`（玻璃图标强制依赖）`348ce23`
 - M1-T08 主题基建：`AppTheme` 浅/深主题 + 有效亮度解析（`UI-01` ②）`08c2b65`
 - M1-T08 玻璃基建：`GlassKit` 档位唯一出口 + `OpaqueContentSurface` 内容层不透明唯一出口（`UI-04`）`08c2b65`
