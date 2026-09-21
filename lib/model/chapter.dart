@@ -18,8 +18,8 @@ class Chapter {
     required this.locate,
   });
 
-  /// 定位串：EPUB = 包内路径（如 `OEBPS/text/ch1.xhtml`）；TXT = `txt:<起始字节>`
-  /// （形如 `txt:0` / `txt:1048576`，M1-T02B 使用）。
+  /// 定位串：EPUB = 包内路径（如 `OEBPS/text/ch1.xhtml`）；TXT = `txt:<起始字符偏移>`
+  /// （形如 `txt:0` / `txt:1048576`，**字符**偏移而非字节，M1-T02B 使用）。
   final String href;
 
   /// 目录标题（已折叠空白）。
