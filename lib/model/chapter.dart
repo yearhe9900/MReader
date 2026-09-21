@@ -4,6 +4,10 @@
 
 /// 章节定位信息。
 ///
+/// **这是全项目唯一的「章节」类型**：`lib/epub/**`（目录解析）、`lib/format/**`
+/// （各格式实现）与 UI 共用它，**不得再复制第二份**（结构相同会导致无意义的字段搬运，
+/// 并让各实现各自挑类型）。本文件是**叶子**：不 import 任何东西。
+///
 /// [href] 是章节的**稳定身份**：`RD-04`（阅读进度）与 `SYNC-02`（同步）都以它对齐，
 /// 因此实现方必须保证「同一章在同一本书里 href 恒定」。
 class Chapter {
@@ -14,7 +18,8 @@ class Chapter {
     required this.locate,
   });
 
-  /// 定位串：EPUB = 包内路径（如 `OEBPS/text/ch1.xhtml`）；TXT = `txt:<起始字节>`。
+  /// 定位串：EPUB = 包内路径（如 `OEBPS/text/ch1.xhtml`）；TXT = `txt:<起始字节>`
+  /// （形如 `txt:0` / `txt:1048576`，M1-T02B 使用）。
   final String href;
 
   /// 目录标题（已折叠空白）。

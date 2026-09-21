@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 import 'package:xml/xml.dart';
 
 import '../format/error_messages.dart';
+import '../model/chapter.dart';
 import '../model/epub_book.dart';
 import 'epub_toc.dart';
 import 'text_codec.dart';
@@ -135,7 +136,8 @@ Future<EpubBook> parseEpub(Uint8List bytes, {String fileName = ''}) async {
   _rejectEncryptedEpub(files, lowerIndex, idToHref, idToMediaType);
 
   // 5) 目录（RD-01）：无目录时返回空列表，由调用方降级为平坦目录。
-  final List<EpubTocEntry> toc =
+  //    目录项类型就是全项目唯一的 Chapter（见 lib/model/chapter.dart）。
+  final List<Chapter> toc =
       parseToc(opfDoc: opfDoc, opfDir: opfDir, lookup: lookup);
 
   // 6) spine：阅读顺序

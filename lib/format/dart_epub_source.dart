@@ -69,15 +69,9 @@ class DartEpubSource implements BookSource {
     final List<Chapter> result;
 
     if (book.toc.isNotEmpty) {
-      // 有目录：原样映射（层级来自真实嵌套深度）。
-      result = book.toc
-          .map((entry) => Chapter(
-                href: entry.href,
-                title: entry.title,
-                level: entry.level,
-                locate: entry.locate,
-              ))
-          .toList(growable: false);
+      // 有目录：**直接使用**解析结果（目录项即章节，类型统一为 Chapter，无需搬运字段）。
+      // 包一层 unmodifiable，避免把 EpubBook 内部列表泄漏给调用方。
+      result = List<Chapter>.unmodifiable(book.toc);
     } else {
       // 无目录：降级为「按 spine 的平坦目录」（RD-01 ④）。
       final List<Chapter> flat = <Chapter>[];

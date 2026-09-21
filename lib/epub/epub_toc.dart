@@ -1,7 +1,10 @@
 // EPUB 目录（TOC）解析：EPUB3 `nav.xhtml` 与 EPUB2 `toc.ncx` 双路径（`RD-01`）。
 //
-// 本文件**只做「已解析对象 -> 目录条目」的转换**：zip 解包与资源命中由调用方通过
+// 本文件**只做「已解析对象 -> 章节列表」的转换**：zip 解包与资源命中由调用方通过
 // [parseToc] 的 `lookup` 回调注入，因此这里不依赖 `archive`，也不碰文件系统。
+//
+// 返回类型是 [Chapter] —— 全项目唯一的章节类型（`lib/model/chapter.dart`）。
+// **不要再引入第二份「目录条目」类型**：目录项与章节结构相同，两份类型会导致无意义的字段搬运。
 //
 // 纯 Dart：不 import Flutter、不 import dart:io。
 import 'dart:typed_data';
@@ -11,33 +14,12 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:path/path.dart' as p;
 import 'package:xml/xml.dart';
 
+import '../model/chapter.dart';
 import 'text_codec.dart';
 import 'xml_util.dart';
 import 'zip_paths.dart';
 
-/// 目录条目。
-class EpubTocEntry {
-  const EpubTocEntry({
-    required this.href,
-    required this.title,
-    required this.level,
-    required this.locate,
-  });
-
-  /// 归一化后的包内路径（如 `OEBPS/text/ch1.xhtml`）。
-  final String href;
-
-  /// 目录标题（nav / ncx 里的文本，已折叠空白）。
-  final String title;
-
-  /// 层级深度：`0` = 顶层；子项 `+1`（**来自真实嵌套深度**，不是扁平序号）。
-  final int level;
-
-  /// fragment id（href 中 `'#'` 之后的部分），无则 `''`。
-  final String locate;
-}
-
-/// 解析 EPUB 目录。
+/// 解析 EPUB 目录，返回 [Chapter] 列表。
 ///
 /// - **EPUB3**：OPF manifest 里 `properties` 含 `nav` 的 item → 解析其
 ///   `<nav epub:type="toc">` 的嵌套 `<ol><li><a>`；
@@ -48,7 +30,7 @@ class EpubTocEntry {
 ///
 /// [lookup] 用于按包内路径取资源字节，通常直接复用 `epub_parser` 的命中逻辑
 /// （含大小写不敏感与百分号三试探）。
-List<EpubTocEntry> parseToc({
+List<Chapter> parseToc({
   required XmlDocument opfDoc,
   required String opfDir,
   required Uint8List? Function(String packagePath) lookup,
@@ -59,19 +41,19 @@ List<EpubTocEntry> parseToc({
   for (final _ManifestItem item in items.navs) {
     final Uint8List? bytes = lookup(item.href);
     if (bytes == null) continue;
-    final List<EpubTocEntry> entries = _parseNav(item.href, bytes);
-    if (entries.isNotEmpty) return entries;
+    final List<Chapter> chapters = _parseNav(item.href, bytes);
+    if (chapters.isNotEmpty) return chapters;
   }
 
   // 路径二：EPUB2 ncx。
   for (final _ManifestItem item in items.ncxs) {
     final Uint8List? bytes = lookup(item.href);
     if (bytes == null) continue;
-    final List<EpubTocEntry> entries = _parseNcx(item.href, bytes);
-    if (entries.isNotEmpty) return entries;
+    final List<Chapter> chapters = _parseNcx(item.href, bytes);
+    if (chapters.isNotEmpty) return chapters;
   }
 
-  return const <EpubTocEntry>[];
+  return const <Chapter>[];
 }
 
 // ---------------------------------------------------------------------------
@@ -134,9 +116,9 @@ _ManifestItems _collectManifestItems(XmlDocument opfDoc, String opfDir) {
 
 /// 解析 `nav.xhtml`：优先用 `package:html` 宽松解析（EPUB3 的 nav 常是脏 XHTML），
 /// 宽松解析拿不到 `<nav>` 时再回落 `package:xml` 严格解析。
-List<EpubTocEntry> _parseNav(String navPath, Uint8List bytes) {
+List<Chapter> _parseNav(String navPath, Uint8List bytes) {
   final String text = decodeText(bytes);
-  if (text.trim().isEmpty) return const <EpubTocEntry>[];
+  if (text.trim().isEmpty) return const <Chapter>[];
 
   final String navDir = p.posix.dirname(navPath);
 
@@ -146,8 +128,8 @@ List<EpubTocEntry> _parseNav(String navPath, Uint8List bytes) {
     if (nav != null) {
       final dom.Element? ol = _firstDescendantByTag(nav, 'ol');
       if (ol != null) {
-        final List<EpubTocEntry> out = <EpubTocEntry>[];
-        _walkNavOl(ol, navDir, 0, out);
+        final List<Chapter> out = <Chapter>[];
+        _walkNavOl(ol, navDir, navPath, 0, out);
         if (out.isNotEmpty) return out;
       }
     }
@@ -155,13 +137,13 @@ List<EpubTocEntry> _parseNav(String navPath, Uint8List bytes) {
 
   // 回落：严格 XML 解析（部分 nav 文档是严格 XHTML，html 解析器会打乱结构）。
   final XmlDocument? xmlDoc = tryParseXml(text);
-  if (xmlDoc == null) return const <EpubTocEntry>[];
+  if (xmlDoc == null) return const <Chapter>[];
   final XmlElement? xmlNav = _findTocNavXml(xmlDoc);
   final XmlElement? xmlOl =
       xmlNav == null ? null : firstElementIn(xmlNav, 'ol');
-  if (xmlOl == null) return const <EpubTocEntry>[];
-  final List<EpubTocEntry> out = <EpubTocEntry>[];
-  _walkNavOlXml(xmlOl, navDir, 0, out);
+  if (xmlOl == null) return const <Chapter>[];
+  final List<Chapter> out = <Chapter>[];
+  _walkNavOlXml(xmlOl, navDir, navPath, 0, out);
   return out;
 }
 
@@ -205,8 +187,9 @@ XmlElement? _findTocNavXml(XmlDocument doc) {
 void _walkNavOl(
   dom.Element ol,
   String navDir,
+  String selfPath,
   int level,
-  List<EpubTocEntry> out,
+  List<Chapter> out,
 ) {
   for (final dom.Element li in ol.children) {
     if (li.localName?.toLowerCase() != 'li') continue;
@@ -216,13 +199,14 @@ void _walkNavOl(
       final String raw = (anchor.attributes['href'] ?? '').trim();
       final String title = collapseWhitespace(anchor.text);
       if (raw.isNotEmpty && title.isNotEmpty) {
-        final EpubTocEntry? entry = _makeEntry(navDir, raw, title, level);
-        if (entry != null) out.add(entry);
+        final Chapter? chapter =
+            _makeChapter(navDir, selfPath, raw, title, level);
+        if (chapter != null) out.add(chapter);
       }
     }
 
     final dom.Element? nested = _firstChildByTag(li, 'ol');
-    if (nested != null) _walkNavOl(nested, navDir, level + 1, out);
+    if (nested != null) _walkNavOl(nested, navDir, selfPath, level + 1, out);
   }
 }
 
@@ -230,19 +214,21 @@ void _walkNavOl(
 void _walkNavOlXml(
   XmlElement ol,
   String navDir,
+  String selfPath,
   int level,
-  List<EpubTocEntry> out,
+  List<Chapter> out,
 ) {
   for (final XmlElement li in ol.childElements) {
     if (li.name.local != 'li') continue;
 
-    final XmlElement? anchor = firstElementIn(li, 'a');
+    final XmlElement? anchor = _firstAnchorOutsideNestedListXml(li);
     if (anchor != null) {
       final String raw = (anchor.getAttribute('href') ?? '').trim();
       final String title = collapsedText(anchor);
       if (raw.isNotEmpty && title.isNotEmpty) {
-        final EpubTocEntry? entry = _makeEntry(navDir, raw, title, level);
-        if (entry != null) out.add(entry);
+        final Chapter? chapter =
+            _makeChapter(navDir, selfPath, raw, title, level);
+        if (chapter != null) out.add(chapter);
       }
     }
 
@@ -253,7 +239,7 @@ void _walkNavOlXml(
         break;
       }
     }
-    if (nested != null) _walkNavOlXml(nested, navDir, level + 1, out);
+    if (nested != null) _walkNavOlXml(nested, navDir, selfPath, level + 1, out);
   }
 }
 
@@ -262,20 +248,20 @@ void _walkNavOlXml(
 // ---------------------------------------------------------------------------
 
 /// 解析 `toc.ncx`（严格 XML）：`navMap` 下的嵌套 `navPoint`。
-List<EpubTocEntry> _parseNcx(String ncxPath, Uint8List bytes) {
+List<Chapter> _parseNcx(String ncxPath, Uint8List bytes) {
   final XmlDocument? doc = tryParseXml(decodeText(bytes));
-  if (doc == null) return const <EpubTocEntry>[];
+  if (doc == null) return const <Chapter>[];
 
   XmlElement? navMap;
   for (final XmlElement element in findAllByLocalName(doc, 'navMap')) {
     navMap = element;
     break;
   }
-  if (navMap == null) return const <EpubTocEntry>[];
+  if (navMap == null) return const <Chapter>[];
 
   final String ncxDir = p.posix.dirname(ncxPath);
-  final List<EpubTocEntry> out = <EpubTocEntry>[];
-  _walkNavPoints(navMap, ncxDir, 0, out);
+  final List<Chapter> out = <Chapter>[];
+  _walkNavPoints(navMap, ncxDir, ncxPath, 0, out);
   return out;
 }
 
@@ -283,20 +269,33 @@ List<EpubTocEntry> _parseNcx(String ncxPath, Uint8List bytes) {
 void _walkNavPoints(
   XmlElement parent,
   String ncxDir,
+  String selfPath,
   int level,
-  List<EpubTocEntry> out,
+  List<Chapter> out,
 ) {
   for (final XmlElement point in parent.childElements) {
     if (point.name.local != 'navPoint') continue;
 
     final String title = _navLabelText(point);
-    final String src = firstAttributeIn(point, 'content', 'src') ?? '';
+    // **只取本层的 `<content>`**：不下钻到嵌套 `navPoint` 的 `<content>`，
+    // 否则父级标题会凭空指向子项的文件。
+    final String src = _ownLevelContentSrc(point) ?? '';
     if (src.trim().isNotEmpty && title.isNotEmpty) {
-      final EpubTocEntry? entry = _makeEntry(ncxDir, src, title, level);
-      if (entry != null) out.add(entry);
+      final Chapter? chapter =
+          _makeChapter(ncxDir, selfPath, src, title, level);
+      if (chapter != null) out.add(chapter);
     }
-    _walkNavPoints(point, ncxDir, level + 1, out);
+    _walkNavPoints(point, ncxDir, selfPath, level + 1, out);
   }
+}
+
+/// `navPoint` **直接子元素**里的 `<content src="…">`。
+String? _ownLevelContentSrc(XmlElement point) {
+  for (final XmlElement child in point.childElements) {
+    if (child.name.local != 'content') continue;
+    return child.getAttribute('src');
+  }
+  return null;
 }
 
 /// `<navLabel><text>` 的文本；找不到 navLabel 时退化为第一个 `<text>`。
@@ -310,18 +309,22 @@ String _navLabelText(XmlElement point) {
 }
 
 // ---------------------------------------------------------------------------
-// 共用：href -> 目录条目
+// 共用：href -> 章节
 // ---------------------------------------------------------------------------
 
-/// 把目录里的相对 href 解析成 [EpubTocEntry]。
+/// 把目录里的相对 href 解析成 [Chapter]。
 ///
-/// **关键点**：nav / ncx 里的 href 是**相对目录文件自身**的（不是相对 OPF 目录），
-/// 因此基准目录是 `dirname(navPath)`。这是本文件最容易写错的一点，已由 fixture 覆盖
-/// 「nav 位于子目录 + href 带 `../`」的用例。
+/// **关键点 1**：nav / ncx 里的 href 是**相对目录文件自身**的（不是相对 OPF 目录），
+/// 因此基准目录是 `dirname(selfPath)`。这是本文件最容易写错的一点，已由用例覆盖
+/// 「nav 位于子目录 + href 带 `../`」。
 ///
-/// 解析不出文件路径（如纯 fragment `'#c1'`）的条目不产生目录项，返回 `null`。
-EpubTocEntry? _makeEntry(
+/// **关键点 2**：`<a href="#c1">` 这类**纯 fragment 链接**指向**目录文件自身**
+/// （EPUB3 允许 nav 与正文同文件），此时 href 取 [selfPath]，`locate` 为 `c1`。
+///
+/// href 为空且无 fragment 的条目返回 `null`（不产生目录项）。
+Chapter? _makeChapter(
   String baseDir,
+  String selfPath,
   String rawHref,
   String title,
   int level,
@@ -331,10 +334,16 @@ EpubTocEntry? _makeEntry(
   final String locate = hash >= 0 ? href.substring(hash + 1).trim() : '';
   final String withoutFragment = hash >= 0 ? href.substring(0, hash) : href;
 
-  final String resolved = resolveHref(baseDir, withoutFragment);
-  if (resolved.isEmpty) return null;
+  final String resolved;
+  if (withoutFragment.trim().isEmpty) {
+    if (locate.isEmpty) return null; // 空 href 且无 fragment：丢弃
+    resolved = selfPath; // 纯 fragment：指向目录文件自身
+  } else {
+    resolved = resolveHref(baseDir, withoutFragment);
+    if (resolved.isEmpty) return null;
+  }
 
-  return EpubTocEntry(
+  return Chapter(
     href: resolved,
     title: title,
     level: level,
@@ -373,6 +382,24 @@ dom.Element? _firstAnchorOutsideNestedList(dom.Element li) {
     if (tag == 'ol') continue;
     if (tag == 'a') return node;
     final dom.Element? found = _firstAnchorOutsideNestedList(node);
+    if (found != null) return found;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// DOM 小工具（package:xml）—— 与上面两个 html 版本**语义必须一致**
+// ---------------------------------------------------------------------------
+
+/// 在 `<li>` 里找第一个 `<a>`，**不下钻嵌套 `<ol>`**（xml 版）。
+///
+/// 不能用 `firstElementIn(li, 'a')`：它是**递归整个子树**的，
+/// 当 `<li>` 自己没 `<a>` 时会取到嵌套 `<ol>` 子项的锚点，导致父级凭空多一条错层条目。
+XmlElement? _firstAnchorOutsideNestedListXml(XmlElement li) {
+  for (final XmlElement child in li.childElements) {
+    if (child.name.local == 'ol') continue;
+    if (child.name.local == 'a') return child;
+    final XmlElement? found = _firstAnchorOutsideNestedListXml(child);
     if (found != null) return found;
   }
   return null;

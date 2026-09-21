@@ -3,7 +3,7 @@
 // 本文件**不依赖 Flutter**，只是数据结构，便于单测与后续在正式工程里复用。
 import 'dart:typed_data';
 
-import '../epub/epub_toc.dart';
+import 'chapter.dart';
 
 /// 一本书的结构 + 元数据。
 ///
@@ -17,7 +17,7 @@ class EpubBook {
     required this.language,
     required this.fileName,
     required this.sections,
-    this.toc = const <EpubTocEntry>[],
+    this.toc = const <Chapter>[],
   });
 
   /// 书名，来自 OPF 的 dc:title；可能为空字符串。
@@ -39,7 +39,7 @@ class EpubBook {
   ///
   /// **空列表表示这本书没有可用目录**，此时调用方应降级为「按 spine 生成平坦目录」。
   /// 默认空列表，保持对既有调用方的向后兼容。
-  final List<EpubTocEntry> toc;
+  final List<Chapter> toc;
 
   /// 给 UI 用的显示名：书名 -> 文件名 -> 占位。
   String get displayTitle {
