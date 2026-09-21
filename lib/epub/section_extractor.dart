@@ -182,3 +182,76 @@ List<String> _stripTags(String source) {
   if (text.isEmpty) return const <String>[];
   return <String>[text];
 }
+
+/// 从 [fragment] 锚点起的段落（`Chapter.locate` 的 **best-effort** 实现）。
+///
+/// 语义：在 XHTML 里找 `id`（或 `name`）等于 [fragment] 的元素，**只保留它之后的内容**
+/// （文档序：锚点子树 → 其后续兄弟 → 逐层向上的后续兄弟）。
+///
+/// 容错：找不到锚点、解析失败、[fragment] 为空 —— 一律**退回整章段落**，
+/// 绝不抛异常也不返回空（脏书里锚点丢失很常见，「显示整章」远好于「报错不给读」）。
+List<String> extractParagraphsFromFragment(Uint8List bytes, String fragment) {
+  final String needle = fragment.trim();
+  final String? decoded = _tryDecodeText(bytes);
+  if (decoded == null) return const <String>[];
+
+  final dom.Document? doc = _tryParseHtml(decoded);
+  if (doc == null) return _stripTags(decoded);
+
+  final dom.Element? body = doc.body ?? doc.documentElement;
+  if (body == null) return const <String>[];
+
+  final List<String> whole = <String>[];
+  final StringBuffer wholeBuffer = StringBuffer();
+  _walk(body, whole, wholeBuffer);
+  _flush(wholeBuffer, whole);
+  if (needle.isEmpty) return whole;
+
+  final dom.Element? anchor = _findAnchor(body, needle);
+  if (anchor == null) return whole;
+
+  final List<String> paragraphs = <String>[];
+  final StringBuffer buffer = StringBuffer();
+  _walk(anchor, paragraphs, buffer);
+  _flush(buffer, paragraphs);
+  for (final dom.Node node in _nodesAfter(anchor)) {
+    _walk(node, paragraphs, buffer);
+    _flush(buffer, paragraphs);
+  }
+  return paragraphs;
+}
+
+/// 找 `id` 或 `name` 等于 [id] 的元素（锚点常写成 `<a id="…">` 或 `<a name="…">`）。
+dom.Element? _findAnchor(dom.Node root, String id) {
+  for (final dom.Node node in root.nodes) {
+    if (node is! dom.Element) continue;
+    if (node.id == id) return node;
+    final String? name = node.attributes['name'];
+    if (name != null && name == id) return node;
+    final dom.Element? found = _findAnchor(node, id);
+    if (found != null) return found;
+  }
+  return null;
+}
+
+/// 文档序中 [target] **之后**的全部节点（先近后远：后续兄弟 -> 逐层向上的后续兄弟）。
+List<dom.Node> _nodesAfter(dom.Node target) {
+  final List<List<dom.Node>> levels = <List<dom.Node>>[];
+  dom.Node? cur = target;
+  while (cur != null && cur is! dom.Document) {
+    final dom.Node? parent = cur.parentNode;
+    if (parent != null) {
+      final List<dom.Node> siblings = parent.nodes;
+      final int index = siblings.indexOf(cur);
+      if (index >= 0 && index + 1 < siblings.length) {
+        levels.add(siblings.sublist(index + 1));
+      }
+    }
+    cur = parent;
+  }
+  final List<dom.Node> ordered = <dom.Node>[];
+  for (final List<dom.Node> level in levels.reversed) {
+    ordered.addAll(level);
+  }
+  return ordered;
+}
