@@ -112,4 +112,16 @@ class LibraryRepository {
     }
     return _coverStore.purgeOrphans(referencedFileNames: referencedFileNames);
   }
+
+  /// 读取书籍副本文件的原始字节（供打开阅读用）。
+  ///
+  /// 文件不存在时返回 `null`（LIB-03：文件缺失场景）。
+  Future<Uint8List?> readBookBytes(BookRecord record) async {
+    final Directory libDir = await _paths.subDir('library');
+    final File file = File(
+      '${libDir.path}${Platform.pathSeparator}${record.filePath}',
+    );
+    if (!await file.exists()) return null;
+    return file.readAsBytes();
+  }
 }
