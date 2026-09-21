@@ -698,4 +698,45 @@ void main() {
       await source.dispose();
     });
   });
+
+  // =====================================================================
+  // G. dispose 契约（RUST-01：上层无感，绝不抛）
+  // =====================================================================
+  group('dispose 契约（RUST-01）', () {
+    test('dispose 之后：各方法返回优雅空结果、不抛异常', () async {
+      final DartEpubSource source =
+          DartEpubSource(fileName: 'g.epub', bytes: _epub3WithNav());
+      await source.dispose();
+
+      final BookMeta meta = await source.load();
+      expect(meta.title, '未命名');
+      expect(meta.titleOrigin, 'none');
+      expect(meta.authorOrigin, 'none');
+      expect(meta.coverOrigin, 'none');
+      expect(await source.chapters(), isEmpty);
+      expect((await source.content(0)).isEmpty, isTrue);
+      expect(await source.totalCharCount(), isNull);
+      expect(await source.search('卷', cancel: CancelToken()).toList(), isEmpty);
+    });
+
+    test('dispose 竞态：content 已挂起后再 dispose，不抛（返回空）', () async {
+      final DartEpubSource source =
+          DartEpubSource(fileName: 'g.epub', bytes: _epub3WithNav());
+      await source.chapters(); // 先准备，让 content 的 await 一定走「已就绪」分支
+      final Future<ChapterContent> pending = source.content(0);
+      await source.dispose();
+      expect((await pending).isEmpty, isTrue);
+    });
+
+    test('dispose 之后不再重新解析（_bookOnce 返回 null，坏字节也不再抛）', () async {
+      final DartEpubSource source = DartEpubSource(
+        fileName: 'bad.epub',
+        bytes: Uint8List.fromList(<int>[1, 2, 3]),
+      );
+      // 故意不先解析：dispose 后任何调用都不应触发解析，更不应抛出。
+      await source.dispose();
+      expect(await source.chapters(), isEmpty);
+      expect((await source.load()).title, '未命名');
+    });
+  });
 }

@@ -258,4 +258,45 @@ void main() {
       await source.dispose(); // 幂等
     });
   });
+
+  group('dispose 契约（RUST-01：上层无感，绝不抛）', () {
+    test('dispose 之后：各方法返回优雅空结果、不抛异常', () async {
+      final DartTxtSource source =
+          DartTxtSource(fileName: 'd.txt', bytes: _utf8(_twoChaptersText()));
+      await source.dispose();
+
+      final BookMeta meta = await source.load();
+      expect(meta.title, '未命名');
+      expect(meta.titleOrigin, 'none');
+      expect(meta.authorOrigin, 'none');
+      expect(meta.coverOrigin, 'none');
+      expect(await source.chapters(), isEmpty);
+      expect((await source.content(0)).isEmpty, isTrue);
+      expect(await source.totalCharCount(), isNull);
+      expect(
+        await source.search('正文', cancel: CancelToken()).toList(),
+        isEmpty,
+      );
+    });
+
+    test('dispose 竞态：content 已挂起后再 dispose，不抛（返回空）', () async {
+      final DartTxtSource source =
+          DartTxtSource(fileName: 'r.txt', bytes: _utf8(_twoChaptersText()));
+      // 先完成准备，让 content 的 await 一定走「已就绪」分支（最易踩中 _text! / _segments!）。
+      await source.chapters();
+      final Future<ChapterContent> pending = source.content(0);
+      await source.dispose();
+      // 修复前：`_text!`（dart_txt_source.dart:132）null check 崩溃。
+      final ChapterContent content = await pending;
+      expect(content.isEmpty, isTrue);
+    });
+
+    test('dispose 竞态：尚未准备的 content 与 dispose 并发，不抛', () async {
+      final DartTxtSource source =
+          DartTxtSource(fileName: 'r2.txt', bytes: _utf8(_twoChaptersText()));
+      final Future<ChapterContent> pending = source.content(0);
+      await source.dispose();
+      expect((await pending).isEmpty, isTrue);
+    });
+  });
 }
