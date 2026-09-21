@@ -12,6 +12,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mreader/format/book_registry.dart';
 import 'package:mreader/format/book_source.dart';
 import 'package:mreader/format/dart_epub_source.dart';
 import 'package:mreader/epub/epub_parser.dart';
@@ -218,6 +219,67 @@ Uint8List _epubWithMissingAnchor() => zipEntries(<EpubEntry>[
       ),
     ]);
 
+/// nav 用**前缀命名空间**书写（html 宽松解析拿不到 `localName == 'nav'`），
+/// 从而强制走 `epub_toc.dart` 的 **XML 回落路径**；
+/// 其中父 `<li>` 自己**没有** `<a>`、只有嵌套 `<ol>`。
+Uint8List _epubWithPrefixedNav() => zipEntries(<EpubEntry>[
+      textEntry('META-INF/container.xml', containerXml('OEBPS/content.opf')),
+      textEntry(
+        'OEBPS/content.opf',
+        opfXml(
+          title: 'XML回落',
+          version: '3.0',
+          manifest: <String>[
+            itemXml('c1', 'text/ch1.xhtml', 'application/xhtml+xml'),
+            itemXml('c2', 'text/ch2.xhtml', 'application/xhtml+xml'),
+            itemXml('nav', 'nav.xhtml', 'application/xhtml+xml', properties: 'nav'),
+          ].join(),
+          spine: <String>[itemrefXml('c1'), itemrefXml('c2')].join(),
+        ),
+      ),
+      textEntry('OEBPS/text/ch1.xhtml',
+          xhtmlDoc(title: '一 起', heading: '第一章', paragraphs: <String>['一。'])),
+      textEntry('OEBPS/text/ch2.xhtml',
+          xhtmlDoc(title: '二 起', heading: '第二章', paragraphs: <String>['二。'])),
+      textEntry(
+        'OEBPS/nav.xhtml',
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<x:html xmlns:x="http://www.w3.org/1999/xhtml" '
+        'xmlns:epub="http://www.idpf.org/2007/ops">'
+        '<x:body><x:nav epub:type="toc"><x:ol>'
+        '<x:li><x:span>无子项链接</x:span>'
+        '<x:ol><x:li><x:a href="text/ch1.xhtml">子一</x:a></x:li>'
+        '<x:li><x:a href="text/ch2.xhtml">子二</x:a></x:li></x:ol>'
+        '</x:li>'
+        '</x:ol></x:nav></x:body></x:html>',
+      ),
+    ]);
+
+/// nav 与正文同文件写法：条目是**纯 fragment** 链接（`<a href="#c1">`）。
+Uint8List _epubWithPureFragmentNav() => zipEntries(<EpubEntry>[
+      textEntry('META-INF/container.xml', containerXml('OEBPS/content.opf')),
+      textEntry(
+        'OEBPS/content.opf',
+        opfXml(
+          title: '纯fragment',
+          version: '3.0',
+          manifest: <String>[
+            itemXml('c1', 'text/ch1.xhtml', 'application/xhtml+xml'),
+            itemXml('nav', 'nav.xhtml', 'application/xhtml+xml', properties: 'nav'),
+          ].join(),
+          spine: itemrefXml('c1'),
+        ),
+      ),
+      textEntry('OEBPS/text/ch1.xhtml',
+          xhtmlDoc(title: '一 起', heading: '第一章', paragraphs: <String>['一。'])),
+      textEntry(
+        'OEBPS/nav.xhtml',
+        navXhtml('<nav epub:type="toc"><ol>'
+            '<li><a href="#c1">第一章</a></li>'
+            '</ol></nav>'),
+      ),
+    ]);
+
 void main() {
   // =====================================================================
   // A. 真实 fixture：`openBook` -> chapters() / content() 对齐 baseline
@@ -341,6 +403,39 @@ void main() {
       expect(chapters.single.locate, '');
       expect(chapters.single.href, 'OEBPS/text/ch1.xhtml');
       expect(chapters.single.title, '第一章', reason: '标题取自该章正文的 h1');
+      await source.dispose();
+    });
+
+    test('XML 回落路径：父 li 无 <a> 时不产生错层条目（只自身不下钻嵌套 ol）', () async {
+      final BookSource source = await openBook(
+        fileName: 'prefixNav.epub',
+        bytes: _epubWithPrefixedNav(),
+      );
+      final List<Chapter> chapters = await source.chapters();
+
+      expect(
+        chapters.map((Chapter c) => (c.title, c.level, c.href)).toList(),
+        <(String, int, String)>[
+          ('子一', 1, 'OEBPS/text/ch1.xhtml'),
+          ('子二', 1, 'OEBPS/text/ch2.xhtml'),
+        ],
+        reason: '父 li 没有自己的 <a>，不应因下钻嵌套 ol 而多出一条 level=0 的条目',
+      );
+      await source.dispose();
+    });
+
+    test('纯 fragment 锚点（<a href="#c1">）：href 取目录文件自身 + locate', () async {
+      final BookSource source = await openBook(
+        fileName: 'pureFrag.epub',
+        bytes: _epubWithPureFragmentNav(),
+      );
+      final List<Chapter> chapters = await source.chapters();
+
+      expect(chapters.single.href, 'OEBPS/nav.xhtml');
+      expect(chapters.single.locate, 'c1');
+      expect(chapters.single.title, '第一章');
+      // nav 文件不在 spine 里：内容按同序号 section 兜底（best-effort，不抛异常）。
+      expect((await source.content(0)).paragraphList, isNotEmpty);
       await source.dispose();
     });
 

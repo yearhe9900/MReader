@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mreader/format/book_registry.dart';
 import 'package:mreader/format/book_source.dart';
 import 'package:mreader/format/dart_epub_source.dart';
 
