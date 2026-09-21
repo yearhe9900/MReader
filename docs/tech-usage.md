@@ -53,7 +53,7 @@
 | 技术 | 版本 | 用途 | 引入批次 | 落点文件 |
 |---|---|---|---|---|
 | `MaterialApp.builder` + `Material(type: MaterialType.transparency)` | 内置 | 统一补一层透明 Material 祖先，避免玻璃组件库下文本渲染成黄色双下划线（PRD §11.4 已知限制） | M1-T01（地基） | `lib/app.dart` |
-| `liquid_glass_widgets` | 1.6.2（**精确锁定，不带 `^`**） | 玻璃视觉（导航层玻璃 + 浮层）；`main()` 内预热着色器 | M1-T08 | `lib/ui/glass_kit.dart`、`lib/ui/glass_scope.dart`、`lib/main.dart` |
+| `liquid_glass_widgets` | 1.7.0（**精确锁定，不带 `^`**） | 玻璃视觉（导航层玻璃 + 浮层）；`main()` 内预热着色器 | M1-T08 | `lib/ui/glass_kit.dart`、`lib/ui/glass_scope.dart`、`lib/main.dart` |
 | `cupertino_icons` | 1.0.9 | PRD §11.4 列为**强制依赖**：玻璃图标依赖它，从 pubspec 移除会渲染成 `?` | M1-T08 | `pubspec.yaml`（无代码落点） |
 | `GlassKit` 档位出口 + `OpaqueContentSurface`（自研） | 内置 | `UI-04` 内容层不透明的**唯一出口**；`premium` 禁入滚动区；固定表面不手传档位 | M1-T08 | `lib/ui/glass_kit.dart` |
 | `GlassScope` 作用域（自研） | 内置 | 有效亮度 / 质量档位 / 玻璃隔离范围收敛为 `InheritedWidget` | M1-T08 | `lib/ui/glass_scope.dart` |
