@@ -398,4 +398,22 @@
 | 设置栏扩展（`TYP-01`/`TYP-03`） | 页边距三档 + 主题三态 | `lib/ui/reader_settings_bar.dart` | 两个 IconButton 循环切换；总高度仍 48px（单行 Row） |
 | 测试 | 验收 | `test/typography/*`（4 文件 53 条） | TYP-01 字号/行距/字体；TYP-02 anchor 7 组合；TYP-04 parseInlineStyles 白名单 + 14 组脏文本不崩溃 |
 
+### 2.14 M2a-T01 — 内嵌图片渲染与解码缓存
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2a-T01（PRD `CNT-01`；6 子项：① readResource 接口 ② img 标记保留 ③ WidgetSpan 解析 ④ ImageCacheLRU ⑤ 阅读页接入 ⑥ 测试） |
+| 日期 | 2026-09-22 |
+| 一句话目标 | EPUB 内嵌插图在阅读页可见；图片字节有界缓存（50MB LRU），不常驻全书（`PERF-02` / `NF-M5`） |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| `BookSource.readResource(href)` | 包内任意资源（图片/字体/CSS）按需读取 | `lib/format/book_source.dart` | 抽象默认 `async => null`；`DartTxtSource` 返回 null；`DartEpubSource` 走 `OpfView.readEntry`（`lazyEntryLoader` **每次现解压**，不常驻全书图片字节） |
+| `<img>` 标记保留 | 正文提取不丢图 | `lib/epub/section_extractor.dart` | `_walk` 遇 `<img>` 写 `\x00IMG:src\x00`（NUL 包裹，正常文本不会出现）；src 用 `resolveHref(baseDir, src)` 归一化为**绝对包内路径**（`baseDir = p.posix.dirname(section.href)`） |
+| `parseContentSpans` | 标记 → `WidgetSpan` | `lib/typography/typeset.dart` | 按 `\x00` 分割：奇数段 = 图片标记 → `WidgetSpan(child: _InlineImage)`；偶数段走 `parseInlineStyles`（`<b>`/`<i>` 复用）。无标记时零开销走纯文本路径 |
+| `_InlineImage` 异步加载 | 加载中转圈 / 失败占位图标 | `typeset.dart` | `initState` 发起加载，`_bytes` 缓存在 State（rebuild 不重载）；`Image.memory` + `errorBuilder` 双保险，脏图不崩 |
+| `ImageCacheLRU` | 图片字节有界缓存 | `lib/reader/image_cache.dart` | **value = 原始字节**（非 `ui.Image`——#4 已知 `dart:ui` 纯 test 环境构造失败；解码交给 `Image.memory` 内部缓存）；上界 `kDefaultImageCacheMaxBytes = 50MB`，`LinkedHashMap` 插入序 = LRU 序，超限淘汰头部；`dispose()` 清空 |
+| 阅读页接入 | 缓存 → readResource 二级读取 | `lib/reader/reader_page.dart` | `_resolveImage`：先查 `_imageCache`，miss 再 `source.readResource` 并入库；`dispose` 时释放缓存；段落渲染 `parseInlineStyles` → `parseContentSpans` |
+| 测试 | 验收 | `test/reader/inline_image_test.dart`（12 条） | `parseContentSpans` 5 条（WidgetSpan 产出 / null 占位 / `<b>`+`<img>` 混合 / 连续图）+ `ImageCacheLRU` 7 条（LRU 提升 / 超限淘汰 / 更新计数 / dispose / 50MB 上界） |
+
 

@@ -11,6 +11,8 @@
 // 分发点 `BookRegistry` / `sniffFormat` / `openBook` 都在 `book_registry.dart`——
 // 把 `dart_epub_source.dart` / `dart_txt_source.dart` 加进来会破坏该铁律，
 // 并让本文件变成所有实现（含未来的 Rust 实现）的汇聚点。**请不要加回去。**
+import 'dart:typed_data';
+
 import '../model/book_meta.dart';
 import '../model/chapter.dart';
 import '../model/chapter_content.dart';
@@ -104,6 +106,12 @@ abstract class BookSource {
   /// `charCountSupported` 布尔量。这里用带默认实现的具体方法补入，
   /// **不破坏 §A.1 的既有字段与签名**。
   Future<int?> totalCharCount() async => null;
+
+  /// 按包内路径读取任意资源字节（图片 / 字体 / CSS）。
+  ///
+  /// [href] 是**已解析的绝对包内路径**（如 `OEBPS/images/cover.jpg`）。
+  /// TXT 源无资源 → 返回 `null`。EPUB 源按需解压（`lazyEntryLoader`，不常驻）。
+  Future<Uint8List?> readResource(String href) async => null;
 
   Future<void> dispose();
 }

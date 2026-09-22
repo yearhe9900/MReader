@@ -10,6 +10,8 @@
 //    （见 `lib/epub/epub_parser.dart` 顶部说明与 `docs/schedule.md` 的 M2a-T06）。
 import 'dart:typed_data';
 
+import 'package:path/path.dart' as p;
+
 import '../epub/epub_parser.dart';
 import '../epub/section_extractor.dart';
 import '../epub/zip_paths.dart';
@@ -139,9 +141,12 @@ class DartEpubSource implements BookSource {
     final EpubSection? section = _sectionFor(book, chapter, chapterIndex);
     if (section == null) return const ChapterContent.paragraphs(<String>[]);
 
+    // baseDir：XHTML 文件所在目录，用于把 <img src> 的相对路径归一化为绝对包内路径。
+    final String baseDir = p.posix.dirname(section.href);
     final List<String> paragraphs = chapter.locate.isEmpty
-        ? extractSection(section.rawBytes).paragraphs
-        : extractParagraphsFromFragment(section.rawBytes, chapter.locate);
+        ? extractSection(section.rawBytes, baseDir: baseDir).paragraphs
+        : extractParagraphsFromFragment(section.rawBytes, chapter.locate,
+            baseDir: baseDir);
 
     return ChapterContent.paragraphs(paragraphs);
   }
@@ -154,6 +159,15 @@ class DartEpubSource implements BookSource {
         searchable: true,
         charCountSupported: true,
       );
+
+  @override
+  Future<Uint8List?> readResource(String href) async {
+    if (_disposed) return null;
+    final EpubParseResult? parsed = await _parsedOnce();
+    if (parsed == null || _disposed) return null;
+    // OpfView.readEntry 按需解压（lazyEntryLoader），不常驻全书图片字节（PERF-02）。
+    return parsed.opfView.readEntry?.call(href);
+  }
 
   @override
   Future<int?> totalCharCount() async {

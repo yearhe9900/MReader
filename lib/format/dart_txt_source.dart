@@ -234,6 +234,9 @@ class DartTxtSource implements BookSource {
   }
 
   @override
+  Future<Uint8List?> readResource(String href) async => null;
+
+  @override
   Future<void> dispose() async {
     _disposed = true;
     _preparing = null;

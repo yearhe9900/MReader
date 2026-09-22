@@ -7,6 +7,7 @@
 // 且载入期 `CircularProgressIndicator` 是无限动画 → `pumpAndSettle` 会**超时挂死**。
 // 故统一用 [_settle]（`runAsync` 让出真实事件循环 + 多轮 `pump` 交替推进），**不用** `pumpAndSettle`。
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -97,6 +98,9 @@ class _FakeSource implements BookSource {
 
   @override
   Future<int?> totalCharCount() async => null;
+
+  @override
+  Future<Uint8List?> readResource(String href) async => null;
 
   @override
   Future<void> dispose() async {

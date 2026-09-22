@@ -25,6 +25,7 @@
 // **不引入任何新依赖**（不使用 `scrollable_positioned_list` 等）。
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -37,6 +38,7 @@ import '../typography/text_style_resolver.dart';
 import '../typography/typeset.dart';
 import 'chapter_cache.dart';
 import 'control_bar.dart';
+import 'image_cache.dart';
 import 'progress_store.dart';
 import 'reading_progress.dart';
 import 'toc_sheet.dart';
@@ -87,6 +89,9 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 章正文的有界 LRU 缓存（`PERF-02`）。
   final ChapterCache _cache = ChapterCache();
+
+  /// 内嵌图片的有界字节缓存（`CNT-01`）。
+  final ImageCacheLRU _imageCache = ImageCacheLRU();
 
   /// 增量加载驱动器（首帧批次 + 后台补齐）。
   ChapterAutoLoader? _loader;
@@ -148,6 +153,7 @@ class _ReaderPageState extends State<ReaderPage> {
     // 故此处「先保存、后 dispose 控制器」是安全的（不会用到已释放的控制器）。
     _disposed = true;
     unawaited(_saveProgress());
+    _imageCache.dispose();
     _controller?.dispose();
     unawaited(widget.source.dispose());
     super.dispose();
@@ -217,6 +223,20 @@ class _ReaderPageState extends State<ReaderPage> {
     } catch (error) {
       return ChapterContent.paragraphs(<String>['[本章解析失败] $error']);
     }
+  }
+
+  /// 读取包内图片资源（`CNT-01`）：先查字节缓存，未命中再调 `readResource`。
+  ///
+  /// 返回的字节交给 `Image.memory` 渲染；Flutter 内部缓存解码结果。
+  Future<Uint8List?> _resolveImage(String href) async {
+    final Uint8List? cached = _imageCache.get(href);
+    if (cached != null) return cached;
+    if (_disposed) return null;
+    final Uint8List? bytes = await widget.source.readResource(href);
+    if (bytes != null && !_disposed) {
+      _imageCache.put(href, bytes);
+    }
+    return bytes;
   }
 
   /// 内容就绪后创建控制器（仅一次）。
@@ -760,12 +780,13 @@ class _ReaderPageState extends State<ReaderPage> {
           for (int p = 0; p < paragraphs.length; p++)
             Padding(
               padding: const EdgeInsets.only(bottom: 16),
-              // TYP-04：首行缩进 + `<b>`/`<i>` 内联样式（白名单）。
+              // TYP-04：首行缩进 + `<b>`/`<i>` 内联样式（白名单）+ `<img>` 图片（CNT-01）。
               child: Text.rich(
                 TextSpan(
-                  children: parseInlineStyles(
+                  children: parseContentSpans(
                     withFirstLineIndent(paragraphs[p]),
                     bodyStyle,
+                    _resolveImage,
                   ),
                 ),
                 style: bodyStyle,

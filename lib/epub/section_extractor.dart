@@ -8,6 +8,7 @@ import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 
 import 'text_codec.dart';
+import 'zip_paths.dart';
 
 /// 一章解析后的可显示内容。
 class ExtractedSection {
@@ -40,7 +41,10 @@ const Set<String> _skipTags = <String>{
 /// 把一章 XHTML 的原始字节解析成 [ExtractedSection]。
 ///
 /// 这是纯函数（无 IO、无 Flutter），可以直接单测。
-ExtractedSection extractSection(Uint8List bytes) {
+///
+/// [baseDir]：XHTML 文件所在目录的包内路径（如 `OEBPS/text`），用于把
+/// `<img src="...">` 的相对路径归一化为绝对包内路径。为空时 src 原样保留。
+ExtractedSection extractSection(Uint8List bytes, {String baseDir = ''}) {
   final String? decoded = _tryDecodeText(bytes);
   if (decoded == null) return const ExtractedSection();
   final String source = decoded;
@@ -56,7 +60,7 @@ ExtractedSection extractSection(Uint8List bytes) {
 
   final List<String> paragraphs = <String>[];
   final StringBuffer buffer = StringBuffer();
-  _walk(body, paragraphs, buffer);
+  _walk(body, paragraphs, buffer, baseDir);
   _flush(buffer, paragraphs);
 
   final _ResolvedTitle title = _resolveTitle(body, doc);
@@ -100,7 +104,9 @@ dom.Document? _tryParseHtml(String source) {
 const Set<String> _preservedInlineTags = <String>{'b', 'i'};
 
 /// 深度优先遍历，遇到块级标签就切段。
-void _walk(dom.Node node, List<String> out, StringBuffer buffer) {
+///
+/// [baseDir] 用于把 `<img src="...">` 的相对路径归一化为绝对包内路径。
+void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir) {
   for (final dom.Node child in node.nodes) {
     if (child is dom.Text) {
       // HTML 规则：空白折叠成单个空格。
@@ -118,13 +124,25 @@ void _walk(dom.Node node, List<String> out, StringBuffer buffer) {
       continue;
     }
 
+    // <img>：写入图片占位标记（NUL 包裹，不会出现在正常文本里）。
+    // src 路径归一化为绝对包内路径（相对于 XHTML 文件所在目录）。
+    if (tag == 'img') {
+      final String? src = child.attributes['src'];
+      if (src != null && src.trim().isNotEmpty) {
+        final String resolved =
+            baseDir.isEmpty ? src.trim() : resolveHref(baseDir, src.trim());
+        buffer.write('\x00IMG:$resolved\x00');
+      }
+      continue; // <img> 是 void 元素，无子节点
+    }
+
     final bool isBlock = _blockTags.contains(tag);
     if (isBlock) _flush(buffer, out);
 
     // 保留白名单内联标签（`<b>` / `<i>`），写成字面 HTML 供渲染层解析。
     final bool preserve = _preservedInlineTags.contains(tag);
     if (preserve) buffer.write('<$tag>');
-    _walk(child, out, buffer);
+    _walk(child, out, buffer, baseDir);
     if (preserve) buffer.write('</$tag>');
 
     if (isBlock) _flush(buffer, out);
@@ -202,7 +220,13 @@ List<String> _stripTags(String source) {
 ///
 /// 容错：找不到锚点、解析失败、[fragment] 为空 —— 一律**退回整章段落**，
 /// 绝不抛异常也不返回空（脏书里锚点丢失很常见，「显示整章」远好于「报错不给读」）。
-List<String> extractParagraphsFromFragment(Uint8List bytes, String fragment) {
+///
+/// [baseDir]：XHTML 文件所在目录的包内路径，用于 `<img src>` 路径归一化。
+List<String> extractParagraphsFromFragment(
+  Uint8List bytes,
+  String fragment, {
+  String baseDir = '',
+}) {
   final String needle = fragment.trim();
   final String? decoded = _tryDecodeText(bytes);
   if (decoded == null) return const <String>[];
@@ -215,7 +239,7 @@ List<String> extractParagraphsFromFragment(Uint8List bytes, String fragment) {
 
   final List<String> whole = <String>[];
   final StringBuffer wholeBuffer = StringBuffer();
-  _walk(body, whole, wholeBuffer);
+  _walk(body, whole, wholeBuffer, baseDir);
   _flush(wholeBuffer, whole);
   if (needle.isEmpty) return whole;
 
@@ -224,10 +248,10 @@ List<String> extractParagraphsFromFragment(Uint8List bytes, String fragment) {
 
   final List<String> paragraphs = <String>[];
   final StringBuffer buffer = StringBuffer();
-  _walk(anchor, paragraphs, buffer);
+  _walk(anchor, paragraphs, buffer, baseDir);
   _flush(buffer, paragraphs);
   for (final dom.Node node in _nodesAfter(anchor)) {
-    _walk(node, paragraphs, buffer);
+    _walk(node, paragraphs, buffer, baseDir);
     _flush(buffer, paragraphs);
   }
   return paragraphs;

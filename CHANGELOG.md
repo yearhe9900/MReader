@@ -20,6 +20,8 @@
 - M1-T07 收尾（PERF-02 ①）：`EpubSection.rawBytes` **去掉无界缓存**（每次访问现取）；新增 `zip_paths.dart` `lazyEntryLoader` 从**压缩态**每次现解（STORE 原样 / DEFLATE 走 `inflateBuffer`），绕开 archive `ArchiveFile.content` 的永久 `_content` 缓存
 - M1-T06 排版与阅读设置（`TYP-01` ~ `TYP-04`）：`ReaderSettings` 扩展（字号/行距/字体/主题/页边距）+ `resolveTextStyle` 单一出口 + `parseInlineStyles`（`<b>`/`<i>` 白名单）+ 首行缩进 + 标题居中 + `ScrollAnchor` 位置锚定 + 页边距/主题三态切换
 - M1-T09 交付验收：§17 逐条判定全 PASS；全量 `flutter test` 279 passed / 1 failed（#4 cover_store_test 不阻塞）；性能基线 §7 归档（供 M2a-T06 before 对照）
+- M2a-T01 内嵌图片渲染（`CNT-01`）：`BookSource.readResource(href)` 接口（EPUB 按需解压 / TXT 返回 null）+ `section_extractor` 保留 `<img>` 标记（src 归一化为绝对包内路径）+ `parseContentSpans` 解析为 `WidgetSpan`（异步加载 / 失败占位不崩）+ 阅读页接入
+- M2a-T01 图片有界缓存（`NF-M5` / `PERF-02`）：`lib/reader/image_cache.dart` `ImageCacheLRU`（key=href，value=原始字节，上界 50MB，LRU 淘汰，`dispose` 清空）；阅读页 `_resolveImage` 经缓存读取，图片字节不常驻全书
 
 ### 变更
 
