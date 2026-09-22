@@ -3,7 +3,7 @@
 > 格式：Keep a Changelog 简化式。日期用 `YYYY-MM-DD`，**按日期倒序**排列。
 > 书写约定：每条一句话、**不复述过程**（分析、根因链、教训留在 PRD 与 `.workbuddy/memory/`），条目末尾附 commit hash 便于追溯。
 
-## 2026-09-21
+## 2026-09-22
 
 ### 新增
 
@@ -12,6 +12,11 @@
 - M1-T04 阅读页：章节连续滚动（全章塞一个 ListView）+ GlobalKey 探测当前章 / 章内位置 `f196d39`
 - M1-T04 进度恢复：同版面 initialScrollOffset 精确落回，否则按章序估算 + 校正 ≤3 帧 `f196d39`
 - M1-T04 目录与副标题：TocSheet 高亮跳章（NAV-01）+「第N章 · X%」去诊断（RD-03）`f196d39`
+
+## 2026-09-21
+
+### 新增
+
 - M1-T03 书库数据层：BookRecord + BookIndex 逐条降级索引（LIB-02/03）`5bd1d8b`
 - M1-T03 导入管道：ImportService SHA-256 前 16 位判重 + 副本 + 封面物化（LIB-02/05）`f797913`
 - M1-T03 书库仓库：LibraryRepository 判重 / 删除连带清理 / 孤儿 GC（LIB-01/05/06）`f797913`
