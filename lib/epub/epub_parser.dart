@@ -69,13 +69,24 @@ class CoverCandidate {
 
 /// 一个 spine 项的**纯数据引用**（[parseEpubStructure] 的产物；不含字节、不含闭包）。
 class EpubSectionRef {
-  const EpubSectionRef({required this.id, required this.href});
+  const EpubSectionRef({
+    required this.id,
+    required this.href,
+    this.linear = true,
+  });
 
   /// OPF manifest 中的 id。
   final String id;
 
   /// 归一化后的包内路径，例如 `OEBPS/text/ch1.xhtml`。
   final String href;
+
+  /// spine 的 `linear` 属性：`linear="no"`（非主线内容，如注释/答案/勘误）为 `false`。
+  ///
+  /// `CNT-05`：非主线章节**不再剔除**，而是保留进 [EpubStructure.sections]
+  /// 并以本标记区分，由消费方（`DartEpubSource.chapters()`）在章节表标注
+  /// 「（非主线）」展示。属性缺省（未写）视为 `true`（主线阅读内容）。
+  final bool linear;
 }
 
 /// [parseEpubStructure] 的返回：**纯数据、无闭包**，可跨 isolate（`compute()` / IsolateRunner）。
@@ -116,7 +127,10 @@ class EpubStructure {
   /// 原始文件名（书名缺失时兜底显示）。
   final String fileName;
 
-  /// spine 顺序的章节引用（已剔除 `linear="no"` 与非文本资源）。
+  /// spine 顺序的章节引用（已剔除非文本资源）。
+  ///
+  /// `CNT-05`：`linear="no"` 的非主线章节**保留**在此并标 [EpubSectionRef.linear]
+  /// 为 `false`，由消费方在章节表标注「（非主线）」展示。
   final List<EpubSectionRef> sections;
 
   /// 目录（`RD-01`）；**空列表表示无可用目录**，调用方降级为「按 spine 生成平坦目录」。
@@ -361,12 +375,13 @@ _ParsedEpub _parse(Uint8List bytes, String fileName) {
       parseToc(opfDoc: opfDoc, opfDir: opfDir, lookup: lookup);
 
   // 6) spine：阅读顺序 —— **只记录 id/href 引用**，正文留给绑定期按需解压（`PERF-02` ①）。
+  //    `linear="no"`（非主线内容）**保留**进列表并标 `linear: false`（`CNT-05`：
+  //    章节表可见并标注「（非主线）」）；资源过滤对它**照常执行**——图片/字体/CSS
+  //    即使标了 `linear="no"` 也不当章节。
   final List<EpubSectionRef> sectionRefs = <EpubSectionRef>[];
   for (final XmlElement itemref in findAllByLocalName(opfDoc, 'itemref')) {
     final String? linear = itemref.getAttribute('linear');
-    if (linear != null && linear.toLowerCase() == 'no') {
-      continue; // 规范里 linear="no" 表示非主线内容，跳过。
-    }
+    final bool isLinear = !(linear != null && linear.toLowerCase() == 'no');
     final String? idref = itemref.getAttribute('idref');
     if (idref == null) continue;
 
@@ -385,7 +400,7 @@ _ParsedEpub _parse(Uint8List bytes, String fileName) {
       // 声明不足（无 media-type 且扩展名不暴露）：需解压该**单个**条目做字节魔数兜底。
       if (!looksTextual(mediaType, href, contentOfArchiveFile(file))) continue;
     }
-    sectionRefs.add(EpubSectionRef(id: idref, href: href));
+    sectionRefs.add(EpubSectionRef(id: idref, href: href, linear: isLinear));
   }
 
   if (sectionRefs.isEmpty) {
@@ -441,6 +456,7 @@ EpubBook _bindBook(_ParsedEpub parsed) {
       id: ref.id,
       href: ref.href,
       loadBytes: lazyEntryLoader(file),
+      linear: ref.linear,
     ));
   }
   return EpubBook(

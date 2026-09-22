@@ -48,7 +48,8 @@ Uint8List _zip(Map<String, String> entries) {
   return Uint8List.fromList(encoded ?? const <int>[]);
 }
 
-/// 一本结构完整的最小 EPUB：2 个 chapter，第二个标了 linear="no"。
+/// 一本结构完整的最小 EPUB：2 个 chapter，第二个标了 `linear="no"`
+/// （`CNT-05` 起保留进 sections 并标 `linear: false`，不再剔除）。
 Uint8List _minimalEpub() {
   return _zip(<String, String>{
     'mimetype': 'application/epub+zip',
@@ -89,7 +90,7 @@ Uint8List _minimalEpub() {
 
 void main() {
   group('parseEpub', () {
-    test('解析元数据，按 spine 顺序取章节，跳过 linear="no"', () async {
+    test('解析元数据，按 spine 顺序取章节，linear="no" 保留并标记（CNT-05）', () async {
       final EpubBook book =
           await parseEpub(_minimalEpub(), fileName: 'demo.epub');
 
@@ -97,8 +98,13 @@ void main() {
       expect(book.author, '测试作者');
       expect(book.language, 'zh');
       expect(book.displayTitle, '测试书名');
-      expect(book.sections.length, 1);
+      expect(book.sections.length, 2,
+          reason: 'CNT-05：linear="no" 保留进 sections，不再剔除');
       expect(book.sections.first.href, 'OEBPS/text/ch1.xhtml');
+      expect(book.sections.first.linear, isTrue, reason: '未写属性默认 true');
+      expect(book.sections[1].href, 'OEBPS/text/ch2.xhtml');
+      expect(book.sections[1].linear, isFalse,
+          reason: '第二章标了 linear="no"，应保留并标记');
     });
 
     test('extractSection 抽到标题，且正文里不再重复标题', () async {

@@ -258,7 +258,7 @@ def fx05():
 
 
 # ---------------------------------------------------------------------------
-# f06：linear="no" 的章节应被跳过（spine 顺序 c1, c2(no), c3）
+# f06：linear="no" 的章节保留并标记（CNT-05；spine 顺序 c1, c2(no), c3）
 # ---------------------------------------------------------------------------
 def fx06():
     name = "fx06_linear_no.epub"
@@ -279,12 +279,12 @@ def fx06():
     BASE[name] = {
         "脏特征": "第二章 linear=\"no\"",
         "预期书名": "linear_no跳过",
-        "预期章节(href)": ["OEBPS/text/ch1.xhtml", "OEBPS/text/ch3.xhtml"],
+        "预期章节(href)": ["OEBPS/text/ch1.xhtml", "OEBPS/text/ch2.xhtml", "OEBPS/text/ch3.xhtml"],
         "预期每章文本": {
             "OEBPS/text/ch1.xhtml": ["第一章", "第一段。"],
             "OEBPS/text/ch3.xhtml": ["第三章", "第三段。"],
         },
-        "预期结果": "正常打开，sections 数为 2，ch2 不出现",
+        "预期结果": "正常打开，sections 数为 3；ch2 保留并标 linear=false，章节表标注（非主线）（CNT-05）",
     }
 
 

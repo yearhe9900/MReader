@@ -32,7 +32,10 @@ class EpubBook {
   /// 原始文件名。书名缺失时作为兜底显示。
   final String fileName;
 
-  /// 按 spine 顺序排列的章节（已跳过 `linear="no"` 的项）。
+  /// 按 spine 顺序排列的章节（非文本资源已剔除）。
+  ///
+  /// `CNT-05`：`linear="no"` 的非主线章节**保留**在此（不再跳过），
+  /// 以 [EpubSection.linear] 标记区分，由章节表标注「（非主线）」展示。
   final List<EpubSection> sections;
 
   /// 目录（`RD-01`）：EPUB3 `nav.xhtml` 或 EPUB2 `toc.ncx` 的解析结果。
@@ -74,6 +77,7 @@ class EpubSection {
     required this.id,
     required this.href,
     required Uint8List rawBytes,
+    this.linear = true,
   })  : _eagerBytes = rawBytes,
         _loader = null;
 
@@ -85,6 +89,7 @@ class EpubSection {
     required this.id,
     required this.href,
     required Uint8List Function() loadBytes,
+    this.linear = true,
   })  : _eagerBytes = null,
         _loader = loadBytes;
 
@@ -93,6 +98,12 @@ class EpubSection {
 
   /// 归一化后的包内路径，例如 `OEBPS/text/ch1.xhtml`。
   final String href;
+
+  /// spine 的 `linear` 属性：`linear="no"` 的非主线章节为 `false`（`CNT-05`）。
+  ///
+  /// 与解析层的 `EpubSectionRef.linear` 同义；属性缺省即 `true`（主线阅读内容）。
+  /// 非主线章节保留可读，由章节表标注「（非主线）」。
+  final bool linear;
 
   final Uint8List? _eagerBytes;
   final Uint8List Function()? _loader;

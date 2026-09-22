@@ -105,20 +105,33 @@ class DartEpubSource implements BookSource {
 
     if (book.toc.isNotEmpty) {
       // 有目录：**直接使用**解析结果（目录项即章节，类型统一为 Chapter，无需搬运字段）。
+      // `CNT-05`（linear="no" 可见并标注）：
+      //   · 目录已覆盖的非主线章：标题追加「（非主线）」；
+      //   · 未被目录覆盖的非主线章：按平坦目录**补入**（同样标注），
+      //     保证非主线内容可从章节表进入；主线目录项的顺序不动。
+      final List<Chapter> out = <Chapter>[];
+      final Set<String> covered = <String>{};
+      for (final Chapter chapter in book.toc) {
+        covered.add(_matchKey(chapter.href));
+        final EpubSection? section = _sectionByHref(book, chapter.href);
+        final bool nonLinear = section != null && !section.linear;
+        out.add(nonLinear ? _markNonLinear(chapter) : chapter);
+      }
+      for (int i = 0; i < book.sections.length; i++) {
+        final EpubSection section = book.sections[i];
+        if (section.linear) continue;
+        if (covered.contains(_matchKey(section.href))) continue;
+        out.add(_flatChapter(section, i, nonLinear: true));
+      }
       // 包一层 unmodifiable，避免把 EpubBook 内部列表泄漏给调用方。
-      result = List<Chapter>.unmodifiable(book.toc);
+      result = List<Chapter>.unmodifiable(out);
     } else {
       // 无目录：降级为「按 spine 的平坦目录」（RD-01 ④）。
+      // `CNT-05`：`linear="no"` 章节同样保留，标题追加「（非主线）」。
       final List<Chapter> flat = <Chapter>[];
       for (int i = 0; i < book.sections.length; i++) {
         final EpubSection section = book.sections[i];
-        final String title = extractSection(section.rawBytes).title;
-        flat.add(Chapter(
-          href: section.href,
-          title: title.isNotEmpty ? title : '第 ${i + 1} 章',
-          level: 0,
-          locate: '',
-        ));
+        flat.add(_flatChapter(section, i, nonLinear: !section.linear));
       }
       result = List<Chapter>.unmodifiable(flat);
     }
@@ -239,16 +252,27 @@ class DartEpubSource implements BookSource {
   /// 是否已释放（供体检 / 测试观察）。
   bool get isDisposed => _disposed;
 
-  /// 由 [Chapter.href] 反查 spine section。
+  /// 按 href 精确反查 spine section（**不做**同序号兜底）。
   ///
-  /// **不能按索引一一对应**：目录项数与 spine 项数可以不相等（目录常合并/拆分章节）。
-  /// 匹配用「百分号解码 + 小写」归一化，容忍 `fx03` 那种大小写不一致的脏书；
-  /// 实在匹配不上时退回同序号 section（best-effort，保证 `content(i)` 不抛异常）。
-  EpubSection? _sectionFor(EpubBook book, Chapter chapter, int chapterIndex) {
-    final String target = _matchKey(chapter.href);
+  /// 「linear=no 是否已被目录覆盖」这类判断只能按 href 匹配——目录项数与
+  /// spine 项数可以不相等，按索引兜底会错位（`CNT-05`）。
+  EpubSection? _sectionByHref(EpubBook book, String href) {
+    final String target = _matchKey(href);
     for (final EpubSection section in book.sections) {
       if (_matchKey(section.href) == target) return section;
     }
+    return null;
+  }
+
+  /// 由 [Chapter] 定位 spine section（供 `content(i)` / `search()` 用）。
+  ///
+  /// **不能按索引一一对应**：目录项数与 spine 项数可以不相等（目录常合并/拆分章节）。
+  /// 匹配用「百分号解码 + 小写」归一化（[_sectionByHref]，容忍 `fx03` 那种大小写
+  /// 不一致的脏书）；实在匹配不上时退回同序号 section（best-effort，保证
+  /// `content(i)` 不抛异常）。
+  EpubSection? _sectionFor(EpubBook book, Chapter chapter, int chapterIndex) {
+    final EpubSection? byHref = _sectionByHref(book, chapter.href);
+    if (byHref != null) return byHref;
     if (chapterIndex >= 0 && chapterIndex < book.sections.length) {
       return book.sections[chapterIndex];
     }
@@ -258,3 +282,26 @@ class DartEpubSource implements BookSource {
   /// href 的匹配键：百分号解码 + 转小写。
   String _matchKey(String href) => decodePercentPath(href).toLowerCase();
 }
+
+/// `linear="no"`（非主线）章节的目录标题后缀（`CNT-05`）。
+const String kNonLinearTitleSuffix = '（非主线）';
+
+/// 由 spine section 生成一条平坦目录项（无目录降级 / linear=no 补入共用）。
+Chapter _flatChapter(EpubSection section, int index, {required bool nonLinear}) {
+  final String title = extractSection(section.rawBytes).title;
+  final String base = title.isNotEmpty ? title : '第 ${index + 1} 章';
+  return Chapter(
+    href: section.href,
+    title: nonLinear ? '$base$kNonLinearTitleSuffix' : base,
+    level: 0,
+    locate: '',
+  );
+}
+
+/// 给目录项标题追加「（非主线）」标注（`CNT-05`；Chapter 无 copyWith，重建一条）。
+Chapter _markNonLinear(Chapter chapter) => Chapter(
+      href: chapter.href,
+      title: '${chapter.title}$kNonLinearTitleSuffix',
+      level: chapter.level,
+      locate: chapter.locate,
+    );

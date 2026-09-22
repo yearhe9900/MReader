@@ -280,6 +280,110 @@ Uint8List _epubWithPureFragmentNav() => zipEntries(<EpubEntry>[
       ),
     ]);
 
+/// `CNT-05`：3 章 spine（c2 标 `linear="no"`），nav 目录**只列 ch1 / ch3**
+/// ——linear=no 章未被目录覆盖，应按平坦目录补入并标注「（非主线）」。
+Uint8List _epubLinearNoNotInToc() => zipEntries(<EpubEntry>[
+      textEntry('META-INF/container.xml', containerXml('OEBPS/content.opf')),
+      textEntry(
+        'OEBPS/content.opf',
+        opfXml(
+          title: '非主线未入目录',
+          version: '3.0',
+          manifest: <String>[
+            itemXml('c1', 'text/ch1.xhtml', 'application/xhtml+xml'),
+            itemXml('c2', 'text/ch2.xhtml', 'application/xhtml+xml'),
+            itemXml('c3', 'text/ch3.xhtml', 'application/xhtml+xml'),
+            itemXml('nav', 'nav.xhtml', 'application/xhtml+xml',
+                properties: 'nav'),
+          ].join(),
+          spine: <String>[
+            itemrefXml('c1'),
+            itemrefXml('c2', linear: 'no'),
+            itemrefXml('c3'),
+          ].join(),
+        ),
+      ),
+      textEntry('OEBPS/text/ch1.xhtml',
+          xhtmlDoc(title: '一 起', heading: '第一回', paragraphs: <String>['一。'])),
+      textEntry(
+          'OEBPS/text/ch2.xhtml',
+          xhtmlDoc(
+              title: '二 起',
+              heading: '第二回',
+              paragraphs: <String>['非主线正文。'])),
+      textEntry('OEBPS/text/ch3.xhtml',
+          xhtmlDoc(title: '三 起', heading: '第三回', paragraphs: <String>['三。'])),
+      textEntry(
+        'OEBPS/nav.xhtml',
+        navXhtml('<nav epub:type="toc"><ol>'
+            '<li><a href="text/ch1.xhtml">第一回</a></li>'
+            '<li><a href="text/ch3.xhtml">第三回</a></li>'
+            '</ol></nav>'),
+      ),
+    ]);
+
+/// `CNT-05`：2 章 spine（c2 标 `linear="no"`），nav 目录**两章都列**
+/// ——linear=no 章已被目录覆盖，只标注「（非主线）」、不重复补入。
+Uint8List _epubLinearNoInToc() => zipEntries(<EpubEntry>[
+      textEntry('META-INF/container.xml', containerXml('OEBPS/content.opf')),
+      textEntry(
+        'OEBPS/content.opf',
+        opfXml(
+          title: '非主线已入目录',
+          version: '3.0',
+          manifest: <String>[
+            itemXml('c1', 'text/ch1.xhtml', 'application/xhtml+xml'),
+            itemXml('c2', 'text/ch2.xhtml', 'application/xhtml+xml'),
+            itemXml('nav', 'nav.xhtml', 'application/xhtml+xml',
+                properties: 'nav'),
+          ].join(),
+          spine: <String>[
+            itemrefXml('c1'),
+            itemrefXml('c2', linear: 'no'),
+          ].join(),
+        ),
+      ),
+      textEntry('OEBPS/text/ch1.xhtml',
+          xhtmlDoc(title: '一 起', heading: '上册', paragraphs: <String>['上。'])),
+      textEntry(
+          'OEBPS/text/ch2.xhtml',
+          xhtmlDoc(
+              title: '二 起',
+              heading: '注释篇',
+              paragraphs: <String>['注释正文。'])),
+      textEntry(
+        'OEBPS/nav.xhtml',
+        navXhtml('<nav epub:type="toc"><ol>'
+            '<li><a href="text/ch1.xhtml">上册</a></li>'
+            '<li><a href="text/ch2.xhtml">注释篇</a></li>'
+            '</ol></nav>'),
+      ),
+    ]);
+
+/// `CNT-05`：spine 里 `linear="no"` 的**图片**仍按资源过滤剔除
+/// ——linear=no 不是绕过「图片/字体/CSS 不当章节」过滤的通行证。
+Uint8List _epubLinearNoImage() => zipEntries(<EpubEntry>[
+      textEntry('META-INF/container.xml', containerXml('OEBPS/content.opf')),
+      textEntry(
+        'OEBPS/content.opf',
+        opfXml(
+          title: '非主线图片',
+          manifest: <String>[
+            itemXml('c1', 'text/ch1.xhtml', 'application/xhtml+xml'),
+            itemXml('cover', 'images/cover.png', 'image/png'),
+          ].join(),
+          spine: <String>[
+            itemrefXml('c1'),
+            itemrefXml('cover', linear: 'no'),
+          ].join(),
+        ),
+      ),
+      textEntry('OEBPS/text/ch1.xhtml',
+          xhtmlDoc(title: '一 起', heading: '第一章', paragraphs: <String>['正文。'])),
+      // PNG 魔数即可（media-type 命中后不会解压读取）。
+      EpubEntry('OEBPS/images/cover.png', <int>[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+    ]);
+
 void main() {
   // =====================================================================
   // A. 真实 fixture：`openBook` -> chapters() / content() 对齐 baseline
@@ -747,5 +851,106 @@ void main() {
       expect(await source.chapters(), isEmpty);
       expect((await source.load()).title, '未命名');
     });
+  });
+
+  // =====================================================================
+  // H. linear="no" 可见并标注（CNT-05，M2a-T02）
+  // =====================================================================
+  group('linear="no" 可见并标注（CNT-05）', () {
+    test('未被目录覆盖的 linear=no 章：按平坦目录补入并标注（验收①②）', () async {
+      final BookSource source = await openBook(
+        fileName: 'linNoA.epub',
+        bytes: _epubLinearNoNotInToc(),
+      );
+      final List<Chapter> chapters = await source.chapters();
+
+      expect(chapters.length, 3, reason: '验收②：总数包含 linear=no 章');
+      expect(
+        chapters.map((Chapter c) => (c.title, c.href, c.locate)).toList(),
+        <(String, String, String)>[
+          ('第一回', 'OEBPS/text/ch1.xhtml', ''),
+          ('第三回', 'OEBPS/text/ch3.xhtml', ''),
+          ('第二回（非主线）', 'OEBPS/text/ch2.xhtml', ''),
+        ],
+        reason: '验收①：linear=no 项带「（非主线）」标注；'
+            '目录项保持原序，补入项按平坦目录追加',
+      );
+      final ChapterContent content = await source.content(2);
+      expect(content.paragraphList, <String>['非主线正文。'],
+          reason: '补入项可正常读出正文');
+      await source.dispose();
+    });
+
+    test('toc 已覆盖的 linear=no 章：同样标注、不重复补入（验收①）', () async {
+      final BookSource source = await openBook(
+        fileName: 'linNoB.epub',
+        bytes: _epubLinearNoInToc(),
+      );
+      final List<Chapter> chapters = await source.chapters();
+
+      expect(chapters.length, 2, reason: '目录已含 linear=no 章，不应重复补入');
+      expect(chapters[0].title, '上册');
+      expect(chapters[1].title, '注释篇$kNonLinearTitleSuffix',
+          reason: '验收①：toc 已含的 linear=no 项同样标注');
+      expect(chapters[1].href, 'OEBPS/text/ch2.xhtml');
+      expect(chapters[1].locate, '');
+      expect((await source.content(1)).paragraphList, <String>['注释正文。']);
+      await source.dispose();
+    });
+
+    test('常规书不回归：无 linear=no 时章节表不变、标题无标注', () async {
+      final BookSource source = await openBook(
+        fileName: 'nav3.epub',
+        bytes: _epub3WithNav(),
+      );
+      final List<Chapter> chapters = await source.chapters();
+
+      expect(chapters.length, 3);
+      expect(
+        chapters
+            .map((Chapter c) => (c.title, c.level, c.href, c.locate))
+            .toList(),
+        <(String, int, String, String)>[
+          ('第一卷', 0, 'OEBPS/text/ch1.xhtml', ''),
+          ('第一章', 1, 'OEBPS/text/ch2.xhtml', ''),
+          ('第一节', 2, 'OEBPS/text/ch3.xhtml', 'c3'),
+        ],
+        reason: '与 B 组既有断言一致：主线书的章节表逐字不变',
+      );
+      for (final Chapter c in chapters) {
+        expect(c.title.endsWith(kNonLinearTitleSuffix), isFalse);
+      }
+      await source.dispose();
+    });
+
+    test('linear=no 的图片仍按资源过滤剔除', () async {
+      final BookSource source = await openBook(
+        fileName: 'linNoImg.epub',
+        bytes: _epubLinearNoImage(),
+      );
+      final List<Chapter> chapters = await source.chapters();
+
+      expect(chapters.length, 1,
+          reason: 'linear=no 的封面 png 不当章节（资源过滤照常执行）');
+      expect(chapters.single.href, 'OEBPS/text/ch1.xhtml');
+      await source.dispose();
+    });
+
+    test('fx06 真实脏书：linear=no 章保留进章节表并标注（验收①②）', () async {
+      final Uint8List? bytes = _readFixture('fx06_linear_no.epub');
+      final BookSource source =
+          await openBook(fileName: 'fx06_linear_no.epub', bytes: bytes!);
+      final List<Chapter> chapters = await source.chapters();
+
+      expect(chapters.length, 3, reason: '验收②：总数包含 linear=no 章');
+      expect(chapters[0].title, '第一章');
+      expect(chapters[1].title, '第二章$kNonLinearTitleSuffix',
+          reason: '验收①：linear=no 项带「（非主线）」标注');
+      expect(chapters[1].href, 'OEBPS/text/ch2.xhtml');
+      expect(chapters[2].title, '第三章');
+      await source.dispose();
+    }, skip: _readFixture('fx06_linear_no.epub') == null
+        ? '缺少 fixture：fx06_linear_no.epub'
+        : null);
   });
 }
