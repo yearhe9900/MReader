@@ -131,9 +131,9 @@ void main() {
       await Directory('${tempDir.path}${Platform.pathSeparator}library')
           .create(recursive: true);
       final String badJson = '[ '
-          '{"bookId":"ok111111","fileName":"好书.epub","filePath":"ok111111.epub","title":"好书","作者":"好作者","format":"epub","cover":{"kind":"none"},"importedAt":1695300000000}, '
+          '{"bookId":"ok111111","fileName":"好书.epub","filePath":"ok111111.epub","title":"好书","author":"好作者","format":"epub","cover":{"kind":"none"},"importedAt":1695300000000}, '
           '{"这一条":"缺少 bookId 等必填字段"}, '
-          '{"bookId":"ok222222","fileName":"第二好书.epub","filePath":"ok222222.epub","title":"第二好书","作者":"好作者","format":"epub","cover":{"kind":"none"},"importedAt":1695300000001}'
+          '{"bookId":"ok222222","fileName":"第二好书.epub","filePath":"ok222222.epub","title":"第二好书","author":"好作者","format":"epub","cover":{"kind":"none"},"importedAt":1695300000001}'
           ']';
       await File(indexPath).writeAsString(badJson, flush: true);
 
@@ -151,7 +151,7 @@ void main() {
           .create(recursive: true);
       // 有效记录 + 一条纯字符串 + 一条数字
       final String mixedJson = '[ '
-          '{"bookId":"ok333333","fileName":"好书.epub","filePath":"ok333333.epub","title":"好书","作者":"好作者","format":"epub","cover":{"kind":"none"},"importedAt":1695300000000}, '
+          '{"bookId":"ok333333","fileName":"好书.epub","filePath":"ok333333.epub","title":"好书","author":"好作者","format":"epub","cover":{"kind":"none"},"importedAt":1695300000000}, '
           '"不是一本书", '
           '42'
           ']';

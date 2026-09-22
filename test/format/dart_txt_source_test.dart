@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/format/book_registry.dart';
 import 'package:mreader/format/book_source.dart';
 import 'package:mreader/format/dart_txt_source.dart';
+import 'package:mreader/meta/meta_source.dart' show kUnknownAuthor;
 
 /// 一行正文（21 个非空白字 + 换行），用来把「章正文」撑过择优阈值。
 const String _line = '这是本章的正文内容，重复若干次以超过阈值。';
@@ -65,7 +66,7 @@ void main() {
       final BookMeta meta = await source.load();
       expect(meta.title, '红楼梦');
       expect(meta.titleOrigin, MetaOrigin.filename);
-      expect(meta.author, '');
+      expect(meta.author, kUnknownAuthor);
       expect(meta.authorOrigin, MetaOrigin.none);
       expect(meta.cover, isA<NoCover>());
       expect(meta.coverOrigin, MetaOrigin.none);
