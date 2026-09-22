@@ -124,4 +124,27 @@ class LibraryRepository {
     if (!await file.exists()) return null;
     return file.readAsBytes();
   }
+
+  /// 更新一本书的「最近阅读时间 + 已读百分比」（`RD-04` 的 `BookRecord` 侧）。
+  ///
+  /// 由 `ReaderPage` 在保存进度时调用。`bookId` 不在库中时**静默返回**（不报错）。
+  Future<void> markRead(
+    String bookId, {
+    required int lastReadAt,
+    required double readProgress,
+  }) async {
+    final List<BookRecord> records = await _index.load();
+    bool found = false;
+    final List<BookRecord> next = <BookRecord>[];
+    for (final BookRecord r in records) {
+      if (r.bookId == bookId) {
+        next.add(r.copyWith(lastReadAt: lastReadAt, readProgress: readProgress));
+        found = true;
+      } else {
+        next.add(r);
+      }
+    }
+    if (!found) return;
+    await _index.save(next);
+  }
 }

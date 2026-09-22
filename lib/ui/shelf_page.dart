@@ -3,8 +3,8 @@
 // 空态：引导文案 + 导入按钮。
 // 有书：网格展示 [BookCard]（封面缩略图 + 书名 + 作者 + 格式标签）。
 // 导入：`FilePicker` 多选 → 逐个调 `importFile`，展示进度 + 失败清单。
-// 删除：长按书卡 → 确认对话框 → `deleteBook`（`LIB-06` 二次确认）。
-// 点击书卡 → 进入 `ReaderPage`（复用现有阅读页）。
+// 删除：长按书卡 → 确认对话框 → `deleteBook`（`LIB-06` 二次确认）+ 连带清理阅读进度。
+// 点击书卡 → 进入 `lib/reader` 的阅读页（`RD-03`/`RD-04`/`NAV-01`）。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
 import 'package:file_picker/file_picker.dart';
@@ -16,18 +16,27 @@ import '../format/book_source.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
+import '../reader/progress_store.dart';
+import '../reader/reader_page.dart';
 import 'book_card.dart';
-import 'reader_page.dart';
 
 /// 书架首页。
 class ShelfPage extends StatefulWidget {
-  const ShelfPage({super.key, required this.repository, required this.coverStore});
+  const ShelfPage({
+    super.key,
+    required this.repository,
+    required this.coverStore,
+    required this.progressStore,
+  });
 
   /// 书库仓库。
   final LibraryRepository repository;
 
   /// 封面存储（传给 [BookCard] 加载缩略图）。
   final CoverStore coverStore;
+
+  /// 阅读进度存储（`RD-04`）：传给阅读页；删书时连带清理。
+  final ProgressStore progressStore;
 
   @override
   State<ShelfPage> createState() => _ShelfPageState();
@@ -141,6 +150,8 @@ class _ShelfPageState extends State<ShelfPage> {
     );
     if (confirmed == true) {
       await widget.repository.deleteBook(record);
+      // `LIB-06` 连带清理：删除该书阅读进度文件（缺失时静默成功）。
+      await widget.progressStore.remove(record.bookId);
       await _loadBooks();
     }
   }
@@ -169,10 +180,17 @@ class _ShelfPageState extends State<ShelfPage> {
 
       if (!mounted) return;
       await Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => ReaderPage(source: source)),
+        MaterialPageRoute<void>(
+          builder: (_) => ReaderPage(
+            source: source,
+            record: record,
+            progressStore: widget.progressStore,
+            repository: widget.repository,
+          ),
+        ),
       );
 
-      // 阅读页关闭后刷新（lastReadAt 会在 M1-T04 更新）
+      // 阅读页关闭后刷新（lastReadAt / readProgress 已在 M1-T04 更新）
       await _loadBooks();
     } finally {
       _opening = false;

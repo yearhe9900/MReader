@@ -16,6 +16,7 @@ import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/model/epub_book.dart';
 import 'package:mreader/platform/app_paths.dart';
+import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/settings/settings_store.dart';
 import 'package:mreader/ui/shelf_page.dart';
 
@@ -157,7 +158,11 @@ void main() {
     await tester.pumpWidget(
       MReaderApp(
         settings: SettingsStore(dir),
-        home: ShelfPage(repository: repository, coverStore: coverStore),
+        home: ShelfPage(
+          repository: repository,
+          coverStore: coverStore,
+          progressStore: ProgressStore(paths),
+        ),
       ),
     );
 

@@ -11,6 +11,7 @@ import 'app.dart';
 import 'library/library_repository.dart';
 import 'meta/cover_store.dart';
 import 'platform/app_paths.dart';
+import 'reader/progress_store.dart';
 import 'settings/settings_store.dart';
 import 'ui/shelf_page.dart';
 
@@ -37,6 +38,9 @@ Future<void> main() async {
     coverStore: coverStore,
   );
 
+  // M1-T04：阅读进度持久化（`RD-04`），注入书架 → 阅读页。
+  final ProgressStore progressStore = ProgressStore(appPaths);
+
   // `UI-01` ②：`brightnessResolver: Theme.maybeBrightnessOf` 让玻璃控件跟随
   // **应用 ThemeMode**（light / dark / system），而非仅系统亮度。
   // 包裹位置在 `MReaderApp` **之外**，`app.dart` 里 builder 的透明 Material 地基一字不动。
@@ -44,7 +48,11 @@ Future<void> main() async {
     LiquidGlassWidgets.wrap(
       child: MReaderApp(
         settings: settings,
-        home: ShelfPage(repository: repository, coverStore: coverStore),
+        home: ShelfPage(
+          repository: repository,
+          coverStore: coverStore,
+          progressStore: progressStore,
+        ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,
     ),
