@@ -12,6 +12,14 @@
 - M1-T04 阅读页：章节连续滚动（全章塞一个 ListView）+ GlobalKey 探测当前章 / 章内位置 `f196d39`
 - M1-T04 进度恢复：同版面 initialScrollOffset 精确落回，否则按章序估算 + 校正 ≤3 帧 `f196d39`
 - M1-T04 目录与副标题：TocSheet 高亮跳章（NAV-01）+「第N章 · X%」去诊断（RD-03）`f196d39`
+- M1-T07 内存收敛（PERF-02）：EPUB 结构解析只建条目名索引，正文按需、图片/字体/CSS 不再常驻 `e16da96`
+- M1-T07 正文增量加载（PERF-02）：阅读页首帧只等目标章 ±1，后台按距离逐批补齐 + 有界 LRU（30 章）`f84b470`
+- M1-T07 隔离执行底座（PERF-01）：`compute()` 薄封装 IsolateRunner（本任务不接线到 `load()`）`9c9ff93`
+- M1-T07 性能基线（PERF-02/03）：样本生成器 + BookSource 层首屏测量 + 纯 Dart 懒加载验收 `9be18ed`
+
+### 变更
+
+- M1-T07 EpubSection 增惰性构造 `.lazy`（`rawBytes` 保留为 getter，消费方零改动）；spine 文本性判定改由 `textualVerdict` 仅凭声明完成 `e16da96`
 
 ## 2026-09-21
 

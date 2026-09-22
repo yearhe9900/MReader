@@ -32,6 +32,9 @@ android/key.properties
 .DS_Store
 *.log
 
+# 性能基线样本（由 tool/gen_perf_fixtures.dart 生成，不入库）
+/perf_fixtures/
+
 # 本工程的 agent 工作数据（记忆、报告），不进源码历史
 .workbuddy/
 deliverables/

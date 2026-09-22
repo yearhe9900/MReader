@@ -353,4 +353,28 @@
 | 测试（`FakeAsync` 铁律） | 让 widget 层测试可信 | `test/reader/reader_page_test.dart`、`test/ui/shelf_page_test.dart`、`test/widget_test.dart` | widget 内部（`initState` / 回调）发起的**真异步 IO 在 FakeAsync 区不会自行推进**，且载入期 `CircularProgressIndicator` 是无限动画 → `pumpAndSettle` **超时挂死**；统一用 `_settle` 助手（`runAsync(Future.delayed)` + `pump` **交替**多轮推进），**不用** `pumpAndSettle` |
 | 纯 Dart 进度模型（可单测 / 可进 isolate） | 复用于 SYNC / TTS / STAT | `lib/reader/reading_progress.dart` | **不 import Flutter、不 import `dart:io`**；`toJson` / `fromJson` **防御式**（非 Map / 缺字段 / 类型错 → `null` 不抛）；`chapterPos` 构造即 clamp `0.0~1.0` |
 
+### 2.12 M1-T07 — 性能（PERF-02 内存收敛 + PERF-03 分段渲染验收）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M1-T07（PRD `PERF-02` / `PERF-01`；负责人指定 4 个子项：① 阅读页增量加载 ② 目录/正文分离 ③ IsolateRunner ④ 样本与验收） |
+| 提交 | `e16da96`（② 解析器惰性）→ `f84b470`（① 阅读页增量）→ `9c9ff93`（③ IsolateRunner）→ `9be18ed`（④ 样本 / 测试 / 基线） |
+| 日期 | 2026-09-22 |
+| 一句话目标 | 打开大书不再一次性解压整本（图 / 字 / CSS 不常驻）；阅读页正文增量加载 + 有界驻留；给出改前 / 改后可复现数字 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| 惰性归档访问（`PERF-02` ①） | 结构解析阶段**不**预解压整本 | `lib/epub/epub_parser.dart` | 旧实现 `Map<String,Uint8List> files` 对**每条** `contentOfArchiveFile`（含图片）预解压；改为 `Map<String,ArchiveFile> byName`——archive 3.x 的 `ArchiveFile.content` 本就按需解压，仅建「条目名 → ArchiveFile」索引即达成「图 / 字 / CSS 保持压缩态」 |
+| 声明式文本性判定 | spine 项「是否正文」不再依赖字节 | `lib/epub/zip_paths.dart`（`textualVerdict`） | 仅凭 `media-type` / 扩展名即可判定的：明确非文本**直接跳过、连解压都不做**；仅当声明不足（无 media-type 且扩展名不暴露）才解压该**单**条目做字节魔数兜底（`fx07b` 脏书路径）。`looksTextual` 复用同一判定，行为逐字不变 |
+| `EpubSection` 惰性构造 | 正文推迟到 `content(i)` 才解压 | `lib/model/epub_book.dart` | 新增 `EpubSection.lazy(loadBytes:)`；`rawBytes` 由字段改为 getter（内部缓存）；**急切构造签名不变** → `dart_epub_source.dart` / 既有测试零改动（不加 `join`、不进 Flutter、不引新依赖） |
+| 正文增量加载（`PERF-02` ②） | 首帧只等「目标章 ±1」，不等全书 | `lib/reader/chapter_cache.dart`、`lib/reader/reader_page.dart` | `ChapterAutoLoader.loadFirstBatch(target)` 取 ±1；后台 `fillOnce(current)` 按「离当前章由近及远」每批 **≤3** 补齐至 ±12 窗口驻留；未加载章渲染等高「载入中」占位块 |
+| 有界驻留（有界 LRU） | 驻留章数不随书增长 | `lib/reader/chapter_cache.dart` | `ChapterCache` 用**保序** `LinkedHashMap`（插入序 = LRU 序，尾 = 最新），上限 `kMaxLoadedChapters = 30`；`touch` 保护「在视章」不被逐出 |
+| 占位高度估计 | 抑制「已加载章数」增长导致的总高跳变 | `lib/reader/reader_page.dart` | 取**已加载章渲染高度的中位数**，**非**「字符数 × 系数」——未加载章的字符数在不解压前提下不可知，那正是 `PERF-02` 要避免的 |
+| 恢复不降级（`RD-04`） | 增量加载后落点仍准 | 同上（`_ensureController`） | 默认仍走「按章序估算 + `addPostFrameCallback` 校正 ≤3 帧」；**仅当**同版面签名**且** `_cache.coversPrefix(targetIndex)`（已加载集合覆盖 `[0, target]`）时才用 `initialScrollOffset` 精确落回 |
+| `PERF-03` 逐段渲染 | 不合成巨型 `Text` | 同上（`_buildChapterItem`） | 每段各自成 `Text`（**禁 `join('\n\n')`**）；超长单章（>10 万字符）验收见 `test/perf` |
+| 隔离执行底座（`PERF-01`） | 为解析移出主 isolate 预留同款形状 | `lib/task/isolate_runner.dart` | `compute()` 薄封装：纯函数 + **可序列化**入参；本任务**不接线**到 `load()`，仅提供底座与失败护栏 |
+| 性能基线（可复现） | 改前 / 改后数字留档 | `tool/perf_bench.dart`、`docs/perf-baseline/README.md` | **BookSource 层**测「首屏」（`load` + `chapters` + `content(±1)`）；**一次进程只测一样本**避免 RSS 互污，多轮取 min/median 时间 + `ProcessInfo.currentRss/maxRss`；样本由 `tool/gen_perf_fixtures.dart` 写到**临时目录、不入库** |
+| 测试铁律（`FakeAsync`） | 让性能验收可信 | `test/perf/lazy_load_test.dart`、`test/task/isolate_runner_test.dart` | 一律**纯 Dart `test()`**（**非** `testWidgets`）——`testWidgets` 体内 `await` 真异步 IO 会挂死（FakeAsync 不排空微任务队列），本项目**已两次实证** |
+| 结果（可复现） | 300+ 章 EPUB（含 80MB 图） | `docs/perf-baseline/README.md` | 首屏时间 **112 → 42 ms**（min，−63%）；驻留 RSS **504.7 → 433.7 MB**（−71 MB）；20MB TXT / 小书无回归 |
+
 
