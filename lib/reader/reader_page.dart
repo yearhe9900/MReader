@@ -1,20 +1,24 @@
-// `RD-03` / `RD-04` / `NAV-01`：阅读页——**章节连续滚动**（从第 1 章一路滚到最后一章）。
+// `RD-03` / `RD-04` / `NAV-01` / `PERF-02` / `PERF-03`：阅读页——**章节连续滚动**
+// （从第 1 章一路滚到最后一章），且正文**增量加载**（不一次性解析全书）。
 //
 // 设计要点：
-//   · **连续滚动**：**全部章节塞进一个 `ListView.builder`**，每章一个 item（一个
-//     `Column`：章节标题 + 该章全部段落）。章与章之间不切页，滚到底自然进入下一章；
+//   · **连续滚动**：**全部章节塞进一个 `ListView.builder`**，每章一个 item（`Column`：
+//     章节标题 + 该章全部段落）。章与章之间不切页，滚到底自然进入下一章；
+//   · **正文增量加载（`PERF-02`）**：首帧**只等「恢复目标章 ±1」**（见
+//     [ChapterAutoLoader.loadFirstBatch]），其余章节由后台按「离当前章由近及远」
+//     逐批补齐；未加载的章渲染**占位块**，高度取「已加载章渲染高度的中位数」以抑制
+//     总高跳变；已加载正文由 [ChapterCache] **有界 LRU**（[kMaxLoadedChapters]=30）兜底，
+//     超出即淘汰回落占位；
 //   · **正文逐段渲染**：每段各自成 widget（`PERF-03`：**禁 `join('\n\n')` 巨型 `Text`**）；
-//   · **当前章 + 章内位置**：每章块挂一个 `GlobalKey`；滚动停止时从「上次索引」向两侧
+//   · **当前章 + 章内位置**：每章块挂 `GlobalKey`；滚动停止时从「上次索引」向两侧
 //     ±4 探测 `findRenderObject`，找出覆盖视口顶部的章块，算出 `chapterIndex` 与
-//     `chapterPos = (视口顶 - 章块顶) / 章块高`（即 `RD-04` 的「章索引 + 章内 0.0~1.0」）；
+//     `chapterPos = (视口顶 - 章块顶) / 章块高`；
 //   · **进度以 `Chapter.href` 为稳定身份**：恢复时先按 href 匹配，匹配不到退回 index 并 clamp；
-//   · **恢复（`RD-04`「落点误差 ≤ 1 屏」）**：进度带**设备本地版面快照** `localHint`——
-//     版面签名一致（同字号 / 行距 / 视口）→ 用 `initialScrollOffset` **精确落回**；
-//     否则 → 按「章索引 + 章内位置」估算 + `addPostFrameCallback` 校正（最多 3 帧、
-//     `|delta| ≤ 1px` 即停）；
+//   · **恢复（`RD-04`「落点误差 ≤ 1 屏」）**：默认走「按章序比例估算 + `addPostFrameCallback`
+//     校正（≤3 帧、偏移差 ≤1px 停）」；仅当**同版面签名且已加载集合覆盖 `[0, targetIndex]`**
+//     时，才用 `initialScrollOffset` 精确落回（否则首帧总高不足，jump 会被 clamp 到错处）；
 //   · **进度保存时机 3 个**：滚动停止 / 切章（含目录跳转、恢复落定）/ `dispose()`；
-//   · **`RD-03`**：AppBar 标题取 `BookRecord.title`、副标题为「第N章 · X%」，
-//     **不出现 implId 等诊断信息**；
+//   · **`RD-03`**：AppBar 标题取 `BookRecord.title`、副标题为「第N章 · X%」，不出现 implId 诊断；
 //   · **`NAV-01`**：AppBar 目录按钮 → 底部 [TocSheet]，当前章高亮、点击跳章。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider / Freezed）。
@@ -28,6 +32,7 @@ import '../format/book_source.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
 import '../ui/reader_settings_bar.dart';
+import 'chapter_cache.dart';
 import 'control_bar.dart';
 import 'progress_store.dart';
 import 'reading_progress.dart';
@@ -39,7 +44,10 @@ const int _kProbeRadius = 4;
 /// 恢复滚动时的最大校正帧数（`RD-04`：估算后迭代收敛）。
 const int _kMaxRestoreFrames = 3;
 
-/// 连续滚动阅读页。
+/// 占位块在「尚无任何已加载章可测」时的默认高度（逻辑像素）。
+const double _kDefaultChapterHeight = 480;
+
+/// 连续滚动 + 正文增量加载的阅读页。
 class ReaderPage extends StatefulWidget {
   const ReaderPage({
     super.key,
@@ -72,11 +80,22 @@ class _ReaderPageState extends State<ReaderPage> {
 
   BookMeta? _meta;
   List<Chapter>? _chapters;
-
-  /// 每章正文（与 `_chapters` 同序；全部就绪后才进入连续滚动）。
-  List<ChapterContent>? _contents;
-
   Object? _error;
+
+  /// 章正文的有界 LRU 缓存（`PERF-02`）。
+  final ChapterCache _cache = ChapterCache();
+
+  /// 增量加载驱动器（首帧批次 + 后台补齐）。
+  ChapterAutoLoader? _loader;
+
+  /// 首帧批次已就绪（可以进入连续滚动列表）。
+  bool _ready = false;
+
+  /// 后台补齐循环是否正在跑（防重复启动）。
+  bool _fillRunning = false;
+
+  /// 本页是否已释放（用于停止后台补齐循环、避免用已释放的 source）。
+  bool _disposed = false;
 
   /// 当前章索引。
   int _currentIndex = 0;
@@ -84,15 +103,13 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 当前章内进度 `0.0 ~ 1.0`（滚动停止时更新；供副标题与保存使用）。
   double _chapterPos = 0.0;
 
-  /// 每章块的 `GlobalKey`（挂在章块 `Column` 上）——用于定位当前章与章内位置。
+  /// 每章块的 `GlobalKey`——用于定位当前章与章内位置。
   final Map<int, GlobalKey> _chapterKeys = <int, GlobalKey>{};
 
   /// 正文滚动区（视口）的 `GlobalKey`——把章块全局坐标换算到视口坐标系。
   final GlobalKey _viewportKey = GlobalKey();
 
-  /// 整本连续滚动列表的控制器。
-  ///
-  /// **内容就绪后**才创建：版面签名一致时带 `initialScrollOffset` 精确恢复（`RD-04`）。
+  /// 整本连续滚动列表的控制器（内容就绪后创建）。
   ScrollController? _controller;
 
   /// 视口尺寸（每次布局记录；用于保存 / 校验版面签名）。
@@ -101,6 +118,9 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 设备本地版面快照（来自进度；`null` = 无 / 不可用）。
   LocalLayoutHint? _localHint;
+
+  /// 占位块高度估计：已加载章渲染高度的中位数（随加载推进收敛）。
+  double _estimatedChapterHeight = _kDefaultChapterHeight;
 
   /// 正在程序化恢复 / 跳转：期间忽略滚动停止的保存，避免把中间值写回磁盘。
   bool _restoring = false;
@@ -123,29 +143,20 @@ class _ReaderPageState extends State<ReaderPage> {
     // 关闭阅读页：先保存进度（不能 await，故 unawaited），再释放书籍资源。
     // 注：`_saveProgress` 在首个 `await` 前同步读取 `_controller.offset`，
     // 故此处「先保存、后 dispose 控制器」是安全的（不会用到已释放的控制器）。
+    _disposed = true;
     unawaited(_saveProgress());
     _controller?.dispose();
     unawaited(widget.source.dispose());
     super.dispose();
   }
 
-  /// 取元数据 + 章节表 + **全部章节正文** + 已存进度 → 定位到上次阅读位置。
-  ///
-  /// 预取全部正文：让首帧的 `maxScrollExtent` 即为最终值，恢复偏移才落在正确处
-  /// （否则会在「载入中…」的矮内容上跳转，导致落点漂移）。
+  /// 取元数据 + 章节表 + 已存进度 → 定位；**首帧只等「目标章 ±1」**，随后后台补齐。
   Future<void> _open() async {
     try {
       final BookMeta meta = await widget.source.load();
       final List<Chapter> chapters = await widget.source.chapters();
       final ReadingProgress? progress =
           await widget.progressStore.load(widget.record.bookId);
-
-      final List<ChapterContent> contents = await Future.wait<ChapterContent>(
-        <Future<ChapterContent>>[
-          for (int i = 0; i < chapters.length; i++) _contentAt(i),
-        ],
-      );
-
       if (!mounted) return;
 
       // 定位：先按 href（稳定身份）匹配，匹配不到退回 index 并 clamp。
@@ -155,7 +166,6 @@ class _ReaderPageState extends State<ReaderPage> {
       setState(() {
         _meta = meta;
         _chapters = chapters;
-        _contents = contents;
         _currentIndex = index;
         _chapterPos = pos;
         _restoreIndex = index;
@@ -165,6 +175,21 @@ class _ReaderPageState extends State<ReaderPage> {
           _chapterKeys[i] = GlobalKey();
         }
       });
+      if (chapters.isEmpty) return;
+
+      final ChapterAutoLoader loader = ChapterAutoLoader(
+        chapterCount: chapters.length,
+        loadContent: _contentAt,
+        cache: _cache,
+      );
+      _loader = loader;
+
+      // 首帧：只等「目标章 ±1」（`PERF-02`：不一次性解析全书）。
+      await loader.loadFirstBatch(index);
+      if (!mounted || _disposed) return;
+      setState(() => _ready = true);
+      _scheduleEstimateRefresh();
+      _ensureAutoFill();
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error);
@@ -180,10 +205,12 @@ class _ReaderPageState extends State<ReaderPage> {
     return progress.chapterIndex.clamp(0, chapters.length - 1);
   }
 
-  /// 解析第 [index] 章正文；单章失败就地降级为一行提示，不拖垮整本书。
+  /// 读取第 [index] 章正文；单章失败就地降级为一行提示，不拖垮整本书。
   Future<ChapterContent> _contentAt(int index) async {
+    if (_disposed) return ChapterContent.paragraphs(const <String>[]);
     try {
-      return await widget.source.content(index);
+      final ChapterContent content = await widget.source.content(index);
+      return content;
     } catch (error) {
       return ChapterContent.paragraphs(<String>['[本章解析失败] $error']);
     }
@@ -191,11 +218,10 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 内容就绪后创建控制器（仅一次）。
   ///
-  /// 版面签名一致 → `initialScrollOffset` 精确恢复；否则 → 记录目标，首帧后估算 + 校正。
+  /// 精确恢复（`initialScrollOffset`）**仅当**「同版面签名 + 已加载集合覆盖 `[0, target]`」
+  /// 同时成立；否则一律走「估算 + 校正」默认路径。
   void _ensureController() {
-    if (_controller != null) {
-      return;
-    }
+    if (_controller != null) return;
     final LocalLayoutHint? hint = _localHint;
     final bool exact = hint != null &&
         _viewportWidth > 0 &&
@@ -205,10 +231,11 @@ class _ReaderPageState extends State<ReaderPage> {
           lineHeight: _settings.lineHeight,
           viewportWidth: _viewportWidth,
           viewportHeight: _viewportHeight,
-        );
+        ) &&
+        _cache.coversPrefix(_restoreIndex);
     if (exact) {
       _controller = ScrollController(initialScrollOffset: hint.scrollOffset);
-      // 首帧后同步一次「当前章 / 章内位置」显示（此时列表已按偏移落位）。
+      _cache.touch(_restoreIndex);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _detectCurrentChapter();
@@ -220,16 +247,17 @@ class _ReaderPageState extends State<ReaderPage> {
     _beginScrollTo(_restoreIndex, _restorePos);
   }
 
-  /// 开始一次程序化「滚动到第 [index] 章的 [pos] 位置」（估算 + 校正）。
+  /// 开始一次程序化「滚动到第 [index] 章的 [pos] 位置」（估算 + 校正）。默认恢复路径。
   void _beginScrollTo(int index, double pos) {
-    _restoreIndex = index.clamp(0, math.max(0, (_chapters?.length ?? 1) - 1));
-    _restorePos = pos.clamp(0.0, 1.0);
+    final int count = math.max(1, _chapters?.length ?? 1);
+    _restoreIndex = index.clamp(0, count - 1);
+    _restorePos = pos.clamp(0.0, 1.0).toDouble();
     _restoreFrames = 0;
     _restoring = true;
     WidgetsBinding.instance.addPostFrameCallback((_) => _restoreStep());
   }
 
-  /// 恢复 / 跳转的迭代校正：测量目标落点 → 跳转 → 复核，`|delta| ≤ 1px` 或超帧数即停。
+  /// 恢复 / 跳转的迭代校正：测量目标落点 → 跳转 → 复核，偏移差 ≤1px 或超帧数即停。
   void _restoreStep() {
     final ScrollController? controller = _controller;
     if (!mounted || controller == null || !controller.hasClients) {
@@ -261,12 +289,14 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
-  /// 恢复 / 跳转落定：同步显示、并保存一次（切章后的新位置写回磁盘）。
+  /// 恢复 / 跳转落定：同步显示、触发后台补齐、保存一次（切章后的新位置写回磁盘）。
   void _finishRestore() {
     _restoring = false;
     if (!mounted) return;
     _detectCurrentChapter();
+    _cache.touch(_currentIndex);
     setState(() {});
+    _ensureAutoFill();
     unawaited(_saveProgress());
   }
 
@@ -348,19 +378,71 @@ class _ReaderPageState extends State<ReaderPage> {
     return object is RenderBox && object.hasSize ? object : null;
   }
 
-  /// 滚动停止：更新当前章 / 章内位置 + 保存。返回 false 表示不拦截通知。
+  /// 滚动停止：更新当前章 / 章内位置 + 触发补齐 + 保存。返回 false 表示不拦截通知。
   bool _onScrollEnd(ScrollEndNotification notification) {
     if (_restoring || _controller == null || !_controller!.hasClients) {
       return false;
     }
     _detectCurrentChapter();
+    _cache.touch(_currentIndex);
+    _ensureAutoFill();
     unawaited(_saveProgress());
     return false;
+  }
+
+  /// 启动后台补齐循环（已在跑 / 未就绪 / 已释放则忽略）。
+  void _ensureAutoFill() {
+    if (_fillRunning || !_ready || _disposed) return;
+    _fillRunning = true;
+    unawaited(_autoFillLoop());
+  }
+
+  /// 后台补齐循环：每批 [kLoadBatchSize] 章，逐批 `setState` 合入；
+  /// 直到「当前窗口内全部驻留」为止。滚动后由 [_ensureAutoFill] 再触发。
+  Future<void> _autoFillLoop() async {
+    try {
+      while (mounted && !_disposed) {
+        final ChapterAutoLoader? loader = _loader;
+        if (loader == null) return;
+        final bool more = await loader.fillOnce(_currentIndex);
+        if (!mounted || _disposed) return;
+        if (!more) return;
+        setState(() {});
+        _scheduleEstimateRefresh();
+      }
+    } finally {
+      _fillRunning = false;
+    }
+  }
+
+  /// 在下一帧测量已加载章的渲染高度，刷新占位高度估计（中位数）。
+  void _scheduleEstimateRefresh() {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshEstimatedHeight());
+  }
+
+  /// 用「已加载章渲染高度的中位数」更新占位块高度，抑制总高反复跳变导致的滚动漂移。
+  ///
+  /// 未加载章的字符数在**不解压该章**的前提下不可知（那正是 `PERF-02` 要避免的），
+  /// 故这里用「已加载章实测高度的中位数」作为其高度代理，而非「字符数 × 系数」。
+  void _refreshEstimatedHeight() {
+    if (!mounted) return;
+    final List<double> heights = <double>[];
+    for (final int i in _cache.loadedIndices) {
+      final RenderBox? box = _chapterBoxAt(i);
+      if (box != null && box.size.height > 1) heights.add(box.size.height);
+    }
+    if (heights.isEmpty) return;
+    heights.sort();
+    final double median = heights[heights.length ~/ 2];
+    if ((median - _estimatedChapterHeight).abs() > 0.5) {
+      setState(() => _estimatedChapterHeight = median);
+    }
   }
 
   /// 跳到第 [index] 章章首（目录点击 / 上下一章按钮）。
   Future<void> _goToChapter(int index) async {
     final List<Chapter>? chapters = _chapters;
+    final ChapterAutoLoader? loader = _loader;
     final ScrollController? controller = _controller;
     if (chapters == null ||
         chapters.isEmpty ||
@@ -376,7 +458,11 @@ class _ReaderPageState extends State<ReaderPage> {
       _currentIndex = target;
       _chapterPos = 0.0;
     });
+    // 先把目标章（±1）载入，避免跳到占位块后高度回填引起漂移。
+    await loader?.loadFirstBatch(target);
+    if (!mounted) return;
     _beginScrollTo(target, 0.0);
+    _ensureAutoFill();
   }
 
   /// 保存当前阅读进度（进度文件 + 回写 `BookRecord` 阅读字段）。
@@ -384,8 +470,7 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 失败静默（不影响阅读，下次保存重试）。
   Future<void> _saveProgress() async {
     final List<Chapter>? chapters = _chapters;
-    final List<ChapterContent>? contents = _contents;
-    if (chapters == null || chapters.isEmpty || contents == null) return;
+    if (chapters == null || chapters.isEmpty) return;
     final int index = _currentIndex.clamp(0, chapters.length - 1);
     final Chapter chapter = chapters[index];
     final int now = DateTime.now().millisecondsSinceEpoch;
@@ -459,8 +544,7 @@ class _ReaderPageState extends State<ReaderPage> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final List<Chapter>? chapters = _chapters;
-    final bool ready =
-        chapters != null && chapters.isNotEmpty && _contents != null;
+    final bool ready = _ready && chapters != null && chapters.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
@@ -566,8 +650,8 @@ class _ReaderPageState extends State<ReaderPage> {
         ),
       );
     }
-    final List<ChapterContent>? contents = _contents;
-    if (contents == null) {
+    if (!_ready) {
+      // 首帧批次尚未就绪（只等「目标章 ±1」，很快）。
       return const Center(child: CircularProgressIndicator());
     }
 
@@ -591,7 +675,7 @@ class _ReaderPageState extends State<ReaderPage> {
               padding: const EdgeInsets.symmetric(vertical: 8),
               itemCount: chapters.length,
               itemBuilder: (BuildContext context, int index) =>
-                  _buildChapterBlock(theme, bodyStyle, index),
+                  _buildChapterItem(theme, bodyStyle, index),
             ),
           ),
         );
@@ -599,22 +683,35 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
-  /// 渲染第 [index] 章块：章节标题 + **逐段**正文（`PERF-03`：不合成巨型 `Text`）。
+  /// 渲染第 [index] 章：已加载则标题 + **逐段**正文，否则渲染**占位块**。
   ///
-  /// 整段 `Column` 挂 [_chapterKeys]，其 `RenderBox` 尺寸即该章内容高度，
-  /// 供 [_detectCurrentChapter] / [_chapterPointOffset] 定位。
-  Widget _buildChapterBlock(ThemeData theme, TextStyle bodyStyle, int index) {
+  /// 章块挂 [_chapterKeys]（占位块亦挂同一 key），其 `RenderBox` 供
+  /// [_detectCurrentChapter] / [_chapterPointOffset] 定位。`PERF-03`：**不合成巨型 `Text`**。
+  Widget _buildChapterItem(ThemeData theme, TextStyle bodyStyle, int index) {
+    final ChapterContent? content = _cache.peek(index);
+    if (content == null) {
+      // 未加载：占位块，高度取「已加载章渲染高度中位数」，避免总高反复跳变。
+      return Container(
+        key: _chapterKeys[index],
+        height: _estimatedChapterHeight,
+        alignment: Alignment.center,
+        child: Text(
+          '第 ${index + 1} 章 · 载入中…',
+          style: theme.textTheme.bodySmall,
+        ),
+      );
+    }
+
     final List<Chapter> chapters = _chapters!;
-    final List<ChapterContent> contents = _contents!;
     final Chapter chapter = chapters[index];
     final String heading =
         chapter.title.isNotEmpty ? chapter.title : '第 ${index + 1} 节';
-    final List<String> paragraphs = contents[index].paragraphList;
+    final List<String> paragraphs = content.paragraphList;
 
     return Padding(
+      key: _chapterKeys[index],
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       child: Column(
-        key: _chapterKeys[index],
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           Text(
