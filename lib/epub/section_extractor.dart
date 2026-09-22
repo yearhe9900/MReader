@@ -93,6 +93,12 @@ dom.Document? _tryParseHtml(String source) {
   }
 }
 
+/// 内联标签白名单：保留为段落文本里的 HTML 标签，供 `typeset.dart` 的
+/// `parseInlineStyles` 解析为 `TextSpan`（`TYP-04` `<b>` / `<i>` 支持）。
+///
+/// 其它内联标签（`<span>` / `<a>` / `<em>` 等）的文本内容正常保留，但标签本身剥掉。
+const Set<String> _preservedInlineTags = <String>{'b', 'i'};
+
 /// 深度优先遍历，遇到块级标签就切段。
 void _walk(dom.Node node, List<String> out, StringBuffer buffer) {
   for (final dom.Node child in node.nodes) {
@@ -114,7 +120,13 @@ void _walk(dom.Node node, List<String> out, StringBuffer buffer) {
 
     final bool isBlock = _blockTags.contains(tag);
     if (isBlock) _flush(buffer, out);
+
+    // 保留白名单内联标签（`<b>` / `<i>`），写成字面 HTML 供渲染层解析。
+    final bool preserve = _preservedInlineTags.contains(tag);
+    if (preserve) buffer.write('<$tag>');
     _walk(child, out, buffer);
+    if (preserve) buffer.write('</$tag>');
+
     if (isBlock) _flush(buffer, out);
   }
 }

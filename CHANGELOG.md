@@ -18,6 +18,7 @@
 - M1-T07 性能基线（PERF-02/03）：样本生成器 + BookSource 层首屏测量 + 纯 Dart 懒加载验收 `9be18ed`
 - M1-T07 收尾（PERF-01 底座）：`parseEpubStructure(bytes, fileName:)` 产出**无闭包纯数据**结构（sections / toc / metadata / 封面候选 href / 条目名索引），可跨 isolate；`parseEpubResult` 保留签名，内部 = structure + 在**本 isolate** 绑定 `loadBytes` / `readEntry`
 - M1-T07 收尾（PERF-02 ①）：`EpubSection.rawBytes` **去掉无界缓存**（每次访问现取）；新增 `zip_paths.dart` `lazyEntryLoader` 从**压缩态**每次现解（STORE 原样 / DEFLATE 走 `inflateBuffer`），绕开 archive `ArchiveFile.content` 的永久 `_content` 缓存
+- M1-T06 排版与阅读设置（`TYP-01` ~ `TYP-04`）：`ReaderSettings` 扩展（字号/行距/字体/主题/页边距）+ `resolveTextStyle` 单一出口 + `parseInlineStyles`（`<b>`/`<i>` 白名单）+ 首行缩进 + 标题居中 + `ScrollAnchor` 位置锚定 + 页边距/主题三态切换
 
 ### 变更
 

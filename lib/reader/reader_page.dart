@@ -31,7 +31,10 @@ import 'package:flutter/material.dart';
 import '../format/book_source.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
-import '../ui/reader_settings_bar.dart';
+import '../typography/anchor.dart';
+import '../typography/reader_settings.dart';
+import '../typography/text_style_resolver.dart';
+import '../typography/typeset.dart';
 import 'chapter_cache.dart';
 import 'control_bar.dart';
 import 'progress_store.dart';
@@ -576,11 +579,9 @@ class _ReaderPageState extends State<ReaderPage> {
         ],
       ),
       bottomNavigationBar: ready
-          ? ReaderControlBar(
+          ?             ReaderControlBar(
               settings: _settings,
-              onSettingsChanged: (ReaderSettings value) {
-                setState(() => _settings = value);
-              },
+              onSettingsChanged: _onSettingsChanged,
               chapterNumber: _currentIndex + 1,
               chapterCount: chapters.length,
               percent: _percent,
@@ -655,10 +656,7 @@ class _ReaderPageState extends State<ReaderPage> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final TextStyle bodyStyle = TextStyle(
-      fontSize: _settings.fontSize,
-      height: _settings.lineHeight,
-    );
+    final TextStyle bodyStyle = resolveTextStyle(_settings, theme: theme);
 
     // 在布局期拿到视口尺寸（用于版面签名与坐标换算），并据内容就绪创建控制器。
     return LayoutBuilder(
@@ -681,6 +679,40 @@ class _ReaderPageState extends State<ReaderPage> {
         );
       },
     );
+  }
+
+  /// 设置变更（字号 / 行距 / 字体 / 页边距）：先锚定当前位置，再 setState，再校正。
+  ///
+  /// `TYP-02` 位置锚定：用 [ScrollAnchor] 记录「视口顶在当前章的相对位置」，
+  /// 列表重建后用同一章块的新位置算出 delta，`jumpTo` 校正，使该段仍在视口内。
+  void _onSettingsChanged(ReaderSettings newSettings) {
+    final ScrollAnchor? anchor = ScrollAnchor.capture(
+      controller: _controller,
+      viewportBox: _viewportBox(),
+      chapterBox: _chapterBoxAt(_currentIndex),
+      chapterIndex: _currentIndex,
+    );
+
+    setState(() => _settings = newSettings);
+
+    // 校正：列表已重建（新布局已生效），在下一帧读新位置并 jumpTo。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final double? correction = anchor?.correction(
+        controller: _controller,
+        viewportBox: _viewportBox(),
+        chapterBox: _chapterBoxAt(_currentIndex),
+      );
+      if (correction != null) {
+        final ScrollController? controller = _controller;
+        if (controller != null && controller.hasClients) {
+          controller.jumpTo(
+            (controller.offset + correction)
+                .clamp(0.0, controller.position.maxScrollExtent),
+          );
+        }
+      }
+    });
   }
 
   /// 渲染第 [index] 章：已加载则标题 + **逐段**正文，否则渲染**占位块**。
@@ -707,15 +739,18 @@ class _ReaderPageState extends State<ReaderPage> {
     final String heading =
         chapter.title.isNotEmpty ? chapter.title : '第 ${index + 1} 节';
     final List<String> paragraphs = content.paragraphList;
+    final double marginH = _settings.pageMargin.horizontal;
 
     return Padding(
       key: _chapterKeys[index],
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      padding: EdgeInsets.fromLTRB(marginH, 16, marginH, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
+          // TYP-04：标题居中。
           Text(
             heading,
+            textAlign: TextAlign.center,
             style: theme.textTheme.titleMedium
                 ?.copyWith(fontWeight: FontWeight.bold),
           ),
@@ -725,7 +760,16 @@ class _ReaderPageState extends State<ReaderPage> {
           for (int p = 0; p < paragraphs.length; p++)
             Padding(
               padding: const EdgeInsets.only(bottom: 16),
-              child: Text(paragraphs[p], style: bodyStyle),
+              // TYP-04：首行缩进 + `<b>`/`<i>` 内联样式（白名单）。
+              child: Text.rich(
+                TextSpan(
+                  children: parseInlineStyles(
+                    withFirstLineIndent(paragraphs[p]),
+                    bodyStyle,
+                  ),
+                ),
+                style: bodyStyle,
+              ),
             ),
         ],
       ),

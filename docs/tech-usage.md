@@ -380,4 +380,22 @@
 | 测试铁律（`FakeAsync`） | 让性能验收可信 | `test/perf/lazy_load_test.dart`、`test/task/isolate_runner_test.dart` | 一律**纯 Dart `test()`**（**非** `testWidgets`）——`testWidgets` 体内 `await` 真异步 IO 会挂死（FakeAsync 不排空微任务队列），本项目**已两次实证** |
 | 结果（可复现） | 300+ 章 EPUB（含 80MB 图） | `docs/perf-baseline/README.md` | 首屏时间 **123 → 45 ms**（min，≈ −63%）；首屏后驻留 RSS **497.9 → 429.2 MB**（≈ −69 MB）；**稳态**（首屏后再读 50 章）**497.9 → 429.8 MB**（+0.6，几乎不增）；100 章大头书读完 100 章 稳态 **562.5 → 426.8 MB**；20MB TXT / 小书无回归 |
 
+### 2.13 M1-T06 — 排版与阅读设置（含位置锚定）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M1-T06（PRD `TYP-01` ~ `TYP-04`；6 子项：① ReaderSettings 扩展 ② resolveTextStyle ③ parseInlineStyles ④ ScrollAnchor ⑤ ReaderSettingsBar 扩展 ⑥ 测试） |
+| 日期 | 2026-09-22 |
+| 一句话目标 | 字号/行距/字体/主题/页边距可调；设置变更后当前段不飞出视口；`<b>`/`<i>` 内联样式渲染；首行缩进 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| `ReaderSettings` 扩展（`TYP-01` ~ `TYP-03`） | 统一阅读设置值对象 | `lib/typography/reader_settings.dart` | 从 `reader_settings_bar.dart` 提取；新增 `fontFamily`（`String?`）、`themeMode`（`AppThemeMode` 三态）、`pageMargin`（`PageMargin` 枚举：narrow=12 / normal=16 / wide=24）。纯 Dart，不 import Flutter / dart:io |
+| `resolveTextStyle`（`TYP-01`） | 字号/行距/字体 → TextStyle 单一出口 | `lib/typography/text_style_resolver.dart` | reader_page 原 3 处 `TextStyle(fontSize:...,height:...)` 统一改为调此函数 |
+| 首行缩进（`TYP-04`） | 段落首行缩进 2 字符 | `lib/typography/typeset.dart` | 全角空格（U+3000）前缀：宽度恒 = 1 中文字宽，不受字号/字体影响 |
+| `<b>`/`<i>` 内联样式（`TYP-04`） | 段落内粗体/斜体渲染 | `typeset.dart` + `section_extractor.dart` | `_walk` 白名单保留 `<b>`/`<i>`（字面 HTML 字符串在段落文本里）；`parseInlineStyles` 正扫标签 + 状态机切 `TextSpan` 列表；未识别标签原样显示（不吞内容） |
+| 位置锚定（`TYP-02`） | 设置变更后当前段不飞出视口 | `lib/typography/anchor.dart`（`ScrollAnchor`） | ① 变更前：GlobalKey + RenderBox 算「视口顶在当前章的相对位置 relPos」；② setState → 列表重建；③ postFrameCallback：`correction = newChapterTop - (newViewportTop - relPos × newChapterHeight)` → `jumpTo` 校正。纯数值版 `correctionFromRaw` 供纯 Dart 测试 |
+| 设置栏扩展（`TYP-01`/`TYP-03`） | 页边距三档 + 主题三态 | `lib/ui/reader_settings_bar.dart` | 两个 IconButton 循环切换；总高度仍 48px（单行 Row） |
+| 测试 | 验收 | `test/typography/*`（4 文件 53 条） | TYP-01 字号/行距/字体；TYP-02 anchor 7 组合；TYP-04 parseInlineStyles 白名单 + 14 组脏文本不崩溃 |
+
 

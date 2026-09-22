@@ -5,6 +5,7 @@
 // 不再重复放目录按钮，避免同一页出现两个功能相同的入口。
 import 'package:flutter/material.dart';
 
+import '../typography/reader_settings.dart';
 import '../ui/reader_settings_bar.dart';
 
 /// 阅读页底部控制条。

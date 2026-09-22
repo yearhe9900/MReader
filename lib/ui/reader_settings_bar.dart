@@ -1,25 +1,15 @@
-// 阅读设置值对象 + 底部控制条。
+// 阅读设置控制条（`TYP-01` ~ `TYP-03`）。
 //
-// 之所以单独拆一个文件：字号 / 行距是整个 demo 的**验证重点**——它证明
-// 纯 Flutter 侧排版参数完全可控、且能实时生效。
+// 从 `lib/typography/reader_settings_bar.dart` 提取并扩展：字号 / 行距 / 页边距 / 主题。
+// [ReaderSettings] 已移至 `lib/typography/reader_settings.dart`，此处只做 UI。
 import 'package:flutter/material.dart';
 
-/// 阅读设置。字号单位是逻辑像素，行距是倍数（Flutter 的 `TextStyle.height`）。
-class ReaderSettings {
-  const ReaderSettings({this.fontSize = 18, this.lineHeight = 1.6});
+import '../settings/settings_store.dart';
+import '../typography/reader_settings.dart';
 
-  final double fontSize;
-  final double lineHeight;
-
-  ReaderSettings copyWith({double? fontSize, double? lineHeight}) {
-    return ReaderSettings(
-      fontSize: fontSize ?? this.fontSize,
-      lineHeight: lineHeight ?? this.lineHeight,
-    );
-  }
-}
-
-/// 底部控制条：A- / A+ 调字号，滑块调行距。改动通过 [onChanged] 立即回传。
+/// 底部控制条：A- / A+ 调字号，滑块调行距，页边距 / 主题切换。
+///
+/// 改动通过 [onChanged] 立即回传。
 class ReaderSettingsBar extends StatelessWidget {
   const ReaderSettingsBar({
     super.key,
@@ -30,19 +20,11 @@ class ReaderSettingsBar extends StatelessWidget {
   final ReaderSettings settings;
   final ValueChanged<ReaderSettings> onChanged;
 
-  static const double _minFontSize = 12;
-  static const double _maxFontSize = 36;
-  static const double _fontStep = 1;
-
-  static const double _minLineHeight = 1.0;
-  static const double _maxLineHeight = 2.6;
-  static const int _lineHeightDivisions = 16;
-
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final bool canShrink = settings.fontSize > _minFontSize;
-    final bool canGrow = settings.fontSize < _maxFontSize;
+    final bool canShrink = settings.fontSize > ReaderSettings.minFontSize;
+    final bool canGrow = settings.fontSize < ReaderSettings.maxFontSize;
 
     return Material(
       elevation: 8,
@@ -63,8 +45,12 @@ class ReaderSettingsBar extends StatelessWidget {
                   onPressed: canShrink
                       ? () => onChanged(
                             settings.copyWith(
-                              fontSize: (settings.fontSize - _fontStep)
-                                  .clamp(_minFontSize, _maxFontSize),
+                              fontSize: (settings.fontSize -
+                                      ReaderSettings.fontStep)
+                                  .clamp(
+                                ReaderSettings.minFontSize,
+                                ReaderSettings.maxFontSize,
+                              ),
                             ),
                           )
                       : null,
@@ -83,8 +69,12 @@ class ReaderSettingsBar extends StatelessWidget {
                   onPressed: canGrow
                       ? () => onChanged(
                             settings.copyWith(
-                              fontSize: (settings.fontSize + _fontStep)
-                                  .clamp(_minFontSize, _maxFontSize),
+                              fontSize: (settings.fontSize +
+                                      ReaderSettings.fontStep)
+                                  .clamp(
+                                ReaderSettings.minFontSize,
+                                ReaderSettings.maxFontSize,
+                              ),
                             ),
                           )
                       : null,
@@ -94,20 +84,92 @@ class ReaderSettingsBar extends StatelessWidget {
                 Expanded(
                   child: Slider(
                     value: settings.lineHeight
-                        .clamp(_minLineHeight, _maxLineHeight),
-                    min: _minLineHeight,
-                    max: _maxLineHeight,
-                    divisions: _lineHeightDivisions,
+                        .clamp(ReaderSettings.minLineHeight,
+                            ReaderSettings.maxLineHeight),
+                    min: ReaderSettings.minLineHeight,
+                    max: ReaderSettings.maxLineHeight,
+                    divisions: 16,
                     label: settings.lineHeight.toStringAsFixed(1),
                     onChanged: (double value) =>
                         onChanged(settings.copyWith(lineHeight: value)),
                   ),
                 ),
+                // 页边距三档切换（TYP-01）
+                _buildMarginToggle(context),
+                const SizedBox(width: 4),
+                // 主题三态切换（TYP-03）
+                _buildThemeToggle(context),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  /// 页边距三档：narrow → normal → wide → narrow …
+  Widget _buildMarginToggle(BuildContext context) {
+    final IconData icon;
+    final String tooltip;
+    switch (settings.pageMargin) {
+      case PageMargin.narrow:
+        icon = Icons.format_align_left;
+        tooltip = '窄边距（点击切换）';
+      case PageMargin.normal:
+        icon = Icons.format_align_center;
+        tooltip = '正常边距（点击切换）';
+      case PageMargin.wide:
+        icon = Icons.format_align_right;
+        tooltip = '宽边距（点击切换）';
+    }
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon, size: 20),
+      onPressed: () {
+        final PageMargin next;
+        switch (settings.pageMargin) {
+          case PageMargin.narrow:
+            next = PageMargin.normal;
+          case PageMargin.normal:
+            next = PageMargin.wide;
+          case PageMargin.wide:
+            next = PageMargin.narrow;
+        }
+        onChanged(settings.copyWith(pageMargin: next));
+      },
+    );
+  }
+
+  /// 主题三态：system → light → dark → system …
+  Widget _buildThemeToggle(BuildContext context) {
+    final IconData icon;
+    final String tooltip;
+    switch (settings.themeMode) {
+      case AppThemeMode.system:
+        icon = Icons.brightness_auto;
+        tooltip = '跟随系统（点击切换）';
+      case AppThemeMode.light:
+        icon = Icons.light_mode;
+        tooltip = '日间（点击切换）';
+      case AppThemeMode.dark:
+        icon = Icons.dark_mode;
+        tooltip = '夜间（点击切换）';
+    }
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon, size: 20),
+      onPressed: () {
+        final AppThemeMode next;
+        switch (settings.themeMode) {
+          case AppThemeMode.system:
+            next = AppThemeMode.light;
+          case AppThemeMode.light:
+            next = AppThemeMode.dark;
+          case AppThemeMode.dark:
+            next = AppThemeMode.system;
+        }
+        onChanged(settings.copyWith(themeMode: next));
+      },
     );
   }
 }
