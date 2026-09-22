@@ -133,19 +133,39 @@ Future<EpubParseResult> parseEpubResult(
   }
 
   // 建立包内路径索引。EPUB 内部一律使用 '/'，但可能出现 './' 前缀或重复斜杠。
-  final Map<String, Uint8List> files = <String, Uint8List>{};
+  //
+  // ⚠️ `PERF-02` ①（内存收敛）：**只建「条目名 → ArchiveFile」索引，绝不预解压字节**。
+  //    archive 3.x 的 `ArchiveFile.content` 本就是**按需解压**（见 `archive_file.dart`
+  //    的 `content` getter：`_content == null` 时才 `decompress()`）。一旦在此对所有条目
+  //    求 `.content`（旧实现 `files[name] = contentOfArchiveFile(f)` 正是如此），就会把整本
+  //    （含图片 / 字体 / CSS）一次性解压并常驻——这正是要消除的。改为按需解压后，
+  //    **非章节资源（图 / 字 / CSS）在结构解析后保持压缩态、不占解压内存**。
+  final Map<String, ArchiveFile> byName = <String, ArchiveFile>{};
   final Map<String, String> lowerIndex = <String, String>{};
   for (final ArchiveFile f in archive.files) {
     if (!f.isFile) continue;
     final String name = normalizeZipPath(f.name);
     if (name.isEmpty) continue;
-    files[name] = contentOfArchiveFile(f);
+    byName[name] = f;
     lowerIndex[name.toLowerCase()] = name;
   }
 
-  /// 供本函数与 [parseToc] 共用的命中逻辑（大小写不敏感 + 百分号三试探）。
-  Uint8List? lookup(String packagePath) =>
-      lookupInFiles(files, lowerIndex, packagePath);
+  /// 供本函数与 [parseToc] 共用的命中逻辑（大小写不敏感 + 百分号三试探）；
+  /// 命中真实条目名后**按需解压**该条目（其余条目保持压缩态）。
+  Uint8List? lookup(String packagePath) {
+    final String? name = resolveEntryName(lowerIndex, packagePath);
+    if (name == null) return null;
+    final ArchiveFile? file = byName[name];
+    if (file == null) return null;
+    return contentOfArchiveFile(file);
+  }
+
+  /// 把包内路径解析成 [ArchiveFile]（**不解压**）——供**惰性**章节读取（`PERF-02` ①）。
+  ArchiveFile? resolveFile(String packagePath) {
+    final String? name = resolveEntryName(lowerIndex, packagePath);
+    if (name == null) return null;
+    return byName[name];
+  }
 
   // 1) container.xml -> OPF 路径
   final Uint8List? containerBytes = lookup('META-INF/container.xml');
@@ -212,7 +232,7 @@ Future<EpubParseResult> parseEpubResult(
   }
 
   // 4) 加密检测（RD-05）：必须在返回任何可读章节之前。
-  _rejectEncryptedEpub(files, lowerIndex, idToHref, idToMediaType);
+  _rejectEncryptedEpub(lookup, idToHref, idToMediaType);
 
   // 5) 目录（RD-01）：无目录时返回空列表，由调用方降级为平坦目录。
   //    目录项类型就是全项目唯一的 Chapter（见 lib/model/chapter.dart）。
@@ -220,6 +240,10 @@ Future<EpubParseResult> parseEpubResult(
       parseToc(opfDoc: opfDoc, opfDir: opfDir, lookup: lookup);
 
   // 6) spine：阅读顺序
+  //
+  //    `PERF-02` ①（正文按需）：对**能仅凭声明判定为文本**的条目（绝大多数 XHTML 章节），
+  //    这里**只构造惰性 `EpubSection`（不解压）**，正文字节推迟到 `content(i)` 才读取；
+  //    仅当声明不足（无 media-type 且扩展名不暴露）时才解压该**单个**条目做字节魔数兜底。
   final List<EpubSection> sections = <EpubSection>[];
   for (final XmlElement itemref in findAllByLocalName(opfDoc, 'itemref')) {
     final String? linear = itemref.getAttribute('linear');
@@ -232,13 +256,26 @@ Future<EpubParseResult> parseEpubResult(
     final String? href = idToHref[idref];
     if (href == null) continue;
 
-    final Uint8List? data = lookup(href);
-    if (data == null) continue; // 资源缺失：优雅跳过，不让整本书解析失败。
+    final ArchiveFile? file = resolveFile(href);
+    if (file == null) continue; // 资源缺失：优雅跳过，不让整本书解析失败。
 
     // 图片 / 字体 / CSS 等资源**不当章节**。
     // media-type 缺失时用扩展名 + 字节魔数兜底（现实里封面图常被塞进 spine 且漏写 media-type）。
-    if (!looksTextual(idToMediaType[idref], href, data)) continue;
-
+    final String? mediaType = idToMediaType[idref];
+    final bool? verdict = textualVerdict(mediaType, href);
+    if (verdict == false) continue; // 明确非文本：不解压直接跳过。
+    if (verdict == true) {
+      // 声明足以判定为文本：惰性入章节，**此刻不解压**（正文留给 `content(i)`）。
+      sections.add(EpubSection.lazy(
+        id: idref,
+        href: href,
+        loadBytes: () => contentOfArchiveFile(file),
+      ));
+      continue;
+    }
+    // 声明不足：必须解压该条目做字节魔数兜底（罕见脏书路径）。
+    final Uint8List data = contentOfArchiveFile(file);
+    if (!looksTextual(mediaType, href, data)) continue;
     sections.add(EpubSection(id: idref, href: href, rawBytes: data));
   }
 
@@ -389,13 +426,11 @@ const Set<String> _fontExtensions = <String>{
 /// 4. 被加密目标是**字体资源**（扩展名，或 manifest 里 media-type 为字体）→ **不算加密**；
 /// 5. 其余情况（非字体目标 + 非字体混淆算法）→ 判为加密，抛 [FormatErrorCode.encryptedEpub]。
 void _rejectEncryptedEpub(
-  Map<String, Uint8List> files,
-  Map<String, String> lowerIndex,
+  Uint8List? Function(String path) lookup,
   Map<String, String> idToHref,
   Map<String, String> idToMediaType,
 ) {
-  final Uint8List? encBytes =
-      lookupInFiles(files, lowerIndex, 'META-INF/encryption.xml');
+  final Uint8List? encBytes = lookup('META-INF/encryption.xml');
   if (encBytes == null) return; // 规则 1：不存在 -> 不加密
 
   final XmlDocument? doc = tryParseXml(decodeText(encBytes));

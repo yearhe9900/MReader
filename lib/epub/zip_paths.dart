@@ -97,15 +97,17 @@ String resolveHref(String baseDir, String href) {
   return p.posix.normalize(joined);
 }
 
-/// 在包内查找资源。依次尝试下列候选（一律**大小写不敏感**）：
+/// 解析 [path] 到**真实条目名**（大小写不敏感 + 百分号三试探）；找不到返回 `null`。
+///
+/// 这是「惰性读取」的关键一步（`PERF-02` ①）：解析器只需建**条目名索引**
+/// （`Map<小写名, 真实名>`，廉价、不解压），真正的字节读取交给调用方**按需**进行——
+/// 从而避免「为了建索引而对整本条目（含图片 / 字体 / CSS）一次性解压并常驻」。
+///
+/// 依次尝试下列候选（一律**大小写不敏感**）：
 /// 1. 归一化后的原路径；
 /// 2. 百分号**解码**后的路径（`%E7%AC%AC` -> 中文，匹配 zip 内是真实中文名的书，`fx02a`）；
 /// 3. 百分号**编码**后的路径（中文 -> `%E7%AC%AC`，匹配 zip 条目名本身即编码的畸形书，`fx02b`）。
-Uint8List? lookupInFiles(
-  Map<String, Uint8List> files,
-  Map<String, String> lowerIndex,
-  String path,
-) {
+String? resolveEntryName(Map<String, String> lowerIndex, String path) {
   final Set<String> candidates = <String>{
     normalizeZipPath(path),
     normalizeZipPath(decodePercentPath(path)),
@@ -113,12 +115,24 @@ Uint8List? lookupInFiles(
   };
   for (final String candidate in candidates) {
     if (candidate.isEmpty) continue;
-    final Uint8List? direct = files[candidate];
-    if (direct != null) return direct;
     final String? byLower = lowerIndex[candidate.toLowerCase()];
-    if (byLower != null) return files[byLower];
+    if (byLower != null) return byLower;
   }
   return null;
+}
+
+/// 在「已持有全部条目字节」的映射里查找资源（保留旧签名，行为与既有逐字一致）。
+///
+/// **新代码优先用 [resolveEntryName] + 按需读取**（见 `epub_parser.dart` 的惰性 `lookup`），
+/// 以免把整本解压结果钉在内存里；本函数供已一次性解压全部条目的调用方使用。
+Uint8List? lookupInFiles(
+  Map<String, Uint8List> files,
+  Map<String, String> lowerIndex,
+  String path,
+) {
+  final String? name = resolveEntryName(lowerIndex, path);
+  if (name == null) return null;
+  return files[name];
 }
 
 /// media-type 缺失时的兜底：需要排除出 spine 的**非文本**资源扩展名。
@@ -139,6 +153,20 @@ const Set<String> _binaryExtensions = <String>{
 /// 现实里（回归 fixture `fx07b`）封面图常被塞进 spine 且漏写 media-type，
 /// 只看 media-type 会把它当正文段落输出。
 bool looksTextual(String? mediaType, String href, Uint8List bytes) {
+  final bool? verdict = textualVerdict(mediaType, href);
+  if (verdict != null) return verdict;
+  return !_looksBinaryByMagic(bytes);
+}
+
+/// **无需字节**的文本性判定（`PERF-02` ①：正文/资源分离）。
+///
+/// 解析器据此在**不解压**条目的前提下决定「是否作为章节收进骨架」：
+/// * 返回 `true` —— 可仅凭声明判定为文本（如 `application/xhtml+xml`，或扩展名非二进制）；
+///   此时应构造**惰性** `EpubSection`，把解压推迟到 `content(i)`；
+/// * 返回 `false` —— 明确非文本（图片 / 音频 / 字体 / CSS / JS）；
+/// * 返回 `null` —— 声明不足（无 media-type 且扩展名不暴露），**必须**再看字节魔数，
+///   由 [looksTextual] 兜底（此路径会解压该**单个**条目，属罕见脏书写法）。
+bool? textualVerdict(String? mediaType, String href) {
   if (mediaType != null && mediaType.isNotEmpty) {
     final String m = mediaType.toLowerCase();
     if (m.startsWith('image/')) return false;
@@ -149,7 +177,8 @@ bool looksTextual(String? mediaType, String href, Uint8List bytes) {
     if (m.contains('javascript')) return false;
     return true;
   }
-  return !_looksBinaryByExtension(href) && !_looksBinaryByMagic(bytes);
+  if (_looksBinaryByExtension(href)) return false;
+  return null; // 扩展名不暴露二进制 -> 无法仅凭名字判定
 }
 
 /// 扩展名兜底：href 以已知二进制扩展名结尾 -> 不是文本。

@@ -59,12 +59,34 @@ class EpubBook {
 }
 
 /// 一个 spine 项（一章）。
+///
+/// 提供两种构造：
+/// * [EpubSection] —— **急切实体**：构造即持有该章 XHTML 的原始字节；
+/// * [EpubSection.lazy] —— **惰性实体**（`PERF-02`）：构造**不**取字节，首次访问
+///   [rawBytes] 时才由 `loadBytes` 回调解码。
+///
+/// 对**消费方而言两者无差别**：一律通过 [rawBytes] getter 读取（类型仍为 [Uint8List]），
+/// 故 `dart_epub_source.dart` / 既有测试**无需改动**。对解析器而言，惰性实体让「正文
+/// 字节只在 `content(i)` 时才读取」成立——结构解析阶段只建章节骨架、不驻留解压结果。
 class EpubSection {
-  const EpubSection({
+  /// 急切实体：直接持有原始字节（构造即解码）。
+  EpubSection({
     required this.id,
     required this.href,
-    required this.rawBytes,
-  });
+    required Uint8List rawBytes,
+  })  : _eagerBytes = rawBytes,
+        _loader = null;
+
+  /// 惰性实体（`PERF-02`）：构造**不**取字节，首次访问 [rawBytes] 时才调用 [loadBytes]。
+  ///
+  /// [loadBytes] 通常闭包捕获包内的 `ArchiveFile`——构造后**不驻留解压结果**
+  /// （archive 3.x 的 `ArchiveFile.content` 本身按需解压），非章节资源据此保持压缩态。
+  EpubSection.lazy({
+    required this.id,
+    required this.href,
+    required Uint8List Function() loadBytes,
+  })  : _eagerBytes = null,
+        _loader = loadBytes;
 
   /// OPF manifest 中的 id，便于调试与定位。
   final String id;
@@ -72,6 +94,13 @@ class EpubSection {
   /// 归一化后的包内路径，例如 `OEBPS/text/ch1.xhtml`。
   final String href;
 
-  /// 该章 XHTML 的原始字节（尚未解码）。按需解码是「不一次性解析整本书」的关键。
-  final Uint8List rawBytes;
+  final Uint8List? _eagerBytes;
+  final Uint8List Function()? _loader;
+  Uint8List? _cached;
+
+  /// 该章 XHTML 的原始字节（尚未解码）。
+  ///
+  /// 惰性实体在**首次访问**时才解码，并缓存结果（后续访问返回同一实例）。
+  /// 「按需解码」是「不一次性解析整本书」的关键。
+  Uint8List get rawBytes => _cached ??= (_eagerBytes ?? _loader!());
 }
