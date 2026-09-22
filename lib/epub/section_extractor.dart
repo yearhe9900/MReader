@@ -118,8 +118,15 @@ void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir)
     final String tag = child.localName?.toLowerCase() ?? '';
     if (_skipTags.contains(tag)) continue;
 
-    // <br> / <hr>：直接作为段落分割，不再向下遍历。
-    if (tag == 'br' || tag == 'hr') {
+    // <br>：行内换行（`CNT-02`）——写入 '\n' 不切段，诗歌等逐行内容
+    // 保持「行距」而非「段间距」。'\n' 是代码写入的，不受 Text 节点
+    // 空白折叠影响；_flush 的 trim 会自然去掉段首段尾换行。
+    if (tag == 'br') {
+      buffer.write('\n');
+      continue;
+    }
+    // <hr>：段落分割（保持既有语义）。
+    if (tag == 'hr') {
       _flush(buffer, out);
       continue;
     }
