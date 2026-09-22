@@ -19,7 +19,12 @@
 //     时，才用 `initialScrollOffset` 精确落回（否则首帧总高不足，jump 会被 clamp 到错处）；
 //   · **进度保存时机 3 个**：滚动停止 / 切章（含目录跳转、恢复落定）/ `dispose()`；
 //   · **`RD-03`**：AppBar 标题取 `BookRecord.title`、副标题为「第N章 · X%」，不出现 implId 诊断；
-//   · **`NAV-01`**：AppBar 目录按钮 → 底部 [TocSheet]，当前章高亮、点击跳章。
+//   · **`NAV-01`**：AppBar 目录按钮 → 底部 [TocSheet]，当前章高亮、点击跳章；
+//   · **`CNT-04c` 链接跳转与返回**：点正文链接（`link_navigator` 解析 href）→
+//     章内锚点 / 跨文件跳章（+ 章内锚点），跳前 [ScrollAnchor.capture] 压入
+//     [LinkBackStack]；栈非空显示浮动「返回」按钮，弹栈恢复原位置。
+//     段落级精确定位：目标段落懒挂 `GlobalKey`，恢复迭代里优先按段落 box
+//     对齐视口顶（未构建时回落「章内相对位置」估算）。目标不存在一律静默忽略。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider / Freezed）。
 // **不引入任何新依赖**（不使用 `scrollable_positioned_list` 等）。
@@ -39,6 +44,7 @@ import '../typography/typeset.dart';
 import 'chapter_cache.dart';
 import 'control_bar.dart';
 import 'image_cache.dart';
+import 'link_navigator.dart';
 import 'progress_store.dart';
 import 'reading_progress.dart';
 import 'toc_sheet.dart';
@@ -139,6 +145,19 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 已消耗的校正帧数。
   int _restoreFrames = 0;
+
+  /// 链接跳转的目标段落下标（`null` = 按章内相对位置定位；`CNT-04c`）。
+  int? _restoreParaIndex;
+
+  /// 目标段落的 `GlobalKey`（懒创建，键 = `'章索引:段落下标'`；`CNT-04c`）。
+  ///
+  /// 只给「要跳过去的那一段」建 key（一本书几百段全挂 key 太重），
+  /// [_buildChapterItem] 渲染时挂到对应段落的 Padding 上，
+  /// [_paragraphPointOffset] 据此精确测量段落顶。
+  final Map<String, GlobalKey> _paraKeys = <String, GlobalKey>{};
+
+  /// 链接返回栈（`CNT-04c` 验收②）：跳转前压入原位置快照，「返回」按钮弹栈恢复。
+  final LinkBackStack _linkStack = LinkBackStack();
 
   @override
   void initState() {
@@ -271,10 +290,14 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   /// 开始一次程序化「滚动到第 [index] 章的 [pos] 位置」（估算 + 校正）。默认恢复路径。
-  void _beginScrollTo(int index, double pos) {
+  ///
+  /// [paraIndex] ≥ 0 时为**段落级目标**（`CNT-04c` 链接跳转）：
+  /// [_restoreStep] 优先把该段落顶对齐视口顶，段落未构建时回落 [pos] 估算。
+  void _beginScrollTo(int index, double pos, {int paraIndex = -1}) {
     final int count = math.max(1, _chapters?.length ?? 1);
     _restoreIndex = index.clamp(0, count - 1);
     _restorePos = pos.clamp(0.0, 1.0).toDouble();
+    _restoreParaIndex = paraIndex >= 0 ? paraIndex : null;
     _restoreFrames = 0;
     _restoring = true;
     WidgetsBinding.instance.addPostFrameCallback((_) => _restoreStep());
@@ -288,7 +311,14 @@ class _ReaderPageState extends State<ReaderPage> {
       return;
     }
     final double maxExtent = controller.position.maxScrollExtent;
-    final double? target = _chapterPointOffset(_restoreIndex, _restorePos);
+    // 段落级目标优先（CNT-04c）：段落 box 精确对齐视口顶；
+    // 未构建（章 item 不在树上）时回落「章内相对位置」估算，后续帧再校正。
+    double? target;
+    final int? paraIndex = _restoreParaIndex;
+    if (paraIndex != null) {
+      target = _paragraphPointOffset(_restoreIndex, paraIndex);
+    }
+    target ??= _chapterPointOffset(_restoreIndex, _restorePos);
     if (target == null) {
       // 目标章尚未布局：按章序比例估算，先把它带进视野，再于后续帧校正。
       final int total = math.max(1, _chapters?.length ?? 1);
@@ -336,6 +366,25 @@ class _ReaderPageState extends State<ReaderPage> {
         viewport.localToGlobal(Offset.zero).dy;
     final double chapterTopContent = chapterTopRelative + controller.offset;
     return chapterTopContent + pos * box.size.height;
+  }
+
+  /// 计算「把第 [chapterIndex] 章第 [paraIndex] 段对齐到视口顶部」所需的
+  /// **内容绝对偏移**（`CNT-04c` 段落级精确定位）。
+  ///
+  /// 段落未构建（章 item 不在树上）时返回 `null`，调用方回落估算路径。
+  /// 段落 key 由 [_followLink] 懒创建、[_buildChapterItem] 挂上。
+  double? _paragraphPointOffset(int chapterIndex, int paraIndex) {
+    final BuildContext? ctx =
+        _paraKeys['$chapterIndex:$paraIndex']?.currentContext;
+    if (ctx == null) return null;
+    final RenderObject? object = ctx.findRenderObject();
+    if (object is! RenderBox || !object.hasSize) return null;
+    final RenderBox? viewport = _viewportBox();
+    final ScrollController? controller = _controller;
+    if (viewport == null || controller == null) return null;
+    final double paraTopRelative = object.localToGlobal(Offset.zero).dy -
+        viewport.localToGlobal(Offset.zero).dy;
+    return paraTopRelative + controller.offset;
   }
 
   /// 探测当前章与章内位置（`RD-04`：章索引 + 章内 0.0~1.0）。
@@ -488,6 +537,115 @@ class _ReaderPageState extends State<ReaderPage> {
     _ensureAutoFill();
   }
 
+  /// 正文链接点击入口（`CNT-04c`）。
+  ///
+  /// 必须是**同步方法 tear-off**（不是闭包）：[InlineParagraph.didUpdateWidget]
+  /// 以 `oldWidget.onLinkTap != widget.onLinkTap` 判等决定是否重建 recognizer，
+  /// tear-off 跨帧相等，避免每次 build 无谓重建手势。
+  void _onLinkTapped(String href) => unawaited(_followLink(href));
+
+  /// 跟随链接 [href]：拆 path/fragment → 找章 → 找段落 → 跳转。
+  ///
+  /// 任一步未命中（章 -1 / 段落 -1）**静默忽略**（`CNT-04c` 验收③），绝不抛异常。
+  Future<void> _followLink(String href) async {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return;
+    final ({String path, String fragment}) parts = splitLinkHref(href);
+
+    // 1) 定位目标章：path 空（章内 `#id`）→ 当前章；否则按 href 匹配。
+    int chapterIndex;
+    if (parts.path.isEmpty) {
+      chapterIndex = _currentIndex;
+    } else {
+      chapterIndex = findChapterIndex(chapters, parts.path);
+      if (chapterIndex < 0) return; // 目标文件不存在：静默忽略。
+    }
+
+    // 2) 定位目标段落：fragment 空（纯跳章）→ 不做段落级定位。
+    int paraIndex = -1;
+    if (parts.fragment.isNotEmpty) {
+      // 跨文件跳转时目标章可能尚未加载：先载入（±1）再扫锚点。
+      if (_cache.peek(chapterIndex) == null) {
+        await _loader?.loadFirstBatch(chapterIndex);
+        if (!mounted) return;
+      }
+      final ChapterContent? content = _cache.peek(chapterIndex);
+      final List<String> paragraphs =
+          content?.paragraphList ?? const <String>[];
+      paraIndex = findParagraphIndex(paragraphs, parts.fragment);
+      if (paraIndex < 0) return; // 目标锚点不存在：静默忽略。
+    }
+
+    if (!mounted) return;
+    await _jumpToLink(chapterIndex, paraIndex);
+  }
+
+  /// 执行链接跳转（`CNT-04c`）：跳前 [ScrollAnchor.capture] 压入 [LinkBackStack]，
+  /// 目标段落懒挂 [GlobalKey]，再走「估算 + 校正」恢复路径做段落级对齐。
+  Future<void> _jumpToLink(int chapterIndex, int paraIndex) async {
+    final ScrollController? controller = _controller;
+    if (controller == null || !controller.hasClients) return;
+    final ChapterAutoLoader? loader = _loader;
+
+    // 跳转前压入原位置快照（返回按钮弹栈恢复；验收②）。
+    final ScrollAnchor? anchor = ScrollAnchor.capture(
+      controller: controller,
+      viewportBox: _viewportBox(),
+      chapterBox: _chapterBoxAt(_currentIndex),
+      chapterIndex: _currentIndex,
+    );
+    if (anchor != null) {
+      _linkStack.push(anchor);
+      setState(() {}); // 让「返回」按钮出现。
+    }
+
+    // 段落级目标：懒创建 key，渲染时挂到对应段落的 Padding 上。
+    if (paraIndex >= 0) {
+      _paraKeys['$chapterIndex:$paraIndex'] = GlobalKey();
+    }
+    // 估算落点（段落大致位置按章内比例估）：目标章未布局时先把它带进视野。
+    final double roughPos =
+        paraIndex >= 0 ? math.min(1.0, (paraIndex + 1) / 12.0) : 0.0;
+
+    // 保存旧位置（此时 _currentIndex / _chapterPos 仍是旧位置）。
+    await _saveProgress();
+    if (!mounted) return;
+    setState(() {
+      _currentIndex = chapterIndex;
+      _chapterPos = roughPos;
+    });
+    // 先把目标章（±1）载入，避免跳到占位块后高度回填引起漂移。
+    await loader?.loadFirstBatch(chapterIndex);
+    if (!mounted) return;
+    _beginScrollTo(chapterIndex, roughPos,
+        paraIndex: paraIndex >= 0 ? paraIndex : -1);
+    _ensureAutoFill();
+  }
+
+  /// 「返回」按钮（`CNT-04c` 验收②）：弹栈恢复到跳转前的位置。
+  ///
+  /// 栈空（弹出 `null`）静默返回，不抛异常。
+  Future<void> _goBack() async {
+    final ScrollAnchor? anchor = _linkStack.pop();
+    if (anchor == null) return;
+    setState(() {}); // 栈可能已空：让「返回」按钮消失。
+    // 保存旧位置（跳转后的位置）。
+    await _saveProgress();
+    if (!mounted) return;
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return;
+    final int target = anchor.chapterIndex.clamp(0, chapters.length - 1);
+    setState(() {
+      _currentIndex = target;
+      _chapterPos = anchor.relativePos;
+    });
+    // 目标章可能已被 LRU 淘汰：先载入（±1）再恢复。
+    await _loader?.loadFirstBatch(target);
+    if (!mounted) return;
+    _beginScrollTo(target, anchor.relativePos);
+    _ensureAutoFill();
+  }
+
   /// 保存当前阅读进度（进度文件 + 回写 `BookRecord` 阅读字段）。
   ///
   /// 失败静默（不影响阅读，下次保存重试）。
@@ -609,6 +767,15 @@ class _ReaderPageState extends State<ReaderPage> {
               canGoNext: _currentIndex < chapters.length - 1,
               onPrevChapter: () => unawaited(_goToChapter(_currentIndex - 1)),
               onNextChapter: () => unawaited(_goToChapter(_currentIndex + 1)),
+            )
+          : null,
+      // CNT-04c 验收②：链接返回栈非空时显示「返回」按钮，弹栈恢复原位置；
+      // 栈空隐藏（普通 Material，玻璃留给 M2a-T04）。
+      floatingActionButton: _linkStack.isNotEmpty
+          ? FloatingActionButton(
+              onPressed: () => unawaited(_goBack()),
+              tooltip: '返回',
+              child: const Icon(Icons.arrow_back),
             )
           : null,
       body: _buildBody(theme),
@@ -779,17 +946,17 @@ class _ReaderPageState extends State<ReaderPage> {
           const SizedBox(height: 12),
           for (int p = 0; p < paragraphs.length; p++)
             Padding(
+              // CNT-04c：链接跳转的目标段落懒挂 key（仅跳转目标段有 key，
+              // 其余段为 null key，不影响渲染），供 _paragraphPointOffset 精确测量。
+              key: _paraKeys['$index:$p'],
               padding: const EdgeInsets.only(bottom: 16),
               // TYP-04：首行缩进 + `<b>`/`<i>` 内联样式（白名单）+ `<img>` 图片（CNT-01）。
-              child: Text.rich(
-                TextSpan(
-                  children: parseContentSpans(
-                    withFirstLineIndent(paragraphs[p]),
-                    bodyStyle,
-                    _resolveImage,
-                  ),
-                ),
+              // CNT-04c：`onLinkTap` 接链接跳转（同步 tear-off，跨帧相等防 recognizer 重建）。
+              child: InlineParagraph(
+                text: withFirstLineIndent(paragraphs[p]),
                 style: bodyStyle,
+                resolveImage: _resolveImage,
+                onLinkTap: _onLinkTapped,
               ),
             ),
         ],
