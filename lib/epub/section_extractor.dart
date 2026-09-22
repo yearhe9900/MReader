@@ -1,6 +1,7 @@
 // XHTML -> 纯文本段落。纯 Dart，不依赖 Flutter。
 //
-// 只做「够用」的块级结构保留：<p> / <div> / <br> / <h1..h6> / <li> 等视为段落边界。
+// 只做「够用」的块级结构保留：<p> / <div> / <h1..h6> / <li> 等视为段落边界；
+// <br> 为行内换行（CNT-02），<table> 按行退化为纯文本（CNT-03）。
 // 图片、CSS、脚注、ruby、SVG 一律优雅跳过，绝不因为脏 HTML 崩掉。
 import 'dart:typed_data';
 
@@ -105,8 +106,17 @@ const Set<String> _preservedInlineTags = <String>{'b', 'i'};
 
 /// 深度优先遍历，遇到块级标签就切段。
 ///
+/// 例外（专用路径，不走通用切段）：`<br>` 行内换行（`CNT-02`）、
+/// `<table>` 按行退化为纯文本（`CNT-03`，见 [_walkTable]）。
 /// [baseDir] 用于把 `<img src="...">` 的相对路径归一化为绝对包内路径。
 void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir) {
+  // 入口节点本身是 <table>（fragment 定位路径可能直接给出表/表后继节点）
+  // 时同样走按行退化，避免锚点定位退回「每单元格一段」的旧切法。
+  if (node is dom.Element && (node.localName?.toLowerCase() ?? '') == 'table') {
+    _flush(buffer, out);
+    _walkTable(node, out, baseDir);
+    return;
+  }
   for (final dom.Node child in node.nodes) {
     if (child is dom.Text) {
       // HTML 规则：空白折叠成单个空格。
@@ -143,6 +153,15 @@ void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir)
       continue; // <img> 是 void 元素，无子节点
     }
 
+    // <table>：按行退化为纯文本（`CNT-03`）——表格前的悬挂文本先成段，
+    // 行的组装（单元格 ' | ' 连接、整行一个段落）全部在 _walkTable 内完成，
+    // 不再走通用块逻辑（那会把每个单元格切成独立段落）。
+    if (tag == 'table') {
+      _flush(buffer, out);
+      _walkTable(child, out, baseDir);
+      continue;
+    }
+
     final bool isBlock = _blockTags.contains(tag);
     if (isBlock) _flush(buffer, out);
 
@@ -162,6 +181,86 @@ void _flush(StringBuffer buffer, List<String> out) {
   buffer.clear();
   if (text.isEmpty) return;
   out.add(text);
+}
+
+/// CNT-03：把 `<table>` 退化为「每个 `<tr>` 一个段落」的纯文本。
+///
+/// - 先把 `<caption>` 退化为表格前的独立段落（内容不丢失）；
+/// - 遍历子树收集所有 `<tr>`：透明穿过 `thead` / `tbody` / `tfoot`，
+///   不进入嵌套表格或单元格（那些随所在单元格递归降级，避免同一内容
+///   既并入单元格又单独成行）；
+/// - 每行的 `td` / `th` 文本各自收集，以 `' | '` 连接，整行只产出一个
+///   段落；整行无内容的空行不产出；
+/// - 单元格内容仍走通用 [_walk]：`<b>` / `<i>` 保留字面标签、`<br>` 变
+///   `'\n'`（单元格内行内换行）、单元格内的嵌套表格递归降级为文本行；
+/// - 产出的是纯文本段落，随渲染自然折行，宽表格不会横向溢出。
+void _walkTable(dom.Element table, List<String> out, String baseDir) {
+  // <caption>：表题/表说明退化为表格前的独立段落，避免内容丢失。
+  for (final dom.Node child in table.nodes) {
+    if (child is dom.Element && child.localName?.toLowerCase() == 'caption') {
+      final List<String> caption = <String>[];
+      final StringBuffer captionBuffer = StringBuffer();
+      _walk(child, caption, captionBuffer, baseDir);
+      _flush(captionBuffer, caption);
+      out.addAll(caption);
+    }
+  }
+
+  final List<dom.Element> rows = <dom.Element>[];
+  _collectTableRows(table, rows);
+  for (final dom.Element tr in rows) {
+    final List<String> cells = <String>[];
+    for (final dom.Element cell in _rowCells(tr)) {
+      final List<String> cellParagraphs = <String>[];
+      final StringBuffer cellBuffer = StringBuffer();
+      _walk(cell, cellParagraphs, cellBuffer, baseDir);
+      _flush(cellBuffer, cellParagraphs);
+      cells.add(cellParagraphs.join('\n'));
+    }
+    // 整行无内容（全空单元格）不产出段落。
+    if (!cells.any((String text) => text.isNotEmpty)) continue;
+    out.add(cells.join(' | ').trim());
+  }
+}
+
+/// 收集 [root]（`<table>`）子树里的所有 `<tr>`（文档序）。
+///
+/// 透明穿过 `thead` / `tbody` / `tfoot` 等包装层；在 `tr` 处停下（行不再
+/// 向内找行），并跳过嵌套 `<table>` 与 `td` / `th`——嵌套内容随所在单元格
+/// 递归处理，避免既并入单元格文本又单独成行的重复。
+void _collectTableRows(dom.Node root, List<dom.Element> rows) {
+  for (final dom.Node child in root.nodes) {
+    if (child is! dom.Element) continue;
+    final String tag = child.localName?.toLowerCase() ?? '';
+    if (tag == 'tr') {
+      rows.add(child);
+      continue;
+    }
+    if (tag == 'table' || tag == 'td' || tag == 'th') continue;
+    _collectTableRows(child, rows);
+  }
+}
+
+/// 收集一行（`<tr>`）内的 `td` / `th` 单元格（文档序）。
+///
+/// 不进入单元格内部找单元格（畸形嵌套忽略），也不进入嵌套 `<table>`
+/// （其内容随所在单元格的 [_walk] 递归降级）。
+List<dom.Element> _rowCells(dom.Element tr) {
+  final List<dom.Element> cells = <dom.Element>[];
+  void visit(dom.Node node) {
+    for (final dom.Node child in node.nodes) {
+      if (child is! dom.Element) continue;
+      final String tag = child.localName?.toLowerCase() ?? '';
+      if (tag == 'td' || tag == 'th') {
+        cells.add(child);
+      } else if (tag != 'table') {
+        visit(child);
+      }
+    }
+  }
+
+  visit(tr);
+  return cells;
 }
 
 /// 章标题及其来源。
