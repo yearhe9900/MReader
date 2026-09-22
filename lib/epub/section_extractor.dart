@@ -1,7 +1,7 @@
 // XHTML -> 纯文本段落。纯 Dart，不依赖 Flutter。
 //
 // 只做「够用」的块级结构保留：<p> / <div> / <h1..h6> / <li> 等视为段落边界；
-// <br> 为行内换行（CNT-02），<table> 按行退化为纯文本（CNT-03）。
+// <br> 为行内换行（CNT-02），<table> 按行退化为纯文本（CNT-03）；链接与锚点写成 NUL 包裹标记（CNT-04a，格式见 [extractSection] 的 dart doc）。
 // 图片、CSS、脚注、ruby、SVG 一律优雅跳过，绝不因为脏 HTML 崩掉。
 import 'dart:typed_data';
 
@@ -45,6 +45,21 @@ const Set<String> _skipTags = <String>{
 ///
 /// [baseDir]：XHTML 文件所在目录的包内路径（如 `OEBPS/text`），用于把
 /// `<img src="...">` 的相对路径归一化为绝对包内路径。为空时 src 原样保留。
+///
+/// ## CNT-04a 标记格式（NUL 包裹，渲染层吞掉、绝不显示到屏幕上）
+///
+/// | 标记 | 含义 |
+/// |---|---|
+/// | `\x00A:<href>\x00文字\x00A\x00` | 链接：归一化后的 href 包住所包文字 |
+/// | `\x00ID:<id>\x00` | 锚点：跳转目标；块级元素的标记位于**段落开头** |
+///
+/// 两类标记可共存于同一段落（脚注返回锚：段首 ID + 段内链接）。
+/// href 归一化口径：`#frag` 原样保留；跨文件与 `<img src>` 同走
+/// [resolveHref]（fragment 单独切出后接回，resolveHref 本身会丢弃 fragment）。
+///
+/// **查询方式（派生扫描 paragraphs 即可，不新增字段）**：
+/// 章内 `#id` 跳转 = `paragraphs.indexWhere((p) => p.contains('\x00ID:$id\x00'))`；
+/// 链接 = 按 `\x00` 切分后奇数段以 `A:` 开头者即 href（闭合标记为 `A`）。
 ExtractedSection extractSection(Uint8List bytes, {String baseDir = ''}) {
   final String? decoded = _tryDecodeText(bytes);
   if (decoded == null) return const ExtractedSection();
@@ -63,6 +78,8 @@ ExtractedSection extractSection(Uint8List bytes, {String baseDir = ''}) {
   final StringBuffer buffer = StringBuffer();
   _walk(body, paragraphs, buffer, baseDir);
   _flush(buffer, paragraphs);
+  // CNT-04a：纯标记段落（块级 id 嵌套块级子元素时产生）接力到相邻段落。
+  _mergeMarkerOnlyParagraphs(paragraphs);
 
   final _ResolvedTitle title = _resolveTitle(body, doc);
 
@@ -70,12 +87,19 @@ ExtractedSection extractSection(Uint8List bytes, {String baseDir = ''}) {
   // 避免「UI 单独渲染的标题」与「正文首段」重复显示同一句话。
   // 若标题其实来自 XHTML 的 `<title>`（正文里没有对应的标题块），
   // 那么首段是**真正的正文**，绝不能删（回归 fixture 覆盖此点）。
-  final List<String> visible = (title.fromHeading &&
-          title.text.isNotEmpty &&
-          paragraphs.isNotEmpty &&
-          paragraphs.first == title.text)
-      ? paragraphs.sublist(1)
-      : paragraphs;
+  // 比较用「剥离标记后的可见文本」（CNT-04a：带 id 的 h1 首段含 ID 标记）。
+  final bool dropFirstTitle = title.fromHeading &&
+      title.text.isNotEmpty &&
+      paragraphs.isNotEmpty &&
+      _visibleText(paragraphs.first) == title.text;
+  final List<String> visible =
+      dropFirstTitle ? paragraphs.sublist(1) : paragraphs;
+  // 首段被剥去时，把它开头的标记接力到新的首段——指向标题的锚点不失效。
+  if (dropFirstTitle && visible.isNotEmpty) {
+    final String markers =
+        _kLeadingMarkers.firstMatch(paragraphs.first)?.group(0) ?? '';
+    if (markers.isNotEmpty) visible[0] = markers + visible[0];
+  }
 
   return ExtractedSection(title: title.text, paragraphs: visible);
 }
@@ -101,7 +125,8 @@ dom.Document? _tryParseHtml(String source) {
 /// 内联标签白名单：保留为段落文本里的 HTML 标签，供 `typeset.dart` 的
 /// `parseInlineStyles` 解析为 `TextSpan`（`TYP-04` `<b>` / `<i>` 支持）。
 ///
-/// 其它内联标签（`<span>` / `<a>` / `<em>` 等）的文本内容正常保留，但标签本身剥掉。
+/// 其它内联标签（`<span>` / `<em>` 等）的文本内容正常保留，但标签本身剥掉；
+/// `<a>` 特殊（CNT-04a）：带 href 时写成 `\x00A:…\x00` 链接标记，无 href 只留文字。
 const Set<String> _preservedInlineTags = <String>{'b', 'i'};
 
 /// 深度优先遍历，遇到块级标签就切段。
@@ -165,11 +190,25 @@ void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir)
     final bool isBlock = _blockTags.contains(tag);
     if (isBlock) _flush(buffer, out);
 
+    // CNT-04a：id / name 锚点标记。块级 flush 之后写入 → 标记位于段落**开头**
+    // （「跳到 #id」= 找含该标记的段落滚过去）；内联元素（如 `<a id>`）则落在
+    // 当前缓冲位置。与同段落内的链接标记可共存（脚注返回锚的常见组合）。
+    final String? anchorId = _anchorIdOf(child);
+    if (anchorId != null) buffer.write('\x00ID:$anchorId\x00');
+
+    // CNT-04a：`<a href>` 链接标记——归一化后的 href 包住所包文字。
+    // 无 href 的 `<a>`（纯锚点 / 纯文字）不产生链接标记，只保留文字。
+    final String? linkHref =
+        tag == 'a' ? _normalizeLinkHref(baseDir, child.attributes['href']) : null;
+    if (linkHref != null) buffer.write('\x00A:$linkHref\x00');
+
     // 保留白名单内联标签（`<b>` / `<i>`），写成字面 HTML 供渲染层解析。
     final bool preserve = _preservedInlineTags.contains(tag);
     if (preserve) buffer.write('<$tag>');
     _walk(child, out, buffer, baseDir);
     if (preserve) buffer.write('</$tag>');
+
+    if (linkHref != null) buffer.write('\x00A\x00');
 
     if (isBlock) _flush(buffer, out);
   }
@@ -181,6 +220,70 @@ void _flush(StringBuffer buffer, List<String> out) {
   buffer.clear();
   if (text.isEmpty) return;
   out.add(text);
+}
+
+// ---------------------------------------------------------------------------
+// CNT-04a：链接与锚点标记
+// ---------------------------------------------------------------------------
+
+/// 段落里成对的 NUL 标记（`\x00…\x00`）。
+final RegExp _kAnyMarkerPair = RegExp(r'\x00[^\x00]*\x00');
+
+/// 段落**开头**连续的 NUL 标记（用于标题剥离时把锚点接力到下一段）。
+final RegExp _kLeadingMarkers = RegExp(r'^(?:\x00[^\x00]*\x00)+');
+
+/// 剥离全部 NUL 标记后的可见文本（渲染层吞标记，口径与之一致）。
+String _visibleText(String paragraph) =>
+    paragraph.replaceAll(_kAnyMarkerPair, '').replaceAll('\x00', '').trim();
+
+/// 元素的锚点 id：优先 `id` 属性；`<a>` 兼容旧式 `name`（脚注常用）。
+String? _anchorIdOf(dom.Element element) {
+  final String? id = element.attributes['id'];
+  if (id != null && id.trim().isNotEmpty) return id.trim();
+  final String tag = element.localName?.toLowerCase() ?? '';
+  if (tag == 'a') {
+    final String? name = element.attributes['name'];
+    if (name != null && name.trim().isNotEmpty) return name.trim();
+  }
+  return null;
+}
+
+/// 归一化 `<a href>`：纯 fragment（`#fn1`）原样；跨文件路径走 [resolveHref]
+/// （与 `<img src>` 同一手法），fragment 单独切出后接回（resolveHref 会丢弃它）。
+///
+/// 返回 `null` 表示不产生链接标记（无 href / 空白 href）。
+String? _normalizeLinkHref(String baseDir, String? raw) {
+  if (raw == null) return null;
+  final String href = raw.trim();
+  if (href.isEmpty) return null;
+  final int hash = href.indexOf('#');
+  if (hash == 0) return href; // 纯 `#fragment`：保持原样
+  final String pathPart = hash > 0 ? href.substring(0, hash) : href;
+  final String fragment = hash > 0 ? href.substring(hash) : '';
+  if (pathPart.trim().isEmpty) return href; // 防御畸形 ` #x`
+  return resolveHref(baseDir, pathPart) + fragment;
+}
+
+/// CNT-04a：把「纯标记段落」（只有 ID/链接标记、无可见文字）并入相邻段落。
+///
+/// 块级带 id 的元素嵌套块级子元素时（`<aside id="fn"><p>…</p></aside>`），
+/// ID 标记会先被 flush 成独立的「纯标记段」——渲染层吞掉标记后就是空白段。
+/// 这里把它接力到**下一段**开头（锚点语义 = 下一段内容的位置）；
+/// 没有下一段则挂到上一段末尾；整章皆空则丢弃。
+void _mergeMarkerOnlyParagraphs(List<String> paragraphs) {
+  for (int i = 0; i < paragraphs.length;) {
+    if (_visibleText(paragraphs[i]).isNotEmpty) {
+      i++;
+      continue;
+    }
+    final String markers = paragraphs.removeAt(i);
+    if (i < paragraphs.length) {
+      paragraphs[i] = markers + paragraphs[i];
+    } else if (paragraphs.isNotEmpty) {
+      paragraphs[paragraphs.length - 1] += markers;
+    }
+    // 空列表 / 仅此一段：丢弃（无可见内容，且渲染层会吞掉标记）。
+  }
 }
 
 /// CNT-03：把 `<table>` 退化为「每个 `<tr>` 一个段落」的纯文本。
@@ -347,6 +450,7 @@ List<String> extractParagraphsFromFragment(
   final StringBuffer wholeBuffer = StringBuffer();
   _walk(body, whole, wholeBuffer, baseDir);
   _flush(wholeBuffer, whole);
+  _mergeMarkerOnlyParagraphs(whole);
   if (needle.isEmpty) return whole;
 
   final dom.Element? anchor = _findAnchor(body, needle);
@@ -360,6 +464,7 @@ List<String> extractParagraphsFromFragment(
     _walk(node, paragraphs, buffer, baseDir);
     _flush(buffer, paragraphs);
   }
+  _mergeMarkerOnlyParagraphs(paragraphs);
   return paragraphs;
 }
 

@@ -37,10 +37,10 @@
       "脏特征": "zip 条目名本身就是百分号编码（href 也是）",
       "预期书名": "百分号zip内文件名",
       "预期章节(href)": [
-        "OEBPS/%E7%AC%AC%E4%B8%80%E7%AB%A0.xhtml"
+        "OEBPS/第一章.xhtml"
       ],
       "预期每章文本": {
-        "OEBPS/%E7%AC%AC%E4%B8%80%E7%AB%A0.xhtml": [
+        "OEBPS/第一章.xhtml": [
           "第一章",
           "zip 内的文件名本身就是 %E7%AC%AC…。"
         ]

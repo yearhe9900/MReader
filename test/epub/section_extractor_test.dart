@@ -1,4 +1,5 @@
-// `section_extractor` 定向断言：`CNT-02` 行内换行 + `CNT-03` 表格按行退化。
+// `section_extractor` 定向断言：`CNT-02` 行内换行 + `CNT-03` 表格按行退化
+// + `CNT-04a` 链接 / 锚点标记。
 //
 // 背景：旧实现把 `<br>` / `<hr>` / 表格标签一并当段落边界——诗歌逐行内容
 // 被切成独立段落（行距变段间距），3×3 表格碎成 9+ 段。现行为：
@@ -133,6 +134,80 @@ void main() {
         '<p>后文。</p>',
       );
       expect(section.paragraphs, <String>['前文。', 'a | b', '后文。']);
+    });
+  });
+
+  group('CNT-04a 链接与锚点标记', () {
+    test('<a href="#fn1"> 包住所包文字写成 A 标记', () {
+      final ExtractedSection section =
+          extractBody('<p>见<a href="#fn1">脚注1</a>。</p>');
+      expect(section.paragraphs, <String>[
+        '见\x00A:#fn1\x00脚注1\x00A\x00。',
+      ]);
+    });
+
+    test('跨文件 href 走 resolveHref 归一化并保留 fragment（baseDir 空）', () {
+      final ExtractedSection section =
+          extractBody('<a href="text/ch2.xhtml#sec1">第二章</a>');
+      expect(section.paragraphs, <String>[
+        '\x00A:text/ch2.xhtml#sec1\x00第二章\x00A\x00',
+      ]);
+    });
+
+    test('跨文件 href 按 baseDir 归一化（与 <img src> 同一手法）', () {
+      final ExtractedSection section = extractSection(
+        Uint8List.fromList(
+            utf8.encode('<html><body><a href="../text/ch2.xhtml#s">x</a>'
+                '</body></html>')),
+        baseDir: 'OEBPS/ch',
+      );
+      expect(section.paragraphs, <String>[
+        '\x00A:OEBPS/text/ch2.xhtml#s\x00x\x00A\x00',
+      ]);
+    });
+
+    test('<a> 无 href：只保留文字；name 作为锚点写 ID 标记', () {
+      final ExtractedSection section =
+          extractBody('<p><a name="fn1">脚注</a></p>');
+      expect(section.paragraphs, <String>['\x00ID:fn1\x00脚注']);
+      // 无 href → 不产生链接标记。
+      expect(section.paragraphs.single.contains('\x00A:'), isFalse);
+    });
+
+    test('块级 id 写在段落开头', () {
+      final ExtractedSection section = extractBody('<p id="sec1">正文</p>');
+      expect(section.paragraphs, <String>['\x00ID:sec1\x00正文']);
+    });
+
+    test('ID 与链接标记共存于同一段落（脚注返回锚）', () {
+      final ExtractedSection section = extractBody(
+          '<aside id="fn1"><p>脚注内容 <a href="#ref1">↩</a></p></aside>');
+      expect(section.paragraphs, <String>[
+        '\x00ID:fn1\x00脚注内容 \x00A:#ref1\x00↩\x00A\x00',
+      ]);
+    });
+
+    test('标题剥离时 ID 标记接力到下一段（指向标题的锚点不失效）', () {
+      final ExtractedSection section =
+          extractBody('<h1 id="top">章一</h1><p>后文</p>');
+      expect(section.title, '章一');
+      expect(section.paragraphs, <String>['\x00ID:top\x00后文']);
+    });
+
+    test('纯锚点空元素不产出空白段落：标记挂到相邻段落', () {
+      final ExtractedSection trailing =
+          extractBody('<p>前</p><div id="empty"></div>');
+      expect(trailing.paragraphs, <String>['前\x00ID:empty\x00']);
+
+      final ExtractedSection alone = extractBody('<div id="x"></div>');
+      expect(alone.paragraphs, isEmpty);
+    });
+
+    test('无链接无 id 的段落完全不受影响（不回归）', () {
+      final ExtractedSection section =
+          extractBody('<p>普通段一。</p><p>普通段二。</p>');
+      expect(section.paragraphs, <String>['普通段一。', '普通段二。']);
+      expect(section.paragraphs.any((String p) => p.contains('\x00')), isFalse);
     });
   });
 }
