@@ -28,6 +28,10 @@
 - M1-T07 EpubSection 增惰性构造 `.lazy`（`rawBytes` 保留为 getter，消费方零改动）；spine 文本性判定改由 `textualVerdict` 仅凭声明完成 `e16da96`
 - M1-T07 收尾：封面候选 `readEntry` 改为按 href **现查**（不再急切解压、常驻全部候选字节）；`dart_epub_source.dart` 顶部「整个对象可直接丢进 `compute()`」的错误注释修正为「`parseEpubStructure` 纯数据跨 isolate，`loadBytes` / `readEntry` 闭包在本 isolate 绑定」
 
+### 修复
+
+- 书架「首点无响应」：开书守卫收窄到 push 前准备阶段（关书后首点不再被吞）+ 准备期卡片 loading 覆盖层 + 书卡 GestureDetector 改 InkWell 按压反馈 `3e750b8`
+
 ## 2026-09-21
 
 ### 新增
