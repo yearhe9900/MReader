@@ -22,6 +22,13 @@
 - M1-T09 交付验收：§17 逐条判定全 PASS；全量 `flutter test` 279 passed / 1 failed（#4 cover_store_test 不阻塞）；性能基线 §7 归档（供 M2a-T06 before 对照）
 - M2a-T01 内嵌图片渲染（`CNT-01`）：`BookSource.readResource(href)` 接口（EPUB 按需解压 / TXT 返回 null）+ `section_extractor` 保留 `<img>` 标记（src 归一化为绝对包内路径）+ `parseContentSpans` 解析为 `WidgetSpan`（异步加载 / 失败占位不崩）+ 阅读页接入
 - M2a-T01 图片有界缓存（`NF-M5` / `PERF-02`）：`lib/reader/image_cache.dart` `ImageCacheLRU`（key=href，value=原始字节，上界 50MB，LRU 淘汰，`dispose` 清空）；阅读页 `_resolveImage` 经缓存读取，图片字节不常驻全书
+- M2a-T02 `<br>` 行内换行（`CNT-02`）：正文抽取保留 `<br>` 为行内换行，fixture baseline 同步 `55bbb27`
+- M2a-T02 表格按行退化渲染（`CNT-03`）：`<table>` 逐行提取单元格文本退化为普通段落，脏表不崩 `16e8508`
+- M2a-T02 链接与锚点标记（`CNT-04a`）：正文抽取保留 `<a href>` 与锚点 ID（NUL 包裹标记，渲染不上屏），14 本 fixture 重生成对齐 `b7ff930`
+- M2a-T02 链接可点（`CNT-04b`）：typeset 解析链接标记为可点下划线 span（onLinkTap，null 时仅下划线）`97d1919`
+- M2a-T02 链接导航器（`CNT-04c-1`）：splitLinkHref / findChapterIndex / findParagraphIndex / LinkBackStack 纯逻辑 + 单测 `7d004db`
+- M2a-T02 阅读页链接跳转（`CNT-04c-2`）：点链接章内段落级 / 跨章定位，浮动「返回」按钮经 LinkBackStack 恢复原位置 `c9f1e6f`
+- M2a-T02 `linear="no"` 可见并标注（`CNT-05`）：spine 非主线项保留进章节总数并标「（非主线）」，资源过滤照常 `3c16acf`
 
 ### 变更
 

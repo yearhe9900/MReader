@@ -416,4 +416,25 @@
 | 阅读页接入 | 缓存 → readResource 二级读取 | `lib/reader/reader_page.dart` | `_resolveImage`：先查 `_imageCache`，miss 再 `source.readResource` 并入库；`dispose` 时释放缓存；段落渲染 `parseInlineStyles` → `parseContentSpans` |
 | 测试 | 验收 | `test/reader/inline_image_test.dart`（12 条） | `parseContentSpans` 5 条（WidgetSpan 产出 / null 占位 / `<b>`+`<img>` 混合 / 连续图）+ `ImageCacheLRU` 7 条（LRU 提升 / 超限淘汰 / 更新计数 / dispose / 50MB 上界） |
 
+### 2.15 M2a-T02 — `<br>` / 表格 / 脚注 / `linear="no"` 四项内容语义
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2a-T02（PRD `CNT-02` / `CNT-03` / `CNT-04` / `CNT-05`） |
+| 提交 | `55bbb27`（CNT-02）→ `16e8508`（CNT-03）→ `b7ff930`（CNT-04a）→ `97d1919`（CNT-04b）→ `7d004db`（CNT-04c-1）→ `c9f1e6f`（CNT-04c-2）→ `3c16acf`（CNT-05）；随批修复书架首点无响应 `3e750b8`、CHANGELOG 单独提交 `a87ab80` |
+| 日期 | 2026-09-22 |
+| 一句话目标 | 四项内容语义一次接好：`<br>` 与表格进正文、链接可跳可返回原位置、`linear="no"` 可见不丢 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| `<br>` 行内换行（`CNT-02`） | 正文抽取不丢换行 | `lib/epub/section_extractor.dart` | 抽取遇 `<br>` 写行内换行进段落文本；`baseline.json` / `make_fixtures.py` 预期同步 |
+| 表格按行退化（`CNT-03`） | 脏表格不崩、内容可读 | 同上 | `<table>` 逐 `tr` 取单元格文本、按行退化为普通段落——**不引表格渲染控件**，退化即交付 |
+| 链接与锚点标记（`CNT-04a`） | 抽取层只打标记、不碰 UI | 同上 | `<a href>` → `\x00A:href\x00文字\x00A\x00`、锚点 → `\x00ID:id\x00`（NUL 包裹：正常文本不会出现，渲染时吞掉不上屏）；14 本 fixture 重生成对齐 |
+| 链接可点（`CNT-04b`） | 标记 → 可点链接 | `lib/typography/typeset.dart` | `InlineParagraph` 解析 A 标记：`onLinkTap` 为 null 时仅下划线不可点；`didUpdateWidget` 以 `oldWidget.onLinkTap != widget.onLinkTap` 判等——**方法 tear-off 跨帧相等**，故阅读页传同步 tear-off `_onLinkTapped` 而非闭包，防 recognizer 无谓重建 |
+| 链接导航器（`CNT-04c-1`） | 跳转纯逻辑可单测 | `lib/reader/link_navigator.dart` | `splitLinkHref`（record 拆 path/fragment）、`findChapterIndex`（匹配键 = 百分号解码 + 小写，找不到 −1）、`findParagraphIndex`（扫 `\x00ID:id\x00`，先原样再解码回退，找不到 −1）、`LinkBackStack`（ScrollAnchor LIFO，空栈 pop 返 null 不抛） |
+| 阅读页跳转与返回（`CNT-04c-2`） | 点链接段落级定位 + 一键回原位 | `lib/reader/reader_page.dart` | path 空 → 章内段落定位；path 非空 → 跳章 + 章内定位；任一步找不到**静默忽略绝不抛**；跳转前 `ScrollAnchor.capture` 压 `LinkBackStack`，右下角浮动返回按钮（栈空隐藏）`pop+restore`；段落 `GlobalKey` 懒创建、测段落 box 顶换算内容绝对偏移。坑：断言「恰好 push 一次」须 `find.byType(ReaderPage, skipOffstage: false)`；点链接字形用 `RenderParagraph.getBoxesForSelection` 取盒中心 |
+| `linear="no"` 可见并标注（`CNT-05`） | 非主线内容不丢、可辨识 | `lib/epub/epub_parser.dart`、`lib/model/epub_book.dart`、`lib/format/dart_epub_source.dart` | `EpubSectionRef` / `EpubSection` 增 `linear` 字段（默认 true），`linear="no"` 保留进 sections 标 false（**资源过滤 media-type/扩展名/魔数照常**）；`chapters()` 中 toc 已覆盖的标题追加「（非主线）」、未覆盖的按平坦目录补入（同样标注）；`_bindBook` 绑定层透传 linear；fx06 契约随新行为同步（预期章节 2→3、ch2 保留） |
+| 书架首点无响应修复（随批 bugfix） | 关书后首点不再被吞 | `lib/ui/shelf_page.dart`、`lib/ui/book_card.dart` | `_opening` 守卫收窄到 push 前准备阶段（push 一发起即释放；关书刷新走 `route.popped.then` 不占守卫）+ 准备期 per-card loading 覆盖层 + `Card(clipBehavior: Clip.antiAlias)>InkWell`（封面/占位走 `Ink.image` / `Ink` 画在 Card 的 Material 上，ripple 不被不透明内容盖住）`3e750b8` |
+| FakeAsync 铁律（本批两次实证） | widget 测试可信 | `test/reader/link_navigation_test.dart`、`test/ui/shelf_page_test.dart` | testWidgets 体内禁 await 真异步 IO（FakeAsync 区永久挂死），统一 `_settle`（`runAsync`+`pump` 交替）；路由 pop 过渡 **ticker 首拍才起算**，单帧大 pump 推不完 → 12×50ms 小帧推进，否则 modal barrier 吞点击 |
+
 
