@@ -134,3 +134,18 @@ BENCH[after]  big_bodies.epub    chapters=100 iters=3 minMs=4758 medianMs=4833 r
   `parseEpubStructure`（纯数据）+ `IsolateRunner`（`compute()` 薄封装）两块底座。
 - `tool/*` 与 `test/perf/*` 用纯 Dart `test()`（**非** `testWidgets`）：本项目已两次实证
   `testWidgets` 体内 `await` 真异步 IO 会挂死（FakeAsync 不排空微任务队列），故不在此复现。
+
+## 7. M1 交付基线（`M1-T09`，供 M2a-T06 `PERF-01` before 对照）
+
+| 样本 | 首屏时间（min / median） | 首屏后 RSS | 读完 N 章后 RSS | 说明 |
+|---|---|---|---|---|
+| `big_320.epub`（320 章 + 80MB 图） | 45 / 60 ms | 429.2 MB | 429.8 MB（读 50 章，+0.6） | 图片不常驻，稳态不随读章数增长 |
+| `big_bodies.epub`（100 章 ≈48MB 正文） | 4758 / 4833 ms | 427.3 MB | 426.8 MB（读 100 章，−0.5） | 正文非驻留，读完全书 RSS 不回升 |
+| `big_20mb.txt`（800 章 ≈20MB） | 403 / 529 ms | 364.3 MB | — | TXT 路径本次未改 |
+| `long_chapter.epub`（单章 12 万字符） | 24 / 28 ms | 414.1 MB | — | 逐段渲染，无单段整章 |
+
+> **M2a-T06（`PERF-01` compute 化）的 before 对照**：上表即为 before 数字。
+> 预期 after：`big_320.epub` 首屏时间下降（解析移出主 isolate，主线程不冻）；
+> RSS 应持平或略降（结构在后台 isolate 解析，主 isolate 只收到纯数据）。
+
+**全量测试**：`flutter test` → **279 passed，1 failed**（`cover_store_test` #4：`dart:ui` 缩略图，已知不阻塞）。
