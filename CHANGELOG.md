@@ -7,6 +7,15 @@
 
 ### 新增
 
+- M1-T04 阅读进度模型：ReadingProgress + 设备本地版面快照 localHint（不参与跨设备同步）`d082c6a`
+- M1-T04 进度持久化：ProgressStore 每本一文件 + bookId 白名单防路径穿越 `d082c6a`
+- M1-T04 阅读页：章节连续滚动（全章塞一个 ListView）+ GlobalKey 探测当前章 / 章内位置 `f196d39`
+- M1-T04 进度恢复：同版面 initialScrollOffset 精确落回，否则按章序估算 + 校正 ≤3 帧 `f196d39`
+- M1-T04 目录与副标题：TocSheet 高亮跳章（NAV-01）+「第N章 · X%」去诊断（RD-03）`f196d39`
+- M1-T03 书库数据层：BookRecord + BookIndex 逐条降级索引（LIB-02/03）`5bd1d8b`
+- M1-T03 导入管道：ImportService SHA-256 前 16 位判重 + 副本 + 封面物化（LIB-02/05）`f797913`
+- M1-T03 书库仓库：LibraryRepository 判重 / 删除连带清理 / 孤儿 GC（LIB-01/05/06）`f797913`
+- M1-T03 书架 UI：ShelfPage 网格 + 导入 + 长按删除二次确认（LIB-01~06）`60c5171`
 - M1-T05 元数据模型：BookMeta 落 lib/model/book_meta.dart（唯一）+ MetaOrigin/CoverRef/intro/auto `c8d06ca`
 - M1-T05 EPUB 元数据：OpfView 四来源封面链（命中即停）+ 多作者整体保留（META-02/03）`f168d1d`
 - M1-T05 TXT 元数据：文件名规则链 + 清洗 + 精确化兜底（META-04）`f168d1d`
@@ -53,6 +62,7 @@
 
 ### 修复
 
+- M1-T04 测试：`shelf_page_test` / `widget_test` 的 FakeAsync 挂死——widget 内真 IO 不推进 + 载入动画致 `pumpAndSettle` 超时，改 `runAsync` + `pump` 交替助手 `f196d39`
 - M1-T08 冷启动：着色器预热与 `settings.load()` 改 `Future.wait` 并行（消除串行叠加的预编译延迟）
 - M1-T02B dispose 竞态：两源释放后/竞态中返回空结果、不抛（RUST-01）`4c1c849`
 - Android 构建：插件模块 compileSdk 统一提升到 36 `11c5198`

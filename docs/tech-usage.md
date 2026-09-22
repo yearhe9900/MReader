@@ -36,6 +36,8 @@
 | `JsonStore` 读写与四态回退 | 自研（`jsonEncode` / `jsonDecode`） | ok → 返回；missing 且有 `.bak` → 回退并**自愈**；missing 无 `.bak` → `null`；corrupt → 先另存 `.corrupt`（不静默丢弃）再回退 | M1-T01 | `lib/storage/json_store.dart` |
 | `FileSecureStore` 凭据降级实现 | 自研（复用 `JsonStore`） | 明文 JSON 承载凭据，`isSecure = false` + 中文 `securityNotice` 供 UI 提示（对齐 `DATA-02` ③）；**不写任何 print**、异常不带凭据值 | M1-T01 | `lib/platform/secure_store_io.dart` |
 | `CoverStore` 封面字节存储 | 自研（复用 `AtomicFile`） | 封面字节落 `covers/`（按 `bookId` 命名）；同目录另生成 `.thumb.png` 缩略图（`dart:ui` 仅能编码 PNG）；孤儿 GC 连带 `.tmp` / `.bak` / `.corrupt` 兄弟文件与 `.thumb.` 一并清理 | M1-T05 | `lib/meta/cover_store.dart` |
+| `BookIndex` / `ImportService` 书库索引与导入 | 自研（复用 `JsonStore` / `AtomicFile`；`crypto` 3.0.6） | `library/index.json` **逐条降级**（单条损坏跳过）；导入管道用 SHA-256 前 16 位内容摘要判重后复制副本 | M1-T03 | `lib/library/book_index.dart`、`lib/library/import_service.dart` |
+| `ProgressStore` 阅读进度存储 | 自研（复用 `JsonStore` / `AtomicFile`） | **每本书记一个** `progress/<bookId>.json`（bookId 白名单防路径穿越）；bookId 直接作文件名，删书连带清理 | M1-T04 | `lib/reader/progress_store.dart`、`lib/reader/reading_progress.dart` |
 | 不引 `shared_preferences` / `sqflite` | — | 自研 JSON + 原子写入已够用（PRD §15.4） | M1-T01 | — |
 
 ### 1.4 平台能力
@@ -305,4 +307,50 @@
 | 缓存上限的**分工**（`META-05` ④） | 说清「谁解码、谁缓存、上限谁兜」，不靠人猜 | `lib/meta/cover_store.dart`（只返字节）/ Flutter 内置 `ImageCache` / `lib/meta/synth_cover.dart`（自建 LRU） | **真实封面**：`CoverStore` 只返**字节**、**不做解码缓存**；UI 走 `Image.memory`，解码去重与上限由 Flutter 内置 `ImageCache`（默认 100 MB / 1000 条）承担——这正是 `META-05` ④「书架滚 20 本不重复解码同一封面」的落点。**合成封面无宿主缓存可依附**，是全工程唯一自建位图缓存，故**必须自带上限** |
 | 封面引用序列化唯一出口（`META-06 ⑤`） | 全工程搜不到 `'file'`/`'synthetic'`/`'none'` | `lib/meta/cover_ref_codec.dart` | 唯一出现魔法串处，由 round-trip 测试锁死；`PendingCover` 序列化**直接抛 `StateError`**（持久化不变式） |
 | 先探针后断言 | 期望值不凭记忆 | `.scratch/probe_meta.dart`（已删） | 实测四来源各一例 / 优先级命中即停 / 非图片候选跳过 / 多作者 / 文件名兜底 / 魔数；再把实测值写进 `test/meta/*` |
+
+### 2.10 M1-T03 — 书库索引 / 导入 / 判重 / 删除连带清理
+
+| 项 | 值 |
+|---|---|
+| 任务 | M1-T03（PRD `LIB-01~06`；架构 §N） |
+| 提交 | `5bd1d8b`（数据层）→ `f797913`（导入 + 仓库）→ `60c5171`（书架 UI）→ `7b58134` `023ca78`（进度表） |
+| 日期 | 2026-09-21 |
+| 一句话目标 | 立起「内容摘要判重 + 索引逐条降级 + 删除连带清理」的书库后端，书架 UI 只依赖 `LibraryRepository` |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| 内容摘要 = SHA-256 hex 前 16 位（`LIB-05`） | 判重键（相同字节 → 相同 bookId） | `lib/library/import_service.dart` | `crypto` 3.0.6（**精确锁定**）；`sha256.convert(bytes).toString().substring(0, 16)`；该 `bookId` 同时是「副本文件名 / `index.json` 主键 / 进度文件名」三处唯一身份 |
+| `BookIndex` **逐条降级**（`LIB-03`） | 单条损坏不崩全库 | `lib/library/book_index.dart` | `load()` 对 JSON 数组逐条 `try-catch` + `item is Map<String,Object?>` 判定，坏条目**跳过**；底层仍走 `JsonStore` 四态回退；索引文件 `library/index.json` |
+| `BookRecord` 纯 Dart 记录（`LIB-02`） | 索引最小可持久化单元 | `lib/library/book_record.dart` | 封面经 `encodeCoverRef` / `decodeCoverRef`（`META-06 ⑤` 唯一出口）；JSON **不含 `PendingCover`**（持久化不变式）；`==` 只比 `bookId`（不按文件名判同书） |
+| 导入管道（`LIB-02` / `LIB-05`） | 一个文件 → 一条记录 | `lib/library/import_service.dart` | 顺序：嗅探格式 → `openBook().load()`（`finally` 保证 dispose）→ 摘要 → 原子写副本 `library/<bookId>.<ext>` → 封面物化（`PendingCover`→`StoredCover`）→ 构造记录；**不写索引**（交仓库），保证「转换」与「入库」职责分离 |
+| 仓库胶水（`LIB-01` / `LIB-05` / `LIB-06`） | UI 唯一后端 | `lib/library/library_repository.dart` | `importFile` 先查 index 判重（命中 → `isNew:false` 不新增；同名不同内容可共存）；`deleteBook` ③ 步：删封面 → 删副本 → 摘索引；`purgeOrphans` 汇总在库 `StoredCover` 文件名后交 `CoverStore.purgeOrphans` |
+| 书架 UI（`LIB-01~06`） | 网格 + 导入 + 删除 | `lib/ui/shelf_page.dart` | `StatefulWidget` + `setState`（**禁** Riverpod / Provider）；`file_picker` `withData:true` 走 bytes（`dart:io` 不进解析链路）；长按弹 `showDialog` **二次确认**；`_opening` 防双击；`_openBook` 不 eager 解析（`d1fc20c`） |
+| 依赖方向（无环） | UI 与后端解耦 | `lib/library/**` → `lib/meta` / `lib/storage` / `lib/platform` / `lib/model` | `import_service` 经分发点 `format/book_registry.dart` 取源，**不经** `book_source.dart` 直连具体实现（§A.1 铁律：实现互不感知） |
+| 测试形态 | 真实 IO + 判重/连带断言 | `test/library/{book_record,book_index,import_service,library_repository}_test.dart`、`test/ui/shelf_page_test.dart` | `Directory.systemTemp.createTempSync` + 逐用例独立目录；断言「同内容二次导入 `isNew=false`、索引仍 1 条」「同名不同内容共存」「删书后副本 + 封面 + 索引三处皆清」「删书连带清进度文件」（M1-T04 追加） |
+
+### 2.11 M1-T04 — 阅读页产品化 / 进度持久化 / 目录
+
+| 项 | 值 |
+|---|---|
+| 任务 | M1-T04（PRD `RD-03` / `RD-04` / `NAV-01`；架构 §N；负责人修订为「章节连续滚动」） |
+| 提交 | `d082c6a`（进度层：模型 + 持久化）→ `f196d39`（阅读页 + 目录 + 接线） |
+| 日期 | 2026-09-21 |
+| 一句话目标 | 章节连续滚动阅读页 + 进度持久化 + 目录；进度模型（含 `localHint`）供 STAT / TTS / SYNC 三方复用 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| **章节连续滚动**（负责人修订，取代原「单章视图」） | 从第 1 章一路滚到最后一章，不切页 | `lib/reader/reader_page.dart` | **全部章节塞进一个 `ListView.builder`**，每章一个 item（`Column`：标题 + 该章全部段落），`itemCount = 章数`，按章懒构建虚拟化；**不引 `scrollable_positioned_list` 等任何新依赖** |
+| **逐段渲染**（`PERF-03`） | 不合成巨型 `Text`（避免一次布局上万个字符） | 同上（`_buildChapterBlock`） | 每段各自成 `Text` 子 widget，**禁 `join('\n\n')` 成一个巨型 `Text`** |
+| 当前章 + 章内位置（`RD-04`） | 「章索引 + 章内 0.0~1.0」在连续滚动下的可靠映射 | 同上（`_detectCurrentChapter`） | 每章块挂 `GlobalKey`；滚动停止时从**上次索引**向两侧 **±4** 探测 `findRenderObject`，取**覆盖视口顶部**的章块（`relTop ≤ 0` 且最大者），`chapterPos = -relTop / 章块高` |
+| 版面签名恢复（`RD-04`「落点误差 ≤ 1 屏」） | 同版面零抖动精确落回，跨版面仍合理 | 同上（`_ensureController` / `_restoreStep`） | 控制器**内容就绪后**才创建：`localHint.matches(...)` 为真 → `ScrollController(initialScrollOffset: hint.scrollOffset)` 精确落回；不一致 / 无 hint → 按章序比例估算 + `addPostFrameCallback` 迭代校正，**≤3 帧**、偏移差 **≤ 1px** 即停 |
+| 进度以 `Chapter.href` 为稳定身份 | 书源重排 / 目录微调时不跳错章 | `lib/reader/reading_progress.dart` | 恢复先按 `chapterHref` 匹配章节，匹配不到退回 `chapterIndex` 并 clamp |
+| `localHint` 设备本地快照（`SYNC-02`） | 绑定字号 / 行距 / 视口尺寸 / 滚动偏移，**不参与跨设备同步** | 同上 | `matches` 容差 0.5 逻辑像素；`hasSameSemantics` **忽略** `localHint`，供同步侧比对语义字段 |
+| 进度持久化（`RD-04`） | 每本书记一个进度文件 | `lib/reader/progress_store.dart` | `<dataDir>/progress/<bookId>.json`；bookId 白名单 `^[A-Za-z0-9_-]+$` 否则 `ArgumentError`；`load` 缺失 / 损坏 / 串档 → `null`；`remove` 幂等清 `.bak` / `.corrupt` / `.tmp`；全部经 `JsonStore` + `AtomicFile` |
+| 保存时机（3 处） | 不丢进度、也不写脏值 | `lib/reader/reader_page.dart` | ① 滚动停止（`ScrollEndNotification`）② 切章（目录跳转 / 恢复落定）③ `dispose`（`unawaited`）；`_restoring` 期间**忽略**保存，避免把校正中途的偏移写回磁盘 |
+| `BookRecord` 回写 + 删除连带 | 书架与阅读页进度一致 | `lib/library/library_repository.dart`、`lib/ui/shelf_page.dart` | 保存进度时 `markRead` 回写 `lastReadAt` / `readProgress`（bookId 不在库中**静默返回**）；删书时连带 `progressStore.remove`（`LIB-06`） |
+| `RD-03` 去诊断信息 | 副标题不泄露 `implId` | `lib/reader/reader_page.dart` | 标题取 `BookRecord.title`（回落到 `BookMeta.title` → 「阅读」）；副标题固定「第N章 · X%」，取代 M0 遗留的「N 章 · `<implId>`」 |
+| 目录 `NAV-01` + 控制条 | 当前章高亮 + 跳章 | `lib/reader/toc_sheet.dart`、`lib/reader/control_bar.dart` | `TocSheet` 用固定 `itemExtent = 56` + `initialScrollOffset` 让当前章滚入可见区（不依赖逐项 `GlobalKey`，后者对懒构建列表不可靠）；`ListTile.selected` 高亮；控制条 = 上/下一章 + 全书进度 + 排版设置（复用 `ReaderSettingsBar`），目录入口**统一在 AppBar** |
+| 测试（`FakeAsync` 铁律） | 让 widget 层测试可信 | `test/reader/reader_page_test.dart`、`test/ui/shelf_page_test.dart`、`test/widget_test.dart` | widget 内部（`initState` / 回调）发起的**真异步 IO 在 FakeAsync 区不会自行推进**，且载入期 `CircularProgressIndicator` 是无限动画 → `pumpAndSettle` **超时挂死**；统一用 `_settle` 助手（`runAsync(Future.delayed)` + `pump` **交替**多轮推进），**不用** `pumpAndSettle` |
+| 纯 Dart 进度模型（可单测 / 可进 isolate） | 复用于 SYNC / TTS / STAT | `lib/reader/reading_progress.dart` | **不 import Flutter、不 import `dart:io`**；`toJson` / `fromJson` **防御式**（非 Map / 缺字段 / 类型错 → `null` 不抛）；`chapterPos` 构造即 clamp `0.0~1.0` |
+
 
