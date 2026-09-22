@@ -6,6 +6,7 @@
 // ⚠️ FakeAsync 铁律：`testWidgets` 测试体跑在 FakeAsync 区，**widget 内部**
 // （`initState` / 回调）发起的真异步 IO 不会自行推进；直接 `pumpAndSettle()` 会超时。
 // 必须用 [_settle]（`runAsync` 让出到真实事件循环 + `pumpAndSettle` 排空+重建）。
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -15,6 +16,7 @@ import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/platform/app_paths.dart';
 import 'package:mreader/reader/progress_store.dart';
+import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_progress.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/shelf_page.dart';
@@ -41,6 +43,10 @@ class _TestAppPaths implements AppPaths {
 Uint8List _txtBytes([String content = '这是正文内容。']) =>
     Uint8List.fromList(content.codeUnits);
 
+/// 合法 UTF-8 的 TXT 字节——**真正要打开**的书必须可解码（回归①②④走完整开书链路）。
+Uint8List _utf8TxtBytes(String content) =>
+    Uint8List.fromList(utf8.encode(content));
+
 /// 让 widget 内发起的**真异步 IO** 完成，并推进若干帧。
 ///
 /// `testWidgets` 的测试体在 FakeAsync 区：`pumpWidget` 触发 `initState` 起的真 IO
@@ -58,6 +64,14 @@ Future<void> _settle(WidgetTester tester, {int rounds = 40}) async {
     await tester.pump(const Duration(milliseconds: 10));
   }
 }
+
+/// 按书名找到书卡（书名文本的最近 [BookCard] 祖先）。
+Finder _cardOf(String title) =>
+    find.ancestor(of: find.text(title), matching: find.byType(BookCard));
+
+/// 全树范围找 [ReaderPage]（`skipOffstage: false`：被覆盖路由若仍挂着也要揪出来，
+/// 否则「恰好 push 一次」的断言会被 offstage 藏掉漏检）。
+Finder _readerPages() => find.byType(ReaderPage, skipOffstage: false);
 
 void main() {
   group('ShelfPage', () {
@@ -222,6 +236,123 @@ void main() {
       // 书卡仍在
       expect(find.byType(BookCard), findsOneWidget);
       expect(await tester.runAsync(() => repo.loadBooks()), hasLength(1));
+    });
+
+    // —— 首点无响应回归（_opening 守卫作用域 + 准备期反馈 + InkWell）——
+
+    testWidgets('回归①：单击一次即导航一次（无须点两次）', (WidgetTester tester) async {
+      await tester.runAsync(
+        () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
+      );
+
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      await tester.tap(find.byType(BookCard));
+      await _settle(tester);
+
+      // 一次点击 → 恰好一次导航（全树范围计数，含被覆盖路由）。
+      expect(_readerPages(), findsOneWidget);
+    });
+
+    testWidgets('回归①b：准备期连点两次也只 push 一次（防双 push 回退）',
+        (WidgetTester tester) async {
+      await tester.runAsync(
+        () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
+      );
+
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      final Finder card = find.byType(BookCard);
+      await tester.tap(card);
+      await tester.tap(card); // 第二击落在准备期 → 守卫吞掉，不得再 push
+      await _settle(tester);
+
+      expect(_readerPages(), findsOneWidget);
+    });
+
+    testWidgets('回归②：从阅读页 pop 后立即点另一本 → 一次即进（主因窗口回归）',
+        (WidgetTester tester) async {
+      final ImportResult a = (await tester.runAsync(
+        () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
+      ))!;
+      final ImportResult b = (await tester.runAsync(
+        () => repo.importFile(bytes: _utf8TxtBytes('乙书正文。'), fileName: '乙书.txt'),
+      ))!;
+
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      // 打开甲书。
+      await tester.tap(_cardOf('甲书'));
+      await _settle(tester);
+      expect(_readerPages(), findsOneWidget);
+      expect(
+        tester.widget<ReaderPage>(_readerPages()).record.bookId,
+        a.record.bookId,
+      );
+
+      // 关书（pop）——**只推假帧、不给 runAsync**：此刻正处主因窗口（旧代码
+      // `_opening` 仍为 true），紧接着点另一本必须一次即进。
+      // 注意：pop 过渡动画 ticker **首拍才起算**，单次大帧推不完；用多帧小步
+      // 推完过渡 + 路由移除（全程无 runAsync，主因窗口不被破坏）。
+      Navigator.of(tester.element(_readerPages())).pop();
+      for (int i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(_readerPages(), findsNothing); // 阅读页已完全退出
+
+      await tester.tap(_cardOf('乙书'));
+      await _settle(tester);
+
+      expect(_readerPages(), findsOneWidget);
+      expect(
+        tester.widget<ReaderPage>(_readerPages()).record.bookId,
+        b.record.bookId,
+      );
+    });
+
+    testWidgets('回归③：长按触发删除确认，不误触发 onTap', (WidgetTester tester) async {
+      await tester.runAsync(
+        () => repo.importFile(bytes: _utf8TxtBytes('要删的书'), fileName: '删我2.txt'),
+      );
+
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      await tester.longPress(find.byType(BookCard));
+      await tester.pumpAndSettle();
+
+      expect(find.text('删除确认'), findsOneWidget);
+      // onTap 未被误触发：没有导航发生。
+      expect(_readerPages(), findsNothing);
+    });
+
+    testWidgets('回归④：开书准备期卡片显示 loading 覆盖层', (WidgetTester tester) async {
+      await tester.runAsync(
+        () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
+      );
+
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      await tester.tap(find.byType(BookCard));
+      await tester.pump(); // 只推一帧、不给 runAsync → 仍在准备期
+
+      // 被点的卡片上出现 loading 覆盖层，且尚未导航。
+      expect(
+        find.descendant(
+          of: find.byType(BookCard),
+          matching: find.byKey(const ValueKey<String>('book-opening-overlay')),
+        ),
+        findsOneWidget,
+      );
+      expect(_readerPages(), findsNothing);
+
+      // 准备完成后正常进入阅读页（覆盖层随准备完成消失）。
+      await _settle(tester);
+      expect(_readerPages(), findsOneWidget);
     });
   });
 }

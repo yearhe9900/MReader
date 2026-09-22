@@ -5,8 +5,12 @@
 // 导入：`FilePicker` 多选 → 逐个调 `importFile`，展示进度 + 失败清单。
 // 删除：长按书卡 → 确认对话框 → `deleteBook`（`LIB-06` 二次确认）+ 连带清理阅读进度。
 // 点击书卡 → 进入 `lib/reader` 的阅读页（`RD-03`/`RD-04`/`NAV-01`）。
+// 开书守卫 `_opening` **只覆盖 push 前的准备阶段**（修复「首点无响应」：守卫若覆盖
+// 整个阅读会话 + 关书刷新，关书后首点会被静默吞掉）；准备期被点卡片显示 loading。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -48,9 +52,13 @@ class _ShelfPageState extends State<ShelfPage> {
   bool _importing = false;
   List<String> _importErrors = <String>[];
 
-  /// 防重复开书：首击进入开书流程后置 true，流程结束（或提前 return）复位。
-  /// 避免首击 UI 冻结期间用户补点的第二次点击再触发一次 push（导致开重）。
+  /// 防重复开书：**只覆盖 push 前的准备阶段**（readBookBytes + openBook）。
+  /// 路由一入栈立即释放——阅读会话期间绝不占用（否则关书后首点被静默吞掉，
+  /// 表现为「首点无响应、必须再点一次」）。
   bool _opening = false;
+
+  /// 正在准备打开的书（bookId）：对应卡片显示 loading 覆盖层；`null` = 无。
+  String? _openingBookId;
 
   @override
   void initState() {
@@ -156,9 +164,15 @@ class _ShelfPageState extends State<ShelfPage> {
     }
   }
 
+  /// 打开一本书：准备（读字节 + 建源）→ push 阅读页。
+  ///
+  /// 守卫 [_opening] **只覆盖 push 前的准备阶段**（防准备期连点重复 push）；
+  /// 路由一入栈立即释放——阅读会话期间绝不占用，否则关书后首点被静默吞掉。
+  /// 准备期被点的卡片显示 loading 覆盖层（[BookCard.loading]）。
   Future<void> _openBook(BookRecord record) async {
-    if (_opening) return; // 防双击重复开书
+    if (_opening) return; // 准备期防双击重复开书
     _opening = true;
+    setState(() => _openingBookId = record.bookId); // 该卡显示 loading 覆盖层
     try {
       final Uint8List? bytes = await widget.repository.readBookBytes(record);
       if (bytes == null || bytes.isEmpty) {
@@ -179,21 +193,24 @@ class _ShelfPageState extends State<ShelfPage> {
       // ReaderPage._open() 承担（其自带 spinner + 错误态，RD-05 仍满足）。
 
       if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ReaderPage(
-            source: source,
-            record: record,
-            progressStore: widget.progressStore,
-            repository: widget.repository,
-          ),
+      final MaterialPageRoute<void> route = MaterialPageRoute<void>(
+        builder: (_) => ReaderPage(
+          source: source,
+          record: record,
+          progressStore: widget.progressStore,
+          repository: widget.repository,
         ),
       );
-
-      // 阅读页关闭后刷新（lastReadAt / readProgress 已在 M1-T04 更新）
-      await _loadBooks();
+      // 不 await push 的 Future（它要等路由 pop 才返回）——push 一发起（路由已
+      // 入栈）就往下走，finally 立即释放守卫。关书刷新走 route.popped，不占守卫。
+      unawaited(Navigator.of(context).push(route));
+      unawaited(route.popped.then((_) {
+        // 阅读页关闭后刷新（lastReadAt / readProgress 已在 M1-T04 更新）。
+        if (mounted) unawaited(_loadBooks());
+      }));
     } finally {
       _opening = false;
+      if (mounted) setState(() => _openingBookId = null);
     }
   }
 
@@ -293,6 +310,7 @@ class _ShelfPageState extends State<ShelfPage> {
               return BookCard(
                 record: record,
                 coverStore: widget.coverStore,
+                loading: _openingBookId == record.bookId,
                 onTap: () => _openBook(record),
                 onLongPress: () => _deleteBook(record),
               );
