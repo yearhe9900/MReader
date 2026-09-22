@@ -4,12 +4,14 @@
 // `await` 真异步 IO 会挂死（FakeAsync 不排空微任务队列），详见 `68578e4` /
 // `docs/tech-usage.md`。故「有界缓存 + 增量加载」逻辑抽到 `lib/reader/chapter_cache.dart`
 // （纯 Dart），在此直接对**真实 source** 驱动并断言。
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/format/dart_epub_source.dart';
 import 'package:mreader/model/chapter.dart';
 import 'package:mreader/model/chapter_content.dart';
+import 'package:mreader/model/epub_book.dart';
 import 'package:mreader/reader/chapter_cache.dart';
 
 import '../../tool/perf_fixtures.dart';
@@ -107,6 +109,65 @@ void main() {
       expect(total, greaterThan(100000));
       // 没有任何一段等于整章（即不是「一条巨型文本」）。
       expect(paragraphs.any((String p) => p.length == total), isFalse);
+    });
+  });
+
+  group('PERF-02 ① 稳态（不随已读章数线性增长）', () {
+    test('EpubSection.lazy **不缓存**：每次访问 rawBytes 都重新加载（计数证据）', () {
+      int loads = 0;
+      final EpubSection section = EpubSection.lazy(
+        id: 'x',
+        href: 'text/x.xhtml',
+        loadBytes: () {
+          loads++;
+          return Uint8List(3);
+        },
+      );
+
+      // 反复访问：**若存在无界缓存**，loadBytes 只会在首次被调用一次。
+      for (int i = 0; i < 100; i++) {
+        section.rawBytes;
+      }
+      expect(loads, 100, reason: '无缓存 -> 每次访问都应重新加载');
+      // 急切实体不受影响（直接返回构造时字节）。
+      final EpubSection eager =
+          EpubSection(id: 'y', href: 'text/y.xhtml', rawBytes: Uint8List(5));
+      expect(eager.rawBytes.length, 5);
+    });
+
+    test('连续读完一本大正文书后，驻留 RSS 增长远小于「若全部驻留」的量级', () async {
+      final Uint8List bytes = buildLargeBodyEpub(
+        chapters: 100,
+        paragraphsPerChapter: 60,
+        charsPerParagraph: 8000,
+      );
+      final DartEpubSource source =
+          DartEpubSource(fileName: 'bodies.epub', bytes: bytes);
+      addTearDown(source.dispose);
+
+      final List<Chapter> chapters = await source.chapters();
+      expect(chapters.length, greaterThanOrEqualTo(100));
+
+      // 首次遍历全书（正文此刻才被逐章解压）：若实现改为「驻留」，此处 RSS 会涨到接近信号量。
+      final int rssBefore = ProcessInfo.currentRss;
+      int signalBytes = 0;
+      for (int i = 0; i < chapters.length; i++) {
+        final ChapterContent c = await source.content(i);
+        signalBytes += c.paragraphList
+            .fold<int>(0, (int a, String p) => a + p.length);
+      }
+      final int growth = ProcessInfo.currentRss - rssBefore;
+
+      // 信号：解压后正文总量（须足够大，使「驻留」与「不驻留」的量级明显分开）。
+      expect(signalBytes, greaterThan(40 * 1024 * 1024), reason: '样本正文 > 40MB');
+
+      // 不驻留：增长只剩 GC 抖动，应远小于信号的 1/2；若正文被驻留则约等于信号、超阈值被抓住。
+      expect(
+        growth,
+        lessThan(signalBytes ~/ 2),
+        reason: '读完 ${chapters.length} 章后 RSS 增长 $growth B，'
+            '解压后正文总量 $signalBytes B',
+      );
     });
   });
 }

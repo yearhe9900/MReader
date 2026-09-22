@@ -16,10 +16,13 @@
 - M1-T07 正文增量加载（PERF-02）：阅读页首帧只等目标章 ±1，后台按距离逐批补齐 + 有界 LRU（30 章）`f84b470`
 - M1-T07 隔离执行底座（PERF-01）：`compute()` 薄封装 IsolateRunner（本任务不接线到 `load()`）`9c9ff93`
 - M1-T07 性能基线（PERF-02/03）：样本生成器 + BookSource 层首屏测量 + 纯 Dart 懒加载验收 `9be18ed`
+- M1-T07 收尾（PERF-01 底座）：`parseEpubStructure(bytes, fileName:)` 产出**无闭包纯数据**结构（sections / toc / metadata / 封面候选 href / 条目名索引），可跨 isolate；`parseEpubResult` 保留签名，内部 = structure + 在**本 isolate** 绑定 `loadBytes` / `readEntry`
+- M1-T07 收尾（PERF-02 ①）：`EpubSection.rawBytes` **去掉无界缓存**（每次访问现取）；新增 `zip_paths.dart` `lazyEntryLoader` 从**压缩态**每次现解（STORE 原样 / DEFLATE 走 `inflateBuffer`），绕开 archive `ArchiveFile.content` 的永久 `_content` 缓存
 
 ### 变更
 
 - M1-T07 EpubSection 增惰性构造 `.lazy`（`rawBytes` 保留为 getter，消费方零改动）；spine 文本性判定改由 `textualVerdict` 仅凭声明完成 `e16da96`
+- M1-T07 收尾：封面候选 `readEntry` 改为按 href **现查**（不再急切解压、常驻全部候选字节）；`dart_epub_source.dart` 顶部「整个对象可直接丢进 `compute()`」的错误注释修正为「`parseEpubStructure` 纯数据跨 isolate，`loadBytes` / `readEntry` 闭包在本 isolate 绑定」
 
 ## 2026-09-21
 

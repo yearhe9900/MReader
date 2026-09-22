@@ -96,11 +96,11 @@ class EpubSection {
 
   final Uint8List? _eagerBytes;
   final Uint8List Function()? _loader;
-  Uint8List? _cached;
 
   /// 该章 XHTML 的原始字节（尚未解码）。
   ///
-  /// 惰性实体在**首次访问**时才解码，并缓存结果（后续访问返回同一实例）。
-  /// 「按需解码」是「不一次性解析整本书」的关键。
-  Uint8List get rawBytes => _cached ??= (_eagerBytes ?? _loader!());
+  /// **不缓存**（`PERF-02` ①：稳态内存不得随「读过的章数」线性增长）：惰性实体**每次访问
+  /// 都重新按需解码**——`totalCharCount()` / `search()` 遍历全书后，已读章节的字节会被 GC
+  /// 回收，而非永久驻留。急切实体直接返回构造时持有的字节。
+  Uint8List get rawBytes => _eagerBytes ?? _loader!();
 }

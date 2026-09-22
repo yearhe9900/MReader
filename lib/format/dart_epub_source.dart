@@ -1,8 +1,13 @@
 // EPUB 的纯 Dart [BookSource] 实现（`'dart-epub'`）。
 //
-// **纯 Dart 层**：不 import Flutter、不 import `dart:io`，只吃 bytes ——
-// 这正是 `PERF-01`（解析移出主 isolate）要求的形状：整个对象可以直接丢进 `compute()`。
+// **纯 Dart 层**：不 import Flutter、不 import `dart:io`，只吃 bytes。
 // M3.5 若把解压层 Rust 化，会新增 `RustEpubSource` 实现同一接口，本文件保持不动。
+//
+// ⚠️ `PERF-01`（解析移出主 isolate）**不是**「把本对象直接丢进 `compute()`」——本对象持有的
+//    `EpubBook.sections[i]` 带 `loadBytes` 闭包、`OpfView.readEntry` 也是闭包，**闭包不可**
+//    被 `SendPort` 序列化。正确做法：后台 isolate 跑 `parseEpubStructure(bytes)`（纯数据、
+//    无闭包）→ 把结构传回主 isolate → 再由持有原始 `bytes` 的主 isolate 绑定
+//    （见 `lib/epub/epub_parser.dart` 顶部说明与 `docs/schedule.md` 的 M2a-T06）。
 import 'dart:typed_data';
 
 import '../epub/epub_parser.dart';
@@ -81,7 +86,8 @@ class DartEpubSource implements BookSource {
     if (parsed == null) return _disposedMeta; // 已释放 / 竞态
     // `META-02/03`：经 `lib/meta/epub_meta.dart` 产 meta——四来源优先级链（命中即停）、
     // 多作者稳定顺序整体保留、封面候选 -> `PendingCover`（真实字节 + 真实格式）。
-    // 纯 Dart：可进 `compute()`（`PERF-01`）。
+    // 纯 Dart（不引 Flutter / dart:io）；但此处 `opfView` 含 `readEntry` 闭包，**不可**跨 isolate——
+    // 要 compute 的是产出纯数据结构的 `parseEpubStructure`（见文件顶部 ⚠️ 与 `PERF-01`）。
     return buildEpubMeta(opfView: parsed.opfView, fileName: fileName);
   }
 

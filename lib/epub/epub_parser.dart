@@ -1,9 +1,21 @@
 // 纯 Dart 的 EPUB 解析层。
 //
-// 对外入口：
-//   · `parseEpub(bytes) -> EpubBook`——结构（元数据 / manifest / spine / 目录 / 加密标记）；
-//   · `parseEpubResult(bytes) -> EpubParseResult`——额外带上 `OpfView`（供 `lib/meta/epub_meta.dart`
-//     做 `META-02/03`，**与 EpubBook 同一次解压产出，不重复解压**）。
+// 对外入口（**两层，务必分清**）：
+//   · `parseEpubStructure(bytes) -> EpubStructure`——**纯数据、无闭包**，可跨 isolate
+//     （`compute()` / `lib/task/isolate_runner.dart`）；只含结构 / 元数据 / 目录 /
+//     封面候选 href / 条目名索引，**不含任何字节**。
+//   · `parseEpubResult(bytes) -> EpubParseResult`——在同一次解析里**额外绑定**出带
+//     `loadBytes`（章节正文按需）与 `readEntry`（封面候选按需）的 [EpubBook] / [OpfView]，
+//     供 `lib/meta/epub_meta.dart`（`META-02/03`）与 `DartEpubSource` 消费。
+//
+// ⚠️ **isolate 边界（`PERF-01`）**：`parseEpubResult` 的返回值**不可跨 isolate 传递**——
+//    它内部的 `loadBytes` / `readEntry` 是**闭包**，`SendPort` 会直接拒绝。要「把解析移出
+//    主 isolate」，请在后台 isolate 调 `parseEpubStructure`（纯数据），把结果传回主 isolate
+//    后，再由持有原始 `bytes` 的主 isolate 绑定（见 `docs/schedule.md` M2a-T06）。
+//
+// `PERF-02` ①（内存收敛）：结构解析阶段**只建「条目名 → ArchiveFile」索引、绝不预解压**；
+//    章节正文由绑定期产出的 `loadBytes` **按需、非驻留**解压（见 `zip_paths.dart` 的
+//    `lazyEntryLoader`），非章节资源（图 / 字 / CSS）在与正文无关的路径上永不读取。
 //
 // 章节正文的 XHTML -> 文本转换在 section_extractor.dart 里按需调用。
 //
@@ -55,6 +67,72 @@ class CoverCandidate {
   final String source;
 }
 
+/// 一个 spine 项的**纯数据引用**（[parseEpubStructure] 的产物；不含字节、不含闭包）。
+class EpubSectionRef {
+  const EpubSectionRef({required this.id, required this.href});
+
+  /// OPF manifest 中的 id。
+  final String id;
+
+  /// 归一化后的包内路径，例如 `OEBPS/text/ch1.xhtml`。
+  final String href;
+}
+
+/// [parseEpubStructure] 的返回：**纯数据、无闭包**，可跨 isolate（`compute()` / IsolateRunner）。
+///
+/// ⚠️ 与 [EpubParseResult] 不同：本结构**不含任何字节、也不含任何闭包**——章节正文与封面候选
+/// 字节都要由**取得本结构的 isolate**（通常主 isolate，它持有原始 `bytes`）再按需读取。
+/// 闭包（`readEntry` / `loadBytes`）**不可**跨 isolate 传递，会被 `SendPort` 拒绝；
+/// 这正是它把「结构」与「绑定」拆开的原因。
+class EpubStructure {
+  const EpubStructure({
+    required this.title,
+    required this.author,
+    required this.language,
+    required this.description,
+    required this.creators,
+    required this.fileName,
+    required this.sections,
+    required this.toc,
+    required this.coverCandidates,
+    required this.entryNames,
+  });
+
+  /// `dc:title`（首个非空）；无则空串。
+  final String title;
+
+  /// `dc:creator`（首个非空）；无则空串。
+  final String author;
+
+  /// `dc:language`；无则空串。
+  final String language;
+
+  /// `dc:description`（简介；`META-01` 的 `intro` 来源）。
+  final String description;
+
+  /// `dc:creator` **多值**，**稳定顺序整体保留**（`META-03` / `Q17`）；不切分。
+  final List<String> creators;
+
+  /// 原始文件名（书名缺失时兜底显示）。
+  final String fileName;
+
+  /// spine 顺序的章节引用（已剔除 `linear="no"` 与非文本资源）。
+  final List<EpubSectionRef> sections;
+
+  /// 目录（`RD-01`）；**空列表表示无可用目录**，调用方降级为「按 spine 生成平坦目录」。
+  final List<Chapter> toc;
+
+  /// 封面候选（`META-02` 四来源，**已按优先级排序**，命中即停）。
+  final List<CoverCandidate> coverCandidates;
+
+  /// 包内条目名索引：`小写真实名 -> 真实名`（供取得结构的 isolate 重新定位条目）。
+  final Map<String, String> entryNames;
+
+  /// 封面候选 href 列表（`coverCandidates` 的 href 投影，便于只看路径的调用方）。
+  List<String> get coverCandidateHrefs =>
+      coverCandidates.map((CoverCandidate c) => c.href).toList();
+}
+
 /// `lib/meta/epub_meta.dart`（纯 Dart）消费的 OPF 视图（架构 §N.4 动作项 D1）。
 ///
 /// 与 [EpubBook] **同一次解析**产出——复用已打开的 zip 归档，**不重复解压**。
@@ -89,11 +167,13 @@ class OpfView {
   /// 封面候选（`META-02` 四来源，**已按优先级排序**，命中即停）。
   final List<CoverCandidate> coverCandidates;
 
-  /// 读包内条目字节（封面命中即停时用）。
+  /// 读包内条目字节（封面命中即停时用）——**按需解压、不常驻**（`PERF-02`）。
   final Uint8List? Function(String href)? readEntry;
 }
 
-/// `parseEpubResult` 的返回：结构与元数据视图**同一次解压**产出。
+/// `parseEpubResult` 的返回：结构与元数据视图**同一次解析**产出。
+///
+/// ⚠️ **不可跨 isolate**（内含 `readEntry` 闭包）——要 `compute()` 请走 [parseEpubStructure]。
 class EpubParseResult {
   const EpubParseResult({required this.book, required this.opfView});
 
@@ -109,7 +189,7 @@ class EpubParseResult {
 /// 3. 解析 OPF 的 metadata / manifest / spine；
 /// 4. **加密检测**（读 `META-INF/encryption.xml`，`RD-05`）——必须在返回可读章节之前；
 /// 5. 解析目录（EPUB3 nav / EPUB2 ncx 双路径，`RD-01`）；
-/// 6. 按 spine 顺序取出各章 XHTML 的原始字节。
+/// 6. 按 spine 顺序取出各章引用（正文按需解压）。
 ///
 /// 失败一律抛 [MReaderFormatException]，消息可读。
 Future<EpubBook> parseEpub(Uint8List bytes, {String fileName = ''}) async {
@@ -118,11 +198,60 @@ Future<EpubBook> parseEpub(Uint8List bytes, {String fileName = ''}) async {
   return result.book;
 }
 
+/// **结构解析（纯数据、可跨 isolate）**——把 EPUB 字节流解析成 [EpubStructure]。
+///
+/// 只产出「结构 + 元数据 + 目录 + 封面候选 + 条目名索引」，**不含任何闭包或解压结果**，
+/// 故可安全丢进 `compute()` / `IsolateRunner`（`PERF-01` / `PERF-02` ①）。
+///
+/// 要拿到带 `loadBytes` / `readEntry` 的 [EpubBook] / [OpfView]，请在**取得本结构的
+/// isolate** 上调用 [parseEpubResult]（或按 `entryNames` 自行绑定）。
+Future<EpubStructure> parseEpubStructure(
+  Uint8List bytes, {
+  String fileName = '',
+}) async =>
+    _parse(bytes, fileName).structure;
+
 /// 与 [parseEpub] 相同，但额外返回 [OpfView]（供 `lib/meta/epub_meta.dart` 消费）。
+///
+/// 内部 = [_parse]（与 [parseEpubStructure] **共用同一个核心**，故只解一次 zip）+
+/// **在调用方 isolate 上**绑定出 [EpubBook] 的 `loadBytes` 与 [OpfView] 的 `readEntry`。
+///
+/// ⚠️ **返回值不可跨 isolate**：两个绑定字段都是闭包，`SendPort` 会拒绝。
+/// 要移出主 isolate，请用 [parseEpubStructure]（纯数据）在后台解析，再回主 isolate 绑定。
 Future<EpubParseResult> parseEpubResult(
   Uint8List bytes, {
   String fileName = '',
 }) async {
+  final _ParsedEpub parsed = _parse(bytes, fileName);
+  return EpubParseResult(
+    book: _bindBook(parsed),
+    opfView: _bindOpfView(parsed),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 核心解析：结构（纯数据） + 本 isolate 的归档句柄
+// ---------------------------------------------------------------------------
+
+/// 解析中间产物：结构（纯数据） + **本 isolate 内**的归档句柄（绑定闭包用，不跨 isolate）。
+class _ParsedEpub {
+  _ParsedEpub({
+    required this.structure,
+    required this.byName,
+    required this.lowerIndex,
+  });
+
+  final EpubStructure structure;
+
+  /// `真实条目名 -> ArchiveFile`（**未解压**，`PERF-02` ①）。
+  final Map<String, ArchiveFile> byName;
+
+  /// `小写条目名 -> 真实条目名`（大小写不敏感命中用）。
+  final Map<String, String> lowerIndex;
+}
+
+/// 核心解析（同步）：产出 [EpubStructure] + 本 isolate 的归档句柄。
+_ParsedEpub _parse(Uint8List bytes, String fileName) {
   if (bytes.isEmpty) {
     throw const MReaderFormatException(FormatErrorCode.emptyFile);
   }
@@ -135,11 +264,10 @@ Future<EpubParseResult> parseEpubResult(
   // 建立包内路径索引。EPUB 内部一律使用 '/'，但可能出现 './' 前缀或重复斜杠。
   //
   // ⚠️ `PERF-02` ①（内存收敛）：**只建「条目名 → ArchiveFile」索引，绝不预解压字节**。
-  //    archive 3.x 的 `ArchiveFile.content` 本就是**按需解压**（见 `archive_file.dart`
-  //    的 `content` getter：`_content == null` 时才 `decompress()`）。一旦在此对所有条目
-  //    求 `.content`（旧实现 `files[name] = contentOfArchiveFile(f)` 正是如此），就会把整本
-  //    （含图片 / 字体 / CSS）一次性解压并常驻——这正是要消除的。改为按需解压后，
-  //    **非章节资源（图 / 字 / CSS）在结构解析后保持压缩态、不占解压内存**。
+  //    archive 3.x 的 `ArchiveFile.content` 是按需解压（且**一次解压即永久缓存** `_content`）；
+  //    一旦在此对所有条目求 `.content`（旧实现 `files[name] = contentOfArchiveFile(f)` 正是如此），
+  //    就会把整本（含图片 / 字体 / CSS）一次性解压并常驻——这正是要消除的。改为按需解压后，
+  //    **非章节资源（图 / 字 / CSS）在与正文无关的路径上永不读取、保持压缩态**。
   final Map<String, ArchiveFile> byName = <String, ArchiveFile>{};
   final Map<String, String> lowerIndex = <String, String>{};
   for (final ArchiveFile f in archive.files) {
@@ -158,13 +286,6 @@ Future<EpubParseResult> parseEpubResult(
     final ArchiveFile? file = byName[name];
     if (file == null) return null;
     return contentOfArchiveFile(file);
-  }
-
-  /// 把包内路径解析成 [ArchiveFile]（**不解压**）——供**惰性**章节读取（`PERF-02` ①）。
-  ArchiveFile? resolveFile(String packagePath) {
-    final String? name = resolveEntryName(lowerIndex, packagePath);
-    if (name == null) return null;
-    return byName[name];
   }
 
   // 1) container.xml -> OPF 路径
@@ -239,12 +360,8 @@ Future<EpubParseResult> parseEpubResult(
   final List<Chapter> toc =
       parseToc(opfDoc: opfDoc, opfDir: opfDir, lookup: lookup);
 
-  // 6) spine：阅读顺序
-  //
-  //    `PERF-02` ①（正文按需）：对**能仅凭声明判定为文本**的条目（绝大多数 XHTML 章节），
-  //    这里**只构造惰性 `EpubSection`（不解压）**，正文字节推迟到 `content(i)` 才读取；
-  //    仅当声明不足（无 media-type 且扩展名不暴露）时才解压该**单个**条目做字节魔数兜底。
-  final List<EpubSection> sections = <EpubSection>[];
+  // 6) spine：阅读顺序 —— **只记录 id/href 引用**，正文留给绑定期按需解压（`PERF-02` ①）。
+  final List<EpubSectionRef> sectionRefs = <EpubSectionRef>[];
   for (final XmlElement itemref in findAllByLocalName(opfDoc, 'itemref')) {
     final String? linear = itemref.getAttribute('linear');
     if (linear != null && linear.toLowerCase() == 'no') {
@@ -256,7 +373,7 @@ Future<EpubParseResult> parseEpubResult(
     final String? href = idToHref[idref];
     if (href == null) continue;
 
-    final ArchiveFile? file = resolveFile(href);
+    final ArchiveFile? file = _resolveFile(byName, lowerIndex, href);
     if (file == null) continue; // 资源缺失：优雅跳过，不让整本书解析失败。
 
     // 图片 / 字体 / CSS 等资源**不当章节**。
@@ -264,53 +381,94 @@ Future<EpubParseResult> parseEpubResult(
     final String? mediaType = idToMediaType[idref];
     final bool? verdict = textualVerdict(mediaType, href);
     if (verdict == false) continue; // 明确非文本：不解压直接跳过。
-    if (verdict == true) {
-      // 声明足以判定为文本：惰性入章节，**此刻不解压**（正文留给 `content(i)`）。
-      sections.add(EpubSection.lazy(
-        id: idref,
-        href: href,
-        loadBytes: () => contentOfArchiveFile(file),
-      ));
-      continue;
+    if (verdict == null) {
+      // 声明不足（无 media-type 且扩展名不暴露）：需解压该**单个**条目做字节魔数兜底。
+      if (!looksTextual(mediaType, href, contentOfArchiveFile(file))) continue;
     }
-    // 声明不足：必须解压该条目做字节魔数兜底（罕见脏书路径）。
-    final Uint8List data = contentOfArchiveFile(file);
-    if (!looksTextual(mediaType, href, data)) continue;
-    sections.add(EpubSection(id: idref, href: href, rawBytes: data));
+    sectionRefs.add(EpubSectionRef(id: idref, href: href));
   }
 
-  if (sections.isEmpty) {
+  if (sectionRefs.isEmpty) {
     throw const MReaderFormatException(FormatErrorCode.emptySpine);
   }
 
-  // 7) 封面候选（META-02 四来源，已按优先级排序）+ 只保留候选的字节。
+  // 7) 封面候选（META-02 四来源，已按优先级排序）——只解析出 href，**不预解压**（绑定期按需）。
   final List<CoverCandidate> coverCandidates =
       _buildCoverCandidates(opfDoc, opfDir, idToHref, idToMediaType);
-  final Map<String, Uint8List> candidateBytes = <String, Uint8List>{};
-  for (final CoverCandidate c in coverCandidates) {
-    final Uint8List? b = lookup(c.href);
-    if (b != null) candidateBytes[c.href] = b;
-  }
 
-  final OpfView opfView = OpfView(
-    title: title.isEmpty ? null : title,
-    creators: creators,
-    language: language.isEmpty ? null : language,
-    description: description.isEmpty ? null : description,
-    coverCandidates: coverCandidates,
-    readEntry: (String href) => candidateBytes[href],
-  );
-
-  final EpubBook book = EpubBook(
+  final EpubStructure structure = EpubStructure(
     title: title,
     author: author,
     language: language,
+    description: description,
+    creators: creators,
     fileName: fileName,
-    sections: sections,
+    sections: sectionRefs,
     toc: toc,
+    coverCandidates: coverCandidates,
+    entryNames: lowerIndex,
   );
 
-  return EpubParseResult(book: book, opfView: opfView);
+  return _ParsedEpub(
+    structure: structure,
+    byName: byName,
+    lowerIndex: lowerIndex,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 绑定：结构（纯数据） -> 带闭包的 EpubBook / OpfView（**仅在本 isolate 内有效**）
+// ---------------------------------------------------------------------------
+
+/// 按包内路径定位归档条目（**不解压**）。
+ArchiveFile? _resolveFile(
+  Map<String, ArchiveFile> byName,
+  Map<String, String> lowerIndex,
+  String packagePath,
+) {
+  final String? name = resolveEntryName(lowerIndex, packagePath);
+  return name == null ? null : byName[name];
+}
+
+/// 把结构绑定成 [EpubBook]：每章挂一个**按需、非驻留**的 `loadBytes`（`PERF-02` ①）。
+EpubBook _bindBook(_ParsedEpub parsed) {
+  final EpubStructure s = parsed.structure;
+  final List<EpubSection> sections = <EpubSection>[];
+  for (final EpubSectionRef ref in s.sections) {
+    final ArchiveFile? file = _resolveFile(parsed.byName, parsed.lowerIndex, ref.href);
+    if (file == null) continue;
+    sections.add(EpubSection.lazy(
+      id: ref.id,
+      href: ref.href,
+      loadBytes: lazyEntryLoader(file),
+    ));
+  }
+  return EpubBook(
+    title: s.title,
+    author: s.author,
+    language: s.language,
+    fileName: s.fileName,
+    sections: sections,
+    toc: s.toc,
+  );
+}
+
+/// 把结构绑定成 [OpfView]：`readEntry` **按需解压封面候选**（不再一次性解压常驻全部候选）。
+OpfView _bindOpfView(_ParsedEpub parsed) {
+  final EpubStructure s = parsed.structure;
+  return OpfView(
+    title: s.title.isEmpty ? null : s.title,
+    creators: s.creators,
+    language: s.language.isEmpty ? null : s.language,
+    description: s.description.isEmpty ? null : s.description,
+    coverCandidates: s.coverCandidates,
+    readEntry: (String href) {
+      final ArchiveFile? file =
+          _resolveFile(parsed.byName, parsed.lowerIndex, href);
+      if (file == null) return null;
+      return lazyEntryLoader(file)();
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------

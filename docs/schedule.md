@@ -152,6 +152,13 @@ PRD §7.1 抽象、§12.1 页面清单与 §15.1 平台能力抽象推导）。*
 > 可序列化，改动范围可控；③ 书架快修（`d1fc20c`）消除了双击/冻结观感，但 `ReaderPage._open()` 里 `load()` 仍在主 isolate，
 > 20MB 大书在 spinner 背后仍会冻主线程——`compute()` 彻底消除此残留。
 > 人天 +1.5（从 M1-T07 的 PERF-01 拆出），M2a 总人天 13→14.5，M1-T07 人天 2.5 不变（PERF-02/03 仍在 M1）。
+>
+> **⚠️ 勘误（2026-09-22，M1-T07 收尾）**：上面「`dart_epub_source.dart:3` 注释：可直接丢进 compute」
+> 与「`parseEpubResult(bytes)` 可直接包进 `compute()`」的前提**不成立**——`parseEpubResult` 的返回值内含
+> `loadBytes` / `readEntry` **闭包**，`SendPort` 会直接拒绝（M1-T07 已实证）。M1-T07 收尾已补
+> `parseEpubStructure(bytes)`（**无闭包纯数据**，可跨 isolate）。**M2a-T06 的正确改法**：后台 isolate 跑
+> `parseEpubStructure` → 把纯数据结构传回主 isolate → 由持有原始 `bytes` 的主 isolate 绑定 `loadBytes` / `readEntry`；
+> **不是**直接 compute `parseEpubResult`。`dart_epub_source.dart` 顶部注释已同步更正。
 
 | 任务ID | 任务名 | 主要文件（相对路径） | 依赖 | 人天 | 说明/风险 |
 |---|---|---|---|---|---|

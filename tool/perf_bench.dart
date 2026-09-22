@@ -1,20 +1,22 @@
-// `PERF-02` 首屏性能基线（命令行，纯 Dart）。
+// `PERF-02` 首屏 / 稳态性能基线（命令行，纯 Dart）。
 //
-// 测量「BookSource 层首屏」——进入阅读页前必须完成的工作：
-//   `load()`（结构 + 元数据） + `chapters()`（章节表） + `content(目标章 ±1)`（首批正文）。
+// 测量「BookSource 层」的两件事：
+//   ① **首屏**：进入阅读页前必须完成的工作 ——
+//      `load()`（结构 + 元数据） + `chapters()`（章节表） + `content(目标章 ±1)`（首批正文）；
+//   ② **稳态**（可选 `readChapters=N`）：在首屏之后再**顺序读完前 N 章**，测其 RSS ——
+//      用于验证 `PERF-02` ①「读过的章不被永久驻留」（读全部后内存不该回到全书大小）。
 //
-// 为什么在 BookSource 层测：纯 Dart、可复现、与 UI/FakeAsync 无关；阅读页「首屏」正是
-// 「等这一组调用返回 + 首次布局」。改前 / 改后用同一脚本、同一命令对比即可。
+// 为什么在 BookSource 层测：纯 Dart、可复现、与 UI/FakeAsync 无关。
 //
-// **一次进程只测一个样本**（避免跨样本的 RSS 互相污染），并可重复多轮观察：
-//   · `firstScreenMs` 取「预热后的最小值」——最稳、最能反映稳态成本；
-//   · `rssMB` / `peakMB` 取最后一轮的驻留 / 峰值（VM 不归还内存，故接近高水位）；
-//   · 多轮 `rssMB` 的走势可看「开关书是否累积」（配合 `test/perf` 的 5× 开关断言）。
+// **一次进程只测一个样本**（避免跨样本 RSS 互污），并可重复多轮：
+//   · `minMs`/`medianMs` 为多轮首屏耗时（min 最稳）；
+//   · `rssMB`/`peakMB` 为末轮首屏后 / 进程峰值；
+//   · `rssAfterReadMB` 为末轮「读完 N 章」后的 RSS（配合 `rssMB` 看是否随读章数增长）。
 //
 // 用法：
-//   dart run tool/gen_perf_fixtures.dart <目录>            # 先生成样本
-//   dart run tool/perf_bench.dart <目录> <样本> <标签> [轮数]
-//     例：dart run tool/perf_bench.dart %TEMP%\mreader_perf big_320.epub after 5
+//   dart run tool/gen_perf_fixtures.dart <目录>
+//   dart run tool/perf_bench.dart <目录> <样本> <标签> [轮数] [读章数]
+//     例：dart run tool/perf_bench.dart %TEMP%\mreader_perf big_bodies.epub after 5 100
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -32,6 +34,7 @@ BookSource? _open(String fixture, Uint8List bytes) {
       return DartTxtSource(fileName: fixture, bytes: bytes);
     case 'big_320.epub':
     case 'long_chapter.epub':
+    case 'big_bodies.epub':
       return DartEpubSource(fileName: fixture, bytes: bytes);
     default:
       return null;
@@ -41,7 +44,8 @@ BookSource? _open(String fixture, Uint8List bytes) {
 Future<void> main(List<String> args) async {
   if (args.length < 3) {
     stderr.writeln(
-      'usage: dart run tool/perf_bench.dart <dir> <fixture> <label> [iterations]',
+      'usage: dart run tool/perf_bench.dart <dir> <fixture> <label> '
+      '[iterations] [readChapters]',
     );
     exitCode = 2;
     return;
@@ -50,6 +54,7 @@ Future<void> main(List<String> args) async {
   final String fixture = args[1];
   final String label = args[2];
   final int iterations = args.length > 3 ? (int.tryParse(args[3]) ?? 3) : 3;
+  final int readChapters = args.length > 4 ? (int.tryParse(args[4]) ?? 0) : 0;
 
   final File file = File('$dir${Platform.pathSeparator}$fixture');
   if (!file.existsSync()) {
@@ -61,6 +66,7 @@ Future<void> main(List<String> args) async {
   final List<int> times = <int>[];
   int lastRss = 0;
   int lastPeak = 0;
+  int lastRssRead = 0;
   int chapterCount = 0;
 
   for (int i = 0; i < iterations; i++) {
@@ -74,6 +80,8 @@ Future<void> main(List<String> args) async {
     await source.load();
     final List<Chapter> chapters = await source.chapters();
     chapterCount = chapters.length;
+
+    // 首批正文：目标章 ±1（与阅读页首屏批次一致）。
     final int target = chapters.isEmpty ? 0 : chapters.length ~/ 2;
     if (chapters.isNotEmpty) {
       await source.content(target);
@@ -84,10 +92,23 @@ Future<void> main(List<String> args) async {
     times.add(sw.elapsedMilliseconds);
     lastRss = ProcessInfo.currentRss;
     lastPeak = ProcessInfo.maxRss;
+
+    // 稳态（可选）：首屏后再顺序读完前 N 章，测其 RSS。
+    if (readChapters > 0) {
+      final int n = readChapters > chapters.length ? chapters.length : readChapters;
+      for (int j = 0; j < n; j++) {
+        await source.content(j);
+      }
+      lastRssRead = ProcessInfo.currentRss;
+    }
     await source.dispose();
   }
 
   times.sort();
+  final String readPart = readChapters > 0
+      ? ' readChapters=$readChapters'
+          ' rssAfterReadMB=${(lastRssRead / _mib).toStringAsFixed(1)}'
+      : '';
   stdout.writeln(
     'BENCH[$label] $fixture '
     'chapters=$chapterCount '
@@ -95,6 +116,7 @@ Future<void> main(List<String> args) async {
     'minMs=${times.first} '
     'medianMs=${times[times.length ~/ 2]} '
     'rssMB=${(lastRss / _mib).toStringAsFixed(1)} '
-    'peakMB=${(lastPeak / _mib).toStringAsFixed(1)}',
+    'peakMB=${(lastPeak / _mib).toStringAsFixed(1)}'
+    '$readPart',
   );
 }

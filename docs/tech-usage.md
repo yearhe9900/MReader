@@ -358,15 +358,18 @@
 | 项 | 值 |
 |---|---|
 | 任务 | M1-T07（PRD `PERF-02` / `PERF-01`；负责人指定 4 个子项：① 阅读页增量加载 ② 目录/正文分离 ③ IsolateRunner ④ 样本与验收） |
-| 提交 | `e16da96`（② 解析器惰性）→ `f84b470`（① 阅读页增量）→ `9c9ff93`（③ IsolateRunner）→ `9be18ed`（④ 样本 / 测试 / 基线） |
+| 提交 | `e16da96`（② 解析器惰性）→ `f84b470`（① 阅读页增量）→ `9c9ff93`（③ IsolateRunner）→ `9be18ed`（④ 样本 / 测试 / 基线）→ 收尾提交（① 去无界缓存 + ④ `parseEpubStructure`，本批） |
 | 日期 | 2026-09-22 |
-| 一句话目标 | 打开大书不再一次性解压整本（图 / 字 / CSS 不常驻）；阅读页正文增量加载 + 有界驻留；给出改前 / 改后可复现数字 |
+| 一句话目标 | 打开大书不再一次性解压整本（图 / 字 / CSS 不常驻）；**读完一整本稳态内存也不顶回全书大小**；阅读页正文增量加载 + 有界驻留；给出改前 / 改后可复现数字 |
 
 | 技术点 | 用途 | 落点 | 关键写法或坑 |
 |---|---|---|---|
 | 惰性归档访问（`PERF-02` ①） | 结构解析阶段**不**预解压整本 | `lib/epub/epub_parser.dart` | 旧实现 `Map<String,Uint8List> files` 对**每条** `contentOfArchiveFile`（含图片）预解压；改为 `Map<String,ArchiveFile> byName`——archive 3.x 的 `ArchiveFile.content` 本就按需解压，仅建「条目名 → ArchiveFile」索引即达成「图 / 字 / CSS 保持压缩态」 |
 | 声明式文本性判定 | spine 项「是否正文」不再依赖字节 | `lib/epub/zip_paths.dart`（`textualVerdict`） | 仅凭 `media-type` / 扩展名即可判定的：明确非文本**直接跳过、连解压都不做**；仅当声明不足（无 media-type 且扩展名不暴露）才解压该**单**条目做字节魔数兜底（`fx07b` 脏书路径）。`looksTextual` 复用同一判定，行为逐字不变 |
-| `EpubSection` 惰性构造 | 正文推迟到 `content(i)` 才解压 | `lib/model/epub_book.dart` | 新增 `EpubSection.lazy(loadBytes:)`；`rawBytes` 由字段改为 getter（内部缓存）；**急切构造签名不变** → `dart_epub_source.dart` / 既有测试零改动（不加 `join`、不进 Flutter、不引新依赖） |
+| `EpubSection` 惰性构造 | 正文推迟到 `content(i)` 才解压 | `lib/model/epub_book.dart` | 新增 `EpubSection.lazy(loadBytes:)`；`rawBytes` 由字段改为 getter、**无缓存**（每次访问现取，`test/perf` 有计数断言）；**急切构造签名不变** → `dart_epub_source.dart` / 既有测试零改动（不加 `join`、不进 Flutter、不引新依赖） |
+| **非驻留解压（`PERF-02` ① 的真正口径）** | 读完的章**不**留在内存里 | `lib/epub/zip_paths.dart`（`lazyEntryLoader`） | **关键坑**：archive 3.x 的 `ArchiveFile.content` 会把解压结果**永久缓存**在 `_content`，仅去掉 `EpubSection._cached` 仍会随读章数线性增长。改法：`lazyEntryLoader` 只捕获**压缩态字节**（`rawContent.toUint8List()`，非消费视图），每次现解——STORE 直接返视图、DEFLATE 走 `package:archive` 的 `inflateBuffer`。故 `totalCharCount()` / `search()` 遍历全书后已读章节可被 GC 回收 |
+| **结构解析 / 绑定分离（`PERF-01` 底座）** | 让结构解析可跨 isolate | `lib/epub/epub_parser.dart` | `parseEpubStructure(bytes, {fileName})` 返回**无闭包纯数据** `EpubStructure`（sections 用 `EpubSectionRef{id,href}`、toc、metadata、封面候选 href、条目名索引）——闭包才是 `SendPort` 拒收项，纯数据对象可跨 isolate；`parseEpubResult(bytes, {fileName})` **签名不变**，内部 = `parseEpubStructure` + 在**本 isolate** 把 `loadBytes` / `readEntry` 绑到捕获了 `bytes` 的闭包上。**切记**：`parseEpubResult` 的返回**不可**跨 isolate |
+| 封面候选按需 | 不再急切解压并常驻全部候选 | 同上（`_bindOpfView` 的 `readEntry`） | 旧实现一次性解压并存下全部封面候选字节（`candidateBytes`）；改为 `readEntry(href)` 按 href **现查** `_resolveFile` → `lazyEntryLoader`，命中即解、用完即弃 |
 | 正文增量加载（`PERF-02` ②） | 首帧只等「目标章 ±1」，不等全书 | `lib/reader/chapter_cache.dart`、`lib/reader/reader_page.dart` | `ChapterAutoLoader.loadFirstBatch(target)` 取 ±1；后台 `fillOnce(current)` 按「离当前章由近及远」每批 **≤3** 补齐至 ±12 窗口驻留；未加载章渲染等高「载入中」占位块 |
 | 有界驻留（有界 LRU） | 驻留章数不随书增长 | `lib/reader/chapter_cache.dart` | `ChapterCache` 用**保序** `LinkedHashMap`（插入序 = LRU 序，尾 = 最新），上限 `kMaxLoadedChapters = 30`；`touch` 保护「在视章」不被逐出 |
 | 占位高度估计 | 抑制「已加载章数」增长导致的总高跳变 | `lib/reader/reader_page.dart` | 取**已加载章渲染高度的中位数**，**非**「字符数 × 系数」——未加载章的字符数在不解压前提下不可知，那正是 `PERF-02` 要避免的 |
@@ -375,6 +378,6 @@
 | 隔离执行底座（`PERF-01`） | 为解析移出主 isolate 预留同款形状 | `lib/task/isolate_runner.dart` | `compute()` 薄封装：纯函数 + **可序列化**入参；本任务**不接线**到 `load()`，仅提供底座与失败护栏 |
 | 性能基线（可复现） | 改前 / 改后数字留档 | `tool/perf_bench.dart`、`docs/perf-baseline/README.md` | **BookSource 层**测「首屏」（`load` + `chapters` + `content(±1)`）；**一次进程只测一样本**避免 RSS 互污，多轮取 min/median 时间 + `ProcessInfo.currentRss/maxRss`；样本由 `tool/gen_perf_fixtures.dart` 写到**临时目录、不入库** |
 | 测试铁律（`FakeAsync`） | 让性能验收可信 | `test/perf/lazy_load_test.dart`、`test/task/isolate_runner_test.dart` | 一律**纯 Dart `test()`**（**非** `testWidgets`）——`testWidgets` 体内 `await` 真异步 IO 会挂死（FakeAsync 不排空微任务队列），本项目**已两次实证** |
-| 结果（可复现） | 300+ 章 EPUB（含 80MB 图） | `docs/perf-baseline/README.md` | 首屏时间 **112 → 42 ms**（min，−63%）；驻留 RSS **504.7 → 433.7 MB**（−71 MB）；20MB TXT / 小书无回归 |
+| 结果（可复现） | 300+ 章 EPUB（含 80MB 图） | `docs/perf-baseline/README.md` | 首屏时间 **123 → 45 ms**（min，≈ −63%）；首屏后驻留 RSS **497.9 → 429.2 MB**（≈ −69 MB）；**稳态**（首屏后再读 50 章）**497.9 → 429.8 MB**（+0.6，几乎不增）；100 章大头书读完 100 章 稳态 **562.5 → 426.8 MB**；20MB TXT / 小书无回归 |
 
 

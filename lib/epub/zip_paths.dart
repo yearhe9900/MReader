@@ -29,6 +29,37 @@ Uint8List contentOfArchiveFile(ArchiveFile file) {
   return Uint8List(0);
 }
 
+/// 为一个**尚未解压**的归档条目构造「按需、**非驻留**」解压器（`PERF-02` ①）。
+///
+/// 返回的闭包**不保留解压结果**：每次调用都从**压缩态**字节重新解压，故长期持有它
+/// 不会让「读过的每一章」永久驻留。
+///
+/// 为什么不用 `ArchiveFile.content`：它的 `_content` **一次解压即永久缓存**在 [file] 上，
+/// 只要闭包还持有 [file]，读过的章就会一直占内存——于是 `totalCharCount()` / `search()`
+/// 遍历全书后，**稳态内存又回到「全书大小」**，正是 `PERF-02` ① 要消除的。
+///
+/// 做法：EPUB 的两种常态压缩法直接自行解压（STORE 原样返回；DEFLATE 走 `inflateBuffer`）；
+/// 极罕见的其它压缩法（bzip2 等）才退回持有 [file] 的 `content`。
+Uint8List Function() lazyEntryLoader(ArchiveFile file) {
+  final int method = file.compressionType ?? ArchiveFile.STORE;
+  final InputStreamBase? raw = file.rawContent;
+  if (raw != null && method == ArchiveFile.DEFLATE) {
+    // 压缩态字节（`toUint8List` 不移动读头，返回视图 / 小拷贝；**非**解压结果）。
+    final Uint8List compressed = raw.toUint8List();
+    return () {
+      final List<int>? out = inflateBuffer(compressed);
+      if (out == null) return Uint8List(0);
+      return out is Uint8List ? out : Uint8List.fromList(out);
+    };
+  }
+  if (raw != null && method == ArchiveFile.STORE) {
+    final Uint8List stored = raw.toUint8List();
+    return () => stored;
+  }
+  // 罕见压缩法：退回（此时才可能因 archive 的内部缓存而驻留）。
+  return () => contentOfArchiveFile(file);
+}
+
 /// 归一化包内路径：统一分隔符、去掉 `'./'` 与开头的 `'/'`、压掉重复斜杠。
 String normalizeZipPath(String raw) {
   var s = raw.replaceAll('\\', '/');

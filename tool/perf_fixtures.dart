@@ -156,6 +156,76 @@ Uint8List buildLongChapterEpub({
   return Uint8List.fromList(encoded ?? const <int>[]);
 }
 
+/// 造一本「**章节正文很大**」的 EPUB，用于验证 `PERF-02` ① 的**稳态**口径：
+/// 「连续读多章后，驻留内存不随『已读章数』线性增长」。
+///
+/// [chapters] 章，每章 [paragraphsPerChapter] 段、每段 [charsPerParagraph] 字符
+/// → 单章 ≈ 二者之积，全书**解压后正文总量 ≈ chapters × 单章**（用少量「大段」撑体积，
+/// 减少 XML 元素数，避免解析/构造开销盖过内存信号）。
+Uint8List buildLargeBodyEpub({
+  int chapters = 100,
+  int paragraphsPerChapter = 60,
+  int charsPerParagraph = 8000,
+}) {
+  final Archive archive = Archive();
+  void add(String path, List<int> bytes) {
+    archive.addFile(ArchiveFile(path, bytes.length, bytes));
+  }
+
+  add('mimetype', utf8.encode('application/epub+zip'));
+  add(
+    'META-INF/container.xml',
+    utf8.encode(
+      '<?xml version="1.0" encoding="UTF-8"?>'
+      '<container version="1.0" '
+      'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+      '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+      'media-type="application/oebps-package+xml"/></rootfiles></container>',
+    ),
+  );
+
+  final StringBuffer manifest = StringBuffer();
+  final StringBuffer spine = StringBuffer();
+  for (int i = 1; i <= chapters; i++) {
+    final String id = 'c$i';
+    manifest.writeln(
+      '<item id="$id" href="text/ch$i.xhtml" '
+      'media-type="application/xhtml+xml"/>',
+    );
+    spine.writeln('<itemref idref="$id"/>');
+  }
+  add(
+    'OEBPS/content.opf',
+    utf8.encode(
+      '<?xml version="1.0" encoding="UTF-8"?>'
+      '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" '
+      'unique-identifier="uid">'
+      '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+      '<dc:title>大正文样本</dc:title><dc:creator>生成器</dc:creator>'
+      '<dc:language>zh</dc:language></metadata>'
+      '<manifest>$manifest</manifest><spine>$spine</spine></package>',
+    ),
+  );
+
+  final String filler = '正' * charsPerParagraph;
+  for (int i = 1; i <= chapters; i++) {
+    final StringBuffer body = StringBuffer('<h1>第$i章</h1>');
+    for (int p = 1; p <= paragraphsPerChapter; p++) {
+      body.write('<p>第$i章第$p段$filler</p>');
+    }
+    add(
+      'OEBPS/text/ch$i.xhtml',
+      utf8.encode(
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>第$i章</title>'
+        '</head><body>$body</body></html>',
+      ),
+    );
+  }
+
+  final List<int>? encoded = ZipEncoder().encode(archive);
+  return Uint8List.fromList(encoded ?? const <int>[]);
+}
+
 /// 造一段大 TXT（`>= chapters` 章；体量由段落数撑起，默认约 20MB+）。
 ///
 /// 每章以「第N章」开头（满足 `DartTxtSource` 的分章规则），其余为足量正文。

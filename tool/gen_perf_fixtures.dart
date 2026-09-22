@@ -5,8 +5,9 @@
 //   dart run tool/gen_perf_fixtures.dart <目录>      # 写到指定目录
 //
 // 产物：
-//   · big_320.epub      —— 320 章 + 10×2MB 图片（验证非章节资源不常驻）
+//   · big_320.epub      —— 320 章 + 20×4MB 图片（验证非章节资源不常驻）
 //   · long_chapter.epub —— 单章 ~12 万字符（`PERF-03`）
+//   · big_bodies.epub   —— 100 章 × ~480KB 正文（≈48MB；稳态不驻留口径）
 //   · big_20mb.txt      —— ~20MB、800 章（首帧时间 / 峰值内存基线）
 import 'dart:io';
 import 'dart:typed_data';
@@ -25,6 +26,7 @@ void main(List<String> args) {
       imageBytesEach: 4 * 1024 * 1024,
     ),
     'long_chapter.epub': buildLongChapterEpub(),
+    'big_bodies.epub': buildLargeBodyEpub(),
     'big_20mb.txt': buildTxt(),
   };
 
