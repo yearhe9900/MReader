@@ -7,15 +7,24 @@
 #   reader 阅读器（含 testWidgets）      test/reader、test/typography、test/perf
 #   ui     界面层（最慢，FakeAsync 重）   test/ui、test/widget_test.dart
 #   fast   parse + data（不含 widget 重的两组）
-#   all    全量（批收官 / 里程碑验收用；默认）
+#   all    全量 —— 仅在负责人明确发出「全量测试」指令时执行（2026-09-23 拍板）；
+#          开发批次只跑与改动相关的分组。无参数不默认全量。
 #
 # 分组口径见 docs/tech-usage.md「测试分组与局部执行」。
 # 统一 --timeout 30s：排查挂死的既定纪律（默认 10 分钟/个太慢）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-group="${1:-all}"
-args=(test --timeout 30s)
+if [ $# -lt 1 ]; then
+  echo "usage: bash tool/test.sh [parse|data|reader|ui|fast|all]" >&2
+  echo "（全量 all 仅在负责人明确下令时执行；开发批次请指定相关分组）" >&2
+  exit 2
+fi
+group="$1"
+# 注意：`flutter test` 的 `test` 子命令已由第 33 行写出，这里**只放选项**——
+# 曾误写成 `args=(test --timeout 30s)`，与子命令叠加成 `flutter test test …`，
+# 第二个位置参数 `test`（目录）把全量拖了进来，分组形同虚设。
+args=(--timeout 30s)
 
 case "$group" in
   parse)  targets=(test/epub test/format) ;;
