@@ -10,6 +10,9 @@
 - M2a-T03 数据层：BookRecord 增 intro 与书名/作者/简介/封面四来源标记（枚举名落盘，旧索引缺失回 none）`4fc5d16`
 - M2a-T03 导入带来源：ImportService 构造记录时带入 intro + 四来源（新导入来源天然正确，META-08②）`4fc5d16`
 - M2a-T03 仓库更新口：LibraryRepository.updateRecord 整体替换同 bookId 条目（编辑/恢复自动值落盘通道）`4fc5d16`
+- M2a-T03 详情页（浏览态）：BookDetailPage 展示封面/书名/作者/四来源标记/格式/大小/进度/分组/简介占位/统计入口，顶栏玻璃、内容整体不透明（UI-04）`51d9071`
+- M2a-T03 入口改道：书架点卡片进详情页（F9/META-08①），开书经 onOpenBook 回调复用书架管道，pop 后刷新列表 `51d9071`
+- M2a-T03 封面查看与选图：cover_picker 大图 readFull 现读（PERF-02）+ FilePicker 本地选图 `51d9071`
 
 ## 2026-09-22
 

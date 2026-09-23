@@ -451,6 +451,10 @@
 | `BookRecord` 增 `intro` + 四来源标记 | 详情页字段与 `META-09`「置 user 不被覆盖」的持久化载体 | `lib/library/book_record.dart` | **枚举落盘用枚举名字符串**（`MetaOrigin.name`）；`fromJson` 缺失/脏值 → `intro=''`、四来源 = `none`（旧索引条目语义即「来源未知」）；构造参数带默认值，旧调用点零改动；`copyWith` 同步扩展 |
 | `ImportService.import` 带入来源 | 新导入的书来源标记天然正确（`META-08 ②`，如 TXT 作者标「文件名推断」） | `lib/library/import_service.dart` | 直接透传 `meta.intro` 与 `meta` 的四来源，不在导入层重算 |
 | `LibraryRepository.updateRecord` | 编辑 / 恢复自动值 / 一次性回填的唯一落盘通道 | `lib/library/library_repository.dart` | 抄 `markRead` 模式：`_index.load` → 同 bookId 替换 → `save`；不在库静默返回；**UI 只依赖本类，禁直触 `BookIndex`** |
+| 书架入口改道 + 开书回调注入 | 「书架点一本书 → 详情页」（F9 / `META-08 ①`），开书管道只有一份 | `lib/ui/shelf_page.dart` | `BookCard.onTap` → `_openDetail` push 详情页（`_detailPushing` 防双击叠页）；`onOpenBook: _openBook` 回调注入，详情页底部「继续阅读」只转发（**禁止复制第二份开书管道**）；`await push` 返回后 `unawaited(_loadBooks())` 刷新（编辑/移出/进度靠它同步） |
+| 详情页玻璃红线落地 | 顶栏玻璃 / 封面区与简介区不透明 | `lib/ui/book_detail_page.dart` | `GlassNavScaffold + GlassTopBar` 做导航层（**从不手传 premium**，库自动提升）；滚动内容 + 底部操作同在一个 `OpaqueContentSurface` 内，内部零玻璃控件（不玻璃包玻璃、玻璃不进滚动行）；简介区显式 `fullyOpaque(surfaceContainerHighest)` |
+| 一次性回填（有界 IO） | 旧索引条目（四来源全 `none`）进详情页时补来源标记 | `meta_editor.needsOriginBackfill` / `backfillFromMeta` + `BookDetailPage._backfill` | 判据取**四来源全 `none`**（TXT 简介/封面解析结果本就是 none，按「任一 none」会每次打开都重解析）；`origin==user` 字段绝不动（`META-09 ④`）；`PendingCover` 物化后才落盘（持久化不含 PendingCover 不变式）；失败静默降级不重试 |
+| 封面字节不常驻（`PERF-02`） | 详情页缩略图 / 大图展示 | `lib/ui/book_detail_page.dart` / `lib/ui/cover_picker.dart` | 缩略图 `readThumb` 现读、换图即弃；大图 `readFull` 现读后 `Dialog + InteractiveViewer` 展示（玻璃弹窗属 M2a-T04） |
 
 
 
