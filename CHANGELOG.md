@@ -29,7 +29,7 @@
 - 测试链路提速：新增 `test/test_config.dart::capTestTimeout()`——CLI 的 `--timeout` 对 `testWidgets` **无效**（其显式用 binding 的 10 分钟默认值压过），须在 `main()` 首行把 `defaultTestTimeout` 置 30s；8 个含 `testWidgets` 的文件接入，reader 组从「挂满 10 分钟」降到 22s / 145 用例全绿 `7b3b76a`
 - backlog① 开书可见滚动优化（方案 A）：恢复回退分支（冷启动读中段 `coversPrefix` 恒 false）改用同版面 `hint.scrollOffset` 做首帧 seed——目标章大概率首帧即进布局窗口、可精确测量，跳过 `maxScrollExtent` 外推估算（同夹具 26157 ↔ 290816 振荡的乱跳源）；像素仍只作 seed，落点照旧语义坐标校正收敛（`RC2` 不变）`82a3757`
 - backlog① 开书可见滚动优化（方案 B）：开书首跳校正全程遮罩正文滚动区（`reader-restore-mask`，opaque 层吞掉恢复期拖动），用户不再看到「前几页 → 当前页」跳动；落定/超帧数放弃统一撤除，目录/链接/上下章主动跳转不遮 `82a3757`
-- 首帧批次语义对齐 567Reader：`loadFirstBatch` 改「目标章必等、邻章 ±1 预取不阻塞、各自到货入缓存」（旧 `Future.wait` 全等——任一邻章慢/挂即拖住开书与同批他章）；`_loadOne` 拆分使同批各章互不拖累
+- 首帧批次语义对齐 567Reader：`loadFirstBatch` 改「目标章必等、邻章 ±1 预取不阻塞、各自到货入缓存」（旧 `Future.wait` 全等——任一邻章慢/挂即拖住开书与同批他章）；`_loadOne` 拆分使同批各章互不拖累 `6dc7a21`
 
 ### 修复
 
