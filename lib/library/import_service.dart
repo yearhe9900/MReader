@@ -76,7 +76,7 @@ class ImportService {
       cover = await _coverStore.materialize(bookId: bookId, pending: cover);
     }
 
-    // 6. 构造记录
+    // 6. 构造记录（带入 intro + 四来源标记：新导入的书来源天然正确，`META-08 ②`）
     return BookRecord(
       bookId: bookId,
       fileName: fileName,
@@ -86,6 +86,11 @@ class ImportService {
       format: format,
       cover: cover,
       importedAt: DateTime.now().millisecondsSinceEpoch,
+      intro: meta.intro,
+      titleOrigin: meta.titleOrigin,
+      authorOrigin: meta.authorOrigin,
+      introOrigin: meta.introOrigin,
+      coverOrigin: meta.coverOrigin,
     );
   }
 }

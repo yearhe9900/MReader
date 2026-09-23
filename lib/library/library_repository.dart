@@ -147,4 +147,25 @@ class LibraryRepository {
     if (!found) return;
     await _index.save(next);
   }
+
+  /// 用 [record] 整体替换索引中的同 `bookId` 条目（`META-09` 编辑 / 恢复自动值落盘）。
+  ///
+  /// 走既有 `_index.load` → 替换 → `save` 模式（同 [markRead]）；
+  /// `bookId` 不在库中时**静默返回**（不报错、不新增）。
+  /// UI 层只依赖本类，**不直接触碰 [BookIndex]**（架构既有规则）。
+  Future<void> updateRecord(BookRecord record) async {
+    final List<BookRecord> records = await _index.load();
+    bool found = false;
+    final List<BookRecord> next = <BookRecord>[];
+    for (final BookRecord r in records) {
+      if (r.bookId == record.bookId) {
+        next.add(record);
+        found = true;
+      } else {
+        next.add(r);
+      }
+    }
+    if (!found) return;
+    await _index.save(next);
+  }
 }

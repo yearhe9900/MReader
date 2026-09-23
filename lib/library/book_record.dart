@@ -21,6 +21,11 @@ class BookRecord {
     required this.importedAt,
     this.lastReadAt,
     this.readProgress,
+    this.intro = '',
+    this.titleOrigin = MetaOrigin.none,
+    this.authorOrigin = MetaOrigin.none,
+    this.introOrigin = MetaOrigin.none,
+    this.coverOrigin = MetaOrigin.none,
   });
 
   /// 内容摘要（SHA-256 hex 前 16 位）；`LIB-05` 判重键。
@@ -53,6 +58,20 @@ class BookRecord {
   /// 已读百分比 `0.0 ~ 1.0`（M1-T04 填充，当前为 `null`）。
   final double? readProgress;
 
+  /// 简介（来自 [BookMeta.intro]；`META-08` 详情页展示）。
+  ///
+  /// 旧索引条目缺失此字段 → `''`（向后兼容）。
+  final String intro;
+
+  /// 书名 / 作者 / 简介 / 封面的**来源标记**（`META-01` 闭合四值）。
+  ///
+  /// 旧索引条目缺失 → `MetaOrigin.none`（语义即「来源未知」）；
+  /// `user` 表示用户手动编辑过，**不被后续重新解析覆盖**（`META-09 ④`）。
+  final MetaOrigin titleOrigin;
+  final MetaOrigin authorOrigin;
+  final MetaOrigin introOrigin;
+  final MetaOrigin coverOrigin;
+
   /// 序列化为 JSON Map（持久化到 `index.json`）。
   Map<String, Object?> toJson() => <String, Object?>{
         'bookId': bookId,
@@ -63,6 +82,11 @@ class BookRecord {
         'format': format,
         'cover': encodeCoverRef(cover),
         'importedAt': importedAt,
+        'intro': intro,
+        'titleOrigin': titleOrigin.name,
+        'authorOrigin': authorOrigin.name,
+        'introOrigin': introOrigin.name,
+        'coverOrigin': coverOrigin.name,
         if (lastReadAt != null) 'lastReadAt': lastReadAt,
         if (readProgress != null) 'readProgress': readProgress,
       };
@@ -99,14 +123,31 @@ class BookRecord {
       importedAt: importedAt.toInt(),
       lastReadAt: (json['lastReadAt'] as num?)?.toInt(),
       readProgress: (json['readProgress'] as num?)?.toDouble(),
+      intro: json['intro'] is String ? json['intro']! as String : '',
+      titleOrigin: _originFromJson(json['titleOrigin']),
+      authorOrigin: _originFromJson(json['authorOrigin']),
+      introOrigin: _originFromJson(json['introOrigin']),
+      coverOrigin: _originFromJson(json['coverOrigin']),
     );
+  }
+
+  /// 来源标记反序列化：**枚举名字符串**；缺失 / 类型错 / 未知名 → `none`
+  /// （旧索引条目语义即「来源未知」，不因脏值丢整条记录）。
+  static MetaOrigin _originFromJson(Object? value) {
+    if (value is! String) return MetaOrigin.none;
+    return MetaOrigin.values.asNameMap()[value] ?? MetaOrigin.none;
   }
 
   /// 生成一份新副本（M2a 的 `META-09` 换封面、M1-T04 进度更新时使用）。
   BookRecord copyWith({
     String? title,
     String? author,
+    String? intro,
     CoverRef? cover,
+    MetaOrigin? titleOrigin,
+    MetaOrigin? authorOrigin,
+    MetaOrigin? introOrigin,
+    MetaOrigin? coverOrigin,
     int? lastReadAt,
     double? readProgress,
   }) {
@@ -119,6 +160,11 @@ class BookRecord {
       format: format,
       cover: cover ?? this.cover,
       importedAt: importedAt,
+      intro: intro ?? this.intro,
+      titleOrigin: titleOrigin ?? this.titleOrigin,
+      authorOrigin: authorOrigin ?? this.authorOrigin,
+      introOrigin: introOrigin ?? this.introOrigin,
+      coverOrigin: coverOrigin ?? this.coverOrigin,
       lastReadAt: lastReadAt ?? this.lastReadAt,
       readProgress: readProgress ?? this.readProgress,
     );
