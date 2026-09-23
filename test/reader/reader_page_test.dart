@@ -50,10 +50,13 @@ class _TestAppPaths implements AppPaths {
 /// 断言「第一章不可见」才有意义（内容过矮时整屏全可见，断言会失真）。
 /// 章数超过 3 时标题按中文数字顺延（第六章 / 第二十章…），href 恒为 `h{序号}`。
 class _FakeSource implements BookSource {
-  _FakeSource({List<int>? paragraphCounts, Set<int>? hangIndices})
-      : paragraphCounts =
-            paragraphCounts ?? const <int>[20, 20, 20],
-        hangIndices = hangIndices ?? const <int>{};
+  _FakeSource({
+    List<int>? paragraphCounts,
+    Set<int>? hangIndices,
+    Map<int, Completer<void>>? gates,
+  })  : paragraphCounts = paragraphCounts ?? const <int>[20, 20, 20],
+        hangIndices = hangIndices ?? const <int>{},
+        gates = gates ?? const <int, Completer<void>>{};
 
   /// 每章段落数（下标 = 章下标；长度 = 章数）。
   final List<int> paragraphCounts;
@@ -62,6 +65,12 @@ class _FakeSource implements BookSource {
   /// 首帧批次之外的章永不驻留 → 布局不再变化、占位高不被实测值替换，
   /// `RC1` 的「未收敛」态可复现（见回归②）。
   final Set<int> hangIndices;
+
+  /// 可释放的加载闸门：`content(i)` 先 `await gates[i].future` 再返回——
+  /// 「该章暂时取不到、测试显式放行后才到货」（回归④：模拟上方章稍后补齐，
+  /// 观测占位→真实合入是否挪动视口）。与 [hangIndices] 的区别：hang 永不完成，
+  /// gate 由测试择机 `complete()` 放行。
+  final Map<int, Completer<void>> gates;
 
   bool disposed = false;
 
@@ -108,6 +117,12 @@ class _FakeSource implements BookSource {
     if (hangIndices.contains(chapterIndex)) {
       // 永不完成：该章正文永远取不到 → 永远停留在估算占位高。
       return Completer<ChapterContent>().future;
+    }
+    final Completer<void>? gate = gates[chapterIndex];
+    if (gate != null) {
+      // 回归④：闸门放行前该章到不了货（放行后立即返回）。
+      await gate.future;
+      if (disposed) return ChapterContent.paragraphs(const <String>[]);
     }
     return ChapterContent.paragraphs(<String>[
       for (int p = 1; p <= paragraphCounts[chapterIndex]; p++)
@@ -577,6 +592,63 @@ void main() {
       // 非空验证：恢复确实落到了目标章（排除「什么都没发生」的假绿）。
       expect(find.text('第三章'), findsOneWidget);
       expect(find.text('第一章'), findsNothing);
+    });
+
+    testWidgets('回归④：占位→真实合入不得挪动视口（上方章高度回填后语义重锚）',
+        (WidgetTester tester) async {
+      // 5 章：第 2 章极矮（2 段），其余 20 段；**第 1 章挂闸门**——首帧预取
+      // 与后台补齐都卡在闸门处，上方高度停留在估算占位值直到测试放行。
+      final Completer<void> gate0 = Completer<void>();
+      final _FakeSource source = _FakeSource(
+        paragraphCounts: const <int>[2, 20, 20, 20, 20],
+        gates: <int, Completer<void>>{0: gate0},
+      );
+      // 播种：恢复到第 2 章（下标 1）章首——上方第 1 章（下标 0）恰为占位高。
+      await tester.runAsync(
+        () => progressStore.save(
+          ReadingProgress(
+            bookId: 'testbook01',
+            chapterHref: 'h2',
+            chapterIndex: 1,
+            chapterPos: 0.0,
+            updatedAt: 1,
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(buildApp(source: source));
+      await _settle(tester);
+
+      // 落定：记「第 2 章标题顶 − 视口顶」间距 d1（第 1 章仍是估算占位高）。
+      final Finder title = find.text('第二章');
+      final Finder viewport = find.byType(ListView);
+      expect(title, findsOneWidget, reason: '恢复应落到第 2 章');
+      final double d1 =
+          tester.getTopLeft(title).dy - tester.getTopLeft(viewport).dy;
+
+      // 放行第 1 章：真实高度（2 段，很矮）合入 → 上方瞬间缩短数百像素。
+      // 旧实现在合入后不重锚：像素偏移不动、同一 offset 指向别处 → 视口
+      // 内容整体后移，用户看到「当前章跳走」（实机「进书从 40 多章跳到
+      // 300 多章」即此漂移在长书上的放大形态）。
+      gate0.complete();
+      await _settle(tester);
+
+      final double d2 =
+          tester.getTopLeft(title).dy - tester.getTopLeft(viewport).dy;
+      // 断言主句放最前：修前红时直接报出 d1/d2 实测漂移量。
+      expect((d2 - d1).abs(), lessThanOrEqualTo(2),
+          reason: '占位→真实合入改变上方高度后必须语义重锚；'
+              'd1=$d1 d2=$d2（旧实现在此漂移数百像素）');
+      // 非空验证：第 1 章真的补齐了（真实标题 + 正文渲染；占位块只显示
+      // 「第 1 章 · 载入中…」且无正文段落，均不匹配下列文本）。
+      expect(find.text('第一章', skipOffstage: false), findsOneWidget,
+          reason: '闸门放行后第 1 章应以真实内容落库渲染');
+      expect(
+        find.textContaining('第1章正文1', findRichText: true,
+            skipOffstage: false),
+        findsWidgets,
+        reason: '第 1 章正文应已渲染（排除 d1==d2 的「什么都没发生」假绿）',
+      );
     });
   });
 }

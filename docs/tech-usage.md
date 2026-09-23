@@ -374,6 +374,7 @@
 | 正文增量加载（`PERF-02` ②） | 首帧只等目标章，不等全书（±1 预取不阻塞） | `lib/reader/chapter_cache.dart`、`lib/reader/reader_page.dart` | `ChapterAutoLoader.loadFirstBatch(target)` **目标章必等、邻章 ±1 `unawaited` 预取、各自到货入缓存**（对齐 567Reader `ReadBook.loadContent` cur±1 并行/仅目标章驱动显示；旧 `Future.wait` 全等会被慢邻章拖住）；后台 `fillOnce(current)` 按「离当前章由近及远」每批 **≤3** 补齐至 ±12 窗口驻留；未加载章渲染等高「载入中」占位块 |
 | 有界驻留（有界 LRU） | 驻留章数不随书增长 | `lib/reader/chapter_cache.dart` | `ChapterCache` 用**保序** `LinkedHashMap`（插入序 = LRU 序，尾 = 最新），上限 `kMaxLoadedChapters = 30`；`touch` 保护「在视章」不被逐出 |
 | 占位高度估计 | 抑制「已加载章数」增长导致的总高跳变 | `lib/reader/reader_page.dart` | 取**已加载章渲染高度的中位数**，**非**「字符数 × 系数」——未加载章的字符数在不解压前提下不可知，那正是 `PERF-02` 要避免的 |
+| 布局突变语义重锚（修 A/C，2026-09-23） | 占位→真实合入 / 占位高刷新**不挪视口** | `lib/reader/reader_page.dart`（`_applyLayoutChange`） | 突变前 `ScrollAnchor.capture` 记「视口顶在当前章的相对位置」，突变后 `_beginScrollTo(chapterIndex, relativePos)` **语义坐标重锚**；**禁**复用 `_onSettingsChanged` 式单跳 `correction`——同帧多次突变 /「跳转未渲染就再次捕获」会把多个 delta **叠加**（过校正）。采样（修 C）随重锚收敛走（`_finishRestore`），防漂移位置入档；恢复迭代中 / 用户手势滚动中 / 锚点抓取失败不重锚 |
 | 恢复不降级（`RD-04`） | 增量加载后落点仍准 | 同上（`_ensureController`） | 默认仍走「按章序估算 + `addPostFrameCallback` 校正 ≤3 帧」；**仅当**同版面签名**且** `_cache.coversPrefix(targetIndex)`（已加载集合覆盖 `[0, target]`）时才用 `initialScrollOffset` 精确落回 |
 | `PERF-03` 逐段渲染 | 不合成巨型 `Text` | 同上（`_buildChapterItem`） | 每段各自成 `Text`（**禁 `join('\n\n')`**）；超长单章（>10 万字符）验收见 `test/perf` |
 | 隔离执行底座（`PERF-01`） | 为解析移出主 isolate 预留同款形状 | `lib/task/isolate_runner.dart` | `compute()` 薄封装：纯函数 + **可序列化**入参；本任务**不接线**到 `load()`，仅提供底座与失败护栏 |
@@ -505,6 +506,8 @@
 - **断言正文段落须 `findRichText: true`**：正文由 `InlineParagraph` → `Text.rich`（RichText）渲染，`find.text` / `find.textContaining` 默认**不匹配富文本**（标题是纯 `Text`、能匹配，故只错在正文断言上）。
 - **防假绿**：构造「某状态不成立」的用例时补**非空验证**（界面确实渲染了内容 / 目标不在场），否则「什么都没发生」时布尔断言恒真。
 - **「二次打开」类测试必须先拆树**：`pumpWidget(buildApp())` 对**同类型无 key** 的 widget 走 `Widget.canUpdate` → Element/State **复用**（`initState`/`dispose` 都不跑、`ScrollController` 是第一次的）——直接再 pump 一次的「关书再开」是假绿（原「同版面 localHint 重开」用例即栽在此）。必须先 `pumpWidget(const SizedBox())` 把树拆掉（真 dispose），排空假区保存后再开。
+- **「稍后到货」用 `gates` 夹具，「永不到货」用 `hangIndices`**：`_FakeSource.gates[i]` 让 `content(i)` `await` 一个 `Completer.future`、测试择机 `complete()` 放行——稳定构造「某章占位、稍后补齐」的中间态（回归④）；`hangIndices` 是永不完成（回归② 冻结布局用）。二者别混用。
+- **预期会红的几何断言放最前**：如回归④ 的 d1/d2 距离主句放在非空验证**之前**——修前红时直接报出实测漂移量（`d1=16.0 d2=-794.0`，810px），而非被非空验证的失败信息带偏排查方向。
 
 
 

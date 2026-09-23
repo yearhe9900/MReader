@@ -31,6 +31,13 @@
 //     26157 ↔ 290816 振荡，估算落点会一路冲到书尾占位区）；
 //     **B. 首跳遮罩**——恢复校正全程（含超帧数放弃）盖住正文滚动区
 //     （[_restoreMask]），中间跳转一律不可见，[_finishRestore] 统一撤除。
+//   · **布局突变语义重锚（修 A，2026-09-23）**：占位→真实合入 / 占位高估计
+//     刷新会改 ListView 总高——像素偏移不动即指向别处（「进书从 40 多章跳到
+//     300 多章」的漂移源）。突变前 [ScrollAnchor] 记「视口顶在当前章的相对
+//     位置」，突变后 [_beginScrollTo] 按语义坐标重锚（等价于 567Reader
+//     「已发布页高不可变、增量刷新不动滚动锚点」的保障，见 [_applyLayoutChange]）；
+//     **采样置后（修 C）**：重锚收敛后才 [_detectCurrentChapter]，突变中间态
+//     不进存档（旧 `_resampleAfterLoad` 合入后立即采样，会把漂移位置当真值）；
 //   · **进度保存时机**：滚动停止 / 切章（含目录跳转）/ `dispose()`，**但都过 `RC1`
 //     写盘闸门**——恢复**未收敛**（校正超帧数中途放弃）、位置**未采样**（占位高 /
 //     探不到章）一律**不写盘**，否则误差会被当真值存进 `ReadingProgress` / `localHint`，
@@ -192,7 +199,8 @@ class _ReaderPageState extends State<ReaderPage> {
   ///
   /// [_detectCurrentChapter] 拿到完整语义坐标 → `true`；命中估算占位高章
   /// （`RC3`）或一个章块都没探到（`RC4`）→ `false`：保持 `_chapterPos`
-  /// 原值、且本轮不得写盘。占位章真正加载后由 [_resampleAfterLoad] 重采样置回。
+  /// 原值、且本轮不得写盘。占位章真正加载后由 [_applyLayoutChange] 的
+  /// 语义重锚收敛（[_finishRestore] 内）重采样置回。
   bool _positionSampled = false;
 
   /// 目标段落的 `GlobalKey`（懒创建，键 = `'章索引:段落下标'`；`CNT-04c`）。
@@ -572,8 +580,8 @@ class _ReaderPageState extends State<ReaderPage> {
     unawaited(_autoFillLoop());
   }
 
-  /// 后台补齐循环：每批 [kLoadBatchSize] 章，逐批 `setState` 合入；
-  /// 直到「当前窗口内全部驻留」为止。滚动后由 [_ensureAutoFill] 再触发。
+  /// 后台补齐循环：每批 [kLoadBatchSize] 章，逐批合入（经 [_applyLayoutChange]
+  /// 做语义重锚）；直到「当前窗口内全部驻留」为止。滚动后由 [_ensureAutoFill] 再触发。
   Future<void> _autoFillLoop() async {
     try {
       while (mounted && !_disposed) {
@@ -582,27 +590,56 @@ class _ReaderPageState extends State<ReaderPage> {
         final bool more = await loader.fillOnce(_currentIndex);
         if (!mounted || _disposed) return;
         if (!more) return;
-        setState(() {});
+        // 修 A：占位→真实合入会改总高，重锚后再采样（修 C，随收敛走）。
+        _applyLayoutChange(() => setState(() {}));
         _scheduleEstimateRefresh();
-        _resampleAfterLoad(); // `RC3`：占位章真正加载后重采样 chapterPos
       }
     } finally {
       _fillRunning = false;
     }
   }
 
-  /// 占位高章真正加载后重采样（`RC3`）：用真实高度刷新 `_chapterPos` 并解闸。
+  /// 布局突变（占位→真实合入 / 占位高估计刷新）后的**语义重锚**（修 A）。
   ///
-  /// 恢复落定时若覆盖视口顶的还是估算占位章，`chapterPos` 采样被挂起
-  /// （`RC1` 写盘闸门关闭）；本批正文合入、真实高度可测后再采一次，
-  /// 使语义坐标恢复可信（是否落盘仍由 [_saveProgress] 内的闸门裁决）。
-  void _resampleAfterLoad() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _restoring) return;
-      if (_detectCurrentChapter()) {
-        _positionSampled = true;
-      }
-    });
+  /// `PERF-02` 增量加载下「占位块 ↔ 真实章」互换会改 ListView 总高——像素
+  /// 偏移不动、同一 offset 就指向别处：上方占位补齐后缩短，视口内容整体后移
+  /// （实机「进书从 40 多章跳到 300 多章」即此漂移在长书上的放大形态）。
+  /// 567Reader 的等价保障是「已发布排版页高度不可变、增量刷新不动滚动锚点」；
+  /// 连续滚动模型高度必变，故在突变前用 [ScrollAnchor] 记「视口顶在当前章的
+  /// 相对位置」，突变后按**语义坐标** [_beginScrollTo] 重锚。
+  ///
+  /// 为何走「估算 + 校正收敛」而非 [_onSettingsChanged] 式单跳 `correction`：
+  /// 单跳校正在「跳转尚未渲染就因再次突变而再次捕获」时，会把多个 delta
+  /// **叠加**（过校正）；[_beginScrollTo] 每帧重测目标、按语义坐标收敛，
+  /// 天然吸收后续突变（重锚迭代中再突变 → [_restoreStep] 下一帧重测即纠偏）。
+  ///
+  /// 采样（修 C）天然置后：[_finishRestore] 在收敛后才 [_detectCurrentChapter]，
+  /// 不会把突变中间态写进 `_currentIndex` / `_chapterPos`（旧 `_resampleAfterLoad`
+  /// 在 `setState` 后立即采样，会把漂移位置当真值采走入档）。
+  ///
+  /// 不重锚的三种情形（保持原状，交给既有采样点兜底）：
+  ///   · 恢复 / 重锚迭代进行中（[_restoring]）——在跑的迭代每帧重测目标，
+  ///     自会吸收本次突变（也防叠加过校正）；
+  ///   · 用户手势滚动中（`isScrolling`）——`jumpTo` 会掐掉用户的甩动；
+  ///   · 锚点抓取失败（章块未布局 / 控制器未挂）——无可锚语义。
+  void _applyLayoutChange(VoidCallback mutate) {
+    final ScrollController? controller = _controller;
+    final bool canAnchor = !_restoring &&
+        controller != null &&
+        controller.hasClients &&
+        !controller.position.isScrollingNotifier.value;
+    final ScrollAnchor? anchor = canAnchor
+        ? ScrollAnchor.capture(
+            controller: controller,
+            viewportBox: _viewportBox(),
+            chapterBox: _chapterBoxAt(_currentIndex),
+            chapterIndex: _currentIndex,
+          )
+        : null;
+    mutate();
+    if (anchor != null) {
+      _beginScrollTo(anchor.chapterIndex, anchor.relativePos);
+    }
   }
 
   /// 在下一帧测量已加载章的渲染高度，刷新占位高度估计（中位数）。
@@ -625,7 +662,10 @@ class _ReaderPageState extends State<ReaderPage> {
     heights.sort();
     final double median = heights[heights.length ~/ 2];
     if ((median - _estimatedChapterHeight).abs() > 0.5) {
-      setState(() => _estimatedChapterHeight = median);
+      // 修 A：占位高是**所有**未加载章的渲染高度——一改就是全局高度突变，
+      // 与合入同样走语义重锚（`_applyLayoutChange`）。
+      _applyLayoutChange(
+          () => setState(() => _estimatedChapterHeight = median));
     }
   }
 

@@ -38,6 +38,8 @@
 - 回归②夹具重建：`_FakeSource` 增 `hangIndices`（`content()` 返回永不完成的 future）**冻结布局**以稳定复现「恢复未收敛」，并补非空验证（列表就位 + 有内容渲染 + 目标章标题/正文均不出现）防假绿 `7b3b76a`
 - 测试假绿（「同版面 localHint 重开」用例）：「第二次打开」实为 `pumpWidget` 对**同类型无 key** widget 的 State 复用（`initState`/`dispose` 都不跑、controller 是第一次的），断言恒真；补 `pumpWidget(SizedBox())` 拆树真重开，方案 A 的 seed 断言随之落地（`initialScrollOffset == hint.scrollOffset`）`82a3757`
 - `_restoreStep` 异常出口（controller 未挂/已卸）改走 `_finishRestore(converged: false)` 统一收口：防方案 B 遮罩永久驻留，`RC1` 闸门语义不变（未收敛照旧不写盘）`82a3757`
+- 进书视口漂移（「40 多章跳到 300 多章」）：占位→真实合入 / 占位高估计刷新改总高后像素偏移不动即指向别处，旧 `_resampleAfterLoad` 合入后立即采样还会把漂移位置当真值入档；改为突变前 `ScrollAnchor` 记「视口顶在当前章的相对位置」、突变后 `_beginScrollTo` **语义坐标重锚**（对齐 567Reader「已发布页高不可变、增量刷新不动滚动锚点」；单跳 `correction` 在「跳转未渲染就再次捕获」时叠加 delta 过校正，故走迭代收敛），采样置后到重锚收敛（修 C）
+- 回归④：`_FakeSource` 增 `gates` 夹具（`content()` await `Completer.future`、测试择机放行）稳定构造「上方章稍后到货」，断言合入前后「第 2 章标题顶 − 视口顶」间距不变（修前实测漂移 810px，修后 ≤2px）
 
 ### 移除
 
