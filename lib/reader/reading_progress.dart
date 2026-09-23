@@ -243,3 +243,95 @@ class ReadingProgress {
       'idx: $chapterIndex, pos: ${chapterPos.toStringAsFixed(3)}, '
       'hint: ${localHint ?? 'none'})';
 }
+
+/// 一块章块的几何 / 加载态快照（[detectChapterAt] 的输入；纯数据，便于纯 Dart 单测）。
+///
+/// 「章块」= 连续滚动列表里某一章对应的 item（已加载章是标题 + 正文，
+/// 未加载章是估算占位块）。
+class ChapterBlockSnapshot {
+  const ChapterBlockSnapshot({
+    required this.index,
+    required this.top,
+    required this.height,
+    required this.reallyLoaded,
+  });
+
+  /// 章索引（与 `chapters()` 同序）。
+  final int index;
+
+  /// 章块顶相对**视口顶**的 y（逻辑像素）：`≤ 0` 表示在视口顶之上或齐平。
+  final double top;
+
+  /// 章块渲染高度（逻辑像素）。未加载章这里是**估算占位高**。
+  final double height;
+
+  /// 该章是否**真实加载**（正文已解析并渲染），而非「已加载章高度中位数」占位块。
+  final bool reallyLoaded;
+
+  /// 章块底相对视口顶的 y。
+  double get bottom => top + height;
+}
+
+/// 判定「视口顶落在哪一章、章内哪个相对位置」（纯计算，不依赖 widget 树）。
+///
+/// 返回值语义（调用方契约，`RC3` / `RC4`）：
+///   · `null` —— 一个章块都没布局，**完全无法确定**；
+///   · `chapterPos == null` —— 章可知，但**章内位置不可采样**（该章仍是估算占位高，
+///     分母是估的，采样会把垃圾值写进 `chapterPos`，`RC3`）；
+///   · `chapterPos` 为数值 —— 完整采样成功。
+///
+/// 前两种情况下调用方**必须保持 `chapterPos` 原值、且不得写盘**（`RC3`/`RC4`：
+/// 探不到就静默沿用旧章并继续保存，正是「多次进出后偏离原章节」的来源）。
+///
+/// 命中规则：取**真正覆盖视口顶**（`top ≤ 0.5 < bottom`）的那一块——而不是
+/// 「顶在视口顶之上」里最靠下的那一块。后者在真章落进探测范围之外时会误判成
+/// 窗口边缘章（`RC4`）；章块在列表里互不重叠，故覆盖者唯一。
+/// 视口顶落在列表顶 / 底内边距（无任何章块覆盖）时，回落到**离视口顶最近**的
+/// **已真实加载**章块，章内位置取 `clamp(-top / height, 0, 1)`
+/// （顶内边距 → 0.0，底内边距 → 1.0）。
+({int chapterIndex, double? chapterPos})? detectChapterAt(
+  Iterable<ChapterBlockSnapshot> blocks,
+) {
+  final List<ChapterBlockSnapshot> all = blocks.toList(growable: false);
+  if (all.isEmpty) return null;
+
+  // ① 找真正覆盖视口顶的章块。**不看加载态**：命中占位章时若跳过它、让邻近真实章
+  //    顶替，就是章级误判（`RC4`）——宁可报「位置不可采样」。
+  ChapterBlockSnapshot? cover;
+  for (final ChapterBlockSnapshot block in all) {
+    if (block.height <= 0) continue;
+    if (block.top <= 0.5 && block.bottom > 0.5) {
+      if (cover == null || block.top > cover.top) {
+        cover = block;
+      }
+    }
+  }
+
+  final ChapterBlockSnapshot chosen;
+  if (cover != null) {
+    if (!cover.reallyLoaded) {
+      // `RC3`：占位高章**不采样 chapterPos**，等该章真正加载后再采样。
+      return (chapterIndex: cover.index, chapterPos: null);
+    }
+    chosen = cover;
+  } else {
+    // ② 视口顶在列表顶 / 底内边距：回落到离视口顶最近的**已真实加载**章块。
+    ChapterBlockSnapshot? nearest;
+    double nearestDistance = double.infinity;
+    for (final ChapterBlockSnapshot block in all) {
+      if (!block.reallyLoaded || block.height <= 0) continue;
+      final double distance = block.top > 0.5
+          ? block.top
+          : (block.bottom <= 0.5 ? 0.5 - block.bottom : 0.0);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = block;
+      }
+    }
+    if (nearest == null) return null;
+    chosen = nearest;
+  }
+
+  final double pos = (-chosen.top / chosen.height).clamp(0.0, 1.0).toDouble();
+  return (chapterIndex: chosen.index, chapterPos: pos);
+}

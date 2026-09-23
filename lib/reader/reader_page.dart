@@ -10,14 +10,21 @@
 //     总高跳变；已加载正文由 [ChapterCache] **有界 LRU**（[kMaxLoadedChapters]=30）兜底，
 //     超出即淘汰回落占位；
 //   · **正文逐段渲染**：每段各自成 widget（`PERF-03`：**禁 `join('\n\n')` 巨型 `Text`**）；
-//   · **当前章 + 章内位置**：每章块挂 `GlobalKey`；滚动停止时从「上次索引」向两侧
-//     ±4 探测 `findRenderObject`，找出覆盖视口顶部的章块，算出 `chapterIndex` 与
-//     `chapterPos = (视口顶 - 章块顶) / 章块高`；
+//   · **当前章 + 章内位置**：每章块挂 `GlobalKey`；滚动停止时**全量扫描已构建的
+//     章块**（`RC4`：原先「上次索引 ±4」的小窗口在落点偏差一大时会拿**窗口边缘章**
+//     顶替真章，于是每次「开→关」都把错误章写回存档、越偏越多——这正是「多次进出后
+//     已经偏离原章节太多」），找出**真正覆盖视口顶**的章块，算出 `chapterIndex` 与
+//     `chapterPos = (视口顶 - 章块顶) / 章块高`；命中**估算占位高**的章时
+//     **不采样** `chapterPos`（`RC3`：分母是估的，会污染跨会话的语义坐标）；
 //   · **进度以 `Chapter.href` 为稳定身份**：恢复时先按 href 匹配，匹配不到退回 index 并 clamp；
-//   · **恢复（`RD-04`「落点误差 ≤ 1 屏」）**：默认走「按章序比例估算 + `addPostFrameCallback`
-//     校正（≤3 帧、偏移差 ≤1px 停）」；仅当**同版面签名且已加载集合覆盖 `[0, targetIndex]`**
-//     时，才用 `initialScrollOffset` 精确落回（否则首帧总高不足，jump 会被 clamp 到错处）；
-//   · **进度保存时机 3 个**：滚动停止 / 切章（含目录跳转、恢复落定）/ `dispose()`；
+//   · **恢复（`RD-04`「落点误差 ≤ 1 屏」）**：`localHint.scrollOffset` **只是首帧初始
+//     近似**（仅用于减首帧跳动；它是依赖「当时已加载集合」的像素值，加载集合一变就
+//     指向别处），落点一律由**语义坐标 `(chapterIndex, chapterPos)` 校正收敛**（`RC2`）：
+//     「估算 + `addPostFrameCallback` 校正（≤8 帧、偏移差 ≤1px 停）」；
+//   · **进度保存时机**：滚动停止 / 切章（含目录跳转）/ `dispose()`，**但都过 `RC1`
+//     写盘闸门**——恢复**未收敛**（校正超帧数中途放弃）、位置**未采样**（占位高 /
+//     探不到章）一律**不写盘**，否则误差会被当真值存进 `ReadingProgress` / `localHint`，
+//     下一轮开书再放大（误差**复利**回路）。
 //   · **`RD-03`**：AppBar 标题取 `BookRecord.title`、副标题为「第N章 · X%」，不出现 implId 诊断；
 //   · **`NAV-01`**：AppBar 目录按钮 → 底部 [TocSheet]，当前章高亮、点击跳章；
 //   · **`CNT-04c` 链接跳转与返回**：点正文链接（`link_navigator` 解析 href）→
@@ -49,11 +56,8 @@ import 'progress_store.dart';
 import 'reading_progress.dart';
 import 'toc_sheet.dart';
 
-/// 探测当前章时，从「上次索引」向两侧各探测多少章。
-const int _kProbeRadius = 4;
-
-/// 恢复滚动时的最大校正帧数（`RD-04`：估算后迭代收敛）。
-const int _kMaxRestoreFrames = 3;
+/// 恢复滚动时的最大校正帧数（`RD-04`：估算后迭代收敛；`RC2`：≤8 帧）。
+const int _kMaxRestoreFrames = 8;
 
 /// 占位块在「尚无任何已加载章可测」时的默认高度（逻辑像素）。
 const double _kDefaultChapterHeight = 480;
@@ -148,6 +152,22 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 链接跳转的目标段落下标（`null` = 按章内相对位置定位；`CNT-04c`）。
   int? _restoreParaIndex;
+
+  /// `RC1` 写盘闸门分量①：当前位置是否**已收敛**。
+  ///
+  /// 程序化恢复 / 跳转（[_beginScrollTo]）开始时清零；仅当校正真正收敛
+  /// （落点偏移差 ≤1px）或**用户主动滚动**后才置回 `true`。
+  /// 校正超帧数中途放弃 → 保持 `false`：误差不得当真值写回存档，
+  /// 否则下一轮开书把它当真值放大（误差**复利**回路，即「多次进出后
+  /// 偏离原章节太多」的来源之一）。
+  bool _positionConverged = false;
+
+  /// `RC1` 写盘闸门分量②：当前位置是否**已完整采样**。
+  ///
+  /// [_detectCurrentChapter] 拿到完整语义坐标 → `true`；命中估算占位高章
+  /// （`RC3`）或一个章块都没探到（`RC4`）→ `false`：保持 `_chapterPos`
+  /// 原值、且本轮不得写盘。占位章真正加载后由 [_resampleAfterLoad] 重采样置回。
+  bool _positionSampled = false;
 
   /// 目标段落的 `GlobalKey`（懒创建，键 = `'章索引:段落下标'`；`CNT-04c`）。
   ///
@@ -260,8 +280,11 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 内容就绪后创建控制器（仅一次）。
   ///
-  /// 精确恢复（`initialScrollOffset`）**仅当**「同版面签名 + 已加载集合覆盖 `[0, target]`」
-  /// 同时成立；否则一律走「估算 + 校正」默认路径。
+  /// 同版面签名 + 已加载集合覆盖 `[0, target]` 时用 `initialScrollOffset`
+  /// 给出**首帧初始近似**（`RC2`：仅减首帧跳动）；无论哪条路径，落点都由
+  /// [_beginScrollTo] 按**语义坐标 `(chapterIndex, chapterPos)` 校正收敛**——
+  /// `scrollOffset` 依赖「当时已加载集合」（`PERF-02` 增量加载下未载章是估算高），
+  /// 加载集合一变同一像素就指向别处，单独照搬不校正即进度漂移（`RC2`）。
   void _ensureController() {
     if (_controller != null) return;
     final LocalLayoutHint? hint = _localHint;
@@ -276,13 +299,12 @@ class _ReaderPageState extends State<ReaderPage> {
         ) &&
         _cache.coversPrefix(_restoreIndex);
     if (exact) {
+      // `RC2`：`scrollOffset` 只作首帧初始近似（减首帧跳动），照搬后
+      // **仍要**走语义坐标校正收敛（[_beginScrollTo] 会重置恢复状态并迭代
+      // ≤8 帧）——不允许「复制完就返回」。
       _controller = ScrollController(initialScrollOffset: hint.scrollOffset);
       _cache.touch(_restoreIndex);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _detectCurrentChapter();
-        setState(() {});
-      });
+      _beginScrollTo(_restoreIndex, _restorePos);
       return;
     }
     _controller = ScrollController();
@@ -300,6 +322,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _restoreParaIndex = paraIndex >= 0 ? paraIndex : null;
     _restoreFrames = 0;
     _restoring = true;
+    _positionConverged = false; // `RC1`：程序化移动开始 → 先关写盘闸门
     WidgetsBinding.instance.addPostFrameCallback((_) => _restoreStep());
   }
 
@@ -329,7 +352,7 @@ class _ReaderPageState extends State<ReaderPage> {
     } else {
       final double delta = target - controller.offset;
       if (delta.abs() <= 1.0) {
-        _finishRestore();
+        _finishRestore(converged: true); // `RC1`：真正收敛 → 闸门开，可写盘
         return;
       }
       controller.jumpTo(target.clamp(0.0, maxExtent));
@@ -338,15 +361,31 @@ class _ReaderPageState extends State<ReaderPage> {
     if (_restoreFrames < _kMaxRestoreFrames) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _restoreStep());
     } else {
-      _finishRestore();
+      // 帧数耗尽（`RC1`）：按**最后一次**测量判定——最后一跳可能已落准；
+      // 仍未落准则视为**未收敛**，[_finishRestore] 不写盘（等待用户滚动或
+      // 下次打开重新恢复），绝不把恢复误差当真值写回存档。
+      double? lastTarget;
+      final int? paraIndex = _restoreParaIndex;
+      if (paraIndex != null) {
+        lastTarget = _paragraphPointOffset(_restoreIndex, paraIndex);
+      }
+      lastTarget ??= _chapterPointOffset(_restoreIndex, _restorePos);
+      final bool converged =
+          lastTarget != null && (lastTarget - controller.offset).abs() <= 1.0;
+      _finishRestore(converged: converged);
     }
   }
 
-  /// 恢复 / 跳转落定：同步显示、触发后台补齐、保存一次（切章后的新位置写回磁盘）。
-  void _finishRestore() {
+  /// 恢复 / 跳转落定：同步显示、触发后台补齐、尝试保存一次。
+  ///
+  /// [converged]：落点是否**真正收敛**（偏移差 ≤1px）。`RC1`：未收敛时
+  /// 闸门保持关闭——是否真的落盘由 [_saveProgress] 内的写盘闸门最终裁决，
+  /// 未收敛 / 未采样一律不写。
+  void _finishRestore({required bool converged}) {
     _restoring = false;
+    _positionConverged = converged;
     if (!mounted) return;
-    _detectCurrentChapter();
+    _positionSampled = _detectCurrentChapter();
     _cache.touch(_currentIndex);
     setState(() {});
     _ensureAutoFill();
@@ -387,51 +426,69 @@ class _ReaderPageState extends State<ReaderPage> {
     return paraTopRelative + controller.offset;
   }
 
-  /// 探测当前章与章内位置（`RD-04`：章索引 + 章内 0.0~1.0）。
+  /// 探测当前章与章内位置（`RD-04`：章索引 + 章内 0.0~1.0；`RC3` / `RC4`）。
   ///
-  /// 从「上次索引」向两侧 ±[_kProbeRadius] 探测：找**覆盖视口顶部**的章块
-  /// （即 `relTop ≤ 0` 且 `relTop` 最大者），据此算 `chapterPos`。
-  void _detectCurrentChapter() {
+  /// **全量扫描已构建的章块**，交给纯函数 [detectChapterAt] 判定：
+  ///   · 覆盖视口顶的是**真实加载章** → 更新 `_currentIndex` + `_chapterPos`，返回 `true`；
+  ///   · 是**估算占位高章**（`RC3`）→ 只更新 `_currentIndex`（章级身份可信），
+  ///     保持 `_chapterPos` 原值（分母是估的，采样会污染语义坐标），返回 `false`；
+  ///   · 一个章块都没探到（`RC4`）→ 全部保持原值，返回 `false`。
+  ///
+  /// 返回值 = 是否拿到完整语义坐标（`RC1` 写盘闸门的「已采样」分量）。
+  bool _detectCurrentChapter() {
     final List<Chapter>? chapters = _chapters;
     final ScrollController? controller = _controller;
     if (chapters == null ||
         chapters.isEmpty ||
         controller == null ||
         !controller.hasClients) {
-      return;
+      return false;
     }
     final RenderBox? viewport = _viewportBox();
-    if (viewport == null) return;
+    if (viewport == null) return false;
     final double viewportTop = viewport.localToGlobal(Offset.zero).dy;
 
-    int? foundIndex;
-    double foundTop = double.negativeInfinity;
-    final int from = math.max(0, _currentIndex - _kProbeRadius);
-    final int to = math.min(chapters.length - 1, _currentIndex + _kProbeRadius);
-    for (int i = from; i <= to; i++) {
+    // `RC4`：全量扫描已构建的章块，不再只探「上次索引 ±4」——落点偏差一大，
+    // 真章就在小窗口之外，旧逻辑会拿**窗口边缘章**顶替并写回存档，每轮「开→关」
+    // 都把错误章写回去，越偏越多（「多次进出后偏离原章节太多」的来源）。
+    final List<ChapterBlockSnapshot> blocks = <ChapterBlockSnapshot>[];
+    for (int i = 0; i < chapters.length; i++) {
       final RenderBox? box = _chapterBoxAt(i);
-      if (box == null) continue;
-      final double topRelative =
-          box.localToGlobal(Offset.zero).dy - viewportTop;
-      if (topRelative <= 0.5 && topRelative > foundTop) {
-        foundTop = topRelative;
-        foundIndex = i;
+      if (box == null) continue; // 未构建（不在视口及缓存区内）。
+      blocks.add(
+        ChapterBlockSnapshot(
+          index: i,
+          top: box.localToGlobal(Offset.zero).dy - viewportTop,
+          height: box.size.height,
+          // 「真实加载」判定用现成的 `ChapterCache.peek`（正文已解析），
+          // 不新造谓词；占位块渲染时 `peek` 必为 `null`。
+          reallyLoaded: _cache.peek(i) != null,
+        ),
+      );
+    }
+
+    final ({int chapterIndex, double? chapterPos})? hit =
+        detectChapterAt(blocks);
+    if (hit == null) {
+      return false; // `RC4`：探不到 → 不动旧值、不写盘。
+    }
+
+    final int index = hit.chapterIndex;
+    final double? pos = hit.chapterPos;
+    if (pos == null) {
+      // `RC3`：占位高章盖住视口顶——章级身份可信，但章内位置不可采样。
+      if (index != _currentIndex) {
+        setState(() => _currentIndex = index);
       }
+      return false;
     }
-    if (foundIndex == null) {
-      // 视口顶部落在章与章的间隙（或所有章块都在下方）：保持当前，不动。
-      return;
-    }
-    final RenderBox box = _chapterBoxAt(foundIndex)!;
-    final double height = box.size.height;
-    final double pos =
-        height > 0 ? (-foundTop / height).clamp(0.0, 1.0).toDouble() : 0.0;
-    if (foundIndex != _currentIndex || (pos - _chapterPos).abs() > 1e-6) {
+    if (index != _currentIndex || (pos - _chapterPos).abs() > 1e-6) {
       setState(() {
-        _currentIndex = foundIndex!;
+        _currentIndex = index;
         _chapterPos = pos;
       });
     }
+    return true;
   }
 
   /// 章块的 `RenderBox`（未布局 / 不在缓存内时为 `null`）。
@@ -455,7 +512,10 @@ class _ReaderPageState extends State<ReaderPage> {
     if (_restoring || _controller == null || !_controller!.hasClients) {
       return false;
     }
-    _detectCurrentChapter();
+    // `RC1`：用户主动滚动 → 当前落点即用户认可的位置（视为已收敛）；
+    // 是否可写还取决于本轮是否采到完整语义坐标（未采到则闸门关、不落盘）。
+    _positionConverged = true;
+    _positionSampled = _detectCurrentChapter();
     _cache.touch(_currentIndex);
     _ensureAutoFill();
     unawaited(_saveProgress());
@@ -481,10 +541,25 @@ class _ReaderPageState extends State<ReaderPage> {
         if (!more) return;
         setState(() {});
         _scheduleEstimateRefresh();
+        _resampleAfterLoad(); // `RC3`：占位章真正加载后重采样 chapterPos
       }
     } finally {
       _fillRunning = false;
     }
+  }
+
+  /// 占位高章真正加载后重采样（`RC3`）：用真实高度刷新 `_chapterPos` 并解闸。
+  ///
+  /// 恢复落定时若覆盖视口顶的还是估算占位章，`chapterPos` 采样被挂起
+  /// （`RC1` 写盘闸门关闭）；本批正文合入、真实高度可测后再采一次，
+  /// 使语义坐标恢复可信（是否落盘仍由 [_saveProgress] 内的闸门裁决）。
+  void _resampleAfterLoad() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _restoring) return;
+      if (_detectCurrentChapter()) {
+        _positionSampled = true;
+      }
+    });
   }
 
   /// 在下一帧测量已加载章的渲染高度，刷新占位高度估计（中位数）。
@@ -648,8 +723,14 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 保存当前阅读进度（进度文件 + 回写 `BookRecord` 阅读字段）。
   ///
+  /// **`RC1` 写盘闸门**：恢复进行中 / 未收敛（校正超帧数放弃）/ 未采样
+  /// （占位高章盖顶、探不到章）一律不写——否则误差被当真值存进
+  /// `ReadingProgress` / `localHint`，下一轮开书再放大（误差**复利**回路）。
+  /// 所有保存路径（滚动停止 / 切章 / `dispose()`）都经此闸门。
+  ///
   /// 失败静默（不影响阅读，下次保存重试）。
   Future<void> _saveProgress() async {
+    if (_restoring || !_positionConverged || !_positionSampled) return;
     final List<Chapter>? chapters = _chapters;
     if (chapters == null || chapters.isEmpty) return;
     final int index = _currentIndex.clamp(0, chapters.length - 1);
