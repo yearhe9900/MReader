@@ -301,7 +301,7 @@ void main() {
       expect(find.text('第三章'), findsNothing);
     });
 
-    testWidgets('RD-04 同版面 localHint：跳到第 3 章保存后再打开精确落回第 3 章',
+    testWidgets('RD-04 同版面 localHint：重开 seed 首帧落回第 3 章（backlog① 方案 A）',
         (WidgetTester tester) async {
       // 第一次打开：跳到第 3 章（触发保存，进度带同版面 localHint）。
       await tester.pumpWidget(buildApp());
@@ -322,11 +322,36 @@ void main() {
       expect(saved!.chapterIndex, 2);
       expect(saved!.chapterHref, 'h3');
       expect(saved!.localHint, isNotNull);
+      final LocalLayoutHint hint = saved!.localHint!;
+      // 防假绿：第 3 章在书尾附近，seed 像素必明显大于 0——
+      // 若 seed 为 0，下面的 seed 断言与「旧实现从 0 起跳」就没有区分力。
+      expect(hint.scrollOffset, greaterThan(0));
 
-      // 第二次打开：同版面 → 用 initialScrollOffset 精确恢复。
+      // ⚠️ 真·关书再开：`pumpWidget` 对**同类型无 key** 的 widget 走
+      // `Widget.canUpdate` → Element/State **复用**（`initState`/`dispose` 都不跑）。
+      // 直接再 pumpWidget(buildApp()) 的「第二次打开」是假绿——树根本没换、
+      // controller 是第一次的（原版断言即栽在这个坑里）。必须先换异类 widget
+      // 把树拆掉（同回归①②③），再排空 dispose 发起的假区保存（`AtomicFile._tails`
+      // 按路径串行，活区同路径 IO 必须等它排空，否则跨区死锁）。
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await _settle(tester, rounds: 20);
+
+      // 第二次打开：同版面 → 用 initialScrollOffset 做首帧 seed。
+      // 这正是 backlog① 方案 A 的直接验收场景：3 章书恢复 target=2 而首帧
+      // 只载 [1,2] → `coversPrefix(2)=false`（「冷启动读中段」的普遍形态），
+      // 走的是**回退分支**；旧实现该分支 `ScrollController()` 从 0 起跳，
+      // 用户先看到「前几页」再被拉到「当前页」。
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
+      final ListView list = tester.widget<ListView>(find.byType(ListView));
+      expect(
+        list.controller!.initialScrollOffset,
+        hint.scrollOffset,
+        reason: '回退分支必须 seed 同版面 hint.scrollOffset（方案 A），不得从 0 起跳',
+      );
       expect(find.text('第三章'), findsOneWidget);
       expect(find.text('第一章'), findsNothing);
     });
@@ -516,6 +541,42 @@ void main() {
       expect(saved, isNotNull);
       expect(saved!.chapterIndex, 1);
       expect(saved.chapterPos, inInclusiveRange(0.4, 0.6));
+    });
+
+    testWidgets('方案B：开书首跳校正期间遮罩盖住列表，落定后撤除（backlog①）',
+        (WidgetTester tester) async {
+      // 播种进度指向第 3 章（恢复目标非书首 → 遮罩必现）。
+      await tester.runAsync(
+        () => progressStore.save(
+          ReadingProgress(
+            bookId: 'testbook01',
+            chapterHref: 'h3',
+            chapterIndex: 2,
+            chapterPos: 0.0,
+            updatedAt: 1,
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(buildApp());
+      // 校正全程只有寥寥数帧（seed 命中时 2 帧内落定），须逐帧轮询抓中间态。
+      final Finder mask = find.byKey(const Key('reader-restore-mask'));
+      bool sawMask = false;
+      for (int i = 0; i < 90 && !sawMask; i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 8)));
+        await tester.pump(const Duration(milliseconds: 8));
+        sawMask = mask.evaluate().isNotEmpty;
+      }
+      expect(sawMask, isTrue,
+          reason: '首跳校正期间应有遮罩（否则用户会看到「前几页 → 当前页」跳动）');
+
+      await _settle(tester);
+      expect(mask.evaluate().isEmpty, isTrue,
+          reason: '校正落定（含超帧数放弃路径）后遮罩必须撤除，不得常驻');
+      // 非空验证：恢复确实落到了目标章（排除「什么都没发生」的假绿）。
+      expect(find.text('第三章'), findsOneWidget);
+      expect(find.text('第一章'), findsNothing);
     });
   });
 }

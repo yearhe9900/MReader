@@ -504,6 +504,7 @@
 - **`dispose()` 发起的假区保存 = 跨区死锁源**：`AtomicFile._tails` 按路径串行化，假异步区发起的保存持有 gate，其完成回调只有 `pump` 能排空；测试体回到活区 `runAsync` 写同一路径会 await 队尾 gate **永久挂起**。用例在 `pumpWidget(const SizedBox())` 关书后补 `await _settle(tester, rounds: 20)` 排空。
 - **断言正文段落须 `findRichText: true`**：正文由 `InlineParagraph` → `Text.rich`（RichText）渲染，`find.text` / `find.textContaining` 默认**不匹配富文本**（标题是纯 `Text`、能匹配，故只错在正文断言上）。
 - **防假绿**：构造「某状态不成立」的用例时补**非空验证**（界面确实渲染了内容 / 目标不在场），否则「什么都没发生」时布尔断言恒真。
+- **「二次打开」类测试必须先拆树**：`pumpWidget(buildApp())` 对**同类型无 key** 的 widget 走 `Widget.canUpdate` → Element/State **复用**（`initState`/`dispose` 都不跑、`ScrollController` 是第一次的）——直接再 pump 一次的「关书再开」是假绿（原「同版面 localHint 重开」用例即栽在此）。必须先 `pumpWidget(const SizedBox())` 把树拆掉（真 dispose），排空假区保存后再开。
 
 
 

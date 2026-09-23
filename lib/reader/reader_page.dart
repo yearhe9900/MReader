@@ -21,6 +21,16 @@
 //     近似**（仅用于减首帧跳动；它是依赖「当时已加载集合」的像素值，加载集合一变就
 //     指向别处），落点一律由**语义坐标 `(chapterIndex, chapterPos)` 校正收敛**（`RC2`）：
 //     「估算 + `addPostFrameCallback` 校正（≤8 帧、偏移差 ≤1px 停）」；
+//   · **开书可见滚动优化（backlog① 2026-09-23）**：冷启动读中段时 `coversPrefix`
+//     恒 false（首帧只载「目标章 ±1」），若从 0 起跳，用户会先看到「前几页」再被
+//     拉到「当前页」。两个互补的对策：
+//     **A. 回退分支 seed**——同版面签名时用 `hint.scrollOffset` 做首帧初始近似
+//     （像素仍只作 seed，落点照旧走语义坐标校正）：目标章大概率首帧即进布局窗口，
+//     `_chapterPointOffset` 直接可测，跳过「`maxScrollExtent` 外推估计」的比例估算
+//     （ListView 懒构建下该值 = 已布局子项均值 × 剩余项数，探针实测同夹具内
+//     26157 ↔ 290816 振荡，估算落点会一路冲到书尾占位区）；
+//     **B. 首跳遮罩**——恢复校正全程（含超帧数放弃）盖住正文滚动区
+//     （[_restoreMask]），中间跳转一律不可见，[_finishRestore] 统一撤除。
 //   · **进度保存时机**：滚动停止 / 切章（含目录跳转）/ `dispose()`，**但都过 `RC1`
 //     写盘闸门**——恢复**未收敛**（校正超帧数中途放弃）、位置**未采样**（占位高 /
 //     探不到章）一律**不写盘**，否则误差会被当真值存进 `ReadingProgress` / `localHint`，
@@ -152,6 +162,13 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 正在程序化恢复 / 跳转：期间忽略滚动停止的保存，避免把中间值写回磁盘。
   bool _restoring = false;
 
+  /// 开书首跳遮罩（backlog① 方案 B）：校正全程盖住正文滚动区，
+  /// 用户看不到「前几页 → 当前页」的中间跳转；[_finishRestore] 统一撤除。
+  ///
+  /// 仅**开书恢复**（目标非书首）时点亮；目录 / 链接 / 上下章等用户主动跳转
+  /// 有明确预期、校正一两帧即完，不遮。
+  bool _restoreMask = false;
+
   /// 恢复 / 跳转目标：章索引 + 章内位置。
   int _restoreIndex = 0;
   double _restorePos = 0.0;
@@ -229,6 +246,8 @@ class _ReaderPageState extends State<ReaderPage> {
         _restoreIndex = index;
         _restorePos = pos;
         _localHint = progress?.localHint;
+        // backlog① 方案 B：恢复目标非书首时，校正全程遮罩（从头开书首帧即到位，不遮）。
+        _restoreMask = index != 0 || pos > 0;
         for (int i = 0; i < chapters.length; i++) {
           _chapterKeys[i] = GlobalKey();
         }
@@ -290,15 +309,25 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 内容就绪后创建控制器（仅一次）。
   ///
-  /// 同版面签名 + 已加载集合覆盖 `[0, target]` 时用 `initialScrollOffset`
-  /// 给出**首帧初始近似**（`RC2`：仅减首帧跳动）；无论哪条路径，落点都由
-  /// [_beginScrollTo] 按**语义坐标 `(chapterIndex, chapterPos)` 校正收敛**——
-  /// `scrollOffset` 依赖「当时已加载集合」（`PERF-02` 增量加载下未载章是估算高），
-  /// 加载集合一变同一像素就指向别处，单独照搬不校正即进度漂移（`RC2`）。
+  /// 同版面签名时用 `initialScrollOffset` 给出**首帧初始近似**（`RC2`：仅减首帧
+  /// 跳动）；无论哪条路径，落点都由 [_beginScrollTo] 按**语义坐标
+  /// `(chapterIndex, chapterPos)` 校正收敛**——`scrollOffset` 依赖「当时已加载
+  /// 集合」（`PERF-02` 增量加载下未载章是估算高），加载集合一变同一像素就指向
+  /// 别处，单独照搬不校正即进度漂移（`RC2`）。
+  ///
+  /// 两条分支的差别只在 seed 的「贴合度」（backlog① 方案 A）：
+  ///   · **精确分支**（同版面 + `coversPrefix`）：目标前所有章已驻留，像素语义
+  ///     完整一致 → `hint.scrollOffset` 即首帧落点，校正 1~2 帧内确认收敛；
+  ///   · **回退分支**（其余一切）：同版面时**仍 seed** `hint.scrollOffset`——
+  ///     冷启动读中段 `coversPrefix` 恒 false（首帧只载 ±1），若从 0 起跳，
+  ///     目标章不在首帧布局窗口里，只能走「`maxScrollExtent` 外推估计」的比例
+  ///     估算（探针实测 26157 ↔ 290816 振荡、8 帧不收敛）；seed 让目标章大概率
+  ///     首帧即可精确测量，跳过估算直接校正。签名不匹配（字号 / 视口变了）
+  ///     则像素语义已失效，seed 无意义 → 从 0 起跳照常估算。
   void _ensureController() {
     if (_controller != null) return;
     final LocalLayoutHint? hint = _localHint;
-    final bool exact = hint != null &&
+    final bool sameLayout = hint != null &&
         _viewportWidth > 0 &&
         _viewportHeight > 0 &&
         hint.matches(
@@ -306,9 +335,8 @@ class _ReaderPageState extends State<ReaderPage> {
           lineHeight: _settings.lineHeight,
           viewportWidth: _viewportWidth,
           viewportHeight: _viewportHeight,
-        ) &&
-        _cache.coversPrefix(_restoreIndex);
-    if (exact) {
+        );
+    if (sameLayout && _cache.coversPrefix(_restoreIndex)) {
       // `RC2`：`scrollOffset` 只作首帧初始近似（减首帧跳动），照搬后
       // **仍要**走语义坐标校正收敛（[_beginScrollTo] 会重置恢复状态并迭代
       // ≤8 帧）——不允许「复制完就返回」。
@@ -317,7 +345,9 @@ class _ReaderPageState extends State<ReaderPage> {
       _beginScrollTo(_restoreIndex, _restorePos);
       return;
     }
-    _controller = ScrollController();
+    // 回退分支（backlog① 方案 A）：同版面时 seed，否则 0。
+    final double seed = sameLayout ? hint.scrollOffset : 0.0;
+    _controller = ScrollController(initialScrollOffset: seed);
     _beginScrollTo(_restoreIndex, _restorePos);
   }
 
@@ -340,7 +370,9 @@ class _ReaderPageState extends State<ReaderPage> {
   void _restoreStep() {
     final ScrollController? controller = _controller;
     if (!mounted || controller == null || !controller.hasClients) {
-      _restoring = false;
+      // 统一收口（backlog① 方案 B）：异常路径也要经 [_finishRestore] 撤遮罩，
+      // 否则遮罩永久留在屏幕上；`converged: false` → `RC1` 闸门照旧关闭不写盘。
+      _finishRestore(converged: false);
       return;
     }
     final double maxExtent = controller.position.maxScrollExtent;
@@ -386,13 +418,14 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
-  /// 恢复 / 跳转落定：同步显示、触发后台补齐、尝试保存一次。
+  /// 恢复 / 跳转落定：同步显示、撤首跳遮罩、触发后台补齐、尝试保存一次。
   ///
   /// [converged]：落点是否**真正收敛**（偏移差 ≤1px）。`RC1`：未收敛时
   /// 闸门保持关闭——是否真的落盘由 [_saveProgress] 内的写盘闸门最终裁决，
   /// 未收敛 / 未采样一律不写。
   void _finishRestore({required bool converged}) {
     _restoring = false;
+    _restoreMask = false; // backlog① 方案 B：校正结束（含放弃）即撤遮罩
     _positionConverged = converged;
     if (!mounted) return;
     _positionSampled = _detectCurrentChapter();
@@ -964,15 +997,36 @@ class _ReaderPageState extends State<ReaderPage> {
         _ensureController();
         return SizedBox.expand(
           key: _viewportKey,
-          child: NotificationListener<ScrollEndNotification>(
-            onNotification: _onScrollEnd,
-            child: ListView.builder(
-              controller: _controller,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: chapters.length,
-              itemBuilder: (BuildContext context, int index) =>
-                  _buildChapterItem(theme, bodyStyle, index),
-            ),
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: NotificationListener<ScrollEndNotification>(
+                  onNotification: _onScrollEnd,
+                  child: ListView.builder(
+                    controller: _controller,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemCount: chapters.length,
+                    itemBuilder: (BuildContext context, int index) =>
+                        _buildChapterItem(theme, bodyStyle, index),
+                  ),
+                ),
+              ),
+              // backlog① 方案 B：开书首跳校正全程遮罩——中间跳转不可见，
+              // [_finishRestore] 撤除。opaque 手势层顺带吞掉恢复期间的拖动，
+              // 防止用户滚动与 `jumpTo` 校正互相打架。
+              if (_restoreMask)
+                Positioned.fill(
+                  child: GestureDetector(
+                    key: const Key('reader-restore-mask'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {},
+                    child: ColoredBox(
+                      color: theme.scaffoldBackgroundColor,
+                      child: const Center(child: CircularProgressIndicator()),
+                    ),
+                  ),
+                ),
+            ],
           ),
         );
       },
