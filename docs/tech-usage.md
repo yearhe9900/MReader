@@ -442,7 +442,7 @@
 | 项 | 值 |
 |---|---|
 | 任务 | M2a-T03（PRD `META-08` / `META-09`；F9 流程；`UI-04` 红线） |
-| 提交 | `4fc5d16`（数据层）→ 详情页 UI → 编辑+封面 → 测试+文档（逐批补） |
+| 提交 | `4fc5d16`（数据层）→ `51d9071`（详情页 UI + 入口改道）→ `8851968`（编辑+封面）→ 测试+文档（逐批补） |
 | 日期 | 2026-09-23 |
 | 一句话目标 | 书架点书进详情页看全字段与来源标记；可编辑书名/作者/简介/封面，用户值不被重新解析覆盖，「恢复自动值」回到解析结果 |
 
@@ -454,6 +454,9 @@
 | 书架入口改道 + 开书回调注入 | 「书架点一本书 → 详情页」（F9 / `META-08 ①`），开书管道只有一份 | `lib/ui/shelf_page.dart` | `BookCard.onTap` → `_openDetail` push 详情页（`_detailPushing` 防双击叠页）；`onOpenBook: _openBook` 回调注入，详情页底部「继续阅读」只转发（**禁止复制第二份开书管道**）；`await push` 返回后 `unawaited(_loadBooks())` 刷新（编辑/移出/进度靠它同步） |
 | 详情页玻璃红线落地 | 顶栏玻璃 / 封面区与简介区不透明 | `lib/ui/book_detail_page.dart` | `GlassNavScaffold + GlassTopBar` 做导航层（**从不手传 premium**，库自动提升）；滚动内容 + 底部操作同在一个 `OpaqueContentSurface` 内，内部零玻璃控件（不玻璃包玻璃、玻璃不进滚动行）；简介区显式 `fullyOpaque(surfaceContainerHighest)` |
 | 一次性回填（有界 IO） | 旧索引条目（四来源全 `none`）进详情页时补来源标记 | `meta_editor.needsOriginBackfill` / `backfillFromMeta` + `BookDetailPage._backfill` | 判据取**四来源全 `none`**（TXT 简介/封面解析结果本就是 none，按「任一 none」会每次打开都重解析）；`origin==user` 字段绝不动（`META-09 ④`）；`PendingCover` 物化后才落盘（持久化不含 PendingCover 不变式）；失败静默降级不重试 |
+| 编辑态 + 仅变化字段置 `user` | `META-09` 保存语义（未改字段来源不动，`③` 的「原值」才可还原） | `meta_editor.validateEdits` / `applyEdits` + `BookDetailPage` 编辑态 | 纯函数算 `changed*` 决定是否传 `copyWith` 字段（`copyWith` 无法表达「显式 null」，未变字段传 `null` = 保持原值）；空书名/空作者 `validateEdits` 返回文案 → 保存禁用 + TextField `errorText` 就地提示（`META-01` 作者兜底「未知作者」不留空串） |
+| 「恢复自动值」重新解析 | 清除自定义、回到内嵌/文件名推断结果（`META-09 ③`），不持久化 auto 快照 | `meta_editor.restoreFromMeta` + `BookDetailPage._restoreAuto` | `readBookBytes` → `openBook` → `load()` 现解现用，`meta.auto ?? BookMeta(title/author/intro)` 兜底；**`try/finally dispose()`**（抄 `import_service`）；封面：`PendingCover` → `materialize`（幂等先清同 bookId 旧文件），解析无内嵌封面则 `delete` 当前 `StoredCover`（不留孤儿）；四来源改回解析值 |
+| 换封面走 `replaceWithUserPick` | `META-09 ②` 换图后旧封面文件被删（`META-06 ①`） | `BookDetailPage._pickCover` / `lib/ui/cover_picker.dart` | `FilePicker(type: FileType.image, withData: true)` 取字节（**零新依赖**）→ `replaceWithUserPick`（materialize 新图 + 删 `previous` 旧文件）→ `coverOrigin = user` → `updateRecord` 落盘 |
 | 封面字节不常驻（`PERF-02`） | 详情页缩略图 / 大图展示 | `lib/ui/book_detail_page.dart` / `lib/ui/cover_picker.dart` | 缩略图 `readThumb` 现读、换图即弃；大图 `readFull` 现读后 `Dialog + InteractiveViewer` 展示（玻璃弹窗属 M2a-T04） |
 
 

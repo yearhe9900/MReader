@@ -13,6 +13,9 @@
 - M2a-T03 详情页（浏览态）：BookDetailPage 展示封面/书名/作者/四来源标记/格式/大小/进度/分组/简介占位/统计入口，顶栏玻璃、内容整体不透明（UI-04）`51d9071`
 - M2a-T03 入口改道：书架点卡片进详情页（F9/META-08①），开书经 onOpenBook 回调复用书架管道，pop 后刷新列表 `51d9071`
 - M2a-T03 封面查看与选图：cover_picker 大图 readFull 现读（PERF-02）+ FilePicker 本地选图 `51d9071`
+- M2a-T03 元数据编辑（META-09）：详情页编辑态三输入框 + 校验，仅变化字段置 user 落盘 `8851968`
+- M2a-T03 换封面：replaceWithUserPick 内建旧文件清理（META-06②）+ coverOrigin 置 user `8851968`
+- M2a-T03 恢复自动值：重新解析回填 auto 文本与四来源，EPUB 封面物化覆盖 / 无内嵌封面清旧文件 `8851968`
 
 ## 2026-09-22
 
