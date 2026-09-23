@@ -26,6 +26,7 @@ import '../reader/progress_store.dart';
 import '../reader/reader_page.dart';
 import 'book_card.dart';
 import 'book_detail_page.dart';
+import 'glass_kit.dart';
 
 /// 书架首页。
 class ShelfPage extends StatefulWidget {
@@ -251,15 +252,19 @@ class _ShelfPageState extends State<ShelfPage> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
 
+    // `UI-02` 导航层玻璃化：顶栏走 GlassTopBar、壳层走 GlassNavScaffold
+    // （照抄 book_detail_page 范本）；内容整体不透明（`UI-04`）。
     if (_loading) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('书架')),
-        body: const Center(child: CircularProgressIndicator()),
+      return GlassNavScaffold(
+        appBar: const GlassTopBar(title: Text('书架')),
+        body: const OpaqueContentSurface(
+          child: Center(child: CircularProgressIndicator()),
+        ),
       );
     }
 
-    return Scaffold(
-      appBar: AppBar(
+    return GlassNavScaffold(
+      appBar: GlassTopBar(
         title: const Text('书架'),
         actions: <Widget>[
           if (_importing)
@@ -279,7 +284,9 @@ class _ShelfPageState extends State<ShelfPage> {
             ),
         ],
       ),
-      body: _books.isEmpty ? _buildEmptyState(theme) : _buildBookGrid(theme),
+      body: OpaqueContentSurface(
+        child: _books.isEmpty ? _buildEmptyState(theme) : _buildBookGrid(theme),
+      ),
     );
   }
 

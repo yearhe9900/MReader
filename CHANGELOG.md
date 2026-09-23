@@ -19,6 +19,8 @@
 - M2a-T03 批次4 验收测试：detail_test 覆盖 META-08①~④ / META-09①~④ + meta_editor 纯函数 + 玻璃红线断言 + 详情页编辑/书架同步链路；LibraryRepository.bookFileSize（只 stat 不读内容，PERF-02）`f978266`
 - 测试分组：新增 `tool/test.sh`（parse/data/reader/ui/fast/all 六档局部执行，统一 --timeout 30s）；`test/epub_fixtures_test.dart` 归入 `test/epub/`（8 处引用同步）；分组口径入 `docs/tech-usage.md`
 - 执行序调整（负责人拍板）：AI 五项 + TTS 四项降级殿后（需求仍 P1），优先阅读功能与体验；新序 M2a→M2b→统计→M3.5 gate→M4→AI/TTS；关键链 169→136 人天 + 殿后 33；gate 首评只用阈值 1/2/4（`docs/PRD.md` §17 M3、`docs/schedule.md` §2.4/§3 同步注记）
+- 全量测试须负责人下令（拍板固化）：`tool/test.sh` 无参数不再默认全量（打印 usage 退出），`all` 档标注仅明确指令时执行；开发批次只跑相关分组 `5a90806`
+- M2a-T04 批次①书架玻璃化（UI-02）：ShelfPage 导航层 GlassNavScaffold + GlassTopBar（照书架详情页范本），内容包 OpaqueContentSurface（UI-04 不透明红线）；detail_test 玻璃断言限定详情页作用域（书架入栈后全树 2 个顶栏）
 
 ## 2026-09-22
 

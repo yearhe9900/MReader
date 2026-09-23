@@ -486,8 +486,11 @@ void main() {
       expect(_inDetail(find.text('暂无简介')), findsOneWidget);
 
       // ③ 玻璃红线：顶栏玻璃属导航层；内容整体不透明、树上无内容层玻璃。
-      expect(find.byType(GlassTopBar, skipOffstage: false), findsOneWidget);
-      expect(find.byType(OpaqueContentSurface), findsOneWidget);
+      // 范围限定到详情页——书架玻璃化（M2a-T04）后全树有 2 个 GlassTopBar /
+      // OpaqueContentSurface（书架在栈下 offstage 也会被 skipOffstage:false 数到）。
+      expect(_inDetail(find.byType(GlassTopBar, skipOffstage: false)),
+          findsOneWidget);
+      expect(_inDetail(find.byType(OpaqueContentSurface)), findsOneWidget);
       expect(find.byType(GlassCard, skipOffstage: false), findsNothing);
       expect(find.byType(GlassContainer, skipOffstage: false), findsNothing);
       expect(find.byType(GlassListTile, skipOffstage: false), findsNothing);

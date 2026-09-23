@@ -461,6 +461,20 @@
 | 文件大小只 stat 不读 | 详情页「文件大小」展示（`META-08 ①`） | `LibraryRepository.bookFileSize` | `File.exists` + `File.length()`，**不 `readAsBytes`**——大书展示大小不把整本书读进内存；文件缺失回 `null`（`LIB-03` 口径同 `readBookBytes`） |
 | 验收测试三层结构 | META-08/09 逐条验收（`f978266`） | `test/meta/detail_test.dart` | ① `meta_editor` 纯函数（originLabel/validate/apply/restore/backfill 判据）；② 仓储集成**纯 `test()` + 临时目录**（导入→编辑→重载/换封面旧文件已删/二次导入不覆写）；③ widget 层 `_settle` 助手排空真 IO（FakeAsync 铁律），玻璃红线断言 `GlassTopBar 有 / OpaqueContentSurface 有 / GlassCard 等内容层玻璃全无`；详情页内文本断言一律 `_inDetail` 范围限定（书架同名文本在栈下防误配） |
 
+### 2.17 M2a-T04 — 导航层玻璃化（UI-02 / UI-03，执行中）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2a-T04（PRD `UI-02` 导航层玻璃 / `UI-03` 浮层玻璃 / `UI-04` 内容不透明红线） |
+| 批次 | ① 书架导航层玻璃化（本节）→ ② glass_dialog/glass_sheet 封装 + 4 调用点 → ③ 测试 + 文档收尾 |
+| 日期 | 2026-09-23 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| 书架导航层玻璃化 | 书架首页顶栏/壳层入玻璃导航层（`UI-02`） | `lib/ui/shelf_page.dart` | 照抄 `book_detail_page` 范本：`GlassNavScaffold(appBar: GlassTopBar(...))`，两个 build 分支（loading / 正常）都要换；内容整体包 `OpaqueContentSurface`（`UI-04`） |
+| 详情页玻璃断言作用域限定 | 书架入栈后全树有 2 个 `GlassTopBar`，原全树断言误报 | `test/meta/detail_test.dart` | `find.byType(GlassTopBar, skipOffstage: false)` 会数到栈下 offstage 的书架 → 包一层 `_inDetail(...)` 再断言 |
+
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
