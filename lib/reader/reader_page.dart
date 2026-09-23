@@ -4,7 +4,7 @@
 // 设计要点：
 //   · **连续滚动**：**全部章节塞进一个 `ListView.builder`**，每章一个 item（`Column`：
 //     章节标题 + 该章全部段落）。章与章之间不切页，滚到底自然进入下一章；
-//   · **正文增量加载（`PERF-02`）**：首帧**只等「恢复目标章 ±1」**（见
+//   · **正文增量加载（`PERF-02`）**：首帧**只等恢复目标章**（±1 邻章预取不阻塞；见
 //     [ChapterAutoLoader.loadFirstBatch]），其余章节由后台按「离当前章由近及远」
 //     逐批补齐；未加载的章渲染**占位块**，高度取「已加载章渲染高度的中位数」以抑制
 //     总高跳变；已加载正文由 [ChapterCache] **有界 LRU**（[kMaxLoadedChapters]=30）兜底，
@@ -261,7 +261,7 @@ class _ReaderPageState extends State<ReaderPage> {
       );
       _loader = loader;
 
-      // 首帧：只等「目标章 ±1」（`PERF-02`：不一次性解析全书）。
+      // 首帧：只等目标章（±1 邻章预取不阻塞；`PERF-02`：不一次性解析全书）。
       await loader.loadFirstBatch(index);
       if (!mounted || _disposed) return;
       setState(() => _ready = true);
@@ -648,7 +648,7 @@ class _ReaderPageState extends State<ReaderPage> {
       _currentIndex = target;
       _chapterPos = 0.0;
     });
-    // 先把目标章（±1）载入，避免跳到占位块后高度回填引起漂移。
+    // 先把目标章载入（邻章 ±1 预取不阻塞），避免跳到占位块后高度回填引起漂移。
     await loader?.loadFirstBatch(target);
     if (!mounted) return;
     _beginScrollTo(target, 0.0);
@@ -732,7 +732,7 @@ class _ReaderPageState extends State<ReaderPage> {
       _currentIndex = chapterIndex;
       _chapterPos = roughPos;
     });
-    // 先把目标章（±1）载入，避免跳到占位块后高度回填引起漂移。
+    // 先把目标章载入（邻章 ±1 预取不阻塞），避免跳到占位块后高度回填引起漂移。
     await loader?.loadFirstBatch(chapterIndex);
     if (!mounted) return;
     _beginScrollTo(chapterIndex, roughPos,
@@ -757,7 +757,7 @@ class _ReaderPageState extends State<ReaderPage> {
       _currentIndex = target;
       _chapterPos = anchor.relativePos;
     });
-    // 目标章可能已被 LRU 淘汰：先载入（±1）再恢复。
+    // 目标章可能已被 LRU 淘汰：先载入目标章再恢复（邻章 ±1 预取不阻塞）。
     await _loader?.loadFirstBatch(target);
     if (!mounted) return;
     _beginScrollTo(target, anchor.relativePos);
@@ -983,7 +983,7 @@ class _ReaderPageState extends State<ReaderPage> {
       );
     }
     if (!_ready) {
-      // 首帧批次尚未就绪（只等「目标章 ±1」，很快）。
+      // 首帧批次尚未就绪（只等目标章，很快）。
       return const Center(child: CircularProgressIndicator());
     }
 

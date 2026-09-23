@@ -6,6 +6,7 @@
 // 抽成本文件两个不依赖 Flutter 的类，由 `ReaderPage` 驱动、由 `test/perf/*` 直接测。
 //
 // ⚠️ 本文件**不 import Flutter、不 import `dart:io`**（可进 isolate）。
+import 'dart:async';
 import 'dart:collection';
 
 import '../model/chapter_content.dart';
@@ -19,7 +20,7 @@ const int kMaxLoadedChapters = 30;
 /// 因此**窗口内的章不会因淘汰上界而被逐出**。
 const int kEagerLoadRadius = 12;
 
-/// 首帧只等「恢复目标章 ± [kFirstBatchRadius]」章。
+/// 首帧邻章预取半径：目标章**必等**，± [kFirstBatchRadius] 章预取不阻塞。
 const int kFirstBatchRadius = 1;
 
 /// 后台每批加载的章数（每批都 `setState` 合入，避免长任务卡 UI）。
@@ -110,7 +111,7 @@ class ChapterCache {
 /// 章正文的**增量加载驱动器**（纯 Dart）。
 ///
 /// 与 [ChapterCache] 配合：
-///   · [loadFirstBatch] 只等「目标章 ±1」（首帧用）；
+///   · [loadFirstBatch] 只等目标章，邻章（±1）各自到货、不阻塞（首帧用）；
 ///   · [fillOnce] 在后台按「离当前章由近及远」逐批（[kLoadBatchSize] 章）补齐。
 ///
 /// 每批加载后调用 [_protectWindow]：把窗口内的章全部标为「最近使用」，
@@ -135,11 +136,23 @@ class ChapterAutoLoader {
   /// 每批章数。
   final int batchSize;
 
-  /// 首帧批次：只加载「[target] ± [kFirstBatchRadius]」（clamp 到边界，去重）。
+  /// 首帧批次：加载「[target] ± [kFirstBatchRadius]」（clamp 到边界，去重）。
+  ///
+  /// **只等目标章**（首帧渲染依赖它）；邻章并发启动但**不阻塞**返回，各自
+  /// 到货各自入缓存——对齐 567Reader `ReadBook.loadContent` 的语义（cur±1
+  /// 并行加载、仅目标章驱动显示、邻章后台到货不拖首帧）。旧实现 `Future.wait`
+  /// 全等：任一邻章解析慢（甚至挂起）都会拖住整个开书流程与同批他章。
   Future<void> loadFirstBatch(int target) async {
     final List<int> batch =
         cache.planLoad(target, chapterCount, radius: kFirstBatchRadius);
-    await _loadAll(batch);
+    final List<int> neighbors =
+        batch.where((int i) => i != target).toList(growable: false);
+    for (final int i in neighbors) {
+      unawaited(_loadOne(i)); // 邻章预取：不等待、互不拖累
+    }
+    if (batch.any((int i) => i == target)) {
+      await _loadOne(target); // 目标章必等（首帧渲染依赖）
+    }
     _protectWindow(target);
   }
 
@@ -156,17 +169,17 @@ class ChapterAutoLoader {
     return true;
   }
 
+  /// 载入单章并落库（越界不落）。
+  Future<void> _loadOne(int index) async {
+    final ChapterContent content = await loadContent(index);
+    if (index < 0 || index >= chapterCount) return;
+    cache.put(index, content);
+  }
+
+  /// 并发加载一批并等待**全部**完成；每章**各自到货各自 `put`**——
+  /// 同批里一章慢/挂不拖住他章的落库（等齐只为 [fillOnce] 的批节奏）。
   Future<void> _loadAll(List<int> indices) async {
-    if (indices.isEmpty) return;
-    final List<MapEntry<int, ChapterContent>> loaded = await Future.wait(
-      indices.map(
-        (int i) async => MapEntry<int, ChapterContent>(i, await loadContent(i)),
-      ),
-    );
-    for (final MapEntry<int, ChapterContent> entry in loaded) {
-      if (entry.key < 0 || entry.key >= chapterCount) continue;
-      cache.put(entry.key, entry.value);
-    }
+    await Future.wait<void>(indices.map(_loadOne));
   }
 
   /// 把窗口 `[current - kEagerLoadRadius, current + kEagerLoadRadius]` 内已驻留的章
