@@ -4,7 +4,9 @@
 // 有书：网格展示 [BookCard]（封面缩略图 + 书名 + 作者 + 格式标签）。
 // 导入：`FilePicker` 多选 → 逐个调 `importFile`，展示进度 + 失败清单。
 // 删除：长按书卡 → 确认对话框 → `deleteBook`（`LIB-06` 二次确认）+ 连带清理阅读进度。
-// 点击书卡 → 进入 `lib/reader` 的阅读页（`RD-03`/`RD-04`/`NAV-01`）。
+// 点击书卡 → 进入书籍详情页（`F9` / `META-08`）；详情页底部「继续阅读」经**注入的**
+// `_openBook` 开书（详情页**不复制**开书管道），详情页 pop 后刷新列表
+// （编辑 / 移出 / 进度都靠这次刷新同步）。
 // 开书守卫 `_opening` **只覆盖 push 前的准备阶段**（修复「首点无响应」：守卫若覆盖
 // 整个阅读会话 + 关书刷新，关书后首点会被静默吞掉）；准备期被点卡片显示 loading。
 //
@@ -23,6 +25,7 @@ import '../meta/cover_store.dart';
 import '../reader/progress_store.dart';
 import '../reader/reader_page.dart';
 import 'book_card.dart';
+import 'book_detail_page.dart';
 
 /// 书架首页。
 class ShelfPage extends StatefulWidget {
@@ -59,6 +62,10 @@ class _ShelfPageState extends State<ShelfPage> {
 
   /// 正在准备打开的书（bookId）：对应卡片显示 loading 覆盖层；`null` = 无。
   String? _openingBookId;
+
+  /// 详情页路由在栈上（push 已发起、尚未 pop）：吞掉过渡期 / 会话期的重复点卡，
+  /// 防「双击卡片 → 叠两个详情页」。pop 后由 [_openDetail] 的 `finally` 释放。
+  bool _detailPushing = false;
 
   @override
   void initState() {
@@ -162,6 +169,32 @@ class _ShelfPageState extends State<ShelfPage> {
       await widget.progressStore.remove(record.bookId);
       await _loadBooks();
     }
+  }
+
+  /// 点书卡 → 书籍详情页（`F9` / `META-08 ①`）。
+  ///
+  /// pop 后刷新列表——编辑 / 移出书架 / 进度变化都靠这次刷新同步回书架。
+  /// 开书管道以 `onOpenBook: _openBook` 回调注入详情页（详情页禁止复制第二份）。
+  Future<void> _openDetail(BookRecord record) async {
+    if (_detailPushing) return; // 过渡期防双击叠详情页
+    _detailPushing = true;
+    try {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => BookDetailPage(
+            record: record,
+            repository: widget.repository,
+            coverStore: widget.coverStore,
+            progressStore: widget.progressStore,
+            onOpenBook: _openBook,
+          ),
+        ),
+      );
+    } finally {
+      _detailPushing = false;
+    }
+    // 详情页已关闭：刷新（编辑 / 移出 / 进度都在这里同步）。
+    if (mounted) unawaited(_loadBooks());
   }
 
   /// 打开一本书：准备（读字节 + 建源）→ push 阅读页。
@@ -311,7 +344,7 @@ class _ShelfPageState extends State<ShelfPage> {
                 record: record,
                 coverStore: widget.coverStore,
                 loading: _openingBookId == record.bookId,
-                onTap: () => _openBook(record),
+                onTap: () => unawaited(_openDetail(record)),
                 onLongPress: () => _deleteBook(record),
               );
             },
