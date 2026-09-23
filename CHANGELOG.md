@@ -3,6 +3,14 @@
 > 格式：Keep a Changelog 简化式。日期用 `YYYY-MM-DD`，**按日期倒序**排列。
 > 书写约定：每条一句话、**不复述过程**（分析、根因链、教训留在 PRD 与 `.workbuddy/memory/`），条目末尾附 commit hash 便于追溯。
 
+## 2026-09-23
+
+### 新增
+
+- M2a-T03 数据层：BookRecord 增 intro 与书名/作者/简介/封面四来源标记（枚举名落盘，旧索引缺失回 none）`4fc5d16`
+- M2a-T03 导入带来源：ImportService 构造记录时带入 intro + 四来源（新导入来源天然正确，META-08②）`4fc5d16`
+- M2a-T03 仓库更新口：LibraryRepository.updateRecord 整体替换同 bookId 条目（编辑/恢复自动值落盘通道）`4fc5d16`
+
 ## 2026-09-22
 
 ### 新增
