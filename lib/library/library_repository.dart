@@ -125,6 +125,19 @@ class LibraryRepository {
     return file.readAsBytes();
   }
 
+  /// library 副本文件大小（字节；`META-08` 详情页「文件大小」展示用）。
+  ///
+  /// 文件不存在时返回 `null`（`LIB-03`：文件缺失场景）。
+  /// 只 `stat` 不读内容——大书展示大小不把整本书读进内存（`PERF-02`）。
+  Future<int?> bookFileSize(BookRecord record) async {
+    final Directory libDir = await _paths.subDir('library');
+    final File file = File(
+      '${libDir.path}${Platform.pathSeparator}${record.filePath}',
+    );
+    if (!await file.exists()) return null;
+    return file.length();
+  }
+
   /// 更新一本书的「最近阅读时间 + 已读百分比」（`RD-04` 的 `BookRecord` 侧）。
   ///
   /// 由 `ReaderPage` 在保存进度时调用。`bookId` 不在库中时**静默返回**（不报错）。
