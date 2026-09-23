@@ -9,7 +9,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:mreader/ui/glass_kit.dart';
 
+import '../test_config.dart';
+
 void main() {
+  capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
   group('玻璃档位固定为 standard（PRD §11.3 / P0）', () {
     test('应用档位 = standard', () {
       expect(kAppGlassQuality, GlassQuality.standard);

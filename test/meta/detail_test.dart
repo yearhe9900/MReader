@@ -33,6 +33,7 @@ import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
 import 'package:mreader/ui/shelf_page.dart';
 
+import '../test_config.dart';
 import 'meta_fixtures.dart';
 
 /// 临时目录实现 [AppPaths]（与 `test/ui/shelf_page_test.dart` 同形），仅用于测试。
@@ -92,6 +93,7 @@ String _fixturePath(String name) =>
     'test${Platform.pathSeparator}fixtures${Platform.pathSeparator}$name';
 
 void main() {
+  capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
   // ==========================================================================
   // meta_editor 纯函数
   // ==========================================================================

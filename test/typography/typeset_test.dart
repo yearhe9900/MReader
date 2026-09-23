@@ -10,7 +10,10 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/typography/typeset.dart';
 
+import '../test_config.dart';
+
 void main() {
+  capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
   const TextStyle base = TextStyle(fontSize: 18, height: 1.6);
 
   group('withFirstLineIndent', () {

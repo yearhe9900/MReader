@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/platform/app_paths.dart';
@@ -20,7 +21,10 @@ import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_progress.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/book_detail_page.dart';
+import 'package:mreader/ui/glass_kit.dart';
 import 'package:mreader/ui/shelf_page.dart';
+
+import '../test_config.dart';
 
 /// 临时目录实现 [AppPaths]，仅用于测试。
 class _TestAppPaths implements AppPaths {
@@ -78,6 +82,7 @@ Finder _readerPages() => find.byType(ReaderPage, skipOffstage: false);
 Finder _detailPages() => find.byType(BookDetailPage, skipOffstage: false);
 
 void main() {
+  capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
   group('ShelfPage', () {
     late Directory tempDir;
     late LibraryRepository repo;
@@ -165,6 +170,42 @@ void main() {
       expect(find.text('删除确认'), findsOneWidget);
       expect(find.text('取消'), findsOneWidget);
       expect(find.text('删除'), findsOneWidget);
+
+      // `UI-03`（M2a-T04）：确认框是玻璃对话框，不是 Material AlertDialog。
+      expect(find.byType(GlassDialog, skipOffstage: false), findsOneWidget);
+      expect(find.byType(AlertDialog, skipOffstage: false), findsNothing);
+
+      // 点「取消」→ 返回 false → 不删（返回值语义与原 showDialog 一致）。
+      await tester.tap(find.text('取消'));
+      // 玻璃弹窗关闭转场 >400ms，_settle 推不完 → pumpAndSettle 走到路由移除。
+      await tester.pumpAndSettle();
+      expect(find.byType(BookCard), findsOneWidget);
+      expect(find.text('删除确认'), findsNothing);
+      expect(await tester.runAsync(() => repo.loadBooks()), hasLength(1));
+    });
+
+    testWidgets('M2a-T04 书架顶栏为 GlassTopBar、内容层不透明（UI-02/UI-04）',
+        (WidgetTester tester) async {
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('一本'), fileName: 'a.txt'),
+      );
+
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      // 导航层：玻璃壳 + 玻璃顶栏（`UI-02`）。
+      expect(find.byType(GlassNavScaffold), findsOneWidget);
+      expect(find.byType(GlassTopBar), findsOneWidget);
+      expect(find.byType(AppBar), findsNothing);
+
+      // 内容层：网格被 OpaqueContentSurface 承载（`UI-04`）；
+      // 书卡（内容层元素）在其**子树内**且不直接是玻璃控件。
+      expect(find.byType(OpaqueContentSurface), findsOneWidget);
+      expect(
+        find.ancestor(of: find.byType(BookCard), matching: find.byType(OpaqueContentSurface)),
+        findsWidgets,
+      );
+      expect(isGlassWidget(find.byType(BookCard).evaluate().single.widget), isFalse);
     });
 
     testWidgets('LIB-06 点击删除后书从列表移除', (WidgetTester tester) async {

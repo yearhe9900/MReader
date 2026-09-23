@@ -20,6 +20,8 @@ import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/settings/settings_store.dart';
 import 'package:mreader/ui/shelf_page.dart';
 
+import 'test_config.dart';
+
 /// 临时目录实现 [AppPaths]（与 `test/ui/shelf_page_test.dart` 同形），仅用于测试。
 class _TestAppPaths implements AppPaths {
   _TestAppPaths(this._root);
@@ -89,6 +91,7 @@ Uint8List _minimalEpub() {
 }
 
 void main() {
+  capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
   group('parseEpub', () {
     test('解析元数据，按 spine 顺序取章节，linear="no" 保留并标记（CNT-05）', () async {
       final EpubBook book =

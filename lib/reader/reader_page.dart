@@ -138,6 +138,14 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 设备本地版面快照（来自进度；`null` = 无 / 不可用）。
   LocalLayoutHint? _localHint;
 
+  /// 本会话最后一次**成功测得**的版面快照（关书时兜底）。
+  ///
+  /// 关书时 `Scrollable` 子节点**先于本 State** 卸载，控制器已 detach
+  /// （`hasClients == false`）→ 现场读不到 `offset`。若无兜底，最后一次保存会把
+  /// `localHint` **写成 null**、覆盖掉会话中已存的有效快照，下次开书即失去
+  /// 首帧精确落点（`RC2` 的 `initialScrollOffset` 前提被自己抹掉）。
+  LocalLayoutHint? _lastLocalHint;
+
   /// 占位块高度估计：已加载章渲染高度的中位数（随加载推进收敛）。
   double _estimatedChapterHeight = _kDefaultChapterHeight;
 
@@ -189,8 +197,9 @@ class _ReaderPageState extends State<ReaderPage> {
   @override
   void dispose() {
     // 关闭阅读页：先保存进度（不能 await，故 unawaited），再释放书籍资源。
-    // 注：`_saveProgress` 在首个 `await` 前同步读取 `_controller.offset`，
-    // 故此处「先保存、后 dispose 控制器」是安全的（不会用到已释放的控制器）。
+    // 注：`Scrollable` 子节点**先于本 State** 卸载，进到这里控制器通常已 detach
+    // （`hasClients == false`）→ 现场版面快照读不到，`_saveProgress` 会回退
+    // [_lastLocalHint]（见 [_buildLocalHint]），**不会用 null 覆盖已存快照**。
     _disposed = true;
     unawaited(_saveProgress());
     _imageCache.dispose();
@@ -743,7 +752,9 @@ class _ReaderPageState extends State<ReaderPage> {
       chapterIndex: index,
       chapterPos: _chapterPos,
       updatedAt: now,
-      localHint: _buildLocalHint(),
+      // 现场测不到（关书时控制器已 detach）→ 回退本会话最后可信快照：
+      // **绝不用 null 覆盖已存快照**，否则「开→关」每循环一次就丢一次像素落点。
+      localHint: _buildLocalHint() ?? _lastLocalHint,
     );
     try {
       await widget.progressStore.save(progress);
@@ -758,17 +769,21 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   /// 组装设备本地版面快照（`localHint`）；视口 / 控制器未就绪时返回 `null`。
+  ///
+  /// 测得成功即写入 [_lastLocalHint] 留底（关书时现场已不可读，见字段注释）。
   LocalLayoutHint? _buildLocalHint() {
     final ScrollController? controller = _controller;
     if (controller == null || !controller.hasClients) return null;
     if (_viewportWidth <= 0 || _viewportHeight <= 0) return null;
-    return LocalLayoutHint(
+    final LocalLayoutHint hint = LocalLayoutHint(
       scrollOffset: controller.offset,
       fontSize: _settings.fontSize,
       lineHeight: _settings.lineHeight,
       viewportWidth: _viewportWidth,
       viewportHeight: _viewportHeight,
     );
+    _lastLocalHint = hint;
+    return hint;
   }
 
   /// 全书进度 `0.0 ~ 1.0`：分母为总章数，末章 `chapterPos == 1.0` 才恰好 100%。

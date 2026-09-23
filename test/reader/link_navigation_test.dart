@@ -23,6 +23,8 @@ import 'package:mreader/platform/app_paths.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
 
+import '../test_config.dart';
+
 /// 临时目录实现 [AppPaths]，仅用于测试。
 class _TestAppPaths implements AppPaths {
   _TestAppPaths(this._root);
@@ -41,7 +43,7 @@ class _TestAppPaths implements AppPaths {
   }
 }
 
-/// 带链接 / 锚点标记的假书源（`CNT-04c`）：2 章。
+/// 带链接 / 锚点标记的假内容源（`BookSource` 假实现，`CNT-04c`）：2 章。
 ///
 /// 第 1 章：脚注引用 `[1]`（章内 `#note1`）、坏链接 `[坏]`（`#missing` 不存在）、
 /// 跨文件链接 `[2]`（`h2#note2`）；章尾有注释段 `\x00ID:note1\x00`。
@@ -160,6 +162,7 @@ Future<void> _tapGlyph(WidgetTester tester, String needle) async {
 }
 
 void main() {
+  capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
   group('CNT-04c 链接跳转与返回', () {
     late Directory tempDir;
     late ProgressStore progressStore;

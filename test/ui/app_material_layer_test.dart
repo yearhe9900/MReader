@@ -12,7 +12,10 @@ import 'package:mreader/app.dart';
 import 'package:mreader/main.dart';
 import 'package:mreader/settings/settings_store.dart';
 
+import '../test_config.dart';
+
 void main() {
+  capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
   testWidgets('app.dart 的透明 Material 地基仍在，首屏不命中黄底双下划线',
       (WidgetTester tester) async {
     // ⚠️ 测试体在 FakeAsync 区里运行，真实文件 IO 必须走**同步** API：

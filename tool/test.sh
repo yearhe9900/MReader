@@ -12,6 +12,9 @@
 #
 # 分组口径见 docs/tech-usage.md「测试分组与局部执行」。
 # 统一 --timeout 30s：排查挂死的既定纪律（默认 10 分钟/个太慢）。
+# ⚠️ CLI --timeout 只覆盖纯 test()——testWidgets 显式用 binding 的 10 分钟
+# 默认值压过它，故含 testWidgets 的文件须在 main() 首行调
+# test/test_config.dart 的 capTestTimeout()（30s 兜底才真正生效）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
