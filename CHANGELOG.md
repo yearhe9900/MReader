@@ -27,16 +27,16 @@
 ### 变更
 
 - 测试链路提速：新增 `test/test_config.dart::capTestTimeout()`——CLI 的 `--timeout` 对 `testWidgets` **无效**（其显式用 binding 的 10 分钟默认值压过），须在 `main()` 首行把 `defaultTestTimeout` 置 30s；8 个含 `testWidgets` 的文件接入，reader 组从「挂满 10 分钟」降到 22s / 145 用例全绿 `7b3b76a`
-- backlog① 开书可见滚动优化（方案 A）：恢复回退分支（冷启动读中段 `coversPrefix` 恒 false）改用同版面 `hint.scrollOffset` 做首帧 seed——目标章大概率首帧即进布局窗口、可精确测量，跳过 `maxScrollExtent` 外推估算（同夹具 26157 ↔ 290816 振荡的乱跳源）；像素仍只作 seed，落点照旧语义坐标校正收敛（`RC2` 不变）
-- backlog① 开书可见滚动优化（方案 B）：开书首跳校正全程遮罩正文滚动区（`reader-restore-mask`，opaque 层吞掉恢复期拖动），用户不再看到「前几页 → 当前页」跳动；落定/超帧数放弃统一撤除，目录/链接/上下章主动跳转不遮
+- backlog① 开书可见滚动优化（方案 A）：恢复回退分支（冷启动读中段 `coversPrefix` 恒 false）改用同版面 `hint.scrollOffset` 做首帧 seed——目标章大概率首帧即进布局窗口、可精确测量，跳过 `maxScrollExtent` 外推估算（同夹具 26157 ↔ 290816 振荡的乱跳源）；像素仍只作 seed，落点照旧语义坐标校正收敛（`RC2` 不变）`82a3757`
+- backlog① 开书可见滚动优化（方案 B）：开书首跳校正全程遮罩正文滚动区（`reader-restore-mask`，opaque 层吞掉恢复期拖动），用户不再看到「前几页 → 当前页」跳动；落定/超帧数放弃统一撤除，目录/链接/上下章主动跳转不遮 `82a3757`
 
 ### 修复
 
 - 关书保存不得用 null 覆盖 `localHint`：dispose 时 `Scrollable` 子节点先于本 State 卸载、控制器已 detach → `_buildLocalHint()` 返回 null，会把会话中已存的有效像素快照写没（下次开书失去 `RC2` 首帧精确落点）；新增 `_lastLocalHint` 留底，`_saveProgress` 以 `?? _lastLocalHint` 兜底 `7b3b76a`
 - 测试跨区死锁：`dispose()` 在 FakeAsync 区发起的保存持有 `AtomicFile._tails` 的路径 gate，其完成回调只有 `pump` 能排空 → 测试体回到活区 `runAsync` 写同路径即永久等待（reader 组整组挂死的真因）；回归用例在 `pumpWidget(SizedBox())` 后补 `_settle` 排空 `7b3b76a`
 - 回归②夹具重建：`_FakeSource` 增 `hangIndices`（`content()` 返回永不完成的 future）**冻结布局**以稳定复现「恢复未收敛」，并补非空验证（列表就位 + 有内容渲染 + 目标章标题/正文均不出现）防假绿 `7b3b76a`
-- 测试假绿（「同版面 localHint 重开」用例）：「第二次打开」实为 `pumpWidget` 对**同类型无 key** widget 的 State 复用（`initState`/`dispose` 都不跑、controller 是第一次的），断言恒真；补 `pumpWidget(SizedBox())` 拆树真重开，方案 A 的 seed 断言随之落地（`initialScrollOffset == hint.scrollOffset`）
-- `_restoreStep` 异常出口（controller 未挂/已卸）改走 `_finishRestore(converged: false)` 统一收口：防方案 B 遮罩永久驻留，`RC1` 闸门语义不变（未收敛照旧不写盘）
+- 测试假绿（「同版面 localHint 重开」用例）：「第二次打开」实为 `pumpWidget` 对**同类型无 key** widget 的 State 复用（`initState`/`dispose` 都不跑、controller 是第一次的），断言恒真；补 `pumpWidget(SizedBox())` 拆树真重开，方案 A 的 seed 断言随之落地（`initialScrollOffset == hint.scrollOffset`）`82a3757`
+- `_restoreStep` 异常出口（controller 未挂/已卸）改走 `_finishRestore(converged: false)` 统一收口：防方案 B 遮罩永久驻留，`RC1` 闸门语义不变（未收敛照旧不写盘）`82a3757`
 
 ### 移除
 
