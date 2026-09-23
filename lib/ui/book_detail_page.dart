@@ -79,6 +79,19 @@ class _BookDetailPageState extends State<BookDetailPage> {
   /// 一次性回填进行中（防重入；`initState` 触发一次）。
   bool _backfilling = false;
 
+  // —— 编辑态（`META-09`）——
+
+  /// 是否处于编辑态：书名 / 作者 / 简介显示 `TextField`，底部换「取消 / 保存」。
+  bool _editing = false;
+
+  /// 编辑输入控制器（进入编辑态时创建、退出时 dispose；浏览态为 `null`）。
+  TextEditingController? _titleCtrl;
+  TextEditingController? _authorCtrl;
+  TextEditingController? _introCtrl;
+
+  /// 「恢复自动值」/ 换封面进行中（防重复点击）。
+  bool _busy = false;
+
   @override
   void initState() {
     super.initState();
@@ -88,6 +101,14 @@ class _BookDetailPageState extends State<BookDetailPage> {
     if (needsOriginBackfill(_record)) {
       unawaited(_backfill());
     }
+  }
+
+  @override
+  void dispose() {
+    _titleCtrl?.dispose();
+    _authorCtrl?.dispose();
+    _introCtrl?.dispose();
+    super.dispose();
   }
 
   // -------------------------------------------------------------------------
@@ -187,6 +208,145 @@ class _BookDetailPageState extends State<BookDetailPage> {
   // 操作
   // -------------------------------------------------------------------------
 
+  /// 进入编辑态（`META-09`）：按当前值初始化三个输入框。
+  void _enterEdit() {
+    _titleCtrl = TextEditingController(text: _record.title);
+    _authorCtrl = TextEditingController(text: _record.author);
+    _introCtrl = TextEditingController(text: _record.intro);
+    // 输入变化 → 重算校验错误 / 保存按钮可用性。
+    for (final TextEditingController c
+        in <TextEditingController>[_titleCtrl!, _authorCtrl!, _introCtrl!]) {
+      c.addListener(() {
+        if (mounted && _editing) setState(() {});
+      });
+    }
+    setState(() => _editing = true);
+  }
+
+  /// 退出编辑态：丢弃输入（取消 / 保存后都走这里），控制器即弃。
+  void _exitEdit() {
+    _titleCtrl?.dispose();
+    _authorCtrl?.dispose();
+    _introCtrl?.dispose();
+    _titleCtrl = null;
+    _authorCtrl = null;
+    _introCtrl = null;
+    setState(() => _editing = false);
+  }
+
+  /// 当前编辑输入的校验错误（`null` = 可保存）。
+  String? get _editError => validateEdits(
+        title: _titleCtrl?.text ?? '',
+        author: _authorCtrl?.text ?? '',
+      );
+
+  /// 保存编辑（`META-09`）：只有值实际变化的字段置 `user`，随后落盘。
+  Future<void> _saveEdits() async {
+    if (_editError != null || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final BookRecord updated = applyEdits(
+        _record,
+        title: _titleCtrl!.text,
+        author: _authorCtrl!.text,
+        intro: _introCtrl!.text,
+      );
+      await widget.repository.updateRecord(updated);
+      if (!mounted) return;
+      setState(() => _record = updated);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+    _exitEdit(); // 书架在 push 的 await 后刷新 → 书架与详情页同步（`META-09 ①`）
+  }
+
+  /// 换封面（`META-09`）：本地选图 → `replaceWithUserPick`（内建旧文件清理，
+  /// `META-06 ①/②`）→ `coverOrigin` 置 `user` → 落盘。
+  Future<void> _pickCover() async {
+    if (_busy) return;
+    final Uint8List? bytes = await pickCoverBytes();
+    if (bytes == null || bytes.isEmpty || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final StoredCover stored = await widget.coverStore.replaceWithUserPick(
+        bookId: _record.bookId,
+        bytes: bytes,
+        previous: _record.cover,
+      );
+      final BookRecord updated = _record.copyWith(
+        cover: stored,
+        coverOrigin: MetaOrigin.user,
+      );
+      await widget.repository.updateRecord(updated);
+      if (!mounted) return;
+      setState(() {
+        _record = updated;
+        _startCoverLoad();
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 「恢复自动值」（`META-09 ③`）：重新解析取自动值 → 文本与四来源回解析值；
+  /// 封面：`PendingCover` 物化（幂等，覆盖旧文件），无内嵌封面则清掉当前封面文件。
+  ///
+  /// `load()` 无论成败都 `dispose()`（抄 `import_service.dart` 的 `try/finally`）。
+  Future<void> _restoreAuto() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final BookMeta? meta = await _reparse();
+      if (!mounted) return;
+      if (meta == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('文件已丢失，无法恢复自动值')),
+        );
+        return;
+      }
+
+      // 封面引用：EPUB → PendingCover 物化（先清同 bookId 旧文件，不留孤儿）；
+      // TXT 等无内嵌封面 → 按解析结果回退，并清掉当前封面文件（换过的用户封面）。
+      CoverRef cover = _record.cover;
+      final CoverRef parsedCover = meta.cover;
+      if (parsedCover is PendingCover) {
+        cover = await widget.coverStore.materialize(
+          bookId: _record.bookId,
+          pending: parsedCover,
+        );
+      } else {
+        if (cover is StoredCover) {
+          await widget.coverStore.delete(cover);
+        }
+        cover = parsedCover;
+      }
+
+      final BookRecord updated =
+          restoreFromMeta(_record, meta).copyWith(cover: cover);
+      await widget.repository.updateRecord(updated);
+      if (!mounted) return;
+      setState(() {
+        _record = updated;
+        _startCoverLoad();
+      });
+      // 编辑态下输入框同步回自动值（恢复 = 全部可编辑字段回到自动值）。
+      if (_editing) {
+        _titleCtrl?.text = updated.title;
+        _authorCtrl?.text = updated.author;
+        _introCtrl?.text = updated.intro;
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('恢复自动值失败，请重试')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// 「继续阅读」：只转发给书架注入的开书回调（**不复制开书管道**）。
   Future<void> _continueReading() async {
     if (_continuing) return;
@@ -250,6 +410,15 @@ class _BookDetailPageState extends State<BookDetailPage> {
           tooltip: '返回',
           onPressed: () => Navigator.of(context).maybePop(),
         ),
+        actions: <Widget>[
+          // 编辑入口（`META-09`）；编辑态下入口隐藏（底部换「取消 / 保存」）。
+          if (!_editing)
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: '编辑元数据',
+              onPressed: _busy ? null : _enterEdit,
+            ),
+        ],
       ),
       // 内容层整体不透明（`UI-04`）：滚动区 + 底部操作同在一个 OpaqueContentSurface。
       body: OpaqueContentSurface(
@@ -276,13 +445,32 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 
   /// 详情内容段落（封面区 / 身份区 / 元信息 / 简介 / 统计入口）。
+  ///
+  /// 编辑态（`META-09`）：书名 / 作者 / 简介换成 `TextField`（不透明普通 Material，
+  /// 仍属内容层，零玻璃），封面区追加「更换封面 / 恢复自动值」按钮。
   List<Widget> _buildSections(ThemeData theme) {
     return <Widget>[
       _buildCoverArea(theme),
       const SizedBox(height: 16),
-      _buildTitleRow(theme),
-      const SizedBox(height: 6),
-      _buildAuthorRow(theme),
+      if (_editing) ...<Widget>[
+        _buildTextField(
+          controller: _titleCtrl!,
+          label: '书名',
+          errorText: (_titleCtrl!.text.trim().isEmpty) ? '书名不能为空' : null,
+        ),
+        const SizedBox(height: 8),
+        _buildTextField(
+          controller: _authorCtrl!,
+          label: '作者',
+          errorText: (_authorCtrl!.text.trim().isEmpty)
+              ? '作者不能为空（缺失时填「未知作者」）'
+              : null,
+        ),
+      ] else ...<Widget>[
+        _buildTitleRow(theme),
+        const SizedBox(height: 6),
+        _buildAuthorRow(theme),
+      ],
       const SizedBox(height: 12),
       _buildInfoRow(theme, '格式', _FormatTag(format: _record.format)),
       _buildInfoRow(
@@ -322,9 +510,11 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 
   /// 封面区（内容层 → 不透明；点封面看大图，`META-08 ①`）。
+  ///
+  /// 编辑态追加「更换封面 / 恢复自动值」（`META-09`），不透明普通按钮（非玻璃）。
   Widget _buildCoverArea(ThemeData theme) {
     final CoverRef ref = _record.cover;
-    final bool tappable = ref is StoredCover;
+    final bool tappable = ref is StoredCover && !_editing;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -342,6 +532,25 @@ class _BookDetailPageState extends State<BookDetailPage> {
         ),
         const SizedBox(height: 6),
         _OriginBadge(origin: _record.coverOrigin), // 封面来源标记
+        if (_editing) ...<Widget>[
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: <Widget>[
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _pickCover,
+                icon: const Icon(Icons.image_outlined, size: 18),
+                label: const Text('更换封面'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _restoreAuto,
+                icon: const Icon(Icons.restore, size: 18),
+                label: const Text('恢复自动值'),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -445,6 +654,8 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 
   /// 简介文本区（内容层 → **不透明**；无简介显示占位而非空白，`META-08 ④`）。
+  ///
+  /// 编辑态换成多行 `TextField`（同一不透明底，仍属内容层、零玻璃）。
   Widget _buildIntroSection(ThemeData theme) {
     final bool hasIntro = _record.intro.isNotEmpty;
     return Container(
@@ -461,20 +672,50 @@ class _BookDetailPageState extends State<BookDetailPage> {
             children: <Widget>[
               Text('简介', style: theme.textTheme.titleSmall),
               const SizedBox(width: 8),
-              _OriginBadge(origin: _record.introOrigin),
+              if (!_editing) _OriginBadge(origin: _record.introOrigin),
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            hasIntro ? _record.intro : '暂无简介',
-            style: hasIntro
-                ? theme.textTheme.bodyMedium
-                : theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.outline,
-                    fontStyle: FontStyle.italic,
-                  ),
-          ),
+          if (_editing)
+            TextField(
+              controller: _introCtrl,
+              maxLines: 6,
+              minLines: 4,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                hintText: '暂无简介',
+                isDense: true,
+              ),
+              style: theme.textTheme.bodyMedium,
+            )
+          else
+            Text(
+              hasIntro ? _record.intro : '暂无简介',
+              style: hasIntro
+                  ? theme.textTheme.bodyMedium
+                  : theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.outline,
+                      fontStyle: FontStyle.italic,
+                    ),
+            ),
         ],
+      ),
+    );
+  }
+
+  /// 编辑态单行输入框（书名 / 作者；不透明普通 Material，零玻璃）。
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required String? errorText,
+  }) {
+    return TextField(
+      controller: controller,
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+        errorText: errorText,
+        isDense: true,
       ),
     );
   }
@@ -496,8 +737,35 @@ class _BookDetailPageState extends State<BookDetailPage> {
     );
   }
 
-  /// 底部操作（`META-08`）：移出书架 + 继续阅读。
+  /// 底部操作（`META-08`）：浏览态 = 移出书架 + 继续阅读；
+  /// 编辑态（`META-09`）= 取消 + 保存（书名 / 作者为空时保存禁用 + 就地提示）。
   Widget _buildActions(ThemeData theme) {
+    if (_editing) {
+      final bool canSave = _editError == null && !_busy;
+      return Row(
+        children: <Widget>[
+          Expanded(
+            child: OutlinedButton(
+              onPressed: _busy ? null : _exitEdit,
+              child: const Text('取消'),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: FilledButton(
+              onPressed: canSave ? _saveEdits : null,
+              child: _busy
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('保存'),
+            ),
+          ),
+        ],
+      );
+    }
     return Row(
       children: <Widget>[
         Expanded(
