@@ -226,4 +226,107 @@ void main() {
       );
     });
   });
+
+  // 进度漂移修复（#36）的纯函数核心：探章逻辑从 widget 树里抽出来，
+  // 用纯 `test()` 断言（本项目已两次实证 `testWidgets` + 真异步 IO 会挂死）。
+  group('detectChapterAt（RC3/RC4 探章纯函数）', () {
+    ChapterBlockSnapshot block(
+      int index,
+      double top,
+      double height, {
+      bool real = true,
+    }) {
+      return ChapterBlockSnapshot(
+        index: index,
+        top: top,
+        height: height,
+        reallyLoaded: real,
+      );
+    }
+
+    test('空输入 → null（一个章块都没布局，完全无法确定）', () {
+      expect(detectChapterAt(const <ChapterBlockSnapshot>[]), isNull);
+    });
+
+    test('覆盖规则：取真正覆盖视口顶的章块，而非「顶在上方」里最靠下者', () {
+      // ch0 全在视口上方、ch1 覆盖视口顶 0.5、ch2 在视口下方 → 唯一覆盖者 ch1。
+      final ({int chapterIndex, double? chapterPos})? hit =
+          detectChapterAt(<ChapterBlockSnapshot>[
+        block(0, -800, 300),
+        block(1, -100, 500),
+        block(2, 400, 500),
+      ]);
+      expect(hit, isNotNull);
+      expect(hit!.chapterIndex, 1);
+      // chapterPos = -top / height = 100 / 500。
+      expect(hit.chapterPos, closeTo(0.2, 1e-9));
+    });
+
+    test('RC3：占位高章盖住视口顶 → 章可知、chapterPos 为 null（不采样）', () {
+      final ({int chapterIndex, double? chapterPos})? hit =
+          detectChapterAt(<ChapterBlockSnapshot>[
+        block(0, -3000, 500),
+        block(1, -100, 480, real: false), // 占位块，覆盖视口顶
+        block(2, 380, 500),
+      ]);
+      expect(hit, isNotNull);
+      expect(hit!.chapterIndex, 1);
+      expect(hit.chapterPos, isNull);
+    });
+
+    test('RC3 守卫：占位章覆盖时不得由邻近真实章顶替（章级误判）', () {
+      // 真实 ch0 全在视口上方——旧「最大 top≤0」规则会选它并把 pos clamp 成 1.0，
+      // 把垃圾值写进 chapterPos；新规则必须报「占位、不可采样」。
+      final ({int chapterIndex, double? chapterPos})? hit =
+          detectChapterAt(<ChapterBlockSnapshot>[
+        block(0, -5000, 480),
+        block(1, -100, 480, real: false),
+      ]);
+      expect(hit, isNotNull);
+      expect(hit!.chapterIndex, 1);
+      expect(hit.chapterPos, isNull);
+    });
+
+    test('RC4 回落：视口顶在章间间隙 → 取最近真实章，不再把全在上方者 clamp 成 1.0', () {
+      // 无块覆盖 0.5（ch0 底 -500、ch1 顶 +200）。
+      // 旧规则会选 ch0（top≤0.5 里最靠下）算出 pos=clamp(800/300)=1.0——错章错位。
+      final ({int chapterIndex, double? chapterPos})? hit =
+          detectChapterAt(<ChapterBlockSnapshot>[
+        block(0, -800, 300),
+        block(1, 200, 500),
+      ]);
+      expect(hit, isNotNull);
+      expect(hit!.chapterIndex, 1); // 距离 200 < 500.5，离视口顶更近
+      expect(hit.chapterPos, 0.0); // 视口顶在其上方内边距里 → 章首
+    });
+
+    test('RC4 回落：视口顶在列表底部 → 最后真实章 pos=1.0；全是占位 → null', () {
+      final ({int chapterIndex, double? chapterPos})? atEnd =
+          detectChapterAt(<ChapterBlockSnapshot>[block(0, -600, 500)]);
+      expect(atEnd, isNotNull);
+      expect(atEnd!.chapterIndex, 0);
+      expect(atEnd.chapterPos, 1.0);
+
+      // 没有任何真实章可回落：占位 + 底部 / 占位 + 顶部内边距 → 都是 null。
+      expect(
+        detectChapterAt(<ChapterBlockSnapshot>[block(0, -600, 500, real: false)]),
+        isNull,
+      );
+      expect(
+        detectChapterAt(<ChapterBlockSnapshot>[block(0, 50, 480, real: false)]),
+        isNull,
+      );
+    });
+
+    test('视口顶与章顶齐平（容差内）→ pos clamp 到 0', () {
+      final ({int chapterIndex, double? chapterPos})? hit =
+          detectChapterAt(<ChapterBlockSnapshot>[
+        block(0, 0.4, 500),
+        block(1, 500.4, 500),
+      ]);
+      expect(hit, isNotNull);
+      expect(hit!.chapterIndex, 0);
+      expect(hit.chapterPos, 0.0);
+    });
+  });
 }

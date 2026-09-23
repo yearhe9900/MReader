@@ -38,21 +38,32 @@ class _TestAppPaths implements AppPaths {
   }
 }
 
-/// 可控的假书源：3 章，标题固定为 第一章 / 第二章 / 第三章。
+/// 可控的假书源：章数 / 每章段落数可注入（默认 3 章 × 20 段，标题 第一/二/三章）。
 ///
-/// 每章给足 20 段，使整本内容**明显高于视口**——这样「恢复/跳章」必须真的滚动，
+/// 每章默认给足 20 段，使整本内容**明显高于视口**——这样「恢复/跳章」必须真的滚动，
 /// 断言「第一章不可见」才有意义（内容过矮时整屏全可见，断言会失真）。
+/// 章数超过 3 时标题按中文数字顺延（第六章 / 第二十章…），href 恒为 `h{序号}`。
 class _FakeSource implements BookSource {
+  _FakeSource({List<int>? paragraphCounts})
+      : paragraphCounts =
+            paragraphCounts ?? const <int>[20, 20, 20];
+
+  /// 每章段落数（下标 = 章下标；长度 = 章数）。
+  final List<int> paragraphCounts;
+
   bool disposed = false;
 
-  /// 每章段落数（刻意大于一屏）。
-  static const int _paragraphsPerChapter = 20;
-
-  static const List<Chapter> _chapters = <Chapter>[
-    Chapter(href: 'h1', title: '第一章', level: 0, locate: ''),
-    Chapter(href: 'h2', title: '第二章', level: 0, locate: ''),
-    Chapter(href: 'h3', title: '第三章', level: 0, locate: ''),
-  ];
+  /// 中文数字标题（1~29；测试用书最多 20 章）。
+  static String _titleAt(int index) {
+    const List<String> digits = <String>[
+      '一', '二', '三', '四', '五', '六', '七', '八', '九',
+    ];
+    final int n = index + 1;
+    if (n < 10) return '第${digits[n - 1]}章';
+    if (n == 10) return '第十章';
+    if (n < 20) return '第十${digits[n - 11]}章';
+    return n == 20 ? '第二十章' : '第二十${digits[n - 21]}章';
+  }
 
   @override
   String get implId => 'dart-fake';
@@ -71,14 +82,19 @@ class _FakeSource implements BookSource {
       );
 
   @override
-  Future<List<Chapter>> chapters() async =>
-      disposed ? const <Chapter>[] : List<Chapter>.of(_chapters);
+  Future<List<Chapter>> chapters() async {
+    if (disposed) return const <Chapter>[];
+    return <Chapter>[
+      for (int i = 0; i < paragraphCounts.length; i++)
+        Chapter(href: 'h${i + 1}', title: _titleAt(i), level: 0, locate: ''),
+    ];
+  }
 
   @override
   Future<ChapterContent> content(int chapterIndex) async {
     if (disposed) return ChapterContent.paragraphs(const <String>[]);
     return ChapterContent.paragraphs(<String>[
-      for (int p = 1; p <= _paragraphsPerChapter; p++)
+      for (int p = 1; p <= paragraphCounts[chapterIndex]; p++)
         '第${chapterIndex + 1}章正文$p',
     ]);
   }
@@ -119,15 +135,31 @@ Future<void> _settle(WidgetTester tester, {int rounds = 60}) async {
   }
 }
 
+/// 可计数的进度存储：`save` 次数 = `_saveProgress` 真实落盘次数。
+///
+/// `RC1` 写盘闸门的可注入断言缝——「恢复未收敛期间一次都不许写」直接看计数。
+class _CountingProgressStore extends ProgressStore {
+  _CountingProgressStore(super.paths);
+
+  int saveCount = 0;
+
+  @override
+  Future<void> save(ReadingProgress progress) async {
+    saveCount++;
+    await super.save(progress);
+  }
+}
+
 void main() {
   group('ReaderPage', () {
     late Directory tempDir;
+    late AppPaths paths;
     late ProgressStore progressStore;
     late LibraryRepository repo;
 
     setUp(() {
       tempDir = Directory.systemTemp.createTempSync('mreader_reader_');
-      final AppPaths paths = _TestAppPaths(tempDir);
+      paths = _TestAppPaths(tempDir);
       progressStore = ProgressStore(paths);
       repo = LibraryRepository(paths: paths, coverStore: FileCoverStore(paths));
     });
@@ -149,11 +181,11 @@ void main() {
           importedAt: 1,
         );
 
-    Widget buildApp() => MaterialApp(
+    Widget buildApp({BookSource? source, ProgressStore? store}) => MaterialApp(
           home: ReaderPage(
-            source: _FakeSource(),
+            source: source ?? _FakeSource(),
             record: record(),
-            progressStore: progressStore,
+            progressStore: store ?? progressStore,
             repository: repo,
           ),
         );
@@ -265,6 +297,149 @@ void main() {
 
       expect(find.text('第三章'), findsOneWidget);
       expect(find.text('第一章'), findsNothing);
+    });
+
+    // ── 进度漂移回归（#36：RC1~RC4）────────────────────────────────────
+
+    testWidgets('回归①：开→关循环 8 次，(chapterIndex, chapterPos) 不累积偏离',
+        (WidgetTester tester) async {
+      final _CountingProgressStore counting = _CountingProgressStore(paths);
+      // 播种语义目标：第 2 章 0.5（无 localHint，首开走估算 + 语义校正路径）。
+      await tester.runAsync(
+        () => counting.save(
+          ReadingProgress(
+            bookId: 'testbook01',
+            chapterHref: 'h2',
+            chapterIndex: 1,
+            chapterPos: 0.5,
+            updatedAt: 1,
+          ),
+        ),
+      );
+
+      for (int cycle = 1; cycle <= 8; cycle++) {
+        await tester.pumpWidget(buildApp(store: counting));
+        await _settle(tester, rounds: 40);
+        // 关书：dispose() 触发一次受闸门裁决的保存。
+        await tester.pumpWidget(const SizedBox());
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)));
+
+        final ReadingProgress? snap =
+            await tester.runAsync<ReadingProgress?>(() => counting.load('testbook01'));
+        expect(snap, isNotNull, reason: '第 $cycle 轮关书后应有存档');
+        expect(snap!.chapterIndex, 1,
+            reason: '第 $cycle 轮：章不得漂移（多次进出偏离原章节的直接回归）');
+        expect(snap.chapterPos, inInclusiveRange(0.4, 0.6),
+            reason: '第 $cycle 轮：章内位置不得累积偏离播种目标 0.5');
+
+        if (cycle == 1) {
+          // 首轮确有真实写盘（证明本循环是「restore → save → restore…」在写，
+          // 而不是「全员被闸门拦下」的假绿）。
+          expect(counting.saveCount, greaterThanOrEqualTo(1));
+          // 注入「已加载集合变化后同一像素指向别处」的脏 localHint
+          //（RC1/RC2 的历史产物）：语义字段保持 (1, 0.5)——
+          // 新实现必须用语义坐标自我纠正回来，旧实现会把落点错章写回存档。
+          final LocalLayoutHint hint = snap.localHint!;
+          await tester.runAsync(
+            () => counting.save(
+              snap.copyWith(
+                localHint: LocalLayoutHint(
+                  scrollOffset: hint.scrollOffset + 600,
+                  fontSize: hint.fontSize,
+                  lineHeight: hint.lineHeight,
+                  viewportWidth: hint.viewportWidth,
+                  viewportHeight: hint.viewportHeight,
+                ),
+              ),
+            ),
+          );
+        }
+      }
+    });
+
+    testWidgets('回归②：恢复未收敛期间 _saveProgress 零落盘，存档原封不动',
+        (WidgetTester tester) async {
+      final _CountingProgressStore counting = _CountingProgressStore(paths);
+      // 播种存档（带 updatedAt 哨兵：被重写过就能看出来）。
+      await tester.runAsync(
+        () => counting.save(
+          ReadingProgress(
+            bookId: 'testbook01',
+            chapterHref: 'h6',
+            chapterIndex: 5,
+            chapterPos: 0.5,
+            updatedAt: 1,
+          ),
+        ),
+      );
+      expect(counting.saveCount, 1); // 播种本身
+
+      // 20 章：第 6 章(下标5)前的真实章极高(150 段)、它与第 7 章极矮(2 段)——
+      // 首帧批次只载入 [4,5,6]，章序比例估算永远落不到第 6 章可见处，
+      // 校正 8 帧耗尽仍未收敛（`target == null` 到最后一帧）。
+      final List<int> counts = List<int>.generate(
+        20,
+        (int i) => (i == 5 || i == 6) ? 2 : 150,
+      );
+      await tester.pumpWidget(
+        buildApp(source: _FakeSource(paragraphCounts: counts), store: counting),
+      );
+      await _settle(tester);
+
+      // 恢复未收敛 → 一次都不许写（RC1：误差不得当真值写回）。
+      expect(counting.saveCount, 1, reason: '未收敛期间不得有任何写盘');
+
+      // 关书：dispose() 的保存同样被闸门拦下。
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      expect(counting.saveCount, 1, reason: 'dispose 保存也必须过写盘闸门');
+
+      final ReadingProgress? saved =
+          await tester.runAsync<ReadingProgress?>(() => counting.load('testbook01'));
+      expect(saved, isNotNull);
+      expect(saved!.updatedAt, 1, reason: '播种值原封未动 = 恢复误差从未落盘');
+      expect(saved.chapterIndex, 5);
+      expect(saved.chapterPos, 0.5);
+    });
+
+    testWidgets('回归③：语义坐标恢复——存第 2 章 0.5，重开仍落回第 2 章 0.5 附近',
+        (WidgetTester tester) async {
+      await tester.runAsync(
+        () => progressStore.save(
+          ReadingProgress(
+            bookId: 'testbook01',
+            chapterHref: 'h2',
+            chapterIndex: 1,
+            chapterPos: 0.5,
+            updatedAt: 1,
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      // 几何断言：落点在第 2 章中部——章标题明显滚出视口顶（≥300px），
+      // 且第 1 章已卸载、副标题切到「第2章」。
+      expect(find.text('第二章'), findsOneWidget);
+      expect(find.text('第一章'), findsNothing);
+      expect(find.textContaining('第2章'), findsWidgets);
+      final double titleTop = tester.getTopLeft(find.text('第二章')).dy;
+      final double viewportTop = tester.getTopLeft(find.byType(ListView)).dy;
+      expect(titleTop - viewportTop, lessThan(-300),
+          reason: '应落在章中部而非章首（chapterPos≈0.5 已生效）');
+
+      // 关书回读：语义坐标仍在 (1, 0.5±0.1)。
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      final ReadingProgress? saved =
+          await tester.runAsync<ReadingProgress?>(() => progressStore.load('testbook01'));
+      expect(saved, isNotNull);
+      expect(saved!.chapterIndex, 1);
+      expect(saved.chapterPos, inInclusiveRange(0.4, 0.6));
     });
   });
 }
