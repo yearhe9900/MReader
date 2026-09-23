@@ -48,6 +48,7 @@ import '../typography/anchor.dart';
 import '../typography/reader_settings.dart';
 import '../typography/text_style_resolver.dart';
 import '../typography/typeset.dart';
+import '../ui/glass_kit.dart';
 import 'chapter_cache.dart';
 import 'control_bar.dart';
 import 'image_cache.dart';
@@ -788,16 +789,30 @@ class _ReaderPageState extends State<ReaderPage> {
   void _openToc() {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null || chapters.isEmpty) return;
-    showModalBottomSheet<void>(
+    // `UI-03` 浮层玻璃：玻璃底部弹窗（`M2a-T04`）。
+    // `isScrollable: false` —— TocSheet 自带 ListView（Flexible 定高），
+    // 库默认的外层 SingleChildScrollView 会吃掉内层手势并撑爆非约束高度。
+    GlassOverlays.showSheet<void>(
       context: context,
-      showDragHandle: true,
-      builder: (BuildContext sheetContext) => TocSheet(
-        chapters: chapters,
-        currentIndex: _currentIndex,
-        onSelect: (int index) {
-          Navigator.of(sheetContext).pop();
-          unawaited(_goToChapter(index));
-        },
+      isScrollable: false,
+      // 库该路径给的是**无界高度**（探针实测 h<=Infinity），Flexible+ListView
+      // 视口会炸 → 这里补 maxHeight 约束（60% 屏高，内容矮时仍收缩）。
+      // `UI-04`：目录列表行不透明——玻璃 sheet 底上垫 OpaqueContentSurface，
+      // 玻璃只留外壳（弹窗背景 / 拖拽把手），列表行下不透出玻璃。
+      builder: (BuildContext sheetContext) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+        ),
+        child: OpaqueContentSurface(
+          child: TocSheet(
+            chapters: chapters,
+            currentIndex: _currentIndex,
+            onSelect: (int index) {
+              Navigator.of(sheetContext).pop();
+              unawaited(_goToChapter(index));
+            },
+          ),
+        ),
       ),
     );
   }

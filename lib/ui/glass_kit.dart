@@ -23,6 +23,11 @@
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+/// 玻璃对话框动作按钮类型（[GlassOverlays.showAlert] 的参数元素）——
+/// 在此 re-export，调用方只需 import 本文件。
+export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    show GlassDialogAction;
+
 /// 应用统一玻璃质量档位（PRD §11.3）。P0 固定 `standard`。
 ///
 /// 其 API 与语义来自 `liquid_glass_widgets` 1.6.2 的 `GlassQuality` 枚举
@@ -224,12 +229,18 @@ abstract final class GlassOverlays {
   static const GlassQuality quality = GlassKit.overlayQuality;
 
   /// 弹出玻璃确认框（薄封装 [GlassDialog.show]）。
+  ///
+  /// 返回值语义与 `showDialog<T>` 一致：动作回调里
+  /// `Navigator.pop(ctx, value)`，barrier 关闭（[barrierDismissible]）返回 `null`。
+  /// [barrierDismissible] 缺省 `false`（库默认）——确认框须显式选择，防误触取消。
   static Future<T?> showAlert<T>({
     required BuildContext context,
     required List<GlassDialogAction> actions,
     String? title,
     String? message,
     Widget? content,
+    bool barrierDismissible = false,
+    double maxWidth = 280,
   }) =>
       GlassDialog.show<T>(
         context: context,
@@ -238,16 +249,26 @@ abstract final class GlassOverlays {
         message: message,
         content: content,
         quality: quality,
+        barrierDismissible: barrierDismissible,
+        maxWidth: maxWidth,
       );
 
   /// 弹出玻璃底部弹窗（薄封装 [GlassSheet.show]）。
+  ///
+  /// [isScrollable] 缺省 `true`（库默认，内容外包 `SingleChildScrollView`）；
+  /// 内容自带可滚动列表时（如目录 `TocSheet` 的 `ListView`）传 `false`，
+  /// 避免纵向滚动视图嵌套（外层会吃掉内层的拖拽手势）。
   static Future<T?> showSheet<T>({
     required BuildContext context,
     required WidgetBuilder builder,
+    bool isScrollable = true,
+    bool showDragIndicator = true,
   }) =>
       GlassSheet.show<T>(
         context: context,
         builder: builder,
         quality: quality,
+        isScrollable: isScrollable,
+        showDragIndicator: showDragIndicator,
       );
 }

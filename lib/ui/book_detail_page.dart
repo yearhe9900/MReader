@@ -362,24 +362,24 @@ class _BookDetailPageState extends State<BookDetailPage> {
   ///
   /// 本项目**导入即入架**，无「未入架」状态，故不提供「加入书架」（见交付报告偏差声明）。
   Future<void> _removeFromShelf() async {
-    final bool? confirmed = await showDialog<bool>(
+    // `UI-03` 浮层玻璃：玻璃确认框（`M2a-T04`）。返回值语义同原 `showDialog`：
+    // 非 `true`（含 barrier 关闭的 null）一律不删。
+    final bool? confirmed = await GlassOverlays.showAlert<bool>(
       context: context,
-      builder: (BuildContext ctx) => AlertDialog(
-        title: const Text('移出书架'),
-        content: Text(
-          '确定将「${_record.title}」移出书架？\n删除后书架不再列出，封面与副本文件一并清理。',
+      title: '移出书架',
+      message: '确定将「${_record.title}」移出书架？\n删除后书架不再列出，封面与副本文件一并清理。',
+      barrierDismissible: true,
+      actions: <GlassDialogAction>[
+        GlassDialogAction(
+          label: '取消',
+          onPressed: () => Navigator.pop(context, false),
         ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('移出'),
-          ),
-        ],
-      ),
+        GlassDialogAction(
+          label: '移出',
+          isDestructive: true,
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
     );
     if (confirmed != true) return;
     await widget.repository.deleteBook(_record);

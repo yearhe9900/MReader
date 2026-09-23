@@ -147,22 +147,24 @@ class _ShelfPageState extends State<ShelfPage> {
   }
 
   Future<void> _deleteBook(BookRecord record) async {
-    final bool? confirmed = await showDialog<bool>(
+    // `UI-03` 浮层玻璃：玻璃确认框（`M2a-T04`）。barrier 可关（返回 null = 取消），
+    // 语义与原 `showDialog<bool>` 一致：非 `true` 一律不删。
+    final bool? confirmed = await GlassOverlays.showAlert<bool>(
       context: context,
-      builder: (BuildContext ctx) => AlertDialog(
-        title: const Text('删除确认'),
-        content: Text('确定删除「${record.title}」？\n删除后书架不再列出，封面文件一并清理。'),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+      title: '删除确认',
+      message: '确定删除「${record.title}」？\n删除后书架不再列出，封面文件一并清理。',
+      barrierDismissible: true,
+      actions: <GlassDialogAction>[
+        GlassDialogAction(
+          label: '取消',
+          onPressed: () => Navigator.pop(context, false),
+        ),
+        GlassDialogAction(
+          label: '删除',
+          isDestructive: true,
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
     );
     if (confirmed == true) {
       await widget.repository.deleteBook(record);
