@@ -17,6 +17,7 @@
 - M2a-T03 换封面：replaceWithUserPick 内建旧文件清理（META-06②）+ coverOrigin 置 user `8851968`
 - M2a-T03 恢复自动值：重新解析回填 auto 文本与四来源，EPUB 封面物化覆盖 / 无内嵌封面清旧文件 `8851968`
 - 测试分组：新增 `tool/test.sh`（parse/data/reader/ui/fast/all 六档局部执行，统一 --timeout 30s）；`test/epub_fixtures_test.dart` 归入 `test/epub/`（8 处引用同步）；分组口径入 `docs/tech-usage.md`
+- 执行序调整（负责人拍板）：AI 五项 + TTS 四项降级殿后（需求仍 P1），优先阅读功能与体验；新序 M2a→M2b→统计→M3.5 gate→M4→AI/TTS；关键链 169→136 人天 + 殿后 33；gate 首评只用阈值 1/2/4（`docs/PRD.md` §17 M3、`docs/schedule.md` §2.4/§3 同步注记）
 
 ## 2026-09-22
 
