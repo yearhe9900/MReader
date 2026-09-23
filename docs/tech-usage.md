@@ -145,6 +145,7 @@
 |---|---|---|---|
 | 大规模删除 + 入口收口 | 减少维护面 | 删 `lib/source/**`（11 文件）、`lib/ui/source/**`、7 个测试；改 `lib/main.dart` | 共 −7496 行；形制知识已固化到架构文档 §A.4，删代码不丢知识 |
 | 残留引用核查 | 确认无悬挂引用 | 全仓 `git grep`（`lib/source` / `ui/source` / `dart:html`） | 0 命中才算闭环 |
+| 残留样本补删 | 收尾当年漏删的调研样本 | `test/fixtures/shenshi.json` | 该文件是 legado 书源原文（`bookSourceName` / `ruleBookInfo` / `exploreUrl` 全套字段），由 M0 `a8d329b` 引入、`236cead` 删原型时**漏删**（当时的删除清单只列了 `lib/source/**` 与测试文件），且全仓零引用 → 本轮 `git rm` 补上；**教训**：删功能时把 `assets` / `fixtures` / 脚本一起过一遍，别只跟着源码目录走 |
 
 ### 2.3 M1-T01 — 工程骨架与平台能力抽象
 
@@ -473,6 +474,11 @@
 |---|---|---|---|
 | 书架导航层玻璃化 | 书架首页顶栏/壳层入玻璃导航层（`UI-02`） | `lib/ui/shelf_page.dart` | 照抄 `book_detail_page` 范本：`GlassNavScaffold(appBar: GlassTopBar(...))`，两个 build 分支（loading / 正常）都要换；内容整体包 `OpaqueContentSurface`（`UI-04`） |
 | 详情页玻璃断言作用域限定 | 书架入栈后全树有 2 个 `GlassTopBar`，原全树断言误报 | `test/meta/detail_test.dart` | `find.byType(GlassTopBar, skipOffstage: false)` 会数到栈下 offstage 的书架 → 包一层 `_inDetail(...)` 再断言 |
+| `GlassOverlays` 扩展 | 4 个原生浮层换玻璃所需的三个透传参数 | `lib/ui/glass_kit.dart` `GlassOverlays` | `showAlert` 补 `barrierDismissible`（缺省 false 库默认，确认框改传 true 保留「点外取消」）与 `maxWidth`（大图放开到整屏）；`showSheet` 补 `isScrollable`/`showDragIndicator`；re-export `GlassDialogAction` 免调用方再 import 玻璃库 |
+| 玻璃确认框返回值语义 | 替换 `showDialog<bool>` 不改业务判定 | `shelf_page.dart` `_deleteBook` / `book_detail_page.dart` `_removeFromShelf` | `GlassDialogAction(label:, isDestructive:, onPressed: () => Navigator.pop(context, true/false))`；barrier 关闭返回 null，业务侧「非 true 不删」判定原样兼容；删除/移出标 `isDestructive`（红光语义） |
+| 目录换玻璃底部弹窗 | `NAV-01` 目录入 `UI-03` 浮层玻璃 | `reader_page.dart` `_openToc` | `GlassOverlays.showSheet(isScrollable: false)`——TocSheet 自带 `Flexible+ListView`，库默认外层 `SingleChildScrollView` 会嵌套纵向滚动吃手势；**该路径库给的是无界高度（探针实测 `h<=Infinity`），Flexible+ListView 视口直接炸**（`Vertical viewport was given unbounded height`）→ builder 外再包 `ConstrainedBox(maxHeight: 0.6 屏高)` 补约束（内容矮时仍收缩）；builder 包 `OpaqueContentSurface` 守 `UI-04`（玻璃只留外壳，列表行下不透玻璃） |
+| 大图玻璃弹窗 | 封面查看器换玻璃（`UI-03`），无确认语义 | `cover_picker.dart` `showCoverFullScreen` | **库断言 1–3 个 actions，空列表 debug 下 AssertionError**（初版 `const []` 踩坑）→ 必须给 1 个「关闭」动作 + `barrierDismissible: true`（点外关，同原 `showDialog` 默认）+ `maxWidth: size.width`，内容 SizedBox 自收 `width-72`（卡片 padding 20×2 + 页边 16×2） |
+| 玻璃弹窗关闭的测试推进 | 确认框点「取消」后 `_settle`(400ms) 推不完关闭转场，弹窗仍在树上误报 | `test/ui/shelf_page_test.dart` LIB-06 | 关闭断言前换 `await tester.pumpAndSettle()`（对照实验实证：onPressed 已触发、400ms 不够、pumpAndSettle 正常关） |
 
 
 ## 测试分组与局部执行（2026-09-23）
@@ -494,6 +500,10 @@
 - 归档调整：`test/epub_fixtures_test.dart` → **`test/epub/epub_fixtures_test.dart`**（根目录散件归组；fixture 路径是包根相对 `Directory('test/fixtures')`，移动不影响取数，README / 架构文档 / 注释共 8 处引用已同步）。
 - `test/widget_test.dart` **留在根目录不搬**：文件名本身是「阻止 `flutter create` 注入 counter 模板」的机制，动名字会引回模板测试；归组由 `tool/test.sh` 显式列出。
 - 改动 `lib/ui/**` 或导航链路 → 起码跑 `ui + 受影响组`；只改解析/仓储 → `fast` 即可；**提交前最后一轮按批次纪律跑全量**。
+- **`--timeout 30s` 对 `testWidgets` 无效（必须再接一层）**：`testWidgets` 用 `timeout: timeout ?? binding.defaultTestTimeout`，而 `AutomatedTestWidgetsFlutterBinding.defaultTestTimeout` 固定 **10 分钟**——CLI 的 `--timeout` 只改 runner 默认、被显式值压过。含 `testWidgets` 的文件须在 `main()` 首行调 `test/test_config.dart::capTestTimeout()`（置 30s），30s 兜底才真正生效（实测：reader 组「挂满 10 分钟」→ 暴露真挂 → 修复后 22s / 145 用例）。
+- **`dispose()` 发起的假区保存 = 跨区死锁源**：`AtomicFile._tails` 按路径串行化，假异步区发起的保存持有 gate，其完成回调只有 `pump` 能排空；测试体回到活区 `runAsync` 写同一路径会 await 队尾 gate **永久挂起**。用例在 `pumpWidget(const SizedBox())` 关书后补 `await _settle(tester, rounds: 20)` 排空。
+- **断言正文段落须 `findRichText: true`**：正文由 `InlineParagraph` → `Text.rich`（RichText）渲染，`find.text` / `find.textContaining` 默认**不匹配富文本**（标题是纯 `Text`、能匹配，故只错在正文断言上）。
+- **防假绿**：构造「某状态不成立」的用例时补**非空验证**（界面确实渲染了内容 / 目标不在场），否则「什么都没发生」时布尔断言恒真。
 
 
 

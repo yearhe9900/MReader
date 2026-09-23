@@ -21,6 +21,22 @@
 - 执行序调整（负责人拍板）：AI 五项 + TTS 四项降级殿后（需求仍 P1），优先阅读功能与体验；新序 M2a→M2b→统计→M3.5 gate→M4→AI/TTS；关键链 169→136 人天 + 殿后 33；gate 首评只用阈值 1/2/4（`docs/PRD.md` §17 M3、`docs/schedule.md` §2.4/§3 同步注记）
 - 全量测试须负责人下令（拍板固化）：`tool/test.sh` 无参数不再默认全量（打印 usage 退出），`all` 档标注仅明确指令时执行；开发批次只跑相关分组 `5a90806`
 - M2a-T04 批次①书架玻璃化（UI-02）：ShelfPage 导航层 GlassNavScaffold + GlassTopBar（照书架详情页范本），内容包 OpaqueContentSurface（UI-04 不透明红线）；detail_test 玻璃断言限定详情页作用域（书架入栈后全树 2 个顶栏）
+- M2a-T04 批次②浮层玻璃化（UI-03）：GlassOverlays.showAlert/showSheet 补 barrierDismissible/maxWidth/isScrollable 透传并导出 GlassDialogAction；4 调用点替换——书架删除确认、详情页移出确认（均玻璃确认框 + isDestructive）、封面大图玻璃弹窗、阅读页目录玻璃底部弹窗（isScrollable:false + OpaqueContentSurface 垫底，TocSheet 行不透明）`9519c5f`
+- M2a-T04 批次③ 测试与修复：玻璃断言入 shelf/reader 测试（GlassDialog/GlassSheet/OpaqueContentSurface/isGlassWidget）；修目录弹窗无界高度（isScrollable:false 路径 ConstrainedBox 0.6 屏高）、封面大图空 actions 触库断言（补「关闭」动作）、LIB-06 关闭转场 pumpAndSettle 推进 `9519c5f`+`7b3b76a`
+
+### 变更
+
+- 测试链路提速：新增 `test/test_config.dart::capTestTimeout()`——CLI 的 `--timeout` 对 `testWidgets` **无效**（其显式用 binding 的 10 分钟默认值压过），须在 `main()` 首行把 `defaultTestTimeout` 置 30s；8 个含 `testWidgets` 的文件接入，reader 组从「挂满 10 分钟」降到 22s / 145 用例全绿 `7b3b76a`
+
+### 修复
+
+- 关书保存不得用 null 覆盖 `localHint`：dispose 时 `Scrollable` 子节点先于本 State 卸载、控制器已 detach → `_buildLocalHint()` 返回 null，会把会话中已存的有效像素快照写没（下次开书失去 `RC2` 首帧精确落点）；新增 `_lastLocalHint` 留底，`_saveProgress` 以 `?? _lastLocalHint` 兜底 `7b3b76a`
+- 测试跨区死锁：`dispose()` 在 FakeAsync 区发起的保存持有 `AtomicFile._tails` 的路径 gate，其完成回调只有 `pump` 能排空 → 测试体回到活区 `runAsync` 写同路径即永久等待（reader 组整组挂死的真因）；回归用例在 `pumpWidget(SizedBox())` 后补 `_settle` 排空 `7b3b76a`
+- 回归②夹具重建：`_FakeSource` 增 `hangIndices`（`content()` 返回永不完成的 future）**冻结布局**以稳定复现「恢复未收敛」，并补非空验证（列表就位 + 有内容渲染 + 目标章标题/正文均不出现）防假绿 `7b3b76a`
+
+### 移除
+
+- Q24 收尾：删除漏删的 `test/fixtures/shenshi.json`（M0 期 legado 书源原文样本，`236cead` 删原型时漏删、全仓零引用）；测试注释「假书源」改「假内容源」（`BookSource` 是格式解析抽象，易与 legado 网络书源同名混淆）
 
 ## 2026-09-22
 
