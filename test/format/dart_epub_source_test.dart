@@ -25,7 +25,7 @@ final File _baselineFile = File('${_fixturesDir.path}/baseline.json');
 
 /// href 的「可比较形态」：百分号解码 + 小写。
 ///
-/// 口径与 `test/epub_fixtures_test.dart` 保持一致：解析器给的是**按 OPF 声明**得到的
+/// 口径与 `test/epub/epub_fixtures_test.dart` 保持一致：解析器给的是**按 OPF 声明**得到的
 /// 逻辑路径，而 baseline 记录的是**包内真实条目**路径（`fx02b` / `fx03` 两类脏书二者形态不同）。
 String _normHref(String href) {
   try {

@@ -459,5 +459,24 @@
 | 换封面走 `replaceWithUserPick` | `META-09 ②` 换图后旧封面文件被删（`META-06 ①`） | `BookDetailPage._pickCover` / `lib/ui/cover_picker.dart` | `FilePicker(type: FileType.image, withData: true)` 取字节（**零新依赖**）→ `replaceWithUserPick`（materialize 新图 + 删 `previous` 旧文件）→ `coverOrigin = user` → `updateRecord` 落盘 |
 | 封面字节不常驻（`PERF-02`） | 详情页缩略图 / 大图展示 | `lib/ui/book_detail_page.dart` / `lib/ui/cover_picker.dart` | 缩略图 `readThumb` 现读、换图即弃；大图 `readFull` 现读后 `Dialog + InteractiveViewer` 展示（玻璃弹窗属 M2a-T04） |
 
+## 测试分组与局部执行（2026-09-23）
+
+> 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
+> **批收官 / 里程碑验收仍跑全量**（任务级提交节奏的纪律不变，只是过程中的反馈回路变短）。
+
+| 组 | 目录/文件 | 性质 | 命令（或 `bash tool/test.sh <组>`） |
+|---|---|---|---|
+| parse 解析层 | `test/epub/`、`test/format/` | 纯 Dart，最快；含 14 本脏书 fixtures 回归 | `flutter test --timeout 30s test/epub test/format` |
+| data 数据层 | `test/library/`、`test/meta/`、`test/storage/`、`test/task/` | 多为纯 `test()` + 临时目录（`detail_test` 含 widget 段） | `flutter test --timeout 30s test/library test/meta test/storage test/task` |
+| reader 阅读器 | `test/reader/`、`test/typography/`、`test/perf/` | 含 `testWidgets`，FakeAsync 铁律适用 | `flutter test --timeout 30s test/reader test/typography test/perf` |
+| ui 界面层 | `test/ui/`、`test/widget_test.dart` | 最慢（`testWidgets` 密集） | `flutter test --timeout 30s test/ui test/widget_test.dart` |
+| fast 快速反馈 | parse + data | 改数据/解析层时的日常回路 | `bash tool/test.sh fast` |
+| all 全量 | 全部 | 批收官、交接、里程碑验收 | `flutter test --timeout 30s` |
+
+- 分组入口统一走 `tool/test.sh`（自带 `--timeout 30s` 与组名校验）；不带参数 = 全量。
+- 归档调整：`test/epub_fixtures_test.dart` → **`test/epub/epub_fixtures_test.dart`**（根目录散件归组；fixture 路径是包根相对 `Directory('test/fixtures')`，移动不影响取数，README / 架构文档 / 注释共 8 处引用已同步）。
+- `test/widget_test.dart` **留在根目录不搬**：文件名本身是「阻止 `flutter create` 注入 counter 模板」的机制，动名字会引回模板测试；归组由 `tool/test.sh` 显式列出。
+- 改动 `lib/ui/**` 或导航链路 → 起码跑 `ui + 受影响组`；只改解析/仓储 → `fast` 即可；**提交前最后一轮按批次纪律跑全量**。
+
 
 

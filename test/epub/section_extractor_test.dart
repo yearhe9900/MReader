@@ -8,7 +8,7 @@
 //   - CNT-03：`<table>` 每个 `<tr>` 退化为一个纯文本段落，单元格以
 //     `' | '` 连接；`<thead>/<tbody>/<tfoot>` 透明；单元格内联标签照常。
 // 本文件锁住这些行为，防止后续改动回归（fixture 回归见
-// `test/epub_fixtures_test.dart`，本文件是它的纯内存最小补充）。
+// `test/epub/epub_fixtures_test.dart`，本文件是它的纯内存最小补充）。
 import 'dart:convert';
 import 'dart:typed_data';
 

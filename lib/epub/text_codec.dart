@@ -22,7 +22,7 @@ import 'package:charset/charset.dart';
 /// **重构说明（M1-T02B）**：本函数的「判定」与「解码」已拆开——
 /// 判定结果即 [detectEncodingName] 返回的**生效编码名**，本函数等价于
 /// 「[detectEncodingName] 取名字 + `_decodeByName` 按名字解码」。
-/// 外部行为（输入 -> 输出字符串）逐字节不变，由 `test/epub_fixtures_test.dart`
+/// 外部行为（输入 -> 输出字符串）逐字节不变，由 `test/epub/epub_fixtures_test.dart`
 /// 的 fx04 / fx09 / fx10 / fx11 与 9 本 fixture 基线共同护栏。
 String decodeText(Uint8List bytes) =>
     _decodeByName(detectEncodingName(bytes), bytes);

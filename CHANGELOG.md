@@ -16,6 +16,7 @@
 - M2a-T03 元数据编辑（META-09）：详情页编辑态三输入框 + 校验，仅变化字段置 user 落盘 `8851968`
 - M2a-T03 换封面：replaceWithUserPick 内建旧文件清理（META-06②）+ coverOrigin 置 user `8851968`
 - M2a-T03 恢复自动值：重新解析回填 auto 文本与四来源，EPUB 封面物化覆盖 / 无内嵌封面清旧文件 `8851968`
+- 测试分组：新增 `tool/test.sh`（parse/data/reader/ui/fast/all 六档局部执行，统一 --timeout 30s）；`test/epub_fixtures_test.dart` 归入 `test/epub/`（8 处引用同步）；分组口径入 `docs/tech-usage.md`
 
 ## 2026-09-22
 

@@ -344,7 +344,7 @@ factory HighPerfRegistry.fromEnvironment({HighPerfEngine? engine}) {
 | **L4 搜索命中** | `search()` 的事件集合 | ① 命中**集合**相等（键 = `chapterIndex + charOffset + matchedText`）；② 命中总数相等 | **命中顺序**允许不同 | `RUST-02 ②` 明文：「顺序可不同，命中集合必须一致」 |
 | **L5 错误分类** | 失败时的终态 | **错误类别枚举**相等（`Encrypted` / `FormatInvalid` / `Io` / `MissingContainer` …） | **中文文案措辞**允许不同（但必须都是中文、可读、同类） | `RUST-02 ③`「给出**同一类**中文原因」；措辞属表达，类别属契约 |
 
-**归一化口径（重要，避免误报）**：`href` 比对一律复用现有测试的口径 `normHref()`（百分号解码 + 转小写），因为 Rust `zip` crate 返回的条目名编码形态可能与 Dart `archive` 不同，但**指向同一章**即等价。该口径已在 `test/epub_fixtures_test.dart:47` 固化，**直接复用，不新造**。
+**归一化口径（重要，避免误报）**：`href` 比对一律复用现有测试的口径 `normHref()`（百分号解码 + 转小写），因为 Rust `zip` crate 返回的条目名编码形态可能与 Dart `archive` 不同，但**指向同一章**即等价。该口径已在 `test/epub/epub_fixtures_test.dart:47` 固化，**直接复用，不新造**。
 
 > ⚠️ **本设计必须点明的一个高风险事实（诚实标注）**：
 > **L2（正文块）是等价性最难达成的一层**。Dart 侧正文由 `package:html`（宽松 HTML 解析器）产出，其「块级标签切段 + 空白折叠 + 标题剥离」行为是该包的**具体实现细节**。Rust 侧若改用 `lol_html` / `html5ever`，**几乎不可能**逐字节复现 `package:html` 的段落切分结果。
@@ -1829,7 +1829,7 @@ await coverStore.purgeOrphans(
 | `zip` 8.6.0 MIT（default features 含 bzip2 C 依赖） | https://crates.io/api/v1/crates/zip |
 | `encoding_rs` 0.8.41 / `chardetng` 1.0.0 / `jieba-rs` 0.11.0 / `quick-xml` 0.42.0 / `lol_html` 3.0.1 / `regex` 1.13.1 / `memchr` 2.8.3 license & MSRV | 本次实测 `cargo info <crate> --registry crates-io` |
 | `kindle_formats` 为 GPL-3.0（排除） | https://crates.io/api/v1/crates/kindle_formats |
-| 现有 14 个 fixture + baseline.json 结构 | 本次实测 `test/fixtures/`、`test/epub_fixtures_test.dart`、`baseline.json` |
+| 现有 14 个 fixture + baseline.json 结构 | 本次实测 `test/fixtures/`、`test/epub/epub_fixtures_test.dart`、`baseline.json` |
 | `capability/` 形制（5 文件） | 本次实测 `lib/source/capability/**` |
 | 仓库实际无 `lib/web/`、无 `.github/` | 本次实测目录列举 |
 

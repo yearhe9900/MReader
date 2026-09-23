@@ -75,7 +75,7 @@ MReader/
 
 > 依赖闭包（`collection` / `meta` / `petitparser` / `csslib` / `source_span` / `win32` / `ffi` / `web` / `plugin_platform_interface` / `lints`）在本机 pub cache 中**均已存在**，`flutter pub get` 可离线成功。
 >
-> `test/epub_fixtures_test.dart` 会用 `dart:io` 读 `test/fixtures/` 下的文件。`dart:io` 只出现在 **test/**（仅在 VM 上跑），`lib/` 源码里没有 `dart:io`。
+> `test/epub/epub_fixtures_test.dart` 会用 `dart:io` 读 `test/fixtures/` 下的文件。`dart:io` 只出现在 **test/**（仅在 VM 上跑），`lib/` 源码里没有 `dart:io`。
 
 ---
 
@@ -158,7 +158,7 @@ flutter run
 flutter test
 ```
 
-> 会跑两个文件：`test/widget_test.dart`（内存造 EPUB 的单测）与 `test/epub_fixtures_test.dart`（读取 `test/fixtures/*.epub`，对照 `test/fixtures/baseline.json` 的 14 本真实脏书回归）。若 `test/fixtures/` 缺失，回归用例会**优雅跳过**而非失败。
+> 会跑两个文件：`test/widget_test.dart`（内存造 EPUB 的单测）与 `test/epub/epub_fixtures_test.dart`（读取 `test/fixtures/*.epub`，对照 `test/fixtures/baseline.json` 的 14 本真实脏书回归）。若 `test/fixtures/` 缺失，回归用例会**优雅跳过**而非失败。
 
 ---
 
@@ -246,7 +246,7 @@ flutter test
 - 已确认 `flutter/material.dart` **不导出** `Uint8List`，因此 `main.dart` 中刻意不写 `Uint8List` 类型标注，改用类型推断。
 - 已确认 `flutter_lints 6.0.0` 的规则文件名为 `lib/flutter.yaml`。
 - 已确认 lint 规则集（`lints 6.1.0` core + recommended + flutter）逐条对照：无空 catch、无 `forEach` 函数字面量、无 `unnecessary_import`、`use_build_context_synchronously` 已用 `if (!mounted) return;` 守卫、widget 全部带 `super.key`、`sort_child_properties_last` 合规。
-- **本轮针对 QA 压出的健壮性缺陷做了修复**（详见下），并新增了 `test/epub_fixtures_test.dart` 把 QA 的 14 本脏书 + `baseline.json` 固化成回归契约：
+- **本轮针对 QA 压出的健壮性缺陷做了修复**（详见下），并新增了 `test/epub/epub_fixtures_test.dart` 把 QA 的 14 本脏书 + `baseline.json` 固化成回归契约：
   - 缺陷① `_lookup` 增加「已解码路径再百分号编码」候选 → 命中「zip 条目名本身就是 `%E7%AC%AC…`」的书（fx02b），不再误报 spine 为空。
   - 缺陷② `text_codec` 声明分支整体 try/catch + GBK 统一 `allowMalformed: true` → 声明 gbk 却含非法字节（fx11）不再抛异常，兑现"绝不抛"。
   - 缺陷③ 声明 utf-8 时先试**严格** utf-8，失败即回落 GBK → 声明 utf-8 实为 GBK（fx09）正确解码而非静默乱码。
