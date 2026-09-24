@@ -7,6 +7,7 @@
 
 ### 新增
 
+- M2b-T08 阅读会话采集内核（`STAT-01/02`，无 UI）：`SessionTracker` 空闲 3min（Q12）切会话（前段计「最后活跃 + 3min 宽限」）、跨 0 点按实际秒数拆天（起止坐标取边界前最后活跃）；`SessionStore` 按月分片 `stats/sessions-YYYY-MM.json`（`JsonStore`+`AtomicFile` 原子写入、坏分片隔离 `.corrupt`）、按 id 并集幂等合并（同 id 取较大时长、`duration≤0` 禁写）；`StatsIndex` `day_key`/`book_id` 双索引单遍扫描聚合，`tool/stats_bench.dart` 实测 4 万条 loadIndex 129ms ≤300ms（PASS）；`app_paths` 接口/实现拆分（stats 零平台插件） `377d171`
 - M2b-T01 备料：PDF 渲染插件选型对比（Q4 拍板材料，**不实施**）→ `docs/选型-PDF插件.md`——9 候选按双硬指标（渲染指定页为位图 + Android/Windows）筛至 pdfrx 2.6.5（主选推荐：6/6 全平台、文本层、可取消渲染）与 pdfx 2.11.0（备选：bytes 与图片页管线同构；无文本层、无 Linux）；含 FMT-01 伪分章 / META-10 注入式渲染接口 / §7.2 文字层搜索风险影响分析与 4 项拍板点 `8f4c3b4`
 - M2b-T03 格式嗅探与魔数纠偏（`FMT-06`）：MOBI/AZW3 以 PalmDB `BOOKMOBI` 魔数（偏移 60..68）识别、压过一切后缀（验收①：AZW3 改名 `.txt` 仍识别为 MOBI 系，tmp_book 真实双样本取证）；`FormatKind.mobi` + `mobiUnsupported` 导入即拒绝（口径区分「MOBI 还没支持」与「不认识的格式」，`M2b-T05` 接入解析器）；纯文本改名 `.epub` 取「明确报错」出口（交 EPUB 解析器 notZip 文案，既有锁不动）；中立判据层 `sniffer.dart` `12879fb`
 - M2b-T02 CBZ 支持（`FMT-02`）：`CbzSource`（`dart-cbz`）每图片页一章（`href` = zip 条目路径、title = 第 N 页），进度按页天然成立（③）；页表自然序 `compareNatural`（`META-11` ②）+ `__MACOSX` / 隐藏文件 / 非图片条目过滤；封面 = 自然序首页图（`PendingCover` + 魔数嗅探，`META-11` ① / `META-05`）；书名 / 作者走 META-04 文件名规则链（与 TXT 同源） `a7ff34d`

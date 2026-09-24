@@ -573,6 +573,24 @@
 | FMT-06 ② 双出口取舍 | 纯文本改名 `.epub` 的纠偏策略 | `sniffFormat` epub 分支 | 验收②「识别为 TXT **或** 明确报错」→ 取「明确报错」：EPUB 解析器给 notZip 可读文案（**诚实报错优先于静默改判**），既有锁 `dart_epub_source_test`「非 zip 字节 + .epub → notZip」不动；若走「识别为 TXT」出口须同步推翻该测试（代码注释已留痕） |
 | `sniffer_test` 11 条 | 判据直测 + 验收 + 既有锁回归钉 | `test/format/sniffer_test.dart` | 夹具按真实样本复刻（kTinyPng 教训：不许「号称」）：可打印 name + NUL 填充 + `BOOKMOBI` tag；回归钉：非 zip 二进制 `.epub`→epub、PK 假 zip `.txt`/`.zip`→unsupported、纯文本→txt |
 
+### 2.23 M2b-T08 — 阅读会话采集内核（STAT-01/02）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2b-T08（`STAT-01`/`STAT-02`，无 UI） |
+| 提交 | `377d171` |
+| 日期 | 2026-09-24 |
+| 一句话目标 | 活跃事件驱动切会话（空闲 3min）+ 跨 0 点拆天 + 按月分片幂等合并 + 双索引聚合（4 万条 ≤300ms） |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| `SessionTracker` 空闲切会话 | `STAT-01` 有效阅读时长采集 | `lib/stats/reading_session.dart` | 时刻由调用方注入（无计时器/IO → 可确定性单测）；空闲**超过** 3min 才切（恰好不切）；前段只计「最后活跃 + 3min 宽限」；`finish` 幂等（不清空事件，可重复调用）；`duration` 整秒下取整、`≤0` 不产出 |
+| 跨 0 点拆天 | `STAT-02` ① 按天归属 | 同上（`_midnightsBetween` / `_emit`） | 一段连续阅读按本地 0 点拆多条、各归各 `dayKey`；起止坐标取「边界前最后活跃」（接缝两侧一致，不虚构边界位置）；id = `<startedAt>_<bookId>` 确定性派生（**不含** endedAt/duration → 跨设备同会话同 id，同步不双计） |
+| `SessionStore` 按月分片 | `STAT-02` 持久化 | `lib/stats/session_store.dart` | `stats/sessions-YYYY-MM.json`（分片键 = `startedAt` 本地年月）；文件名白名单正则挡 `.bak`/`.corrupt`/`.tmp`；合并**按 id 并集**（同 id 取较大时长）、无变化不重写（幂等无写放大）；坏条目防御式跳过、坏分片隔离 `.corrupt` 不影响他月 |
+| `StatsIndex` 双索引聚合 | `STAT-02` ④ 聚合查询 | `lib/stats/reading_session.dart` | `day_key`/`book_id` 两组内存索引 + total，单遍扫描；`tool/stats_bench.dart` 实测 4 万条（≈5 年、61 分片）**loadIndex 126~132ms ≤300ms PASS**、纯聚合 5ms、落盘 merge 940ms |
+| `app_paths` 接口/实现拆分 | stats 零平台插件（`STAT-02` ⑤）+ bench `dart run` 可编译 | `lib/platform/app_paths.dart`（纯接口）、`lib/platform/path_provider_app_paths.dart`（实现） | 接口文件不再 import path_provider（只留 `dart:io` 目录类型）；全仓仅 `main.dart` 引用实现类；测试/bench 用临时目录实现 `_TestAppPaths` |
+| 弱断言修正（验收抓出） | 防假绿 | `test/task/session_store_test.dart` | 「禁写记录不产生分片」原断言测**从未触碰的 8 月**平凡真 → 换成真正「本会被创建」的月份（8 月 zeroAug 被拒后断言无 8 月分片）；教训：**存在性断言必须钉「本会被创建」的那个对象** |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
