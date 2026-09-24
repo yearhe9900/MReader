@@ -141,4 +141,80 @@ void main() {
       );
     });
   });
+
+  group('hasPdfMagic（%PDF 判据，FMT-01 / M2b-T01）', () {
+    /// PDF 头（`%PDF-1.4`）：真样本 `tmp_book/小狗钱钱.pdf` 偏移 0 实测同头。
+    Uint8List pdfBytes() => Uint8List.fromList(<int>[
+          0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34, 0x0A,
+        ]);
+
+    test('真样本头 %PDF-1.4 → true', () {
+      expect(hasPdfMagic(pdfBytes()), isTrue);
+    });
+
+    test('不足 4 字节的截断 → false（不误判）', () {
+      expect(hasPdfMagic(Uint8List.fromList(<int>[0x25, 0x50, 0x44])), isFalse);
+      expect(hasPdfMagic(Uint8List(0)), isFalse);
+    });
+
+    test('非 %PDF 头 → false', () {
+      expect(hasPdfMagic(_text('这是纯文本，不是 PDF。')), isFalse);
+      expect(hasPdfMagic(_fakeZip()), isFalse);
+      expect(hasPdfMagic(_mobiFixture()), isFalse);
+    });
+
+    test('只在偏移 0 判定：%PDF 出现在头部之后 → false（从严，不误开）', () {
+      final Uint8List shifted = Uint8List.fromList(<int>[
+        0x0A, 0x0A,
+        ...pdfBytes(),
+      ]);
+      expect(hasPdfMagic(shifted), isFalse);
+    });
+  });
+
+  group('sniffFormat · PDF（FMT-01 / M2b-T01）', () {
+    Uint8List pdfBytes() => Uint8List.fromList(<int>[
+          0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34, 0x0A,
+        ]);
+
+    test('魔数优先：真 PDF 改名 .txt → pdf（不被纯文本启发式吃掉）', () {
+      expect(sniffFormat(fileName: 'x.txt', bytes: pdfBytes()), FormatKind.pdf);
+      expect(sniffFormat(fileName: 'noext', bytes: pdfBytes()), FormatKind.pdf);
+    });
+
+    test('.pdf 后缀：内容不是 PDF 也交 PDF 解析器给可读报错（口径同 .epub）', () {
+      expect(
+        sniffFormat(fileName: 'x.pdf', bytes: _text('纯文本。')),
+        FormatKind.pdf,
+      );
+      expect(sniffFormat(fileName: 'x.pdf', bytes: _fakeZip()), FormatKind.pdf);
+    });
+
+    test('.pdf 后缀 + 真 PDF 头 → pdf', () {
+      expect(sniffFormat(fileName: '书.pdf', bytes: pdfBytes()), FormatKind.pdf);
+      expect(
+        sniffFormat(fileName: 'D:\\书\\小狗钱钱.PDF', bytes: pdfBytes()),
+        FormatKind.pdf,
+        reason: '扩展名大小写与 Windows 路径分隔符都要兼容',
+      );
+    });
+
+    test('回归：MOBI 魔数仍优先于 PDF 后缀（两判据不串台）', () {
+      expect(
+        sniffFormat(fileName: 'x.pdf', bytes: _mobiFixture()),
+        FormatKind.mobi,
+      );
+    });
+
+    test('回归：既有 epub / cbz / cbr / txt / unsupported 判定不受影响', () {
+      expect(sniffFormat(fileName: 'x.epub', bytes: _fakeZip()), FormatKind.epub);
+      expect(sniffFormat(fileName: 'x.cbz', bytes: _fakeZip()), FormatKind.cbz);
+      expect(sniffFormat(fileName: 'x.cbr', bytes: _fakeZip()), FormatKind.cbr);
+      expect(sniffFormat(fileName: 'x.txt', bytes: _text('纯文本。')), FormatKind.txt);
+      expect(
+        sniffFormat(fileName: 'x.bin', bytes: Uint8List.fromList(<int>[0x00, 0x01])),
+        FormatKind.unsupported,
+      );
+    });
+  });
 }

@@ -14,8 +14,10 @@ import 'package:mreader/format/book_source.dart';
 import 'package:mreader/format/cbz_source.dart';
 import 'package:mreader/format/dart_epub_source.dart';
 import 'package:mreader/format/dart_txt_source.dart';
+import 'package:mreader/format/pdf_source.dart';
 
 import 'epub_builder.dart';
+import 'pdf_fakes.dart';
 
 /// 一个「已注册实现」的样本：标签 + 工厂（每次调用返回**全新实例**，保证用例互不污染）。
 class BookSourceSample {
@@ -89,6 +91,17 @@ List<BookSourceSample> registeredSources() => <BookSourceSample>[
         create: () => CbzSource(
           fileName: 'contract.cbz',
           bytes: _minimalCbz(),
+        ),
+      ),
+      // M2b-T01 接入信号：PDF 走**注入的**渲染内核（`META-10` ③），
+      // 契约测试用假引擎，故不依赖 pdfrx 与原生库（离线可跑）。
+      BookSourceSample(
+        label: 'pdfrx-pdf',
+        fileName: 'contract.pdf',
+        create: () => PdfSource(
+          fileName: 'contract.pdf',
+          bytes: minimalPdfBytes(),
+          engine: FakePdfEngine(pageCount: 2),
         ),
       ),
     ];

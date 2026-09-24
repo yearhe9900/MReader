@@ -62,3 +62,18 @@ bool hasMobiMagic(Uint8List bytes) {
   }
   return true;
 }
+
+/// 是否是 PDF 容器（`FMT-01`，M2b-T01）。
+///
+/// 判据 = 文件头 `%PDF`（0x25 0x50 0x44 0x46）。PDF 规范要求 header 位于**文件起始**，
+/// 故本判据只看偏移 0（不做「头 1024 字节内搜索」的宽松变体——宁可落 `unsupported`
+/// 也不误开）。真样本 `tmp_book/小狗钱钱.pdf` 实测命中。
+///
+/// 为什么它也要放在 `sniffFormat` 的后缀判定**之前**：与 `hasMobiMagic` 同理——
+/// **魔数压过后缀**。PDF 头是纯 ASCII 且前几行常含可打印文本，改名 `.txt` 后
+/// 纯文本启发式（`looksLikeText`）有误判风险，必须先由魔数截住。
+bool hasPdfMagic(Uint8List bytes) {
+  // 逐字节常量 "%PDF"（避免 String 编码歧义，与 hasMobiMagic 同写法）。
+  if (bytes.length < 4) return false;
+  return bytes[0] == 0x25 && bytes[1] == 0x50 && bytes[2] == 0x44 && bytes[3] == 0x46;
+}

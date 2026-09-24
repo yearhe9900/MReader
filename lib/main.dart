@@ -12,6 +12,8 @@ import 'library/library_repository.dart';
 import 'meta/cover_store.dart';
 import 'platform/app_paths.dart';
 import 'platform/path_provider_app_paths.dart';
+import 'platform/pdf_engine.dart';
+import 'platform/pdfrx_pdf_engine.dart';
 import 'reader/progress_store.dart';
 import 'settings/settings_store.dart';
 import 'ui/shelf_page.dart';
@@ -19,6 +21,12 @@ import 'ui/shelf_page.dart';
 Future<void> main() async {
   // path_provider 等插件在访问前需要先初始化绑定。
   WidgetsFlutterBinding.ensureInitialized();
+
+  // `FMT-01` / `META-10` ③：PDF 渲染内核经**注入缝**接入（`Q4 ①` 拍板 pdfrx 2.6.5）。
+  // 全仓唯一 import pdfrx 的文件是右边这个适配器；格式层（`PdfSource`）只认
+  // `PdfEngine` 抽象，因此换内核不动格式层与 UI。pdfrx 自身的初始化（原生库准备）
+  // 是惰性的，首次开 PDF 才发生，不拖慢冷启动。
+  PdfEngineProvider.current = PdfrxPdfEngine();
 
   // `UI-01` ① + 平台能力经抽象注入（PRD §15.1）：
   // 玻璃着色器预热与数据目录解析/设置加载**并行**——两者完全独立，

@@ -13,6 +13,7 @@ import 'cbz_source.dart';
 import 'cbr_source.dart';
 import 'dart_epub_source.dart';
 import 'dart_txt_source.dart';
+import 'pdf_source.dart';
 import 'sniffer.dart';
 
 // `MReaderFormatException` / `FormatErrorCode` 经 `book_source.dart` 的
@@ -22,7 +23,9 @@ import 'sniffer.dart';
 ///
 /// [mobi] = MOBI/AZW3（PalmDB `BOOKMOBI` 家族，`FMT-06` ① 识别）；解析器
 /// `M2b-T05` 接入，接入前 [BookRegistry.open] 抛 `mobiUnsupported`、导入即拒绝。
-enum FormatKind { epub, txt, cbz, cbr, mobi, unsupported }
+/// [pdf] = PDF（`FMT-01`，M2b-T01 接入）：`%PDF` 魔数 / `.pdf` 后缀识别，
+/// 渲染内核经 `PdfEngine` 注入（`META-10` ③，见 `lib/platform/pdf_engine.dart`）。
+enum FormatKind { epub, txt, cbz, cbr, mobi, pdf, unsupported }
 
 /// 装配 + 分发点。
 ///
@@ -39,6 +42,8 @@ class BookRegistry {
   /// - `cbz`  → [CbzSource]（M2b-T02 接入，`FMT-02`）；
   /// - `cbr`  → [CbrSource]（M2b-T02 接入，`FMT-03`：`Q5` 退化「识别 + 明确提示」，
   ///   `load()` 抛 `cbrUnsupported`、导入即拒绝）；
+  /// - `pdf`  → [PdfSource]（M2b-T01 接入，`FMT-01`：伪分章 + 连续翻阅 + 缩放；
+  ///   渲染内核取组合根注入的 `PdfEngine`，未注入时抛 `unsupportedFormat`）；
   /// - `mobi` → `M2b-T05` 接入解析器；接入前抛 `mobiUnsupported`（导入即拒绝，
   ///   口径与 `unsupportedFormat` 区分：用户能知道「这是 MOBI，还没支持」）；
   /// - `unsupported` → 抛 [MReaderFormatException]（`RD-05`）。
@@ -57,6 +62,8 @@ class BookRegistry {
         return CbzSource(fileName: fileName, bytes: bytes);
       case FormatKind.cbr:
         return CbrSource(fileName: fileName, bytes: bytes);
+      case FormatKind.pdf:
+        return PdfSource(fileName: fileName, bytes: bytes);
       case FormatKind.mobi:
         throw const MReaderFormatException(FormatErrorCode.mobiUnsupported);
       case FormatKind.unsupported:
@@ -75,23 +82,29 @@ Future<BookSource> openBook({
     const BookRegistry().open(fileName: fileName, bytes: bytes);
 
 /// 一级（扩展名）+ 二级（魔数）分发（PRD §7.3 二级判定；`FMT-06` 魔数纠偏，
-/// M2b-T03 落地）。
+/// M2b-T03 落地；M2b-T01 追加 PDF）。
 ///
 /// 规则（自上而下，魔数优先于后缀）：
 /// 1. **MOBI 系魔数**（[hasMobiMagic]，PalmDB `BOOKMOBI`）压过**一切**后缀
 ///    ——AZW3 头 8 字节是可打印 ASCII（PDB name），改名 `.txt` 不得落纯文本
 ///    判定（`FMT-06` 验收①）；
+/// 1b. **PDF 魔数**（[hasPdfMagic]，文件头 `%PDF`）同样压过后缀（`FMT-01`）：
+///    PDF 改名 `.txt` 不会被纯文本启发式误判（与上一条同口径）；
 /// 2. **EPUB**：扩展名 `.epub` 为主——`.zip` / 纯文本 / 坏字节改名 `.epub` 都
 ///    交给 EPUB 解析器，由它给出「不是有效 EPUB」的可读提示 = `FMT-06` 验收②
 ///    的「明确报错」出口（「识别为 TXT」出口未取，取舍见函数体注释）；
 /// 3. **CBZ / CBR**：扩展名 `.cbz` / `.cbr`（坏包由各自解析器给可读提示；
 ///    `FMT-03`：CBR 由 `CbrSource` 明确提示暂不支持）；
+/// 3b. **PDF 后缀**：非 PDF 字节改名 `.pdf` → 交给 PDF 解析器给可读报错
+///    （与 `.epub` 的「明确报错」出口同口径，不落 `unsupported`）；
 /// 4. **TXT**：非 zip 且（扩展名 `.txt` 或字节可判为文本）；
 /// 5. 其余：`unsupported`。
 ///
-/// 边界声明（M2b-T03）：① MOBI 与 AZW3 不做家族内区分（同判据同 kind）；
+/// 边界声明（M2b-T03 / M2b-T01）：① MOBI 与 AZW3 不做家族内区分（同判据同 kind）；
 /// ② 非 `BOOKMOBI` 的其他 PalmDB 落 `unsupported`；③ cbz/cbr 的「纯文本内容」
-/// 不做纠偏（不在 `FMT-06` 验收面，坏包走解析器可读报错）。
+/// 不做纠偏（不在 `FMT-06` 验收面，坏包走解析器可读报错）；④ PDF 判据只看
+/// **偏移 0** 的 `%PDF`（规范要求 header 位于文件起始；不做「头 1024 字节内搜索」
+/// 的宽松变体——宁可落 `unsupported` 也不误开）。
 FormatKind sniffFormat({
   required String fileName,
   required Uint8List bytes,
@@ -100,6 +113,9 @@ FormatKind sniffFormat({
 
   // 1. MOBI 系魔数（FMT-06 ①）：先于一切后缀与纯文本判定。
   if (hasMobiMagic(bytes)) return FormatKind.mobi;
+  // 1b. PDF 魔数（FMT-01，M2b-T01）：与 MOBI 同理，魔数压过后缀——
+  //     PDF 改名 `.txt` 仍识别为 PDF（真样本 tmp_book/小狗钱钱.pdf 实证 `%PDF`）。
+  if (hasPdfMagic(bytes)) return FormatKind.pdf;
   // 2. EPUB：扩展名优先。FMT-06 ② 双出口取「明确报错」——纯文本/坏字节改名
   //    `.epub` 仍交给 EPUB 解析器给 notZip 可读报错，不静默改判 TXT（诚实报错
   //    优先）；既有锁 dart_epub_source_test「非 zip 字节 + .epub → notZip 文案」
@@ -107,6 +123,9 @@ FormatKind sniffFormat({
   if (ext == 'epub') return FormatKind.epub;
   if (ext == 'cbz') return FormatKind.cbz;
   if (ext == 'cbr') return FormatKind.cbr;
+  // 3b. PDF 后缀（FMT-01）：非 PDF 字节改名 `.pdf` 也交 PDF 解析器给可读报错
+  //     （口径同 `.epub`；`looksLikeZip` 之前，故 zip 改名 `.pdf` 也报「不是有效 PDF」）。
+  if (ext == 'pdf') return FormatKind.pdf;
   if (looksLikeZip(bytes)) return FormatKind.unsupported;
   if (ext == 'txt') return FormatKind.txt;
   if (looksLikeText(bytes)) return FormatKind.txt;

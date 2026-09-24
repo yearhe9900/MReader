@@ -26,6 +26,8 @@ windows/flutter/generated_*
 android/local.properties
 android/app/.cxx/
 android/.gradle/
+# Kotlin 2.x 增量编译缓存（KGP 2.3.20 起在 android/ 下生成）
+android/.kotlin/
 android/key.properties
 
 # 杂项

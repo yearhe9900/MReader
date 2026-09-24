@@ -8,8 +8,10 @@ import 'package:mreader/library/book_record.dart';
 import 'package:mreader/library/import_service.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/platform/app_paths.dart';
+import 'package:mreader/platform/pdf_engine.dart';
 
 import '../format/epub_builder.dart';
+import '../format/pdf_fakes.dart';
 import '../meta/meta_fixtures.dart';
 
 /// 临时目录实现 [AppPaths]，仅用于测试。
@@ -142,6 +144,30 @@ void main() {
       );
       expect(record.format, 'cbz');
       expect(record.filePath.endsWith('.cbz'), isTrue);
+      expect(
+        record.cover,
+        isA<StoredCover>(),
+        reason: 'PendingCover → CoverStore.materialize（META-06）',
+      );
+      final File file = File(
+        '${tempDir.path}${Platform.pathSeparator}library${Platform.pathSeparator}${record.filePath}',
+      );
+      expect(await file.exists(), isTrue);
+    });
+
+    test('PDF 导入：format=pdf、封面物化 StoredCover（META-10 ①）、副本落盘',
+        () async {
+      // 渲染内核经组合根注入（`META-10` ③）；本用例注入假引擎，测试离线可跑。
+      PdfEngineProvider.current = FakePdfEngine(pageCount: 3);
+      addTearDown(
+        () => PdfEngineProvider.current = const UnavailablePdfEngine(),
+      );
+      final BookRecord record = await service.import(
+        bytes: minimalPdfBytes(),
+        fileName: '小狗钱钱.pdf',
+      );
+      expect(record.format, 'pdf');
+      expect(record.filePath.endsWith('.pdf'), isTrue);
       expect(
         record.cover,
         isA<StoredCover>(),

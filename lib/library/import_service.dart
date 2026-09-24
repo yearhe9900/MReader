@@ -60,6 +60,7 @@ class ImportService {
       FormatKind.txt => 'txt',
       FormatKind.cbz => 'cbz',
       FormatKind.cbr => 'cbr',
+      FormatKind.pdf => 'pdf',
       FormatKind.mobi => 'mobi',
       FormatKind.unsupported =>
         throw const MReaderFormatException(FormatErrorCode.unsupportedFormat),
