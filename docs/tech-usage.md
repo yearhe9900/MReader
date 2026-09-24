@@ -72,6 +72,7 @@
 | `BookSource` 统一抽象 + 分发点（自研） | 内置 | §7.1 抽象（`load`/`chapters`/`content`/`capabilities`/`search`/`totalCharCount`）+ `BookRegistry`/`sniffFormat`/`openBook` | M1-T02A | `lib/format/book_source.dart`（纯类型）、`lib/format/book_registry.dart`（分发点）、`lib/format/dart_epub_source.dart`、`lib/model/chapter.dart`、`lib/model/chapter_content.dart` |
 | `detectEncodingName` 编码名缝（自研） | 内置 | `NF-C4` / §15.6.2：把「探测编码名」与「按名解码」拆开——Rust 首版只替换探测 | M1-T02B | `lib/epub/text_codec.dart` |
 | `DartTxtSource` 纯 Dart TXT 源（自研） | 内置 | 照译参考实现 `TextFile.kt` 分章算法（`RD-02`）：规则择优 / 规则分章 / 10KB 分块兜底 | M1-T02B | `lib/format/dart_txt_source.dart` |
+| `CbzSource` / `CbrSource` 图片页压缩包源（自研） | 内置 | CBZ 每图片页一章（自然序、首页图封面）；CBR 按 Q5 退化「导入即拒绝」+ `RarExtractor` 注入升级缝 | M2b-T02 | `lib/format/cbz_source.dart`、`lib/format/cbr_source.dart`、`lib/format/image_pages.dart`、`lib/format/natural_sort.dart`、`lib/platform/rar_extractor.dart` |
 | `file_picker` | 8.3.7 | 选择本地 EPUB / TXT；`withData: true` 走 bytes，避免 `dart:io` 进入解析链路 | M1-T01 | `lib/main.dart` |
 
 ### 1.7 构建工具链
@@ -534,6 +535,26 @@
 | baseline 预期值人工推演 | 防假绿 | 同上 | 「预期每章文本」按 `section_extractor.dart` 语义**人工推演**（生成器注释写明推演链），**不抄实测输出**——实测抄录 = 永远绿的假基线；推演与实测互证（首跑即 124 全绿 = 互证成立） |
 | fixture 生成器重生成噪音 | 保持任务级提交干净 | `test/fixtures/*.epub` | `make_fixtures.py` 整体重生成时 `zipfile.writestr` 写当前时间戳 → **全部旧二进制 byte churn**（语义不变、baseline 不变）；新增 fixture 时对旧 fx01~fx11 用 `git checkout --` 还原，只提交新 fixture + baseline.json + 生成器源码 |
 | 排版语义落点对照 | 第 2 条逐项验收证据链 | `lib/typography/typeset.dart`（缩进 2 全角空格 / 加粗斜体）、`lib/reader/reader_page.dart:1142`（标题居中，UI 单独渲染标题）、`test/reader/inline_image_test.dart`、`test/reader/link_navigation_test.dart`、`test/epub/section_extractor_test.dart` | 六项中五项既有单测各管一段，fx12 补「一本书全生效」的串联证据；标题居中无独立几何断言（实现行 + 实机目验项），如实入验收记录 |
+
+### 2.21 M2b-T02 — CBZ / CBR 支持（图片页模式 + Q5 退化）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2b-T02（`FMT-02`/`FMT-03`、`META-11`） |
+| 提交 | `28e66f8`（kTinyPng 夹具修复）、`a7ff34d`（T02 交付） |
+| 日期 | 2026-09-24 |
+| 一句话目标 | CBZ 每图片页一章（整页竖向滚动 + 点页全屏缩放）；CBR 按 Q5 拍板「导入即拒绝」（同加密文件处理），`RarExtractor` 注入缝留升级路径 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| `CbzSource`（`dart-cbz`） | ZIP 图片页包解析（`FMT-02`） | `lib/format/cbz_source.dart` | **每图片页一章**：`Chapter.href` = zip 条目路径（稳定身份 RD-04/SYNC-02）、`title` = `第 N 页` → 进度按页（③）天然成立；`ChapterContent.imagePages([href])` 与 `paragraphs` 互斥命名构造器；封面 = 自然序首页图 `PendingCover(bytes, sniffCoverFormat(bytes))`（`META-11` ①② / `META-05`） |
+| `compareNatural` 自然序（自研） | 页表排序防 `10.jpg` 字典序乱页（`META-11` ②） | `lib/format/natural_sort.dart` | 数字段按数值（前导零少者在前 `7`<`07`）、非数字段 ASCII 大小写不敏感、兜底 `compareTo` 全序；混合串内数字段同效（`a2b<a10b`） |
+| 非驻留解压（`PERF-02` ①） | 页字节按需现解、绝不整包驻留 | 同上（`lazyEntryLoader(file)`） | DEFLATE 走 `inflateBuffer` / STORE 取视图；**绝不用 `ArchiveFile.content`**（一次解压永久缓存 `_content`）；`resolveEntryName` 大小写不敏感 + 百分号三试探 |
+| `image_pages.dart` 共享判据层 | CBZ/CBR 共用图片扩展名白名单 | `lib/format/image_pages.dart` | `isImagePageName`/`kImagePageExtensions` 从 `cbz_source.dart` 抽出——**实现类之间零 import 铁律**，共享判据落中立模块各自 import |
+| `CbrSource` + `RarExtractor` 注入缝（`FMT-03`） | CBR 退化与升级分界 | `lib/format/cbr_source.dart`、`lib/platform/rar_extractor.dart` | Q5 拍板（2026-09-24）「导入即拒绝」：默认 `UnavailableRarExtractor.isAvailable=false` → `load()` 抛 `FormatErrorCode.cbrUnsupported`（文案含「转换为 CBZ」）、书不入库；注入可用实现即自动升级为 CBZ 同行为（假实现 `_FakeRar` 测试锁定升级缝），`META-11` ③ 如实记「退化无封面链路、错误单点」 |
+| 图片页渲染 + 点页全屏缩放 | 阅读页 `FMT-02` ①②（拍板：点页全屏缩放） | `lib/reader/reader_page.dart`（`_ImagePage`/`_ImageZoomPage`/`_openImageZoom`） | `content.imagePages != null` 分支整页竖向滚动、不走 `InlineParagraph`；`Image.memory` **不设 `cacheWidth`**（不降采样 =「不糊」）；点页 → 全屏 `InteractiveViewer(maxScale: 5)`；「单/双页」（US-12）如实记录未覆盖 |
+| 错误文案唯一来源扩充（`RD-05`） | 新错误码中文文案 1:1 | `lib/format/error_messages.dart` | `cbrUnsupported`/`noImagePages` 入枚举与文案表；`unsupportedFormat` 改「当前支持 EPUB、TXT 与 CBZ」；`error_messages_test` 兜底：覆盖/中文/无调试词/无重复口径 |
+| **kTinyPng 夹具修复**（顺带闭环既存失败） | 测试图片底座可解码 | `test/meta/meta_fixtures.dart` | 旧 base64 串 **IDAT CRC 损坏 + chunk 结构崩坏**（脚本遍历实证）→ `instantiateImageCodec` 必败；换 zlib 自构造 1×1 RGB PNG（三 chunk CRC 全过）；连带闭环 M1-T09 起挂案的 `cover_store` 缩略图既存失败（缩略图生成解码同因失败） |
 
 ## 测试分组与局部执行（2026-09-23）
 
