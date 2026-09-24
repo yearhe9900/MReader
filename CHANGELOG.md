@@ -15,6 +15,11 @@
 - M2b-T02 CBR 退化（`FMT-03`，Q5 拍板「导入即拒绝」= 与加密文件处理一致）：`CbrSource`（`dart-cbr`）+ `RarExtractor` 注入缝（默认 `UnavailableRarExtractor` → `load()` 抛 `cbrUnsupported`「转换为 CBZ」、书不入库）；注入可用实现即自动升级为 CBZ 同行为（假实现测试锁定），`META-11` ③ 记「退化模式无封面链路、错误单点」 `a7ff34d`
 - M2b-T02 接线与文案：`sniffFormat` 扩展名优先判 `.cbz` / `.cbr`、`ImportService` format 映射、`error_messages`（RD-05 唯一来源）增 `cbrUnsupported` / `noImagePages`，`unsupportedFormat` 文案改「当前支持 EPUB、TXT 与 CBZ」；契约测试注册 `dart-cbz`；parse 155 / data 99 / reader 150 全绿 `a7ff34d`
 
+### 新增
+
+- M2b-T01 PDF 支持（`FMT-01` / `META-10`）：渲染能力经 **`PdfEngine` 注入缝**接入（`lib/` 内零 import pdfrx，全仓唯一适配器 `lib/platform/pdfrx_pdf_engine.dart`；组合根一行 `PdfEngineProvider.current = PdfrxPdfEngine()`）；`PdfSource` 伪分章 **N=10**（`href` = `p{起始页}`、标题 `第 X–Y 页`）、正文 = 按页资源键的图片页序列（连续翻阅 + 点页缩放**复用 CBZ 管线，阅读页零改动**）、进度复用语义坐标 `(chapterHref, chapterPos)`；封面渲染第 0 页（512px）→ `PendingCover(PNG)`，失败回退 `NoCover` 交 `META-07` 合成；手写 BGRA→PNG 编码器（`dart:io` zlib + 自实现 CRC32，零新依赖）；嗅探加 `%PDF` 魔数（**压过后缀**）+ `FormatKind.pdf` + `.pdf` 后缀臂；`encryptedPdf` 文案入 `RD-05` 唯一来源表、`unsupportedFormat` 文案补 PDF `d6e6d86`
+- M2b-T01 测试面（parse 212 / data 152）：`test/format/pdf_source_test.dart` 20 条（伪分章 / 页键 / 封面 / 错误码 / dispose 契约 / 能力如实）+ `bgra_png_test.dart` 5 条（**测试侧独立 PNG 解析器**（按位 CRC）先自检既有参考图 `kTinyPng` 再验编码器）+ `pdf_fakes.dart` 假引擎 + 契约清单增 `pdfrx-pdf` 样本 + 导入管道 PDF 用例 `d6e6d86`
+
 ### 变更
 
 - archive 3.x→4.3.0 迁移（M2b-T01 前置，负责人拍板「迁 archive 4.x」保 pdfrx 2.6.5）：`zip_paths` 两辅助函数适配（`lazyEntryLoader` 收敛单出口 `decompress(output)`，PERF-02 非驻留解压语义等价保持）+ `tryDecodeZip` EOCD 判废守卫（4.x 无 EOCD 静默解空回归，坏 zip / 非 zip 错误码 RD-05 同型同码），`epub_parser`/`cbz_source` 调用点零改动，parse 167 + data 151 全绿 `64ae658`

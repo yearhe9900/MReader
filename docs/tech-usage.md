@@ -609,6 +609,32 @@
 | 迁移面收窄承诺与兑现 | 控制回归面 | `zip_paths.dart` 两个辅助函数 | 签名不变（`contentOfArchiveFile` / `lazyEntryLoader`）→ `epub_parser` / `cbz_source` 调用点**零改动**；4.x 映射：`file.content` = `readBytes()` 别名（固定 `Uint8List`）、`compressionType` 整型常量 → `CompressionType` 枚举、`rawContent` `InputStreamBase` → `FileContent?` |
 | 依赖锁定终态 | 解算收敛 | `pubspec.yaml` | `archive: 4.3.0`（精确锁）、`crypto: 3.0.7`、`pdfrx: 2.6.5`（Q4① 不可让）、`pdfrx_engine: 0.6.1`（transitive）、`sdk: ^3.13.0`（Flutter 3.47.5）；决定性论据：pdfrx_engine **0.1.0 起全线**（含 0.4.x/0.5.x/0.6.x）硬要求 `archive ^4.x`，无任何「pdfrx 2.6.x + archive 3.x」组合 |
 
+### 2.25 M2b-T01 — PDF 支持（FMT-01 / META-10）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2b-T01（`FMT-01` 伪分章 + 连续翻阅 + 缩放；`META-10` 封面渲染第 0 页） |
+| 提交 | `d6e6d86` |
+| 日期 | 2026-09-24 |
+| 一句话目标 | pdfrx 2.6.5 经**注入缝**接入（`Q4 ①`），PDF 表现为「按 N 页伪分章的图片页书」，阅读页零改动 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| `PdfEngine` 注入缝 | `META-10` ③ / `Q4 ①` 验收①：`lib/` 内不直接依赖平台渲染 API | `lib/platform/pdf_engine.dart`（纯接口）、`lib/platform/pdfrx_pdf_engine.dart`（**全仓唯一** `import package:pdfrx` 的文件） | 抽象「字节进 → 编码图片字节出」；`PdfEngineDocument{pageCount, renderPagePng(widthPx), pageText, dispose}`；异常收敛为 `PdfEngineOpenException{PdfOpenFailure.encrypted/unreadable}`（第三方异常类型不泄漏到格式层）；`UnavailablePdfEngine` 为默认兜底 |
+| 组合根注入 | 免改 `openBook` / `BookRegistry` 签名与全部调用点 | `PdfEngineProvider.current`（main.dart 一行 `= PdfrxPdfEngine()`） | 同款模式：pdfrx 自己的 `PdfrxEntryFunctions.instance`；`PdfSource` 构造仍可显式传 `engine:`（测试用假引擎，不污染全局） |
+| pdfrx 关闭路径取证 | `Q4 ④` 密码 PDF 明确拒绝 | `PdfDocument.openData(..., firstAttemptByEmptyPassword: true)` **不传** `passwordProvider` | 需要密码时抛 `PdfPasswordException`（`pdfrx_pdfium.dart:849`）；**空密码可开的所有者加密**（仅限打印/复制）`isEncrypted == true` → 同样拒绝（保守口径；放开只需删一段，格式层与 UI 零改动）；`pdfrxFlutterInitialize()` 幂等惰性调用（首次开 PDF 才发生，不拖冷启动） |
+| **render 尺寸坑（必看）** | 渲染长宽比正确 | `page.render(fullWidth:, fullHeight:)` | **两个必须成对传**：只传 `fullWidth` 时源码 `fullHeight ??= this.height` 会按页面 72dpi 高度兜底 → 比例错图；实现里 `fullHeight = widthPx * page.height / page.width` |
+| `PdfImage` 非驻留 | `PERF-02` ① | 适配器 `renderPagePng` | `pixels` 是 **BGRA8888**；`encodeBgraToPng(...)` 后 **`finally { image.dispose(); }`**（含异常路径）；`PdfSource` 侧不缓存页字节，每次 `readResource` 现渲染 |
+| 手写 BGRA→PNG 编码器 | 让 PDF 页与 CBZ 页对上层的**形态完全一致**（都交 `Image.memory`） | `lib/platform/bgra_png.dart` | 颜色类型 6（truecolor+alpha，B↔R 换位）、每行过滤器字节 0、`dart:io` `ZLibEncoder` 造 IDAT、自实现 CRC32 表；**不引第三方图像库**（不吃新依赖、M3.5 Rust 层也不碰这条链）；行/字节用 `Uint8List` 预分配 + 索引写入（1600×2263 逐像素 `BytesBuilder.add` 会慢） |
+| 编码器验证法（可复用） | 防「自证自」 | `test/format/bgra_png_test.dart` | 测试侧写**独立** PNG 解析器（CRC-32 用按位展开，不复用编码器查表）并**先拿既有有效参考图 `kTinyPng` 自检解析器**，再验编码器输出（结构 / IHDR / CRC / ZLib 解回像素逐点比对） |
+| 伪分章 N=10 | `FMT-01` ①②（目录按伪分章生成） | `PdfSource._buildChapters`（`kPdfPagesPerChapter`） | 依据：阅读页图片分支是 **Column 急构建**（进章即对每个 `imagePages` 元素发一次 `readResource`），PDF 每页要**现渲染** → N 即并发渲染上界；N=10 → 100 页样本 10 章（对齐验收①）；`href = p{起始页}`（0 基，稳定身份） |
+| 页资源键 | 阅读页取图零适配 | `imagePages = ['p0','p1',…]` → `readResource('pN')` | 章身份与页键**同源同命名**（`p10` 既是「第 11 页」也是该页所在章）；非法/越界键 → `null`（不触发渲染）；坏页渲染失败 → `null`（复用图片页分支的缺图兜底，不炸阅读） |
+| 封面（`META-10` ①②） | 书架 / 详情页缩略图 | `load()` 渲染第 0 页（`kPdfCoverRenderWidthPx = 512`） | `sniffCoverFormat` 嗅出 PNG → `PendingCover` + `coverOrigin = metadata`；渲染失败 → `NoCover`（展示层按 `META-07` 合成封面而非空白）；渲染宽度用常量区分（缩略图不必渲大图） |
+| 错误码映射（`RD-05`） | 同型同码、文案唯一来源 | `PdfSource._prepare` → `error_messages.dart` | 引擎 `encrypted` → `encryptedPdf`（**新增枚举 + 文案 + 测试护栏 1:1**）、`unreadable` → `corruptFile`；空字节 → `emptyFile`（**不触碰引擎**）；`pageCount == 0` → `corruptFile`（不复用含 EPUB 专有名词的 `emptySpine`）；引擎未注入 → `unsupportedFormat`（detail 指明原因，诚实降级） |
+| 嗅探与分发 | `FMT-06` 魔数思想的自然延伸 | `sniffer.dart::hasPdfMagic`、`book_registry.dart` | `%PDF`（偏移 0，**从严**不做头 1024 字节搜索）压过一切后缀（PDF 改名 `.txt` 不被纯文本启发式吃掉）；`.pdf` 后缀臂位置在 `looksLikeZip` **之前** → zip/纯文本改名 `.pdf` 交 PDF 解析器给可读报错（同 `.epub` 的「明确报错」口径）；`import_service` 加 `FormatKind.pdf => 'pdf'` 落盘扩展名 |
+| **测试教训：异步匹配器必须 await** | 防假红/假绿 | `pdf_source_test.dart` | `expect(() => source.load(), throwsA(…))` **不等待** → 紧随其后的 `dispose()` 先跑 → `_prepare` 落进「打开完成时已释放」的竞态分支优雅返回空元数据 → 断言永远看不到异常（实测 1 条红即此因，实现无误）。修法：`await expectLater(source.load(), throwsA(…))` |
+| 验收对照（`Q4` 拍板） | 不满足即不算完成 | — | ①注入式接口：`lib/format/**` 零 pdfrx import，唯一适配器文件为 platform 层；②PDF 文本层：`PdfEngineDocument.pageText`（pdfrx `loadText().fullText`）已备好，T04 实现搜索时消费；③Developer Mode：构建文档待补（T09）；④密码 PDF：`encryptedPdf` 拒绝、无 passwordProvider 链路 |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
