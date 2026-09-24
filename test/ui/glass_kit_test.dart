@@ -1,24 +1,30 @@
 // `UI-04` 内容层不透明红线 + 玻璃档位策略（PRD §11.3）的单测。
 //
 // 三组断言：
-//   ① 档位固定 `standard`，P0 不引入 `premium`（也不手动覆盖固定表面档位）；
+//   ① 默认高档下生效档位 `standard`（接线后随档位变，此处验默认态；P0 不引入
+//      `premium`、也不手动覆盖固定表面档位）；
 //   ② `isGlassWidget` 是「是否玻璃控件」的可判定形式（红线自检的基础）；
 //   ③ 内容层容器 [OpaqueContentSurface] 存在、底色完全不透明、且拒绝玻璃子控件。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:mreader/ui/glass_kit.dart';
+import 'package:mreader/ui/glass_runtime.dart';
 
 import '../test_config.dart';
 
 void main() {
   capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
-  group('玻璃档位固定为 standard（PRD §11.3 / P0）', () {
-    test('应用档位 = standard', () {
+  // 静态态隔离：GlassKit getter 读 GlassRuntime.config，每用例复位到默认高档。
+  setUp(GlassRuntime.resetForTest);
+  tearDown(GlassRuntime.resetForTest);
+
+  group('默认高档下的玻璃档位（PRD §11.3 / P0）', () {
+    test('应用档位常量 = standard', () {
       expect(kAppGlassQuality, GlassQuality.standard);
     });
 
-    test('浮层 / 滚动区档位 = standard（非 premium / minimal）', () {
+    test('浮层 / 滚动区生效档位 = standard（非 premium / minimal）', () {
       expect(GlassKit.overlayQuality, GlassQuality.standard);
       expect(GlassOverlays.quality, GlassQuality.standard);
     });

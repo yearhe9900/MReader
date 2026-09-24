@@ -1,14 +1,16 @@
-// 玻璃作用域：把「当前有效亮度 / 当前质量档位 / 玻璃隔离范围」收敛到一处。
+// 玻璃作用域：把「当前有效亮度 / 当前生效档位配置 / 玻璃隔离范围」收敛到一处。
 //
-// 本批只做**基础设施**，不接任何业务页面。作用域的三个值都从环境解析、可显式覆盖：
+// 作用域的三个值都从环境解析、可显式覆盖：
 //   · 有效亮度 —— 来自玻璃库的 `GlassTheme.brightnessOf`（它内部是三级级联：
 //     外部 `brightnessResolver`（Material 集成）→ Cupertino 主题 → 系统亮度）；
-//   · 质量档位 —— 默认 [kAppGlassQuality]（`standard`）；若上层有自适应作用域则取其有效档位；
+//   · 档位配置 —— 默认 [GlassRuntime.config]（用户偏好 × 自动降级的生效结果）；
+//     [GlassScopeProvider] 订阅 [GlassRuntime]，档位切换时**整树重建**、
+//     各薄封装层（`glass_kit.dart`）经 [GlassScope.configOf] 自动跟档；
 //   · 玻璃隔离范围 —— `glassAllowed`，供内容层把「此范围内禁止玻璃」显式表达出来（`UI-04`）。
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
-import 'glass_kit.dart';
+import 'glass_runtime.dart';
 
 /// 玻璃作用域（[InheritedWidget]）。
 ///
@@ -19,7 +21,7 @@ class GlassScope extends InheritedWidget {
   const GlassScope({
     super.key,
     required this.brightness,
-    required this.quality,
+    required this.config,
     required this.glassAllowed,
     required super.child,
   });
@@ -27,8 +29,8 @@ class GlassScope extends InheritedWidget {
   /// 当前有效亮度（跟随应用 ThemeMode）。
   final Brightness brightness;
 
-  /// 当前质量档位。
-  final GlassQuality quality;
+  /// 当前生效的玻璃档位配置（`UI-05` / `UI-06` 接线后的唯一真值）。
+  final GlassTierConfig config;
 
   /// 玻璃隔离范围：`true` = 作用域内允许玻璃；`false` = 禁止（内容层用）。
   final bool glassAllowed;
@@ -41,11 +43,16 @@ class GlassScope extends InheritedWidget {
   static Brightness brightnessOf(BuildContext context) =>
       maybeOf(context)?.brightness ?? GlassTheme.brightnessOf(context);
 
-  /// 当前质量档位：优先本作用域；否则取库自适应作用域的有效档位；再否则 [kAppGlassQuality]。
+  /// 当前生效档位配置：优先本作用域；否则 [GlassRuntime.config]。
+  ///
+  /// 薄封装层（`glass_kit.dart`）应经本方法取值——`dependOn` 建立的依赖保证
+  /// 档位切换（作用域重建）时自动重跑 `build`（`UI-05` ③ 切档即生效）。
+  static GlassTierConfig configOf(BuildContext context) =>
+      maybeOf(context)?.config ?? GlassRuntime.config;
+
+  /// 当前滚动区 / 浮层档位（[GlassTierConfig.scrollQuality] 的快捷方式）。
   static GlassQuality qualityOf(BuildContext context) =>
-      maybeOf(context)?.quality ??
-      GlassAdaptiveScopeData.maybeOf(context)?.effectiveQuality ??
-      kAppGlassQuality;
+      configOf(context).scrollQuality;
 
   /// 该上下文是否允许玻璃存在（`UI-04` 隔离范围）。
   ///
@@ -56,40 +63,62 @@ class GlassScope extends InheritedWidget {
   @override
   bool updateShouldNotify(GlassScope oldWidget) =>
       brightness != oldWidget.brightness ||
-      quality != oldWidget.quality ||
+      config != oldWidget.config ||
       glassAllowed != oldWidget.glassAllowed;
 }
 
 /// 从环境解析并下发 [GlassScope]（放在 `MaterialApp` 之下、业务页之上）。
 ///
-/// 之所以是 [StatelessWidget] 而非在 `main()` 直接构造 [GlassScope]：
-/// 有效亮度必须从**应用主题**解析，而主题只有在 `MaterialApp` 之下才可读。
-class GlassScopeProvider extends StatelessWidget {
+/// **订阅 [GlassRuntime]**：生效档位变化（切档 / 「降低视觉特效」/ 自动降档）时
+/// 重建作用域，整棵子树的玻璃控件跟档（`UI-05` ③ / `UI-06` 的生效触点）。
+class GlassScopeProvider extends StatefulWidget {
   /// 创建设置作用域的包裹组件。
   const GlassScopeProvider({
     super.key,
-    this.quality,
+    this.config,
     this.glassAllowed = true,
     required this.child,
   });
 
-  /// 覆盖档位；缺省取自适应作用域的有效档位或 [kAppGlassQuality]。
-  final GlassQuality? quality;
+  /// 覆盖档位配置（测试 / 特定子树钉档用）；缺省取 [GlassRuntime.config]。
+  final GlassTierConfig? config;
 
   /// 玻璃隔离范围（`UI-04`）；内容层子树可传 `false`。
   final bool glassAllowed;
 
+  /// 作用域包裹的子树。
   final Widget child;
+
+  @override
+  State<GlassScopeProvider> createState() => _GlassScopeProviderState();
+}
+
+class _GlassScopeProviderState extends State<GlassScopeProvider> {
+  @override
+  void initState() {
+    super.initState();
+    GlassRuntime.addListener(_onRuntimeChanged);
+  }
+
+  @override
+  void dispose() {
+    GlassRuntime.removeListener(_onRuntimeChanged);
+    super.dispose();
+  }
+
+  void _onRuntimeChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return GlassScope(
       brightness: GlassTheme.brightnessOf(context),
-      quality: quality ??
-          GlassAdaptiveScopeData.maybeOf(context)?.effectiveQuality ??
-          kAppGlassQuality,
-      glassAllowed: glassAllowed,
-      child: child,
+      config: widget.config ?? GlassRuntime.config,
+      glassAllowed: widget.glassAllowed,
+      child: widget.child,
     );
   }
 }

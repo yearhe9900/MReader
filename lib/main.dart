@@ -15,7 +15,10 @@ import 'platform/path_provider_app_paths.dart';
 import 'platform/pdf_engine.dart';
 import 'platform/pdfrx_pdf_engine.dart';
 import 'reader/progress_store.dart';
+import 'settings/perf_frame_monitor.dart';
+import 'settings/perf_prefs_store.dart';
 import 'settings/settings_store.dart';
+import 'ui/glass_runtime.dart';
 import 'ui/shelf_page.dart';
 
 Future<void> main() async {
@@ -35,10 +38,18 @@ Future<void> main() async {
   final AppPaths appPaths = PathProviderAppPaths();
   final Directory dataDir = await appPaths.dataDir();
   final SettingsStore settings = SettingsStore(dataDir);
+  final PerfPrefsStore perfPrefs = PerfPrefsStore(dataDir);
   await Future.wait(<Future<void>>[
     _warmUpGlassShaders(),
     settings.load(),
+    perfPrefs.load(),
   ]);
+
+  // `UI-05` / `UI-06` 档位生效接线（M2b-T07）：性能偏好 × 自动降级 → 玻璃档位。
+  // `bind` 订阅偏好变更（设置页切档即全局生效）；帧预算监控连续超 16ms × 60 帧
+  // 时降一档（会话内、不持久化）。低端设备判定注入位默认 false（探测策略待拍板）。
+  GlassRuntime.bind(perfPrefs);
+  PerfFrameMonitor(onBudgetExceeded: GlassRuntime.noteBudgetDegraded).start();
 
   // M1-T03：构造封面存储 + 书库仓库（LIB-01~06 的后端）。
   final CoverStore coverStore = FileCoverStore(appPaths);

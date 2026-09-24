@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import 'settings/settings_store.dart';
 import 'theme/app_theme.dart';
+import 'ui/glass_scope.dart';
 
 /// 应用根组件。
 class MReaderApp extends StatefulWidget {
@@ -60,10 +61,14 @@ class _MReaderAppState extends State<MReaderApp> {
       // 玻璃态组件库（M1-T08 接入）自身不提供 Material 祖先，缺省时其下的
       // 文本会渲染成黄色双下划线（PRD §11.4 已知限制）；这里统一补一层透明
       // Material。属于必须先接好的地基，不等到 M1-T08。
+      // `GlassScopeProvider`（M2b-T07 档位生效接线）包在 Material 之下、
+      // 路由树之上：全路由（含弹层 Overlay）共享生效档位，切档整树跟档。
       builder: (BuildContext context, Widget? child) {
         return Material(
           type: MaterialType.transparency,
-          child: child ?? const SizedBox.shrink(),
+          child: GlassScopeProvider(
+            child: child ?? const SizedBox.shrink(),
+          ),
         );
       },
       home: widget.home ?? const SizedBox.shrink(),

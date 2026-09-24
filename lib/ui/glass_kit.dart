@@ -1,4 +1,4 @@
-// 玻璃控件薄封装 + `UI-04` 内容层不透明红线（本批基础设施，**不接任何业务页面**）。
+// 玻璃控件薄封装 + `UI-04` 内容层不透明红线 + `UI-05`/`UI-06` 档位生效接线。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // UI-04 红线（内容层不透明）—— 违反即返工
@@ -13,37 +13,54 @@
 // 3. 玻璃控件**不可嵌套** —— 玻璃卡片里只能放不透明内容（`GlassCard` 内不得再放
 //    `GlassButton` 等，PRD §11.4）。用 [isGlassWidget] 在 debug 下自检。
 //
+// ══════════════════════════════════════════════════════════════════════════════
+// UI-05 / UI-06 档位生效接线（M2b-T07 接线批）—— 本文件是**唯一消费点**
+// ══════════════════════════════════════════════════════════════════════════════
+// 每个薄封装在 `build` 里经 `GlassScope.configOf(context)` 取**生效配置**
+// （用户偏好 ×「降低视觉特效」× 低端钳制 × 帧预算降档；真值在 `glass_runtime.dart`）：
+//   · 固定表面（顶栏 / 底栏）—— 高档不覆盖（库自动提升 `premium`，`UI-05` ①）；
+//     中 / 低档以 `GlassIsolationScope(defaultQuality:)` 显式钉 `standard` / `minimal`
+//     （库 `GlassThemeHelpers.resolveQuality` 优先级链：最近的隔离作用域 defaultQuality
+//     压过 `GlassScaffold` 内层的 `premium` 提示）；
+//   · 滚动区 / 浮层 —— 显式传 `scrollQuality`（永不 `premium`）；
+//   · 「关」档（`UI-06` ②）—— 整体退化为 Material 纯色（[AppBar] / [NavigationBar] /
+//     [Scaffold] / [showDialog] / [showModalBottomSheet]），功能完整可用。
+//
 // 质量档位策略（PRD §11.3）：
 //   · 固定表面（顶栏 / 底栏）→ 由库的 `GlassScaffold → GlassIsolationScope` **自动提升为
-//     `premium`**，本项目**不手动传 `premium`**（见 [GlassKit.fixedSurfaceQualityOverride]）；
-//   · 浮层（对话框 / 底部弹窗）与滚动区内的玻璃 → [kAppGlassQuality]（= `standard`）；
-//   · P0 **不使用** `adaptiveQuality`（标记 `@experimental`，首启要跑约 3 秒基准，且不持久化
-//     `initialQuality` 会每次冷启动重现降级窗口，PRD §11.3）。`minimal` 与用户可调档位属
-//     `UI-05`（M2b）。
+//     `premium`**，高档下本项目**不手动传 `premium`**；
+//   · 浮层（对话框 / 底部弹窗）与滚动区内的玻璃 → `standard`（高档）；
+//   · P0 **不使用** `adaptiveQuality` / `GlassAdaptiveScope`（`@experimental`，首启要跑
+//     约 3 秒基准，PRD §11.3）。自动降级走项目自己的 `PerfDegradePolicy` + `PerfFrameMonitor`。
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+
+import 'glass_runtime.dart';
+import 'glass_scope.dart';
 
 /// 玻璃对话框动作按钮类型（[GlassOverlays.showAlert] 的参数元素）——
 /// 在此 re-export，调用方只需 import 本文件。
 export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
     show GlassDialogAction;
 
-/// 应用统一玻璃质量档位（PRD §11.3）。P0 固定 `standard`。
+/// 应用默认玻璃质量档位（PRD §11.3，= 高档的滚动区档位）。
 ///
-/// 其 API 与语义来自 `liquid_glass_widgets` 1.6.2 的 `GlassQuality` 枚举
-/// （取值：`standard` / `premium` / `minimal`）。
+/// **默认值**常量；运行时生效值见 [GlassKit.overlayQuality]（`UI-05` 接线后随档位变）。
 const GlassQuality kAppGlassQuality = GlassQuality.standard;
 
-/// 档位策略的唯一出口（PRD §11.3）。测试在此断言「P0 不引入 premium」。
+/// 档位策略的运行时出口（生效值来自 [GlassRuntime.config]）。
 abstract final class GlassKit {
-  /// 浮层 / 滚动区玻璃使用的档位：非固定表面 → `standard`。
-  static const GlassQuality overlayQuality = kAppGlassQuality;
+  /// 浮层 / 滚动区玻璃的**生效**档位：高档 / 中档 `standard`、低档 `minimal`。
+  static GlassQuality get overlayQuality => GlassRuntime.config.scrollQuality;
 
-  /// 固定表面（顶栏 / 底栏）的档位覆盖值：**恒为 `null`**。
-  ///
-  /// 传 `null` 即「不覆盖」——库在 `GlassScaffold` 内经 `GlassIsolationScope`
-  /// 把导航栏自动提升为 `premium`。本项目**从不**手动传 `premium`（`UI-05` ①）。
-  static const GlassQuality? fixedSurfaceQualityOverride = null;
+  /// 固定表面（顶栏 / 底栏）的生效覆盖值：高档 `null`（库自动提升 `premium`，
+  /// `UI-05` ①）；中档 `standard`（取消提升）；低档 `minimal`。本项目**从不**
+  /// 手动传 `premium`（`UI-05` ①）。
+  static GlassQuality? get fixedSurfaceQualityOverride =>
+      GlassRuntime.config.fixedSurfaceQualityOverride;
+
+  /// 特效总开关（`UI-06`）：`false` = 「关」档，全部薄封装退化为纯色。
+  static bool get glassEnabled => GlassRuntime.config.glassEnabled;
 }
 
 /// 判定一个 [Widget] 是否是「玻璃控件」（`UI-04` 红线的**可判定形式**）。
@@ -127,14 +144,30 @@ class OpaqueContentSurface extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// 导航层（薄封装，最小集）
+// 导航层（薄封装，最小集；档位生效 + 「关」档纯色退化的唯一出口）
 // ---------------------------------------------------------------------------
+
+/// 把 `defaultQuality` 钉进最近的 [GlassIsolationScope]（固定表面降档用）。
+///
+/// [GlassScaffold] 内层给条面包了 `GlassIsolationScope(defaultQuality: premium)`；
+/// 在条面**更内侧**再包一层同类型作用域即可覆盖该提示（库
+/// `GlassThemeHelpers.resolveQuality` 取最近作用域）。[quality] 为 `null`
+/// （高档）时不包——维持库自动 `premium` 提升（`UI-05` ①）。
+Widget _withFixedSurfaceQuality(GlassQuality? quality, Widget bar) {
+  if (quality == null) return bar;
+  return GlassIsolationScope(
+    isolated: true,
+    defaultQuality: quality,
+    child: bar,
+  );
+}
 
 /// 导航层顶栏（薄封装 [GlassAppBar]）。
 ///
 /// 注意：`GlassAppBar` 的**条面本身是布局容器**，玻璃质感来自条内的按钮
-/// （见库文档）。固定表面的 premium 由库自动提升，此处**不传档位**。
-class GlassTopBar extends StatelessWidget {
+/// （见库文档）——故降档靠 [GlassIsolationScope] 的 `defaultQuality` 提示。
+/// 「关」档（`UI-06` ②）退化为 Material [AppBar]。
+class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
   /// 创建玻璃顶栏。
   const GlassTopBar({
     super.key,
@@ -146,25 +179,59 @@ class GlassTopBar extends StatelessWidget {
     this.toolbarHeight = 44.0,
   });
 
+  /// 标题区。
   final Widget? title;
+
+  /// 标题前置区。
   final Widget? leading;
+
+  /// 标题后动作区。
   final List<Widget>? actions;
+
+  /// 标题是否居中。
   final bool centerTitle;
+
+  /// 条面背景（透明 = 玻璃质感来自条内控件）。
   final Color backgroundColor;
+
+  /// 工具条高度。
   final double toolbarHeight;
 
+  /// [Scaffold] 退化路径需要的首选尺寸（= [toolbarHeight]）。
   @override
-  Widget build(BuildContext context) => GlassAppBar(
+  Size get preferredSize => Size.fromHeight(toolbarHeight);
+
+  @override
+  Widget build(BuildContext context) {
+    final GlassTierConfig config = GlassScope.configOf(context);
+    if (!config.glassEnabled) {
+      // 「关」档（`UI-06` ②）：Material 纯色顶栏，功能完整可用。
+      return AppBar(
+        title: title,
+        leading: leading,
+        actions: actions,
+        centerTitle: centerTitle,
+        toolbarHeight: toolbarHeight,
+      );
+    }
+    return _withFixedSurfaceQuality(
+      config.fixedSurfaceQualityOverride,
+      GlassAppBar(
         title: title,
         leading: leading,
         actions: actions,
         centerTitle: centerTitle,
         backgroundColor: backgroundColor,
         toolbarHeight: toolbarHeight,
-      );
+      ),
+    );
+  }
 }
 
 /// 导航层底栏（薄封装 [GlassTabBar.bottom]）。
+///
+/// 显式传档位（高档 `null` = 吃 `GlassScaffold` 的 `premium` 提示）；
+/// 「关」档退化为 Material [NavigationBar]。
 class GlassNavBar extends StatelessWidget {
   /// 创建玻璃底栏。
   const GlassNavBar({
@@ -174,24 +241,49 @@ class GlassNavBar extends StatelessWidget {
     required this.onTabSelected,
   });
 
+  /// 标签页配置。
   final List<GlassTab> tabs;
+
+  /// 当前选中下标。
   final int selectedIndex;
+
+  /// 选中回调。
   final ValueChanged<int> onTabSelected;
 
   @override
-  Widget build(BuildContext context) => GlassTabBar.bottom(
-        tabs: tabs,
+  Widget build(BuildContext context) {
+    final GlassTierConfig config = GlassScope.configOf(context);
+    if (!config.glassEnabled) {
+      // 「关」档（`UI-06` ②）：Material 纯色底栏。
+      return NavigationBar(
         selectedIndex: selectedIndex,
-        onTabSelected: onTabSelected,
-        // 固定表面：**不传 quality** → 库在 GlassScaffold 内自动提升为 premium（§11.3 / UI-05 ①）。
-        // 切勿在此写死 premium（那会绕过库的自适应与隔离策略）；见 [GlassKit]。
+        onDestinationSelected: onTabSelected,
+        destinations: <NavigationDestination>[
+          for (final GlassTab tab in tabs)
+            NavigationDestination(
+              icon: tab.icon ?? const SizedBox.shrink(),
+              selectedIcon: tab.activeIcon,
+              label: tab.label ?? '',
+            ),
+        ],
       );
+    }
+    return GlassTabBar.bottom(
+      tabs: tabs,
+      selectedIndex: selectedIndex,
+      onTabSelected: onTabSelected,
+      // 固定表面：高档不传 → 库在 GlassScaffold 内自动提升 premium（§11.3 / UI-05 ①）；
+      // 中 / 低档显式钉 standard / minimal（取消提升）。**切勿写死 premium**。
+      quality: config.fixedSurfaceQualityOverride,
+    );
+  }
 }
 
 /// 导航壳层（薄封装 [GlassScaffold]）。
 ///
 /// 保证顶栏 / 底栏玻璃永远绘制在正文之上，并给内容边缘做渐隐；正文请用
-/// [OpaqueContentSurface] 承载（`UI-04`）。
+/// [OpaqueContentSurface] 承载（`UI-04`）。「关」档（`UI-06` ②）退化为 Material
+/// [Scaffold]（appBar 由 [GlassTopBar] 自身退化，这里只换壳）。
 class GlassNavScaffold extends StatelessWidget {
   /// 创建玻璃导航壳层。
   const GlassNavScaffold({
@@ -202,33 +294,51 @@ class GlassNavScaffold extends StatelessWidget {
     this.background,
   });
 
+  /// 页面正文（内容层请用 [OpaqueContentSurface] 承载）。
   final Widget body;
+
+  /// 顶栏（通常 [GlassTopBar]）。
   final Widget? appBar;
+
+  /// 底栏（通常 [GlassNavBar]）。
   final Widget? bottomBar;
+
+  /// 背景层（仅玻璃档生效；退化档由 Scaffold 自身背景承担）。
   final Widget? background;
 
   @override
-  Widget build(BuildContext context) => GlassScaffold(
+  Widget build(BuildContext context) {
+    final GlassTierConfig config = GlassScope.configOf(context);
+    if (!config.glassEnabled) {
+      // 「关」档（`UI-06` ②）：Material 纯色壳层，功能完整可用。
+      return Scaffold(
+        appBar: appBar is PreferredSizeWidget ? appBar! as PreferredSizeWidget : null,
         body: body,
-        appBar: appBar,
-        bottomBar: bottomBar,
-        background: background,
+        bottomNavigationBar: bottomBar,
       );
+    }
+    return GlassScaffold(
+      body: body,
+      appBar: appBar,
+      bottomBar: bottomBar,
+      background: background,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
-// 浮层（薄封装，最小集）
+// 浮层（薄封装，最小集；档位生效 + 「关」档纯色退化）
 // ---------------------------------------------------------------------------
 
 /// 浮层玻璃入口（对话框 / 底部弹窗）。
 ///
-/// 浮层不是「固定表面」，故显式使用 [GlassKit.overlayQuality]（= `standard`），
-/// **不传 `premium`**（§11.3）。
+/// 档位随 [GlassScope.configOf]（滚动区 / 浮层档），**不传 `premium`**（§11.3）；
+/// 「关」档（`UI-06` ②）退化为 Material [showDialog] / [showModalBottomSheet]。
 abstract final class GlassOverlays {
-  /// 浮层档位（见 [GlassKit.overlayQuality]）。
-  static const GlassQuality quality = GlassKit.overlayQuality;
+  /// 浮层**生效**档位（见 [GlassKit.overlayQuality]）。
+  static GlassQuality get quality => GlassKit.overlayQuality;
 
-  /// 弹出玻璃确认框（薄封装 [GlassDialog.show]）。
+  /// 弹出玻璃确认框（薄封装 [GlassDialog.show]；「关」档退化 [showDialog]）。
   ///
   /// 返回值语义与 `showDialog<T>` 一致：动作回调里
   /// `Navigator.pop(ctx, value)`，barrier 关闭（[barrierDismissible]）返回 `null`。
@@ -241,19 +351,57 @@ abstract final class GlassOverlays {
     Widget? content,
     bool barrierDismissible = false,
     double maxWidth = 280,
-  }) =>
-      GlassDialog.show<T>(
+  }) {
+    final GlassTierConfig config = GlassScope.configOf(context);
+    if (!config.glassEnabled) {
+      // 「关」档（`UI-06` ②）：Material 纯色对话框（maxWidth 为玻璃档参数，退化档
+      // 用平台标准宽度，功能完整可用）。
+      return showDialog<T>(
         context: context,
-        actions: actions,
-        title: title,
-        message: message,
-        content: content,
-        quality: quality,
         barrierDismissible: barrierDismissible,
-        maxWidth: maxWidth,
+        builder: (BuildContext dialogContext) => AlertDialog(
+          title: title == null ? null : Text(title),
+          content: message == null && content == null
+              ? null
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    if (message != null) Text(message),
+                    ?content,
+                  ],
+                ),
+          actions: <Widget>[
+            for (final GlassDialogAction action in actions)
+              TextButton(
+                onPressed: action.onPressed,
+                child: Text(
+                  action.label,
+                  style: TextStyle(
+                    fontWeight: action.isPrimary ? FontWeight.bold : null,
+                    color: action.isDestructive
+                        ? Theme.of(dialogContext).colorScheme.error
+                        : null,
+                  ),
+                ),
+              ),
+          ],
+        ),
       );
+    }
+    return GlassDialog.show<T>(
+      context: context,
+      actions: actions,
+      title: title,
+      message: message,
+      content: content,
+      quality: config.scrollQuality,
+      barrierDismissible: barrierDismissible,
+      maxWidth: maxWidth,
+    );
+  }
 
-  /// 弹出玻璃底部弹窗（薄封装 [GlassSheet.show]）。
+  /// 弹出玻璃底部弹窗（薄封装 [GlassSheet.show]；「关」档退化 [showModalBottomSheet]）。
   ///
   /// [isScrollable] 缺省 `true`（库默认，内容外包 `SingleChildScrollView`）；
   /// 内容自带可滚动列表时（如目录 `TocSheet` 的 `ListView`）传 `false`，
@@ -263,12 +411,47 @@ abstract final class GlassOverlays {
     required WidgetBuilder builder,
     bool isScrollable = true,
     bool showDragIndicator = true,
-  }) =>
-      GlassSheet.show<T>(
+  }) {
+    final GlassTierConfig config = GlassScope.configOf(context);
+    if (!config.glassEnabled) {
+      // 「关」档（`UI-06` ②）：Material 纯色底部弹窗（保留拖拽指示条与滚动语义）。
+      return showModalBottomSheet<T>(
         context: context,
-        builder: builder,
-        quality: quality,
-        isScrollable: isScrollable,
-        showDragIndicator: showDragIndicator,
+        isScrollControlled: true,
+        builder: (BuildContext sheetContext) => Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              if (showDragIndicator) ...<Widget>[
+                const SizedBox(height: 8),
+                Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Theme.of(sheetContext).dividerColor,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 4),
+              ],
+              if (isScrollable)
+                Flexible(child: SingleChildScrollView(child: builder(sheetContext)))
+              else
+                builder(sheetContext),
+            ],
+          ),
+        ),
       );
+    }
+    return GlassSheet.show<T>(
+      context: context,
+      builder: builder,
+      quality: config.scrollQuality,
+      isScrollable: isScrollable,
+      showDragIndicator: showDragIndicator,
+    );
+  }
 }

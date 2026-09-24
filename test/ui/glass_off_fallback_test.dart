@@ -1,0 +1,243 @@
+// `M2b-T07`：档位生效接线的**验收映射**测试（`UI-05` ③ / `UI-06` ②）。
+//
+// PRD 验收条目 → 断言：
+//   · `UI-06` ②「关闭特效后 UI 仍完整可用（退化为纯色）」→ 关档下无任何玻璃控件
+//     （GlassScaffold / GlassAppBar / GlassTabBar / GlassDialog / GlassSheet），
+//     Material 全家桶（Scaffold / AppBar / NavigationBar / AlertDialog / BottomSheet）在场；
+//   · `UI-05` ③「降低视觉特效强制 minimal」→ 低档 [GlassIsolationScope.defaultQuality]
+//     与 [GlassTabBar.quality] 均为 minimal；
+//   · 中档钉 `standard`（取消 premium 提升）；高档不覆盖（`null`，交库自动提升）。
+//
+// 玻璃档的 GlassDialog / GlassSheet 弹层**不在此渲染**——flutter test 软件光栅下
+// 每帧数百 ms 真实异步开销（tech-usage §2.26）；关档退化弹层是纯 Material，可测。
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:mreader/settings/perf_prefs_store.dart';
+import 'package:mreader/ui/glass_kit.dart';
+import 'package:mreader/ui/glass_runtime.dart';
+import 'package:mreader/ui/glass_scope.dart';
+
+import '../test_config.dart';
+
+/// 两个最小标签页（[GlassTab] 至少要有 icon 或 label；标签文案避开标题「书架」，
+/// 防 `find.text` 撞车）。
+const List<GlassTab> kTabs = <GlassTab>[
+  GlassTab(icon: Icon(Icons.list), label: '目录'),
+  GlassTab(icon: Icon(Icons.settings), label: '设置'),
+];
+
+/// 钉档宿主：[MaterialApp] + [GlassScopeProvider]（`config` 覆盖 = 测试钉档）。
+Widget host(GlassQualityTier tier, Widget home) {
+  return MaterialApp(
+    home: GlassScopeProvider(
+      config: glassTierConfigFor(tier),
+      child: home,
+    ),
+  );
+}
+
+/// [GlassTopBar] 内**本项目加的**固定表面钉档作用域。
+///
+/// 双重限定（「GlassTopBar 后代」∩「GlassAppBar 祖先」）防撞玻璃库内部
+/// 同类型作用域（如 `GlassScaffold` 给条面包的 premium 提示层）。
+Finder pinnedScope() => find.descendant(
+      of: find.byType(GlassTopBar),
+      matching: find.ancestor(
+        of: find.byType(GlassAppBar),
+        matching: find.byType(GlassIsolationScope),
+      ),
+    );
+
+void main() {
+  capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
+  setUp(GlassRuntime.resetForTest);
+  tearDown(GlassRuntime.resetForTest);
+
+  testWidgets('关档：导航壳层退化为 Material 纯色（UI-06 ②）', (WidgetTester tester) async {
+    await tester.pumpWidget(host(
+      GlassQualityTier.off,
+      GlassNavScaffold(
+        appBar: const GlassTopBar(title: Text('书架')),
+        bottomBar: GlassNavBar(
+          tabs: kTabs,
+          selectedIndex: 0,
+          onTabSelected: (_) {},
+        ),
+        body: const SizedBox.expand(),
+      ),
+    ));
+
+    // 推演：off → 壳层换 Material Scaffold、顶栏 AppBar、底栏 NavigationBar；
+    // 全树不得出现任何玻璃控件；标题照常渲染（功能完整可用）。
+    expect(find.byType(GlassScaffold), findsNothing);
+    expect(find.byType(Scaffold), findsOneWidget);
+    expect(find.byType(GlassAppBar), findsNothing);
+    expect(find.byType(AppBar), findsOneWidget);
+    expect(find.byType(GlassTabBar), findsNothing);
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('书架'), findsOneWidget);
+  });
+
+  testWidgets('高档：不覆盖固定表面（库自动提升 premium，UI-05 ①）', (WidgetTester tester) async {
+    await tester.pumpWidget(host(
+      GlassQualityTier.high,
+      Scaffold(
+        appBar: const GlassTopBar(title: Text('书架')),
+        bottomNavigationBar: GlassNavBar(
+          tabs: kTabs,
+          selectedIndex: 0,
+          onTabSelected: (_) {},
+        ),
+      ),
+    ));
+
+    // 推演：高档 fixedSurfaceQualityOverride = null → 不包钉档作用域
+    // （GlassScaffold 提供的 premium 提示不受阻碍）；GlassTabBar.quality = null。
+    expect(pinnedScope(), findsNothing);
+    expect(
+      tester.widget<GlassTabBar>(find.byType(GlassTabBar)).quality,
+      isNull,
+    );
+  });
+
+  testWidgets('中档：固定表面钉 standard（取消 premium 提升）', (WidgetTester tester) async {
+    await tester.pumpWidget(host(
+      GlassQualityTier.medium,
+      Scaffold(
+        appBar: const GlassTopBar(title: Text('书架')),
+        bottomNavigationBar: GlassNavBar(
+          tabs: kTabs,
+          selectedIndex: 0,
+          onTabSelected: (_) {},
+        ),
+      ),
+    ));
+
+    // 推演：中档 override = standard → 钉档作用域 defaultQuality = standard
+    // （最近作用域压过 GlassScaffold 内层 premium 提示）；GlassTabBar.quality
+    // = standard。
+    expect(pinnedScope(), findsOneWidget);
+    expect(
+      tester.widget<GlassIsolationScope>(pinnedScope()).defaultQuality,
+      GlassQuality.standard,
+    );
+    expect(
+      tester.widget<GlassTabBar>(find.byType(GlassTabBar)).quality,
+      GlassQuality.standard,
+    );
+  });
+
+  testWidgets('低档：全部 minimal（UI-05 ③ 降低视觉特效）', (WidgetTester tester) async {
+    await tester.pumpWidget(host(
+      GlassQualityTier.low,
+      Scaffold(
+        appBar: const GlassTopBar(title: Text('书架')),
+        bottomNavigationBar: GlassNavBar(
+          tabs: kTabs,
+          selectedIndex: 0,
+          onTabSelected: (_) {},
+        ),
+      ),
+    ));
+
+    // 推演：低档 override = minimal → 钉档作用域与 GlassTabBar.quality 均 minimal。
+    expect(
+      tester.widget<GlassIsolationScope>(pinnedScope()).defaultQuality,
+      GlassQuality.minimal,
+    );
+    expect(
+      tester.widget<GlassTabBar>(find.byType(GlassTabBar)).quality,
+      GlassQuality.minimal,
+    );
+  });
+
+  testWidgets('玻璃档导航壳层 = GlassScaffold（玻璃永在正文之上）', (WidgetTester tester) async {
+    await tester.pumpWidget(host(
+      GlassQualityTier.high,
+      const GlassNavScaffold(
+        appBar: GlassTopBar(title: Text('书架')),
+        body: SizedBox.expand(),
+      ),
+    ));
+
+    // 推演：玻璃档壳层走 GlassScaffold（玻璃永远绘制在正文之上）；与关档互补。
+    expect(find.byType(GlassScaffold), findsOneWidget);
+  });
+
+  testWidgets('关档：showAlert 退化为 AlertDialog（返回值语义同 showDialog）', (WidgetTester tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(host(
+      GlassQualityTier.off,
+      Scaffold(
+        body: Builder(
+          builder: (BuildContext context) {
+            ctx = context;
+            return const SizedBox.expand();
+          },
+        ),
+      ),
+    ));
+
+    final Future<String?> future = GlassOverlays.showAlert<String>(
+      context: ctx,
+      title: '删除书籍',
+      message: '确认删除《测试》？',
+      actions: <GlassDialogAction>[
+        GlassDialogAction(label: '删除', isDestructive: true, onPressed: () {}),
+        GlassDialogAction(
+          label: '取消',
+          isPrimary: true,
+          onPressed: () => Navigator.pop(ctx, 'cancel'),
+        ),
+      ],
+    );
+    await tester.pumpAndSettle();
+
+    // 推演：关档走 showDialog + AlertDialog，无 GlassDialog；标题 / 动作照常渲染。
+    expect(find.byType(GlassDialog), findsNothing);
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.text('删除书籍'), findsOneWidget);
+    expect(find.text('取消'), findsOneWidget);
+
+    // 返回值语义：动作回调里 Navigator.pop(ctx, value) → future 收到 value。
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(await future, 'cancel');
+  });
+
+  testWidgets('关档：showSheet 退化为 Material BottomSheet（无 GlassSheet）', (WidgetTester tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(host(
+      GlassQualityTier.off,
+      Scaffold(
+        body: Builder(
+          builder: (BuildContext context) {
+            ctx = context;
+            return const SizedBox.expand();
+          },
+        ),
+      ),
+    ));
+
+    final Future<String?> future = GlassOverlays.showSheet<String>(
+      context: ctx,
+      isScrollable: false,
+      builder: (BuildContext sheetContext) => TextButton(
+        onPressed: () => Navigator.pop(sheetContext, 'closed'),
+        child: const Text('关闭'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 推演：关档走 showModalBottomSheet（BottomSheet 在树）+ 拖拽指示条；
+    // 内容照常渲染，无 GlassSheet。
+    expect(find.byType(GlassSheet), findsNothing);
+    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(find.text('关闭'), findsOneWidget);
+
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    expect(await future, 'closed');
+  });
+}
