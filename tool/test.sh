@@ -4,7 +4,7 @@
 # 用法：bash tool/test.sh [parse|data|reader|ui|fast|all]
 #   parse  解析层（纯 Dart，最快）      test/epub、test/format
 #   data   数据层（多为纯 test+临时目录） test/library、test/meta、test/storage、test/task
-#   reader 阅读器（含 testWidgets）      test/reader、test/typography、test/perf
+#   reader 阅读器（含 testWidgets）      test/reader、test/typography、test/perf、test/search
 #   ui     界面层（最慢，FakeAsync 重）   test/ui、test/widget_test.dart
 #   fast   parse + data（不含 widget 重的两组）
 #   all    全量 —— 仅在负责人明确发出「全量测试」指令时执行（2026-09-23 拍板）；
@@ -32,7 +32,7 @@ args=(--timeout 30s)
 case "$group" in
   parse)  targets=(test/epub test/format) ;;
   data)   targets=(test/library test/meta test/storage test/task) ;;
-  reader) targets=(test/reader test/typography test/perf) ;;
+  reader) targets=(test/reader test/typography test/perf test/search) ;;
   ui)     targets=(test/ui test/widget_test.dart) ;;
   fast)   targets=(test/epub test/format test/library test/meta test/storage test/task) ;;
   all)    targets=() ;;

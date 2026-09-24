@@ -293,22 +293,27 @@ void main() {
   });
 
   group('PdfSource · 能力如实（不宣称做不到的事）', () {
-    test('capabilities：图片页 / 不重排 / 搜索未接入（T04 才置 true）/ 无字符数',
+    test('capabilities：图片页 / 不重排 / 文本层可搜（T04 已接入）/ 无字符数',
         () async {
       final PdfSource source = _source(FakePdfEngine(pageCount: 5));
       final SourceCapabilities caps = source.capabilities();
       expect(caps.hasImages, isTrue);
       expect(caps.reflowable, isFalse);
       expect(caps.hasFootnotes, isFalse);
-      expect(caps.searchable, isFalse,
-          reason: 'T04 落地前声明可搜会违背契约测试「声明可搜就要搜得到」');
+      expect(caps.searchable, isTrue,
+          reason: 'M2b-T04 文本层搜索已接入（逐页 pageText），契约「声明可搜'
+              '就要搜得到」由 search() 实现兑现（命中语义见 test/search/pdf_search_test.dart）');
       expect(caps.charCountSupported, isFalse);
       await source.dispose();
     });
 
-    test('search 为空流、totalCharCount 为 null', () async {
+    test('search 无文本层零命中、totalCharCount 为 null', () async {
       final PdfSource source = _source(FakePdfEngine(pageCount: 5));
-      expect(await source.search('任意', cancel: CancelToken()).toList(), isEmpty);
+      // 假引擎 texts 空 = 全书扫描件：零命中，但逐页进度照常产出（不再宣称「空流」）。
+      final List<SearchEvent> events =
+          await source.search('任意', cancel: CancelToken()).toList();
+      expect(events.map((SearchEvent e) => e.hit).nonNulls, isEmpty);
+      expect(events.map((SearchEvent e) => e.progress).nonNulls, hasLength(5));
       expect(await source.totalCharCount(), isNull);
       await source.dispose();
     });

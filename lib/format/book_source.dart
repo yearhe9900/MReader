@@ -83,6 +83,19 @@ class SearchEvent {
   final double? progress;
 }
 
+/// 可序列化的源描述：全书搜索在**后台 isolate 重建源**的入参（`CNT-06`
+/// 「后台 isolate 执行」/ `RUST-05`，M2b-T04）。
+///
+/// 只含纯数据（文件名 + 完整字节），可跨 isolate 传递；持有不可序列化句柄的实现
+/// （如 `PdfSource` 的引擎文档句柄）给不出 spec，由搜索驱动层改走本 isolate 流式
+/// 执行（见 `lib/task/search_session.dart` 文件头的两条路径）。
+class SearchBookSpec {
+  const SearchBookSpec({required this.fileName, required this.bytes});
+
+  final String fileName;
+  final Uint8List bytes;
+}
+
 /// §7.1 格式解析统一抽象。**各实现互不感知**。
 abstract class BookSource {
   /// 实现标识：`'dart-epub'` / `'dart-txt'`（将来 `'rust-epub'` …）。仅日志 / 体检用。
@@ -98,6 +111,14 @@ abstract class BookSource {
 
   /// 全书搜索（`CNT-06` 的纯 Dart 基线，M2b 才产品化）。
   Stream<SearchEvent> search(String query, {required CancelToken cancel});
+
+  /// 可后台重建的源描述（[SearchBookSpec]）；`null` = 本实现持有不可序列化句柄，
+  /// 搜索只能在本 isolate 流式执行（`CNT-06` 的驱动层据此分流，上层无感）。
+  ///
+  /// 与 [totalCharCount] 同一「带默认实现的具体方法增补」手法：不破坏 §A.1
+  /// 冻结的既有字段与签名。EPUB / TXT 返回自身 fileName + bytes；PDF（引擎句柄）/
+  /// CBZ / CBR（不可搜）返回 `null`。
+  SearchBookSpec? get searchSpec => null;
 
   /// 全书字符总数（`STAT-14` 用）。不支持时返回 `null`。
   ///

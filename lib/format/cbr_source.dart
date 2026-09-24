@@ -133,6 +133,11 @@ class CbrSource implements BookSource {
   Stream<SearchEvent> search(String query, {required CancelToken cancel}) =>
       const Stream<SearchEvent>.empty();
 
+  /// 图片格式给不出可序列化源描述（也不可搜）→ `null`。
+  /// （`BookSource.searchSpec` 的默认实现**不跨 `implements` 继承**，显式写出。）
+  @override
+  SearchBookSpec? get searchSpec => null;
+
   @override
   Future<int?> totalCharCount() async => null;
 

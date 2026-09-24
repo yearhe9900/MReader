@@ -171,16 +171,71 @@ class PdfSource implements BookSource {
         hasImages: true,
         hasFootnotes: false,
         reflowable: false, // 页面固版式：不重排（与 CBZ 同口径）
-        // 文本层搜索由 M2b-T04（CNT-06）接入：`readResource` / `pageText` 已备好，
-        // 但 `search()` 尚未实现——此刻声明 searchable 会违背契约测试
-        // 「声明可搜就必须搜得到」。T04 落地时改这里为 true 并实现 search()。
-        searchable: false,
+        // `M2b-T04`（`CNT-06` / `Q4` ②）：文本层搜索已接入——逐页消费
+        // `PdfEngineDocument.pageText`，扫描件（无文本层页）自动跳过。
+        searchable: true,
         charCountSupported: false, // 无「字符数」语义（页数 ≠ 字符数）
       );
 
   @override
-  Stream<SearchEvent> search(String query, {required CancelToken cancel}) =>
-      const Stream<SearchEvent>.empty(); // M2b-T04 接入（Q4 ②）
+  Stream<SearchEvent> search(String query, {required CancelToken cancel}) async* {
+    if (query.isEmpty) return;
+    await _ensurePrepared();
+    if (_disposed) return;
+    final PdfEngineDocument? document = _document;
+    final List<Chapter>? chapterList = _chapters;
+    if (document == null || chapterList == null || chapterList.isEmpty) return;
+    final int pages = _pageCount;
+
+    // 与 `DartEpubSource.search` 同一形状的朴素子串扫描（`CNT-06` 验收①
+    // 「命中数与实际出现次数一致」= indexOf 全计数）。扫描单位是**页**（文本层的
+    // 最小抽取单元；扫描件页 `pageText` 为 null 自动跳过），命中 `chapterIndex`
+    // 按伪分章折算，`offset` 为**章内**页文本字符累加偏移（与段落源同一语义）。
+    int chapterIndex = -1;
+    int offsetInChapter = 0;
+    for (int page = 0; page < pages; page++) {
+      if (cancel.isCancelled || _disposed) return;
+      final String? text = await document.pageText(page);
+      if (_disposed) return; // `pageText` 的 await 期间可能已被释放
+      final int chapter = page ~/ kPdfPagesPerChapter;
+      if (chapter != chapterIndex) {
+        chapterIndex = chapter;
+        offsetInChapter = 0;
+      }
+      if (text != null && text.isNotEmpty) {
+        int from = 0;
+        while (true) {
+          final int at = text.indexOf(query, from);
+          if (at < 0) break;
+          yield SearchEvent.hit(SearchHit(
+            chapterIndex: chapterIndex,
+            chapterTitle: chapterList[chapterIndex].title,
+            offset: offsetInChapter + at,
+            context: _lineAround(text, at, at + query.length),
+          ));
+          if (cancel.isCancelled) return;
+          from = at + query.length;
+        }
+        offsetInChapter += text.length;
+      }
+      yield SearchEvent.progress((page + 1) / pages);
+    }
+  }
+
+  /// 命中所在行（页文本按 `\n` 分行）作上下文片段——对齐段落源的「命中所在整段」。
+  static String _lineAround(String text, int start, int end) {
+    final int found = text.lastIndexOf('\n', start);
+    final int lineStart = found < 0 ? 0 : found + 1;
+    int lineEnd = text.indexOf('\n', end);
+    if (lineEnd < 0) lineEnd = text.length;
+    return text.substring(lineStart, lineEnd);
+  }
+
+  /// PDF 是**句柄源**（`PdfEngineDocument` 绑原生引擎、不可序列化）→ 给不出
+  /// [SearchBookSpec]：搜索驱动层据此改走本 isolate 流式（`lib/task/search_session.dart`）。
+  /// （`BookSource.searchSpec` 的默认实现**不跨 `implements` 继承**，显式写出。）
+  @override
+  SearchBookSpec? get searchSpec => null;
 
   @override
   Future<int?> totalCharCount() async => null;

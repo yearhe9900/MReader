@@ -101,7 +101,12 @@ List<BookSourceSample> registeredSources() => <BookSourceSample>[
         create: () => PdfSource(
           fileName: 'contract.pdf',
           bytes: minimalPdfBytes(),
-          engine: FakePdfEngine(pageCount: 2),
+          // texts 注入「正文」页文本：`capabilities().searchable` 为真后，
+          // 契约「声明可搜就必须搜得到」对 PDF 同样生效（M2b-T04）。
+          engine: FakePdfEngine(
+            pageCount: 2,
+            texts: <int, String>{0: '正文一。', 1: '正文二。'},
+          ),
         ),
       ),
     ];

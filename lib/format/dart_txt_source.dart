@@ -189,6 +189,12 @@ class DartTxtSource implements BookSource {
         charCountSupported: true,
       );
 
+  /// TXT 可序列化重现（fileName + bytes）→ 全书搜索走**后台重建**路径
+  /// （`CNT-06`「后台 isolate 执行」，见 `lib/task/search_session.dart`）。
+  @override
+  SearchBookSpec? get searchSpec =>
+      SearchBookSpec(fileName: fileName, bytes: bytes);
+
   @override
   Future<int?> totalCharCount() async {
     final int? cached = _totalChars;

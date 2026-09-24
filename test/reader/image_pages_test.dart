@@ -93,6 +93,9 @@ class _ImageSource implements BookSource {
       const Stream<SearchEvent>.empty();
 
   @override
+  SearchBookSpec? get searchSpec => null;
+
+  @override
   Future<int?> totalCharCount() async => null;
 
   @override

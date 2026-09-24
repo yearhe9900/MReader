@@ -144,6 +144,9 @@ class _FakeSource implements BookSource {
       const Stream<SearchEvent>.empty();
 
   @override
+  SearchBookSpec? get searchSpec => null;
+
+  @override
   Future<int?> totalCharCount() async => null;
 
   @override
