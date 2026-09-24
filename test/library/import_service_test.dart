@@ -102,6 +102,34 @@ void main() {
       );
     });
 
+    test('MOBI 系导入即拒绝：mobiUnsupported（FMT-06 ①；M2b-T05 接入解析器前）',
+        () async {
+      // PalmDB `BOOKMOBI` 最小复刻（同 test/format/sniffer_test.dart 夹具）：
+      // 偏移 0..32 可打印 name（AZW3 实测 `epubor.c`）+ NUL，偏移 60..68 = BOOKMOBI。
+      final Uint8List mobiBytes = Uint8List(80);
+      const List<int> name = <int>[
+        0x65, 0x70, 0x75, 0x62, 0x6F, 0x72, 0x2E, 0x63, // "epubor.c"
+      ];
+      mobiBytes.setRange(0, name.length, name);
+      const List<int> tag = <int>[
+        0x42, 0x4F, 0x4F, 0x4B, 0x4D, 0x4F, 0x42, 0x49, // "BOOKMOBI"
+      ];
+      mobiBytes.setRange(60, 68, tag);
+
+      // 改名 .txt——魔数压过后缀识别为 MOBI 系；导入即拒绝，口径区分
+      // 「这是 MOBI，还没支持」（mobiUnsupported）与「不认识的格式」。
+      expect(
+        () => service.import(bytes: mobiBytes, fileName: '牧神记.txt'),
+        throwsA(
+          isA<MReaderFormatException>().having(
+            (MReaderFormatException e) => e.code,
+            'code',
+            FormatErrorCode.mobiUnsupported,
+          ),
+        ),
+      );
+    });
+
     test('CBZ 导入：format=cbz、封面物化 StoredCover（META-11 ①）、副本落盘',
         () async {
       final Uint8List bytes = zipEntries(<EpubEntry>[

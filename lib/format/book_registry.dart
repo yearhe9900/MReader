@@ -13,12 +13,16 @@ import 'cbz_source.dart';
 import 'cbr_source.dart';
 import 'dart_epub_source.dart';
 import 'dart_txt_source.dart';
+import 'sniffer.dart';
 
 // `MReaderFormatException` / `FormatErrorCode` 经 `book_source.dart` 的
 // `export 'error_messages.dart';` 转出，不再单独 import（避免重复导入同一个库）。
 
 /// 格式种类。
-enum FormatKind { epub, txt, cbz, cbr, unsupported }
+///
+/// [mobi] = MOBI/AZW3（PalmDB `BOOKMOBI` 家族，`FMT-06` ① 识别）；解析器
+/// `M2b-T05` 接入，接入前 [BookRegistry.open] 抛 `mobiUnsupported`、导入即拒绝。
+enum FormatKind { epub, txt, cbz, cbr, mobi, unsupported }
 
 /// 装配 + 分发点。
 ///
@@ -35,6 +39,8 @@ class BookRegistry {
   /// - `cbz`  → [CbzSource]（M2b-T02 接入，`FMT-02`）；
   /// - `cbr`  → [CbrSource]（M2b-T02 接入，`FMT-03`：`Q5` 退化「识别 + 明确提示」，
   ///   `load()` 抛 `cbrUnsupported`、导入即拒绝）；
+  /// - `mobi` → `M2b-T05` 接入解析器；接入前抛 `mobiUnsupported`（导入即拒绝，
+  ///   口径与 `unsupportedFormat` 区分：用户能知道「这是 MOBI，还没支持」）；
   /// - `unsupported` → 抛 [MReaderFormatException]（`RD-05`）。
   ///
   /// 返回的永远是 [BookSource] 抽象——调用方无法、也无需知道来源。
@@ -51,6 +57,8 @@ class BookRegistry {
         return CbzSource(fileName: fileName, bytes: bytes);
       case FormatKind.cbr:
         return CbrSource(fileName: fileName, bytes: bytes);
+      case FormatKind.mobi:
+        throw const MReaderFormatException(FormatErrorCode.mobiUnsupported);
       case FormatKind.unsupported:
         throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
     }
@@ -66,27 +74,42 @@ Future<BookSource> openBook({
 }) =>
     const BookRegistry().open(fileName: fileName, bytes: bytes);
 
-/// 一级（扩展名）+ 二级（魔数）分发（PRD §7.3；`FMT-06` 的完整纠偏在 M2b）。
+/// 一级（扩展名）+ 二级（魔数）分发（PRD §7.3 二级判定；`FMT-06` 魔数纠偏，
+/// M2b-T03 落地）。
 ///
-/// 规则：
-/// - **EPUB**：扩展名 `.epub`（**以扩展名为主**——`.zip` 改名 `.epub` 也要交给 EPUB 解析器，
-///   由它给出「不是有效 EPUB」的可读提示，而不是在这里静默拒绝）；
-/// - **CBZ / CBR**：扩展名 `.cbz` / `.cbr`（同样以扩展名为主——坏包由各自解析器
-///   给可读提示；`FMT-03`：CBR 由 `CbrSource` 明确提示暂不支持）；
-/// - **TXT**：非 zip 且（扩展名 `.txt` 或字节可判为文本）；
-/// - 其余：`unsupported`。
+/// 规则（自上而下，魔数优先于后缀）：
+/// 1. **MOBI 系魔数**（[hasMobiMagic]，PalmDB `BOOKMOBI`）压过**一切**后缀
+///    ——AZW3 头 8 字节是可打印 ASCII（PDB name），改名 `.txt` 不得落纯文本
+///    判定（`FMT-06` 验收①）；
+/// 2. **EPUB**：扩展名 `.epub` 为主——`.zip` / 纯文本 / 坏字节改名 `.epub` 都
+///    交给 EPUB 解析器，由它给出「不是有效 EPUB」的可读提示 = `FMT-06` 验收②
+///    的「明确报错」出口（「识别为 TXT」出口未取，取舍见函数体注释）；
+/// 3. **CBZ / CBR**：扩展名 `.cbz` / `.cbr`（坏包由各自解析器给可读提示；
+///    `FMT-03`：CBR 由 `CbrSource` 明确提示暂不支持）；
+/// 4. **TXT**：非 zip 且（扩展名 `.txt` 或字节可判为文本）；
+/// 5. 其余：`unsupported`。
+///
+/// 边界声明（M2b-T03）：① MOBI 与 AZW3 不做家族内区分（同判据同 kind）；
+/// ② 非 `BOOKMOBI` 的其他 PalmDB 落 `unsupported`；③ cbz/cbr 的「纯文本内容」
+/// 不做纠偏（不在 `FMT-06` 验收面，坏包走解析器可读报错）。
 FormatKind sniffFormat({
   required String fileName,
   required Uint8List bytes,
 }) {
   final String ext = _extensionOf(fileName);
 
+  // 1. MOBI 系魔数（FMT-06 ①）：先于一切后缀与纯文本判定。
+  if (hasMobiMagic(bytes)) return FormatKind.mobi;
+  // 2. EPUB：扩展名优先。FMT-06 ② 双出口取「明确报错」——纯文本/坏字节改名
+  //    `.epub` 仍交给 EPUB 解析器给 notZip 可读报错，不静默改判 TXT（诚实报错
+  //    优先）；既有锁 dart_epub_source_test「非 zip 字节 + .epub → notZip 文案」
+  //    保持不动。若改走「识别为 TXT」出口，须同步推翻该测试并更新此处注释。
   if (ext == 'epub') return FormatKind.epub;
   if (ext == 'cbz') return FormatKind.cbz;
   if (ext == 'cbr') return FormatKind.cbr;
-  if (_looksLikeZip(bytes)) return FormatKind.unsupported;
+  if (looksLikeZip(bytes)) return FormatKind.unsupported;
   if (ext == 'txt') return FormatKind.txt;
-  if (_looksLikeText(bytes)) return FormatKind.txt;
+  if (looksLikeText(bytes)) return FormatKind.txt;
   return FormatKind.unsupported;
 }
 
@@ -98,32 +121,4 @@ String _extensionOf(String fileName) {
   final int dot = base.lastIndexOf('.');
   if (dot <= 0 || dot == base.length - 1) return '';
   return base.substring(dot + 1).toLowerCase();
-}
-
-/// 是否是 zip 容器（PK 头的三种形态：本地文件头 / 空档案 / 分卷档案）。
-bool _looksLikeZip(Uint8List bytes) {
-  if (bytes.length < 4) return false;
-  if (bytes[0] != 0x50 || bytes[1] != 0x4B) return false;
-  return (bytes[2] == 0x03 && bytes[3] == 0x04) ||
-      (bytes[2] == 0x05 && bytes[3] == 0x06) ||
-      (bytes[2] == 0x07 && bytes[3] == 0x08);
-}
-
-/// 字节是否「看起来是文本」（`.txt` 之外的兜底；完整嗅探属 M2b 的 `FMT-06`）。
-///
-/// 判据（保守，宁可判为不支持也不误开二进制）：
-/// 1. 无 `0x00`（含 NUL 的几乎一定是二进制）；
-/// 2. 头部 512 字节里没有除 `\t \n \f \r` 之外的 C0 控制符；
-/// 3. 非 ASCII 字节视为文本（中文 TXT 必然是高位字节）。
-bool _looksLikeText(Uint8List bytes) {
-  if (bytes.isEmpty) return false;
-  final int head = bytes.length > 512 ? 512 : bytes.length;
-  for (int i = 0; i < head; i++) {
-    final int b = bytes[i];
-    if (b == 0x00) return false;
-    if (b < 0x20 && b != 0x09 && b != 0x0A && b != 0x0C && b != 0x0D) {
-      return false;
-    }
-  }
-  return true;
 }

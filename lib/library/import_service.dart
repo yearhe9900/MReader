@@ -49,12 +49,18 @@ class ImportService {
     if (kind == FormatKind.unsupported) {
       throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
     }
-    // 落盘扩展名 = 格式名（`FormatKind.unsupported` 已在上方拦截，该臂不可达）。
+    // MOBI 系已被魔数识别但解析器未接入（`M2b-T05`）：导入即拒绝，口径区分
+    // 「这是 MOBI，还没支持」与「不认识的格式」（`FMT-06` ①）。
+    if (kind == FormatKind.mobi) {
+      throw const MReaderFormatException(FormatErrorCode.mobiUnsupported);
+    }
+    // 落盘扩展名 = 格式名（`unsupported`/`mobi` 已在上方拦截，这两臂不可达）。
     final String format = switch (kind) {
       FormatKind.epub => 'epub',
       FormatKind.txt => 'txt',
       FormatKind.cbz => 'cbz',
       FormatKind.cbr => 'cbr',
+      FormatKind.mobi => 'mobi',
       FormatKind.unsupported =>
         throw const MReaderFormatException(FormatErrorCode.unsupportedFormat),
     };
