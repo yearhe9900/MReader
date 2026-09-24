@@ -1,0 +1,223 @@
+// `TYP-07` / `TYP-08`：字体族选择 + 亮度遮罩 + 预设背景色 widget 测试。
+//
+// 验收映射：
+//   · `TYP-07` ① 字体族可切换并**立即生效**（点 chip 后只 pump 一帧即换样式）；
+//   · `TYP-07` ② 中文无豆腐块 —— 由平台族名 + 回退链兜底（断言 fontFamilyFallback
+//     非空：Windows 不认通用族名，回退链是无豆腐块的实际保障）；
+//   · `TYP-07` ③ `pubspec.yaml` 无 `fonts:` 资源段（不内嵌字体文件）；
+//   · `TYP-08` ① 亮度遮罩**实时**生效（拖动回调后一帧）且**保留**（重进仍在）；
+//   · `TYP-08` ② 米黄背景对比度足够 —— WCAG 对比度 ≥ 4.5（人工推演：#F2E7D3 底 ×
+//     #1F1F1F 字 ≈ 13.5:1）；
+//   · `TYP-08` ③ 夜间模式不产生白底 —— 暗色主题下底色恒为暗色
+//     （#121212 / 纯黑 #000000），正文浅色。
+//
+// 预期值人工推演（遮罩不透明度）：亮度 b → 遮罩黑层不透明度 `1 - b`；
+// b = 0.5 时为 0.5（`Color.fromRGBO(0,0,0,·).a` 精确等于该值）。
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mreader/library/library_repository.dart';
+import 'package:mreader/reader/progress_store.dart';
+import 'package:mreader/reader/reader_page.dart';
+import 'package:mreader/reader/reading_prefs.dart';
+import 'package:mreader/reader/reading_prefs_store.dart';
+import 'package:mreader/typography/typeset.dart';
+
+import 'reader_harness.dart';
+import '../test_config.dart';
+
+/// WCAG 相对亮度（sRGB 通道 0~1，gamma 解码后加权）。
+double _luminance(Color color) {
+  double channel(double c) => c <= 0.03928
+      ? c / 12.92
+      : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
+  return 0.2126 * channel(color.r) +
+      0.7152 * channel(color.g) +
+      0.0722 * channel(color.b);
+}
+
+/// WCAG 对比度（(L1 + 0.05) / (L2 + 0.05)，L1 ≥ L2）。
+double _contrastRatio(Color a, Color b) {
+  final double la = _luminance(a);
+  final double lb = _luminance(b);
+  final double light = math.max(la, lb);
+  final double dark = math.min(la, lb);
+  return (light + 0.05) / (dark + 0.05);
+}
+
+void main() {
+  capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
+  group('TYP-07 字体族 / TYP-08 亮度与背景色', () {
+    late Directory tempDir;
+    late TestAppPaths paths;
+    late ProgressStore progressStore;
+    late ReadingPrefsStore prefsStore;
+    late LibraryRepository repo;
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('mreader_appear_');
+      paths = TestAppPaths(tempDir);
+      progressStore = ProgressStore(paths);
+      prefsStore = ReadingPrefsStore(paths);
+      repo = fakeRepository(paths);
+    });
+
+    tearDown(() {
+      if (tempDir.existsSync()) {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    Widget buildApp({ReadingPrefsStore? prefs, ThemeData? theme}) => MaterialApp(
+          theme: theme,
+          home: ReaderPage(
+            source: FakeBookSource(),
+            record: fakeRecord(),
+            progressStore: progressStore,
+            repository: repo,
+            readingPrefsStore: prefs ?? prefsStore,
+          ),
+        );
+
+    InlineParagraph paragraph(WidgetTester tester) =>
+        tester.widget<InlineParagraph>(find.byType(InlineParagraph).first);
+
+    testWidgets('TYP-07 验收①②：字体族可切换并立即生效，挂跨平台回退链',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      // 初始：系统默认（fontFamily 为 null）。
+      expect(paragraph(tester).style.fontFamily, isNull);
+
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('font-serif')));
+      await tester.pump(); // 只 pump 一帧 —— 立即生效，不等任何异步。
+      expect(paragraph(tester).style.fontFamily, 'serif');
+      // 验收②：回退链非空（Windows 不认通用族名，靠回退链保中文无豆腐块）。
+      expect(paragraph(tester).style.fontFamilyFallback, isNotEmpty);
+
+      await tester.tap(find.byKey(const Key('font-sans')));
+      await tester.pump();
+      expect(paragraph(tester).style.fontFamily, 'sans-serif');
+      expect(paragraph(tester).style.fontFamilyFallback, isNotEmpty);
+
+      await tester.tap(find.byKey(const Key('font-default')));
+      await tester.pump();
+      expect(paragraph(tester).style.fontFamily, isNull);
+    });
+
+    test('TYP-07 验收③：pubspec.yaml 无 fonts: 资源段（不内嵌字体文件）', () {
+      final String pubspec = File('pubspec.yaml').readAsStringSync();
+      expect(
+        RegExp(r'^\s*fonts:', multiLine: true).hasMatch(pubspec),
+        isFalse,
+        reason: 'pubspec.yaml 不得出现 fonts: 资源段（TYP-07 红线）',
+      );
+    });
+
+    testWidgets('TYP-08 验收①：亮度遮罩实时生效且持久化保留',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      // 初始亮度 1.0：不加遮罩。
+      expect(find.byKey(const Key('reader-brightness-mask')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
+
+      // 滑块到 0.5（拖动路径即 onChanged 回调）→ 一帧生效（实时）。
+      final Slider slider =
+          tester.widget<Slider>(find.byKey(const Key('brightness-slider')));
+      slider.onChanged!(0.5);
+      await tester.pump();
+
+      final Finder mask = find.byKey(const Key('reader-brightness-mask'));
+      expect(mask, findsOneWidget);
+      ColoredBox maskBox() => tester.widget<ColoredBox>(
+            find.descendant(of: mask, matching: find.byType(ColoredBox)),
+          );
+      // 推演：遮罩不透明度 = 1 - 0.5 = 0.5。
+      expect(maskBox().color.a, closeTo(0.5, 0.001));
+
+      await settle(tester); // 排空落盘
+      final ReadingPrefs? saved =
+          await tester.runAsync<ReadingPrefs?>(() => prefsStore.load());
+      expect(saved, isNotNull);
+      expect(saved!.brightness, 0.5, reason: '亮度即时持久化');
+
+      // 真·关书重进（换 store 实例模拟重启）：亮度保留。
+      await closeBook(tester);
+      await tester.pumpWidget(buildApp(prefs: ReadingPrefsStore(paths)));
+      await settle(tester);
+
+      final Finder mask2 = find.byKey(const Key('reader-brightness-mask'));
+      expect(mask2, findsOneWidget, reason: '重进后遮罩仍在（亮度保留）');
+      expect(
+        tester
+            .widget<ColoredBox>(
+              find.descendant(of: mask2, matching: find.byType(ColoredBox)),
+            )
+            .color
+            .a,
+        closeTo(0.5, 0.001),
+      );
+    });
+
+    testWidgets('TYP-08 验收②：米黄背景对比度足够（WCAG ≥ 4.5）',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('background-sepia')));
+      await tester.pump(); // 一帧生效。
+
+      // 页面底色 = 米黄 #F2E7D3（日间映射）。
+      final Scaffold scaffold =
+          tester.widget<Scaffold>(find.byType(Scaffold));
+      expect(scaffold.backgroundColor, const Color(0xFFF2E7D3));
+
+      // 正文 #1F1F1F × 米黄 #F2E7D3 ≈ 13.5:1（推演）≥ 4.5（WCAG AA 正文阈值）。
+      final InlineParagraph para = paragraph(tester);
+      expect(para.style.color, const Color(0xFF1F1F1F));
+      expect(
+        _contrastRatio(const Color(0xFFF2E7D3), para.style.color!),
+        greaterThanOrEqualTo(4.5),
+      );
+    });
+
+    testWidgets('TYP-08 验收③：夜间模式不产生白底', (WidgetTester tester) async {
+      // 暗色主题 = 夜间模式（以实际生效的 brightness 为准）。
+      await tester.pumpWidget(buildApp(theme: ThemeData.dark()));
+      await settle(tester);
+
+      // 白色预设在夜间映射为深色底 #121212：不得出现白底。
+      final Scaffold scaffold =
+          tester.widget<Scaffold>(find.byType(Scaffold));
+      expect(scaffold.backgroundColor, const Color(0xFF121212));
+      expect(paragraph(tester).style.color, const Color(0xFFE6E6E6));
+
+      // 纯黑预设：页面底恰为 #000000，正文浅色（#D9D9D9）。
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('background-black')));
+      await tester.pump();
+      final Scaffold dark = tester.widget<Scaffold>(find.byType(Scaffold));
+      expect(dark.backgroundColor, const Color(0xFF000000));
+      expect(paragraph(tester).style.color, const Color(0xFFD9D9D9));
+
+      // 对比度同样足够：#000000 × #D9D9D9 ≈ 14.9:1（推演）≥ 4.5。
+      expect(
+        _contrastRatio(const Color(0xFF000000), const Color(0xFFD9D9D9)),
+        greaterThanOrEqualTo(4.5),
+      );
+    });
+  });
+}

@@ -49,6 +49,22 @@
 //     [LinkBackStack]；栈非空显示浮动「返回」按钮，弹栈恢复原位置。
 //     段落级精确定位：目标段落懒挂 `GlobalKey`，恢复迭代里优先按段落 box
 //     对齐视口顶（未构建时回落「章内相对位置」估算）。目标不存在一律静默忽略。
+//   · **`TYP-06` 书签**：当前位置添加书签 / 列表逐条删除，按书持久化
+//     （[BookmarkStore]，增删即时落盘）；列表行点击跳回该语义位置
+//     （href 优先，回退 index）；
+//   · **`TYP-07` 字体族**：外观面板三选一（系统默认 / 衬线 / 无衬线），
+//     **不内嵌字体文件**（`pubspec.yaml` 无 `fonts:` 段）——平台族名 +
+//     `reader_fonts.dart` 回退链（Windows 不认通用族名，回退链保中文无豆腐块）；
+//     字体族只能由外观面板改：控制条的 `ReaderSettings.copyWith` 会把
+//     未传入的 fontFamily 清掉，故 [_onSettingsChanged] 在页面边界续上现值；
+//   · **`TYP-08` 亮度与背景色**：应用内亮度遮罩（黑色叠加层，不透明度
+//     `1 - brightness`，实时 + 持久化）+ 预设背景色板（白 / 米黄 / 灰 / 纯黑，
+//     夜间一律映射暗色——验收③「夜间模式不产生白底」）；
+//   · **`TYP-09` 全屏与进度指示**：沉浸全屏（隐藏 AppBar 与底部控制条，
+//     右上浮动按钮退出并恢复）+ 细粒度进度指示「第 N/M 章 · X%」——
+//     **滚动实时更新**（[_updateLiveProgress] 只写显示字段 `_liveIndex` /
+//     `_livePos`，滚动中间态**不进** `_currentIndex` / `_chapterPos`，
+//     `RC1` 写盘闸门与「采样置后」原则不动）。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider / Freezed）。
 // **不引入任何新依赖**（不使用 `scrollable_positioned_list` 等）。
@@ -66,11 +82,20 @@ import '../typography/reader_settings.dart';
 import '../typography/text_style_resolver.dart';
 import '../typography/typeset.dart';
 import '../ui/glass_kit.dart';
+import 'bookmark.dart';
+import 'bookmark_sheet.dart';
+import 'bookmark_store.dart';
 import 'chapter_cache.dart';
 import 'control_bar.dart';
 import 'image_cache.dart';
 import 'link_navigator.dart';
 import 'progress_store.dart';
+import 'reader_fonts.dart';
+import 'reader_progress_indicator.dart';
+import 'reading_appearance_sheet.dart';
+import 'reading_background.dart';
+import 'reading_prefs.dart';
+import 'reading_prefs_store.dart';
 import 'reading_progress.dart';
 import 'toc_sheet.dart';
 
@@ -88,6 +113,8 @@ class ReaderPage extends StatefulWidget {
     required this.record,
     required this.progressStore,
     required this.repository,
+    this.bookmarkStore,
+    this.readingPrefsStore,
   });
 
   /// 书籍内容来源（`BookSource` 抽象，EPUB / TXT 通用）。
@@ -103,6 +130,17 @@ class ReaderPage extends StatefulWidget {
 
   /// 书库仓库（进度变化时回写 `BookRecord.lastReadAt` / `readProgress`）。
   final LibraryRepository repository;
+
+  /// 书签持久化（`TYP-06`）。
+  ///
+  /// `null` = 尚未接线（main.dart 接线前的降级）：书签功能照常可用，
+  /// 但只保留在本会话内存里，不落盘。
+  final BookmarkStore? bookmarkStore;
+
+  /// 阅读偏好持久化（`TYP-07~09`：排版 / 亮度 / 背景色）。
+  ///
+  /// `null` = 尚未接线：偏好本会话内有效，不落盘。
+  final ReadingPrefsStore? readingPrefsStore;
 
   @override
   State<ReaderPage> createState() => _ReaderPageState();
@@ -213,6 +251,38 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 链接返回栈（`CNT-04c` 验收②）：跳转前压入原位置快照，「返回」按钮弹栈恢复。
   final LinkBackStack _linkStack = LinkBackStack();
 
+  /// 应用内亮度 `0.2 ~ 1.0`（`TYP-08`；1.0 = 不加遮罩）。
+  double _brightness = ReadingPrefs.maxBrightness;
+
+  /// 预设背景色板（`TYP-08`）。
+  ReaderBackground _background = ReaderBackground.white;
+
+  /// 书签列表（添加顺序；`TYP-06`）。
+  List<Bookmark> _bookmarks = <Bookmark>[];
+
+  /// 沉浸全屏（`TYP-09`）：`true` = 隐藏 AppBar 与底部控制条。
+  bool _fullscreen = false;
+
+  /// 滚动**实时显示**用的章索引 / 章内位置（`TYP-09` 验收②）。
+  ///
+  /// 只喂进度显示（副标题 / 控制条 / [ReaderProgressIndicator]），
+  /// **绝不进存档**：存档只采信滚动停止时的采样（`RC1` 闸门语义不变），
+  /// 滚动中间态、占位章探测（`RC3`）都不污染 `_currentIndex` / `_chapterPos`。
+  int _liveIndex = 0;
+  double _livePos = 0.0;
+
+  /// 当前渲染几何所对应的滚动偏移（帧末 post-frame 采样，即「布局生效时的
+  /// `pixels`」）。
+  ///
+  /// 为什么需要：`ScrollUpdateNotification` 派发于 layout **之前**
+  /// （`setPixels` → 派发通知 + `markNeedsLayout`，布局在本帧稍后才跑），
+  /// 通知处理器里读 `localToGlobal` 拿到的是**上一帧**几何——「滚动已发生、
+  /// 布局未跟上」的滞后会被当成真实位置（实证：拖 150px 后块顶仍报旧值，
+  /// 章内位置算出 0，进度不动）。故采样时按
+  /// `top - (pixels - _laidOutPixels)` 把滞后补回（见 [_buildBlockSnapshots]）。
+  /// `null` = 尚无布局基线，不校正。
+  double? _laidOutPixels;
+
   @override
   void initState() {
     super.initState();
@@ -240,6 +310,12 @@ class _ReaderPageState extends State<ReaderPage> {
       final List<Chapter> chapters = await widget.source.chapters();
       final ReadingProgress? progress =
           await widget.progressStore.load(widget.record.bookId);
+      // TYP-06~09：书签（按书）与阅读偏好（全局）。store 未接线时为 null / 空，
+      // 走内存态默认（构造注释里的降级口径）。
+      final List<Bookmark> bookmarks =
+          await widget.bookmarkStore?.load(widget.record.bookId) ??
+              <Bookmark>[];
+      final ReadingPrefs? prefs = await widget.readingPrefsStore?.load();
       if (!mounted) return;
 
       // 定位：先按 href（稳定身份）匹配，匹配不到退回 index 并 clamp。
@@ -247,10 +323,18 @@ class _ReaderPageState extends State<ReaderPage> {
       final double pos = progress?.chapterPos ?? 0.0;
 
       setState(() {
+        if (prefs != null) {
+          _settings = prefs.settings;
+          _brightness = prefs.brightness;
+          _background = prefs.background;
+        }
+        _bookmarks = bookmarks;
         _meta = meta;
         _chapters = chapters;
         _currentIndex = index;
         _chapterPos = pos;
+        _liveIndex = index;
+        _livePos = pos;
         _restoreIndex = index;
         _restorePos = pos;
         _localHint = progress?.localHint;
@@ -510,29 +594,10 @@ class _ReaderPageState extends State<ReaderPage> {
     }
     final RenderBox? viewport = _viewportBox();
     if (viewport == null) return false;
-    final double viewportTop = viewport.localToGlobal(Offset.zero).dy;
 
-    // `RC4`：全量扫描已构建的章块，不再只探「上次索引 ±4」——落点偏差一大，
-    // 真章就在小窗口之外，旧逻辑会拿**窗口边缘章**顶替并写回存档，每轮「开→关」
-    // 都把错误章写回去，越偏越多（「多次进出后偏离原章节太多」的来源）。
-    final List<ChapterBlockSnapshot> blocks = <ChapterBlockSnapshot>[];
-    for (int i = 0; i < chapters.length; i++) {
-      final RenderBox? box = _chapterBoxAt(i);
-      if (box == null) continue; // 未构建（不在视口及缓存区内）。
-      blocks.add(
-        ChapterBlockSnapshot(
-          index: i,
-          top: box.localToGlobal(Offset.zero).dy - viewportTop,
-          height: box.size.height,
-          // 「真实加载」判定用现成的 `ChapterCache.peek`（正文已解析），
-          // 不新造谓词；占位块渲染时 `peek` 必为 `null`。
-          reallyLoaded: _cache.peek(i) != null,
-        ),
-      );
-    }
-
+    // `RC4`：全量扫描已构建的章块（见 [_buildBlockSnapshots]），交给纯函数判定。
     final ({int chapterIndex, double? chapterPos})? hit =
-        detectChapterAt(blocks);
+        detectChapterAt(_buildBlockSnapshots(viewport));
     if (hit == null) {
       return false; // `RC4`：探不到 → 不动旧值、不写盘。
     }
@@ -541,18 +606,110 @@ class _ReaderPageState extends State<ReaderPage> {
     final double? pos = hit.chapterPos;
     if (pos == null) {
       // `RC3`：占位高章盖住视口顶——章级身份可信，但章内位置不可采样。
-      if (index != _currentIndex) {
-        setState(() => _currentIndex = index);
+      if (index != _currentIndex || index != _liveIndex) {
+        setState(() {
+          _currentIndex = index;
+          _liveIndex = index;
+        });
       }
       return false;
     }
-    if (index != _currentIndex || (pos - _chapterPos).abs() > 1e-6) {
+    if (index != _currentIndex ||
+        (pos - _chapterPos).abs() > 1e-6 ||
+        index != _liveIndex ||
+        (pos - _livePos).abs() > 1e-6) {
       setState(() {
         _currentIndex = index;
         _chapterPos = pos;
+        // 显示值与语义值在同一采样点对齐（`TYP-09` 的实时显示见
+        // [_updateLiveProgress]，滚动停止后两者必然收敛到同一检测结果）。
+        _liveIndex = index;
+        _livePos = pos;
       });
     }
     return true;
+  }
+
+  /// 构建**全部已布局章块**的几何 / 加载态快照（[detectChapterAt] 的输入）。
+  ///
+  /// `RC4`：全量扫描已构建的章块，不再只探「上次索引 ±4」——落点偏差一大，
+  /// 真章就在小窗口之外，旧逻辑会拿**窗口边缘章**顶替并写回存档，每轮「开→关」
+  /// 都把错误章写回去，越偏越多（「多次进出后偏离原章节太多」的来源）。
+  ///
+  /// 返回的 `top` 已按 [_laidOutPixels] **补回布局滞后**（滚动通知派发于
+  /// layout 之前，此刻几何还是上一帧的）。
+  List<ChapterBlockSnapshot> _buildBlockSnapshots(RenderBox viewport) {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null) return const <ChapterBlockSnapshot>[];
+    // 布局滞后量 = 当前滚动偏移 − 几何所对应的滚动偏移（基线）。
+    // 向下滚（pixels 增）时内容上移、真实 top 更小，故校正为 `top - lag`。
+    final ScrollController? controller = _controller;
+    final double? baseline = _laidOutPixels;
+    final double lag = (controller != null &&
+            controller.hasClients &&
+            baseline != null)
+        ? controller.position.pixels - baseline
+        : 0.0;
+    // 帧末（布局已生效）记下几何所对应的 `pixels`，作下次采样的基线。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ScrollController? c = _controller;
+      if (c != null && c.hasClients) {
+        _laidOutPixels = c.position.pixels;
+      }
+    });
+    final double viewportTop = viewport.localToGlobal(Offset.zero).dy;
+    final List<ChapterBlockSnapshot> blocks = <ChapterBlockSnapshot>[];
+    for (int i = 0; i < chapters.length; i++) {
+      final RenderBox? box = _chapterBoxAt(i);
+      if (box == null) continue; // 未构建（不在视口及缓存区内）。
+      blocks.add(
+        ChapterBlockSnapshot(
+          index: i,
+          top: box.localToGlobal(Offset.zero).dy - viewportTop - lag,
+          height: box.size.height,
+          // 「真实加载」判定用现成的 `ChapterCache.peek`（正文已解析），
+          // 不新造谓词；占位块渲染时 `peek` 必为 `null`。
+          reallyLoaded: _cache.peek(i) != null,
+        ),
+      );
+    }
+    return blocks;
+  }
+
+  /// 滚动过程中的**显示级**位置采样（`TYP-09` 验收②「进度随滚动实时更新」）。
+  ///
+  /// 与 [_detectCurrentChapter] 同一判定（[detectChapterAt]），但**只写显示字段**
+  /// `_liveIndex` / `_livePos`：滚动中间态不进 `_currentIndex` / `_chapterPos`，
+  /// `RC1` 写盘闸门与「采样置后」原则一点不动。命中占位高章时
+  /// （`detectChapterAt` 返回 `chapterPos == null`）章级身份照常刷新、
+  /// 章内位置保持原显示值。
+  void _updateLiveProgress() {
+    final ScrollController? controller = _controller;
+    if (_chapters == null ||
+        _chapters!.isEmpty ||
+        controller == null ||
+        !controller.hasClients) {
+      return;
+    }
+    final RenderBox? viewport = _viewportBox();
+    if (viewport == null) return;
+    final ({int chapterIndex, double? chapterPos})? hit =
+        detectChapterAt(_buildBlockSnapshots(viewport));
+    if (hit == null) return;
+    final int index = hit.chapterIndex;
+    final double pos = hit.chapterPos ?? _livePos;
+    if (index != _liveIndex || (pos - _livePos).abs() > 1e-6) {
+      setState(() {
+        _liveIndex = index;
+        _livePos = pos;
+      });
+    }
+  }
+
+  /// 滚动中实时刷新进度显示（返回 false 表示不拦截通知）。
+  bool _onScrollUpdate(ScrollUpdateNotification notification) {
+    _updateLiveProgress();
+    return false;
   }
 
   /// 章块的 `RenderBox`（未布局 / 不在缓存内时为 `null`）。
@@ -700,6 +857,8 @@ class _ReaderPageState extends State<ReaderPage> {
     setState(() {
       _currentIndex = target;
       _chapterPos = 0.0;
+      _liveIndex = target;
+      _livePos = 0.0;
     });
     // 先把目标章载入（邻章 ±1 预取不阻塞），避免跳到占位块后高度回填引起漂移。
     await loader?.loadFirstBatch(target);
@@ -784,6 +943,8 @@ class _ReaderPageState extends State<ReaderPage> {
     setState(() {
       _currentIndex = chapterIndex;
       _chapterPos = roughPos;
+      _liveIndex = chapterIndex;
+      _livePos = roughPos;
     });
     // 先把目标章载入（邻章 ±1 预取不阻塞），避免跳到占位块后高度回填引起漂移。
     await loader?.loadFirstBatch(chapterIndex);
@@ -809,6 +970,8 @@ class _ReaderPageState extends State<ReaderPage> {
     setState(() {
       _currentIndex = target;
       _chapterPos = anchor.relativePos;
+      _liveIndex = target;
+      _livePos = anchor.relativePos;
     });
     // 目标章可能已被 LRU 淘汰：先载入目标章再恢复（邻章 ±1 预取不阻塞）。
     await _loader?.loadFirstBatch(target);
@@ -879,12 +1042,29 @@ class _ReaderPageState extends State<ReaderPage> {
     return ((index + chapterPos) / chapters.length).clamp(0.0, 1.0).toDouble();
   }
 
-  /// 全书进度百分比（整数，向下取整——避免「差一点」就显示 100%）。
-  int get _percent {
+  /// 显示用全书进度百分比（整数，向下取整——避免「差一点」就显示 100%）。
+  ///
+  /// `TYP-09` 验收②：取滚动实时值 `_liveIndex` / `_livePos`；
+  /// 存档侧的 `markRead` 仍用语义值（[_overallProgress]），互不干扰。
+  int get _livePercent {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null || chapters.isEmpty) return 0;
-    return (_overallProgress(_currentIndex, _chapterPos) * 100).floor();
+    final double overall =
+        ((_liveIndex + _livePos) / chapters.length).clamp(0.0, 1.0);
+    return (overall * 100).floor();
   }
+
+  /// 是否夜间（暗色主题）——`TYP-08` 验收③「夜间模式不产生白底」的判定基准：
+  /// 以**实际生效的主题亮度**为准（跟随系统时即系统当前亮度）。
+  bool _isNight(ThemeData theme) => theme.brightness == Brightness.dark;
+
+  /// 页面底色（`TYP-08`：背景色板 × 夜间映射）。
+  Color _pageColor(ThemeData theme) =>
+      _background.pageColor(night: _isNight(theme));
+
+  /// 正文文字颜色（与页面底色配对，保证对比度）。
+  Color _textColor(ThemeData theme) =>
+      _background.textColor(night: _isNight(theme));
 
   /// 打开目录弹窗（`NAV-01`）。
   void _openToc() {
@@ -918,6 +1098,161 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
+  /// 打开书签弹窗（`TYP-06`：添加当前位置 / 列表查看 / 跳转 / 逐条删除）。
+  void _openBookmarks() {
+    // 与 [TocSheet] 同款玻璃底部弹窗（`UI-03` / `UI-04`：列表行垫不透明表面）。
+    GlassOverlays.showSheet<void>(
+      context: context,
+      isScrollable: false,
+      builder: (BuildContext sheetContext) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+        ),
+        child: OpaqueContentSurface(
+          child: BookmarkSheet(
+            bookmarks: _bookmarks,
+            onCreate: _addBookmarkAtCurrentPosition,
+            onDelete: _removeBookmark,
+            onJump: (Bookmark bookmark) {
+              Navigator.of(sheetContext).pop();
+              unawaited(_goToBookmark(bookmark));
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 打开外观面板（`TYP-07` 字体族 / `TYP-08` 亮度与背景色）。
+  void _openAppearance() {
+    GlassOverlays.showSheet<void>(
+      context: context,
+      builder: (BuildContext sheetContext) => OpaqueContentSurface(
+        child: ReadingAppearanceSheet(
+          prefs: ReadingPrefs(
+            settings: _settings,
+            brightness: _brightness,
+            background: _background,
+          ),
+          onChanged: _onPrefsChanged,
+        ),
+      ),
+    );
+  }
+
+  /// 抓「当前位置」创建书签并入列 + 落盘（`TYP-06`）；返回 `null` = 书未就绪。
+  Bookmark? _addBookmarkAtCurrentPosition() {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return null;
+    final int index = _currentIndex.clamp(0, chapters.length - 1);
+    final Chapter chapter = chapters[index];
+    final Bookmark bookmark = Bookmark(
+      bookId: widget.record.bookId,
+      chapterHref: chapter.href,
+      chapterIndex: index,
+      chapterPos: _chapterPos,
+      chapterTitle:
+          chapter.title.isNotEmpty ? chapter.title : '第 ${index + 1} 节',
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+    );
+    setState(() => _bookmarks = <Bookmark>[..._bookmarks, bookmark]);
+    _persistBookmarks();
+    return bookmark;
+  }
+
+  /// 删除书签（`TYP-06`）：内存列表即时移除 + 落盘（弹窗侧 UI 同步即时更新）。
+  void _removeBookmark(Bookmark bookmark) {
+    final List<Bookmark> next = List<Bookmark>.of(_bookmarks)
+      ..remove(bookmark);
+    setState(() => _bookmarks = next);
+    _persistBookmarks();
+  }
+
+  /// 书签落盘（fire-and-forget；失败静默，下次保存重试，不影响阅读）。
+  void _persistBookmarks() {
+    final BookmarkStore? store = widget.bookmarkStore;
+    if (store == null) return;
+    unawaited(_persistBookmarksQuietly(store));
+  }
+
+  Future<void> _persistBookmarksQuietly(BookmarkStore store) async {
+    try {
+      await store.save(widget.record.bookId, _bookmarks);
+    } catch (_) {
+      // 保存失败不影响阅读（与 `_saveProgress` 同策略）。
+    }
+  }
+
+  /// 阅读偏好落盘（fire-and-forget；失败静默）。
+  void _persistPrefs() {
+    final ReadingPrefsStore? store = widget.readingPrefsStore;
+    if (store == null) return;
+    unawaited(_persistPrefsQuietly(store));
+  }
+
+  Future<void> _persistPrefsQuietly(ReadingPrefsStore store) async {
+    try {
+      await store.save(ReadingPrefs(
+        settings: _settings,
+        brightness: _brightness,
+        background: _background,
+      ));
+    } catch (_) {
+      // 保存失败不影响阅读。
+    }
+  }
+
+  /// 跳回书签位置（`TYP-06` 验收②）：href 优先，匹配不到退回 index 并 clamp。
+  Future<void> _goToBookmark(Bookmark bookmark) async {
+    final List<Chapter>? chapters = _chapters;
+    final ChapterAutoLoader? loader = _loader;
+    final ScrollController? controller = _controller;
+    if (chapters == null ||
+        chapters.isEmpty ||
+        controller == null ||
+        !controller.hasClients) {
+      return;
+    }
+    final int matched =
+        chapters.indexWhere((Chapter c) => c.href == bookmark.chapterHref);
+    final int target = matched >= 0
+        ? matched
+        : bookmark.chapterIndex.clamp(0, chapters.length - 1);
+    // 保存旧位置（此时 _currentIndex / _chapterPos 仍是旧位置）。
+    await _saveProgress();
+    if (!mounted) return;
+    setState(() {
+      _currentIndex = target;
+      _chapterPos = bookmark.chapterPos;
+      _liveIndex = target;
+      _livePos = bookmark.chapterPos;
+    });
+    // 先把目标章载入（邻章 ±1 预取不阻塞），避免跳到占位块后高度回填引起漂移。
+    await loader?.loadFirstBatch(target);
+    if (!mounted) return;
+    _beginScrollTo(target, bookmark.chapterPos);
+    _ensureAutoFill();
+  }
+
+  /// 沉浸全屏切换（`TYP-09`）：隐藏 / 恢复 AppBar 与底部控制条。
+  void _toggleFullscreen() {
+    setState(() => _fullscreen = !_fullscreen);
+  }
+
+  /// 外观面板回调（`TYP-07` / `TYP-08`）：排版变化走位置锚定，亮度 / 背景只重绘。
+  void _onPrefsChanged(ReadingPrefs next) {
+    final bool typesetChanged = next.settings != _settings;
+    setState(() {
+      _brightness = next.brightness;
+      _background = next.background;
+    });
+    if (typesetChanged) {
+      // 字号 / 行距 / 字体族会重排 → 与控制条同款「锚定 → setState → 校正」。
+      _applySettings(next.settings);
+    }
+    _persistPrefs();
+  }
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -925,41 +1260,63 @@ class _ReaderPageState extends State<ReaderPage> {
     final bool ready = _ready && chapters != null && chapters.isNotEmpty;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              _title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+      backgroundColor: _pageColor(theme),
+      // `TYP-09` 验收①③：沉浸全屏隐藏顶部栏，退出全屏原样恢复。
+      appBar: _fullscreen
+          ? null
+          : AppBar(
+              title: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    _title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  Text(
+                    _subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
+              ),
+              actions: <Widget>[
+                IconButton(
+                  key: const Key('reader-bookmarks'),
+                  tooltip: '书签',
+                  icon: const Icon(Icons.bookmark),
+                  onPressed: ready ? _openBookmarks : null,
+                ),
+                IconButton(
+                  key: const Key('reader-appearance'),
+                  tooltip: '外观',
+                  icon: const Icon(Icons.tune),
+                  onPressed: ready ? _openAppearance : null,
+                ),
+                IconButton(
+                  tooltip: '目录',
+                  icon: const Icon(Icons.list),
+                  onPressed: ready ? _openToc : null,
+                ),
+                IconButton(
+                  key: const Key('reader-fullscreen-enter'),
+                  tooltip: '全屏',
+                  icon: const Icon(Icons.fullscreen),
+                  onPressed: ready ? _toggleFullscreen : null,
+                ),
+              ],
             ),
-            Text(
-              _subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall,
-            ),
-          ],
-        ),
-        actions: <Widget>[
-          IconButton(
-            tooltip: '目录',
-            icon: const Icon(Icons.list),
-            onPressed: ready ? _openToc : null,
-          ),
-        ],
-      ),
-      bottomNavigationBar: ready
+      bottomNavigationBar: ready && !_fullscreen
           ?             ReaderControlBar(
               settings: _settings,
               onSettingsChanged: _onSettingsChanged,
-              chapterNumber: _currentIndex + 1,
+              chapterNumber: _liveIndex + 1,
               chapterCount: chapters.length,
-              percent: _percent,
+              percent: _livePercent,
               canGoPrev: _currentIndex > 0,
               canGoNext: _currentIndex < chapters.length - 1,
               onPrevChapter: () => unawaited(_goToChapter(_currentIndex - 1)),
@@ -990,11 +1347,13 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   /// AppBar 副标题：`第N章 · X%`（`RD-03` 取代 M0 遗留的「N 章 · implId」诊断信息）。
+  ///
+  /// 取**滚动实时显示值**（`TYP-09` 验收②；显示值语义见 `_liveIndex` 字段注释）。
   String get _subtitle {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null) return '载入中…';
     if (chapters.isEmpty) return '无章节';
-    return '第${_currentIndex + 1}章 · $_percent%';
+    return '第${_liveIndex + 1}章 · $_livePercent%';
   }
 
   Widget _buildBody(ThemeData theme) {
@@ -1040,7 +1399,14 @@ class _ReaderPageState extends State<ReaderPage> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final TextStyle bodyStyle = resolveTextStyle(_settings, theme: theme);
+    // `TYP-07`：字体族（系统默认 / 衬线 / 无衬线）+ 跨平台回退链（中文无豆腐块）；
+    // `TYP-08`：正文颜色随背景色板（夜间映射保证对比度、夜间无白底）。
+    final TextStyle bodyStyle =
+        resolveTextStyle(_settings, theme: theme).copyWith(
+      fontFamilyFallback: readerFontFallback(_settings.fontFamily),
+      color: _textColor(theme),
+    );
+    final Color pageColor = _pageColor(theme);
 
     // 在布局期拿到视口尺寸（用于版面签名与坐标换算），并据内容就绪创建控制器。
     return LayoutBuilder(
@@ -1053,14 +1419,20 @@ class _ReaderPageState extends State<ReaderPage> {
           child: Stack(
             children: <Widget>[
               Positioned.fill(
-                child: NotificationListener<ScrollEndNotification>(
-                  onNotification: _onScrollEnd,
-                  child: ListView.builder(
-                    controller: _controller,
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: chapters.length,
-                    itemBuilder: (BuildContext context, int index) =>
-                        _buildChapterItem(theme, bodyStyle, index),
+                child: NotificationListener<ScrollUpdateNotification>(
+                  // `TYP-09` 验收②：滚动实时刷新进度显示（只写显示字段）。
+                  onNotification: _onScrollUpdate,
+                  child: NotificationListener<ScrollEndNotification>(
+                    onNotification: _onScrollEnd,
+                    child: ListView.builder(
+                      controller: _controller,
+                      // bottom 留出进度指示条高度（约 28px）+ 留白，
+                      // 避免末段正文被常驻指示条压住看不见。
+                      padding: const EdgeInsets.only(top: 8, bottom: 40),
+                      itemCount: chapters.length,
+                      itemBuilder: (BuildContext context, int index) =>
+                          _buildChapterItem(theme, bodyStyle, index),
+                    ),
                   ),
                 ),
               ),
@@ -1074,9 +1446,46 @@ class _ReaderPageState extends State<ReaderPage> {
                     behavior: HitTestBehavior.opaque,
                     onTap: () {},
                     child: ColoredBox(
-                      color: theme.scaffoldBackgroundColor,
+                      // `TYP-08` 验收③：遮罩底色跟页面底色——纯黑 / 夜间背景时
+                      // 不得闪白底（旧值 `theme.scaffoldBackgroundColor` 在亮色
+                      // 主题下是白的）。
+                      color: pageColor,
                       child: const Center(child: CircularProgressIndicator()),
                     ),
+                  ),
+                ),
+              // `TYP-08` 验收①：应用内亮度遮罩——黑色叠加层，不透明度
+              // `1 - brightness`；拖动即生效（实时），由外观面板持久化（保留）。
+              if (_brightness < ReadingPrefs.maxBrightness)
+                Positioned.fill(
+                  key: const Key('reader-brightness-mask'),
+                  child: IgnorePointer(
+                    child: ColoredBox(
+                      color: Color.fromRGBO(0, 0, 0, 1 - _brightness),
+                    ),
+                  ),
+                ),
+              // `TYP-09`：细粒度进度指示（常驻；全屏隐藏控制条后仍是可见进度）。
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: ReaderProgressIndicator(
+                  chapterNumber: _liveIndex + 1,
+                  chapterCount: chapters.length,
+                  percent: _livePercent,
+                ),
+              ),
+              // `TYP-09` 验收③：全屏时右上浮动按钮——退出并恢复顶部栏。
+              if (_fullscreen)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IconButton.filledTonal(
+                    key: const Key('reader-fullscreen-exit'),
+                    tooltip: '退出全屏',
+                    icon: const Icon(Icons.fullscreen_exit),
+                    onPressed: _toggleFullscreen,
                   ),
                 ),
             ],
@@ -1086,11 +1495,29 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
-  /// 设置变更（字号 / 行距 / 字体 / 页边距）：先锚定当前位置，再 setState，再校正。
+  /// 设置变更（字号 / 行距 / 页边距 / 主题；控制条入口）。
+  ///
+  /// `ReaderSettings.copyWith` 的「fontFamily 传 null = 重置」语义：控制条各按钮
+  /// 的 `copyWith` 调用**不带** fontFamily，会把字体族清掉。字体族只能由外观面板
+  /// （`TYP-07`）修改，故这里在页面边界**续上当前字体族**（显式构造，全字段可控），
+  /// 再走 [_applySettings] 的位置锚定，并落盘偏好（`TYP-07` 保留）。
+  void _onSettingsChanged(ReaderSettings newSettings) {
+    final ReaderSettings merged = ReaderSettings(
+      fontSize: newSettings.fontSize,
+      lineHeight: newSettings.lineHeight,
+      fontFamily: _settings.fontFamily,
+      themeMode: newSettings.themeMode,
+      pageMargin: newSettings.pageMargin,
+    );
+    _applySettings(merged);
+    _persistPrefs();
+  }
+
+  /// 应用排版设置：先锚定当前位置，再 setState，再校正。
   ///
   /// `TYP-02` 位置锚定：用 [ScrollAnchor] 记录「视口顶在当前章的相对位置」，
   /// 列表重建后用同一章块的新位置算出 delta，`jumpTo` 校正，使该段仍在视口内。
-  void _onSettingsChanged(ReaderSettings newSettings) {
+  void _applySettings(ReaderSettings newSettings) {
     final ScrollAnchor? anchor = ScrollAnchor.capture(
       controller: _controller,
       viewportBox: _viewportBox(),
@@ -1134,7 +1561,8 @@ class _ReaderPageState extends State<ReaderPage> {
         alignment: Alignment.center,
         child: Text(
           '第 ${index + 1} 章 · 载入中…',
-          style: theme.textTheme.bodySmall,
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: bodyStyle.color?.withValues(alpha: 0.6)),
         ),
       );
     }
@@ -1176,12 +1604,14 @@ class _ReaderPageState extends State<ReaderPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          // TYP-04：标题居中。
+          // TYP-04：标题居中；颜色随背景色板（TYP-08 对比度 / 夜间无白底）。
           Text(
             heading,
             textAlign: TextAlign.center,
-            style: theme.textTheme.titleMedium
-                ?.copyWith(fontWeight: FontWeight.bold),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: bodyStyle.color,
+            ),
           ),
           const SizedBox(height: 6),
           const Divider(height: 1),
