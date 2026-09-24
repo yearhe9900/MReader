@@ -678,6 +678,19 @@
 | 口径提醒 | 耗时为开发机（Windows x64）**下界口径**（open 不含 HTML 解析/排版、full 不含清洗/切段），正式判定须 Android 主力机复测；计时对象是 **active entry**（combo 文件 = KF8 头的 `numTextRecords`，非 record 0 头自述值） |
 | 落点 | `tool/mobi_probe.dart`（探针）、`docs/perf-baseline/mobi.md`（基线 + 对 T05 实现的规格输入 §5） |
 
+### 2.30 M2b-T04 — 全书搜索双执行路径与阈值 4 基线（CNT-06）
+
+| 项 | 值 |
+|---|---|
+| 双执行路径 | `SearchSession.start` 按源能力分流：可序列化 `searchSpec`（EPUB/TXT = fileName + bytes）→ 后台 isolate `openBook` 重建源、事件逐条 SendPort 回传（主 isolate 零搜索占用）；句柄源（PDF，`searchSpec=null`）→ 本 isolate 流式（`pageText` 逐页 `await` 让出事件循环）。对外同一事件流语义，`usedIsolate` 观测取证 |
+| 协议级取消（RUST-05） | `cancel()` 当帧关本地流 + 反向 SendPort 发 `_kCancel` → 后台置 `CancelToken` 逐章短路 → `Isolate.exit()` 不留后台线程；泵口丢弃迟到事件。**不杀线程** |
+| 回落（RUST-01） | 派发失败 / 端口「未 done」提前关闭 → 同一 spec 本 isolate 重建重跑（`_LocalRun(ownsSource: true)` 自建自毁）；业务错误（`MReaderFormatException` 经信封回传）**不**回落；回落事实只写 `dart:developer log` |
+| `implements` 默认实现坑 | `BookSource` 的带默认实现方法（`searchSpec` / `totalCharCount`）**不跨 `implements` 继承**——所有 `implements BookSource` 的类必须显式补 getter（cbz/cbr/pdf + 测试假源共 7 处踩坑实证） |
+| 高亮后处理 | `highlightSpans`（typeset）对扁平 span **非重叠**切分（与各源 `search()` 计数口径一致）、命中片段叠 `kSearchHighlightColor`（`0x66FFC107` 琥珀半透明，亮/暗主题通用）、recognizer **复制**到子片段保链接可点；`InlineParagraph.highlightQuery` 在 `_buildSpans` 统一收口（快路径与标记路径都过） |
+| widget 测试禁忌 | 搜索 widget 测试**禁用后台 isolate 路径**（FakeAsync 不排空 isolate 消息会挂死）：假源 `searchSpec => null` + `SearchSession.start(localSource: …)` 强制本 isolate 流式——`test/search/search_fakes.dart` 头注即契约 |
+| 阈值 4 基线 | `dart run tool/search_bench.dart <dir> <fixture> <label> [query] [iters]`（`2b6f05e`）：首屏 = `firstHitElapsed`（含 isolate 往返）、卡顿 = 主 isolate 心跳 `maxGapMs`（含收尾间隔）。实测与根因入 `docs/perf-baseline/search.md`——TXT 20.7MB 首屏 0.45s 达标 / **无 toc 48M 字符 EPUB 4.2s 超标**（flatTitles 全书预解压，`epub_parser.dart:518-523`）/ **心跳法 Windows 本底 15~25ms 不具 16ms 区分力**（UI 帧级判定走 `FrameTiming` 真机口径） |
+| 落点 | `lib/task/search_session.dart`（会话唯一收口）、`lib/ui/search_sheet.dart`（面板）、`lib/typography/typeset.dart`（`highlightSpans` / `highlightQuery`）、`lib/reader/reader_page.dart` `_openSearch` / `_startSearch` / `_jumpToSearchHit`、`tool/search_bench.dart` |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
