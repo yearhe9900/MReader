@@ -7,6 +7,7 @@
 
 ### 新增
 
+- M2b-T03 格式嗅探与魔数纠偏（`FMT-06`）：MOBI/AZW3 以 PalmDB `BOOKMOBI` 魔数（偏移 60..68）识别、压过一切后缀（验收①：AZW3 改名 `.txt` 仍识别为 MOBI 系，tmp_book 真实双样本取证）；`FormatKind.mobi` + `mobiUnsupported` 导入即拒绝（口径区分「MOBI 还没支持」与「不认识的格式」，`M2b-T05` 接入解析器）；纯文本改名 `.epub` 取「明确报错」出口（交 EPUB 解析器 notZip 文案，既有锁不动）；中立判据层 `sniffer.dart` `12879fb`
 - M2b-T02 CBZ 支持（`FMT-02`）：`CbzSource`（`dart-cbz`）每图片页一章（`href` = zip 条目路径、title = 第 N 页），进度按页天然成立（③）；页表自然序 `compareNatural`（`META-11` ②）+ `__MACOSX` / 隐藏文件 / 非图片条目过滤；封面 = 自然序首页图（`PendingCover` + 魔数嗅探，`META-11` ① / `META-05`）；书名 / 作者走 META-04 文件名规则链（与 TXT 同源） `a7ff34d`
 - M2b-T02 阅读页图片页模式（`FMT-02` ①②，2026-09-24 拍板「点页全屏缩放」）：`ChapterContent.imagePages`（与段落互斥）→ 整页竖向滚动、原始字节解码不降采样（「不糊」）；点页进全屏 `InteractiveViewer` 缩放查看器（maxScale 5）；「单 / 双页」描述面（US-12）未覆盖，如实记录 `a7ff34d`
 - M2b-T02 CBR 退化（`FMT-03`，Q5 拍板「导入即拒绝」= 与加密文件处理一致）：`CbrSource`（`dart-cbr`）+ `RarExtractor` 注入缝（默认 `UnavailableRarExtractor` → `load()` 抛 `cbrUnsupported`「转换为 CBZ」、书不入库）；注入可用实现即自动升级为 CBZ 同行为（假实现测试锁定），`META-11` ③ 记「退化模式无封面链路、错误单点」 `a7ff34d`

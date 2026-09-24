@@ -556,6 +556,23 @@
 | 错误文案唯一来源扩充（`RD-05`） | 新错误码中文文案 1:1 | `lib/format/error_messages.dart` | `cbrUnsupported`/`noImagePages` 入枚举与文案表；`unsupportedFormat` 改「当前支持 EPUB、TXT 与 CBZ」；`error_messages_test` 兜底：覆盖/中文/无调试词/无重复口径 |
 | **kTinyPng 夹具修复**（顺带闭环既存失败） | 测试图片底座可解码 | `test/meta/meta_fixtures.dart` | 旧 base64 串 **IDAT CRC 损坏 + chunk 结构崩坏**（脚本遍历实证）→ `instantiateImageCodec` 必败；换 zlib 自构造 1×1 RGB PNG（三 chunk CRC 全过）；连带闭环 M1-T09 起挂案的 `cover_store` 缩略图既存失败（缩略图生成解码同因失败） |
 
+### 2.22 M2b-T03 — 格式嗅探与魔数纠偏（FMT-06）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2b-T03（`FMT-06`） |
+| 提交 | `12879fb` |
+| 日期 | 2026-09-24 |
+| 一句话目标 | MOBI 系 `BOOKMOBI` 魔数识别压过后缀（验收①）；纯文本改名 `.epub` 取「明确报错」出口（验收②双出口取舍） |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| `sniffer.dart` 中立判据层 | 字节判据独立于 `FormatKind` 与实现类（零 import 铁律，同 `image_pages.dart` 模式） | `lib/format/sniffer.dart` | `hasMobiMagic`/`looksLikeZip`/`looksLikeText` 三判据公有化；`book_registry` 的 `_looksLikeZip`/`_looksLikeText` 迁入（分发逻辑与判据分离，判据可独立单测） |
+| PalmDB `BOOKMOBI` 判据 | MOBI/AZW3 家族识别（`FMT-06` ①） | `hasMobiMagic` | 偏移 60..68 == ASCII `BOOKMOBI`（type "BOOK" + creator "MOBI"）——tmp_book 真实《牧神记》.mobi/.azw3 **双样本实测互证**；**AZW3 头 8 字节可打印**（PDB name 实测 `epubor.c`）→ 判据必须先于纯文本判定，否则 AZW3 改名 `.txt` 落 txt；截断 <68 字节不误判；非 `BOOKMOBI` 的 PalmDB 落 unsupported（边界声明） |
+| `FormatKind.mobi` + `mobiUnsupported` | 已识别但解析未接入的拒绝口径 | `book_registry.dart`、`error_messages.dart`、`import_service.dart` | 口径区分「这是 MOBI，还没支持」vs「不认识的格式」（`unsupportedFormat`）；T05 接入 `MobiSource` 后删 import 拦截即自然落盘 `.mobi` |
+| FMT-06 ② 双出口取舍 | 纯文本改名 `.epub` 的纠偏策略 | `sniffFormat` epub 分支 | 验收②「识别为 TXT **或** 明确报错」→ 取「明确报错」：EPUB 解析器给 notZip 可读文案（**诚实报错优先于静默改判**），既有锁 `dart_epub_source_test`「非 zip 字节 + .epub → notZip」不动；若走「识别为 TXT」出口须同步推翻该测试（代码注释已留痕） |
+| `sniffer_test` 11 条 | 判据直测 + 验收 + 既有锁回归钉 | `test/format/sniffer_test.dart` | 夹具按真实样本复刻（kTinyPng 教训：不许「号称」）：可打印 name + NUL 填充 + `BOOKMOBI` tag；回归钉：非 zip 二进制 `.epub`→epub、PK 假 zip `.txt`/`.zip`→unsupported、纯文本→txt |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
