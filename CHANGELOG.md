@@ -14,6 +14,8 @@
 - flatTitles 预取测试 5 条（`_FlatTitlesRunner` tamper 法验 `chapters()` 咨询预取表优先 / miss 回退现场取），parse 组 117→122 全绿 `56fabe5`
 - 进度表重构：阶段/子任务拆分 + 人天加权进度% + 状态/负责人/预计完成时间 `52664ce`
 - 执行序再调整（负责人拍板）：M3.5（Rust 加速层含 ★GATE★）优先级提高，提前到 M2b 之后、统计支线之前（新序 M2a→M2b→M3.5→统计→M4→AI/TTS）；依赖不破、gate 阈值 1/4 基线齐备；全局日历重排挂账
+- M2a-T05 交付验收（M2a 收官）：全量 `flutter test` **400 passed / 1 failed**（#4 既存不阻塞）；§17 M2 判定第 2 条（排版语义六件套）由 fx12 端到端锁死、第 6 条（详情页）由 detail/meta 测试覆盖；PERF-01 回归四样本 maxGap 30/24/33/186ms 全 <1s 无回归 `83b95b4`
+- M2a-T05 补 fixture：`fx12_typography_semantics.epub` 排版语义综合样本（标题/加粗/换行/表格/插图/脚注）+ baseline 人工推演预期 + 语义逐项标注测试 2 条（parse 组 122→124） `83b95b4`
 
 ## 2026-09-23
 

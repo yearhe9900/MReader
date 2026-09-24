@@ -519,6 +519,22 @@
 | tamper runner 测试法 | 证明消费方**确实咨询**预取表（而非碰巧同值） | `test/format/dart_epub_source_test.dart`（`_FlatTitlesRunner`） | 预取值派生自同一份字节，正常路径「表值 == 现场解压值」区分不了取值来源 → 继承 `IsolateRunner` 覆写 `run`（`runWithFallback` 虚调），真实解析后把 `EpubStructure` 重建为注入 map：注入「注入标题」断言压过现场解压所得；注入 `{}` 断言 miss 回退 |
 | 结果（可复现） | §7.1 结论 3 闭环 | `docs/perf-baseline/README.md` §7.2 | `maxGapMs`：无目录大书 **3996 → 194ms**（−95%）、320 章无目录书 130 → 25、单超长章 96 → 45、20MB TXT 27 → 29（噪声级持平）；**PERF-01 验收①全样本 <1s 达成**；稳态 RSS 不回归（读 50 / 100 章 +1.2 / +0.1MB）。首屏大书 min 3835 → 5602ms：总工作量未变（标题提取整体搬入解析 isolate，链路仍串行），升幅含本机 ~1s 级日间波动（同码 §3 与 §7.1 两表自身即差 ~0.9s）与后台冷堆 GC 成本，属「响应性换墙钟」的可接受交换 |
 
+### 2.20 M2a-T05 — 交付验收：fx12 排版语义 fixture + 全量回归（M2a 收官）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2a-T05（M2a 交付验收与回归，§17 M2 判定第 2/6 条 + PERF-01 回归） |
+| 提交 | `83b95b4` |
+| 日期 | 2026-09-24 |
+| 一句话目标 | 验收 fixture 把「排版语义六件套」端到端锁进回归网；全量 400/1 收官 M2a；PERF-01 复核无回归 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| fx12 综合验收 fixture | §17 M2 第 2 条六语义端到端（标题/加粗/换行/表格/插图/脚注；首行缩进为渲染期语义） | `test/fixtures/make_fixtures.py`（`fx12`）、`baseline.json`、`epub_fixtures_test.dart` | 一书六语义：h1→title + 首段去重、`<b>/<i>` 字面保留供 `typeset` 解析、`<br>`→`'\n'` 行内不切段、表格 caption 独立段 + 每 `tr` 一行、`<img>`→`\x00IMG:src\x00`、`<aside id>` 纯标记段并入下一段（`\x00ID:id\x00` 接力） |
+| baseline 预期值人工推演 | 防假绿 | 同上 | 「预期每章文本」按 `section_extractor.dart` 语义**人工推演**（生成器注释写明推演链），**不抄实测输出**——实测抄录 = 永远绿的假基线；推演与实测互证（首跑即 124 全绿 = 互证成立） |
+| fixture 生成器重生成噪音 | 保持任务级提交干净 | `test/fixtures/*.epub` | `make_fixtures.py` 整体重生成时 `zipfile.writestr` 写当前时间戳 → **全部旧二进制 byte churn**（语义不变、baseline 不变）；新增 fixture 时对旧 fx01~fx11 用 `git checkout --` 还原，只提交新 fixture + baseline.json + 生成器源码 |
+| 排版语义落点对照 | 第 2 条逐项验收证据链 | `lib/typography/typeset.dart`（缩进 2 全角空格 / 加粗斜体）、`lib/reader/reader_page.dart:1142`（标题居中，UI 单独渲染标题）、`test/reader/inline_image_test.dart`、`test/reader/link_navigation_test.dart`、`test/epub/section_extractor_test.dart` | 六项中五项既有单测各管一段，fx12 补「一本书全生效」的串联证据；标题居中无独立几何断言（实现行 + 实机目验项），如实入验收记录 |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
