@@ -17,6 +17,7 @@
 
 ### 变更
 
+- archive 3.x→4.3.0 迁移（M2b-T01 前置，负责人拍板「迁 archive 4.x」保 pdfrx 2.6.5）：`zip_paths` 两辅助函数适配（`lazyEntryLoader` 收敛单出口 `decompress(output)`，PERF-02 非驻留解压语义等价保持）+ `tryDecodeZip` EOCD 判废守卫（4.x 无 EOCD 静默解空回归，坏 zip / 非 zip 错误码 RD-05 同型同码），`epub_parser`/`cbz_source` 调用点零改动，parse 167 + data 151 全绿 `64ae658`
 - Q4 PDF 插件选型拍板（负责人，2026-09-24，原文「1、pdfrx 2.6.5；2、是；3、是；4、拒绝」）：主选 **pdfrx 2.6.5**（经 META-10 ③ 注入式接口接入）；PDF **纳入** CNT-06 全书搜索覆盖面（pdfrx 文本层）；Windows Developer Mode 构建约束**接受**（构建机一次性）；密码 PDF **明确拒绝**（对齐加密文件口径，不走 `passwordProvider`）。落地验收条目见 `docs/选型-PDF插件.md` §4 `f353364`
 - M2a-T06 PERF-01 接线：EPUB 解析移出主 isolate——后台 `parseEpubStructureTask`（纯数据 + 信封）跑 `parseEpubStructure`，主 isolate `bindEpubResult` 绑定 `loadBytes`/`readEntry` 闭包；TXT 准备/解码（`_txtPrepareTask`/`_txtDecodeTask`）同款后台化 `5aa0679`
 - IsolateRunner 升级：`compute()` 改 `dart:isolate` 的 `Isolate.run`（纯层零 Flutter 铁律不破）+ `runWithFallback` 失败护栏（派发失败/远端意外回落主 isolate 现跑，业务错误经信封原样抛出，对齐 RUST-01 降级语义） `5aa0679`

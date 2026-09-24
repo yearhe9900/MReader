@@ -591,6 +591,24 @@
 | `app_paths` 接口/实现拆分 | stats 零平台插件（`STAT-02` ⑤）+ bench `dart run` 可编译 | `lib/platform/app_paths.dart`（纯接口）、`lib/platform/path_provider_app_paths.dart`（实现） | 接口文件不再 import path_provider（只留 `dart:io` 目录类型）；全仓仅 `main.dart` 引用实现类；测试/bench 用临时目录实现 `_TestAppPaths` |
 | 弱断言修正（验收抓出） | 防假绿 | `test/task/session_store_test.dart` | 「禁写记录不产生分片」原断言测**从未触碰的 8 月**平凡真 → 换成真正「本会被创建」的月份（8 月 zeroAug 被拒后断言无 8 月分片）；教训：**存在性断言必须钉「本会被创建」的那个对象** |
 
+### 2.24 M2b-T01 前置 — archive 3.x→4.3.0 迁移（2026-09-24）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2b-T01 前置（负责人拍板「迁 archive 4.x」，保 pdfrx 2.6.5） |
+| 提交 | `64ae658` |
+| 日期 | 2026-09-24 |
+| 一句话目标 | 消解 `pdfrx_engine → archive ^4.x` 与项目 `archive ^3.6.1` 解算冲突；PERF-02 非驻留解压语义等价保持、错误码同型同码（RD-05） |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| `decompress(OutputStream? output)` 非缓存语义 | 4.x 非驻留解压单出口（替 3.x「STORE 取视图 / DEFLATE 走 `inflateBuffer` / 罕见压缩法退回缓存」三分支） | `lazyEntryLoader` | **带输出即不落 `_content` 缓存**（源码实证：`_rawContent!.decompress(output)` 不写缓存，仅无参路径才 `_content = FileContentMemory(bytes)`）——PERF-02 ① 由库原生保证，罕见压缩法不再有「退回缓存」驻留例外；`OutputMemoryStream()` 免参构造 + `getBytes()` 视图出口 |
+| 解压幂等双保险 | 闭包多次调用语义 | `lazyEntryLoader` 实证 | `ZipFile.decompress` 对 deflate/bzip2 有 `savePos/setPosition` 读头复位；STORE 分支 `output.writeStream(_rawContent!)` 虽不复位，但 `OutputMemoryStream.writeStream` 用 `setRange`（`stream.position` 只读引用）**不推进源流读头** |
+| **4.x 静默解空回归**（教训） | 坏输入契约被库行为变更破坏 | `zip_directory.dart`（库行为） | `ZipDirectory.read` 找不到 EOCD（`0x06054b50`）时**静默 return**（`filePosition = -1`），`decodeStream` 返回**空 Archive** 不抛错（3.x 抛 `ArchiveException`）→ parse 3 条红（坏 zip `corruptFile`→`noImagePages`、非 zip `notZip`→`missingContainer`）；**依赖升级后红测先怀疑库行为变更，断言差异即取证入口** |
+| `tryDecodeZip` EOCD 判废守卫 | 收敛回 `null` 出口 | `zip_paths.dart` | `decoder.directory.filePosition < 0 → return null`；误杀面为零（合法 zip——含 0 条目的空 zip——必有 EOCD 记录）；RD-05 同型同码钉死：坏 zip→`corruptFile`、非 zip→`notZip`、缺 container→`missingContainer`、无图片页→`noImagePages`，错误码不得因库行为变更后移 |
+| 迁移面收窄承诺与兑现 | 控制回归面 | `zip_paths.dart` 两个辅助函数 | 签名不变（`contentOfArchiveFile` / `lazyEntryLoader`）→ `epub_parser` / `cbz_source` 调用点**零改动**；4.x 映射：`file.content` = `readBytes()` 别名（固定 `Uint8List`）、`compressionType` 整型常量 → `CompressionType` 枚举、`rawContent` `InputStreamBase` → `FileContent?` |
+| 依赖锁定终态 | 解算收敛 | `pubspec.yaml` | `archive: 4.3.0`（精确锁）、`crypto: 3.0.7`、`pdfrx: 2.6.5`（Q4① 不可让）、`pdfrx_engine: 0.6.1`（transitive）、`sdk: ^3.13.0`（Flutter 3.47.5）；决定性论据：pdfrx_engine **0.1.0 起全线**（含 0.4.x/0.5.x/0.6.x）硬要求 `archive ^4.x`，无任何「pdfrx 2.6.x + archive 3.x」组合 |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
