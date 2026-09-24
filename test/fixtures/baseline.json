@@ -171,6 +171,31 @@
     "fx11_declared_gbk_invalid_bytes.epub": {
       "脏特征": "章节声明 charset=gbk，但字节含非法 GBK（0xFF）",
       "预期结果": "理想：不应抛异常（decodeText 承诺绝不抛）；最低：不崩溃"
+    },
+    "fx12_typography_semantics.epub": {
+      "脏特征": "非脏书；排版语义综合验收样本（M2a-T05，§17 M2 第 2 条）",
+      "预期书名": "排版语义验收",
+      "预期作者": "作者辰",
+      "预期章节(href)": [
+        "OEBPS/text/ch1.xhtml"
+      ],
+      "预期章标题": {
+        "OEBPS/text/ch1.xhtml": "第一章 排版语义"
+      },
+      "预期每章文本": {
+        "OEBPS/text/ch1.xhtml": [
+          "第一章 排版语义",
+          "首段正文，<b>加粗</b>与<i>斜体</i>应生效。",
+          "诗行甲\n诗行乙",
+          "此处有注\u0000A:#fn1\u0000[1]\u0000A\u0000，可跳转。",
+          "表一",
+          "甲 | 乙",
+          "1 | 2",
+          "插图：\u0000IMG:fig1.png\u0000",
+          "\u0000ID:fn1\u0000注释一 \u0000A:#top\u0000返回\u0000A\u0000"
+        ]
+      },
+      "预期结果": "正常打开；标题/加粗/换行/表格/插图/脚注六语义抽取正确"
     }
   },
   "probes": {
@@ -349,6 +374,19 @@
       "zip_declares_utf8_manifest": true,
       "xhtml_utf8_valid": {
         "OEBPS/text/ch1.xhtml": false
+      }
+    },
+    "fx12_typography_semantics.epub": {
+      "zip_entries": [
+        "mimetype",
+        "META-INF/container.xml",
+        "OEBPS/content.opf",
+        "OEBPS/text/ch1.xhtml",
+        "OEBPS/text/fig1.png"
+      ],
+      "zip_declares_utf8_manifest": true,
+      "xhtml_utf8_valid": {
+        "OEBPS/text/ch1.xhtml": true
       }
     }
   }

@@ -150,6 +150,7 @@ void main() {
     'fx06_linear_no.epub',
     'fx07a_cover_in_spine_with_media_type.epub',
     'fx07b_cover_in_spine_no_media_type.epub', // 缺陷④ 修复后按基线正常打开
+    'fx12_typography_semantics.epub', // M2a-T05 验收样本（非脏书，六语义综合）
   ];
 
   group('按 baseline 正常解析', () {
@@ -158,6 +159,46 @@ void main() {
         await expectMatchesBaseline(name, baseline[name] as Map<String, dynamic>);
       }, skip: skipIfMissing(name));
     }
+  });
+
+  // =====================================================================
+  // A2. fx12 排版语义六件套 —— M2a-T05 验收（§17 M2 判定第 2 条）
+  //     baseline 已锁全文精确序列；本组按语义逐项标注，供验收条目对照。
+  // =====================================================================
+  group('fx12 六语义端到端（§17 M2 第 2 条）', () {
+    test('标题 / 加粗 / 换行 / 表格 / 插图 / 脚注 逐项生效', () async {
+      final Uint8List bytes = readFixture('fx12_typography_semantics.epub')!;
+      final EpubBook book = await parseEpub(bytes, fileName: 'fx12');
+      final ExtractedSection ex = extractSection(
+          sectionByHref(book, 'OEBPS/text/ch1.xhtml').rawBytes);
+
+      // 标题：h1 提取为章标题、正文首段去重（UI 单独渲染 → TYP-04 居中，实机目验）。
+      expect(ex.title, '第一章 排版语义', reason: '第2条·标题：h1 提取为章标题');
+      expect(ex.paragraphs.first, '首段正文，<b>加粗</b>与<i>斜体</i>应生效。',
+          reason: '第2条·标题：正文首段与标题去重');
+
+      // 加粗/斜体：字面标签保留，供 typeset.parseInlineStyles 渲染（TYP-04）。
+      expect(ex.paragraphs.first, contains('<b>加粗</b>'),
+          reason: '第2条·加粗：<b> 字面保留供渲染层解析');
+
+      // 换行：`<br>` 行内换行不切段（CNT-02）。
+      expect(ex.paragraphs[1], '诗行甲\n诗行乙',
+          reason: '第2条·换行：<br> 行内换行不切段');
+
+      // 表格：caption 独立段 + 每 `<tr>` 一行（CNT-03）。
+      expect(ex.paragraphs.sublist(3, 6), <String>['表一', '甲 | 乙', '1 | 2'],
+          reason: '第2条·表格：caption + 按行退化');
+
+      // 插图：IMG 占位标记（CNT-01）。
+      expect(ex.paragraphs[6], '插图：\x00IMG:fig1.png\x00',
+          reason: '第2条·插图：IMG 标记携带归一化 src');
+
+      // 脚注：引用链接 + 注释锚点标记（CNT-04）。
+      expect(ex.paragraphs[2], contains('\x00A:#fn1\x00'),
+          reason: '第2条·脚注：注引用产出链接标记');
+      expect(ex.paragraphs.last, startsWith('\x00ID:fn1\x00'),
+          reason: '第2条·脚注：锚点标记接力到注释段开头');
+    }, skip: skipIfMissing('fx12_typography_semantics.epub'));
   });
 
   // =====================================================================

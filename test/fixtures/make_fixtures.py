@@ -466,9 +466,97 @@ def fx11():
     }
 
 
+def png_1px():
+    """构造 1×1 全透明 PNG（标准库 zlib 现算 CRC，规范推导非记忆字节）。
+
+    供 fx12 的插图条目使用——fixture 是「真实可打开的样本」，
+    图片须是合法 PNG（渲染层才能真显示，不只抽取标记）。
+    """
+    import struct
+    import zlib
+
+    def chunk(tag, data):
+        body = tag + data
+        return (
+            struct.pack(">I", len(data))
+            + body
+            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)  # 1x1 RGBA8
+    idat = zlib.compress(b"\x00\x00\x00\x00\x00")  # filter0 + 透明像素
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", idat)
+        + chunk(b"IEND", b"")
+    )
+
+
+# ---------------------------------------------------------------------------
+# f12：排版语义综合验收样本（M2a-T05「补 fixture」，§17 M2 判定第 2 条）
+# 非脏书——一本书同时覆盖六语义：居中标题（h1→title 剥离）、首行缩进正文段、
+# <b>/<i> 加粗斜体（字面保留供 typeset 解析）、插图 IMG 标记、脚注链接/锚点、
+# 表格按行退化；另含 <br> 行内换行（CNT-02）。
+# 「预期每章文本」按 lib/epub/section_extractor.dart 语义人工推演（非实测抄录）：
+#   - h1 取自正文标题块 → title="第一章 排版语义" 且重复首段剥除；
+#   - <b>/<i> 保留字面标签；<br> 变 '行内\\n'；表格 caption 独立段 + 每 tr 一行
+#     （单元格 ' | ' 连接）；<img> 写 \\x00IMG:src\\x00（无 baseDir 原样）；
+#   - <aside id> 的纯标记段并入下一段开头（\\x00ID:fn1\\x00 接力）。
+# ---------------------------------------------------------------------------
+def fx12():
+    name = "fx12_typography_semantics.epub"
+    m = item("c1", "text/ch1.xhtml", "application/xhtml+xml") + item(
+        "f1", "text/fig1.png", "image/png"
+    )
+    s = itemref("c1")
+    raw = (
+        '<html xmlns="http://www.w3.org/1999/xhtml">'
+        "<head><title>第一章 排版语义</title></head>"
+        "<body><h1>第一章 排版语义</h1>"
+        "<p>首段正文，<b>加粗</b>与<i>斜体</i>应生效。</p>"
+        "<p>诗行甲<br/>诗行乙</p>"
+        '<p>此处有注<a href="#fn1">[1]</a>，可跳转。</p>'
+        "<table><caption>表一</caption>"
+        "<tr><td>甲</td><td>乙</td></tr>"
+        "<tr><td>1</td><td>2</td></tr></table>"
+        '<p>插图：<img src="fig1.png" alt="图一"/></p>'
+        '<aside id="fn1"><p>注释一 <a href="#top">返回</a></p></aside>'
+        "</body></html>"
+    ).encode("utf-8")
+    entries = [
+        ("META-INF/container.xml", container("OEBPS/content.opf")),
+        ("OEBPS/content.opf", opf("排版语义验收", "作者辰", "zh", m, s)),
+        ("OEBPS/text/ch1.xhtml", raw),
+        ("OEBPS/text/fig1.png", png_1px()),
+    ]
+    write_epub(os.path.join(HERE, name), entries)
+    BASE[name] = {
+        "脏特征": "非脏书；排版语义综合验收样本（M2a-T05，§17 M2 第 2 条）",
+        "预期书名": "排版语义验收",
+        "预期作者": "作者辰",
+        "预期章节(href)": ["OEBPS/text/ch1.xhtml"],
+        "预期章标题": {"OEBPS/text/ch1.xhtml": "第一章 排版语义"},
+        "预期每章文本": {
+            "OEBPS/text/ch1.xhtml": [
+                "第一章 排版语义",
+                "首段正文，<b>加粗</b>与<i>斜体</i>应生效。",
+                "诗行甲\n诗行乙",
+                "此处有注\x00A:#fn1\x00[1]\x00A\x00，可跳转。",
+                "表一",
+                "甲 | 乙",
+                "1 | 2",
+                "插图：\x00IMG:fig1.png\x00",
+                "\x00ID:fn1\x00注释一 \x00A:#top\x00返回\x00A\x00",
+            ]
+        },
+        "预期结果": "正常打开；标题/加粗/换行/表格/插图/脚注六语义抽取正确",
+    }
+
+
 def main():
     for fn in (fx01, fx02a, fx02b, fx03, fx04, fx05, fx06, fx07a, fx07b,
-               fx08, fx08b, fx09, fx10, fx11):
+               fx08, fx08b, fx09, fx10, fx11, fx12):
         fn()
 
     # 逐字节探针：判定 GBK 字节是否会被“严格 UTF-8”误判
