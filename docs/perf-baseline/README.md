@@ -125,13 +125,17 @@ BENCH[after]  big_bodies.epub    chapters=100 iters=3 minMs=4758 medianMs=4833 r
 | 测试文件 | 断言 |
 |---|---|
 | `test/perf/lazy_load_test.dart` | 320 章首帧批次 ≤ 3；补齐后驻留 ≤ 30 且 < 总章数；含图片书窗口中心驻留 ≤ 30；LRU 小上界逐出；超长章逐段（>1000 段、>10 万字符、无单段整章）；**① 稳态**：`EpubSection.lazy` 每次访问都重新加载（无无界缓存，计数断言）+ 读完 100 章大头书后 RSS 增量 < 解压后正文总量的一半 |
-| `test/task/isolate_runner_test.dart` | `compute()` 薄封装：纯函数往返；不可序列化入参 / 捕获闭包**明确失败、不静默** |
+| `test/task/isolate_runner_test.dart` | `Isolate.run` 薄封装：纯函数往返 + **debugName 取证**（任务确在独立 isolate 执行）；不可序列化入参 / 捕获闭包**明确失败、不静默**；`runWithFallback` 派发失败 / 远端意外 → 回落本 isolate 重跑，业务错误经信封原样冒出（M2a-T06） |
 
 ## 6. 已知边界（本次未覆盖 / 后续）
 
 - `PERF-02` 的**磁盘缓存**（`docs/进度表.md` 风险 2）仍待 M2；本任务只做「内存收敛」。
-- `PERF-01` 的 **isolate 真正接线**（把解析放进 `compute()`）仍待 M2a-T06；本任务只交
-  `parseEpubStructure`（纯数据）+ `IsolateRunner`（`compute()` 薄封装）两块底座。
+- `PERF-01` 的 **isolate 真正接线**已于 **M2a-T06** 交付（后台 `parseEpubStructureTask` + 主 isolate
+  `bindEpubResult`，实测见 §7.1）；本 M1-T07 批次当时只交了 `parseEpubStructure`（纯数据）+
+  `IsolateRunner`（当时为 `compute()` 薄封装）两块底座。
+- **无目录大书的平坦目录取标题仍在主 isolate 同步**（M2a-T06 实测残余，**待拍板**）：
+  `_flatChapter` 逐章 `extractSection(section.rawBytes).title`（解压 + HTML 解析 × 章数），
+  `big_bodies.epub` 实测残余 ~4s 连续无响应（§7.1 结论 3）。
 - `tool/*` 与 `test/perf/*` 用纯 Dart `test()`（**非** `testWidgets`）：本项目已两次实证
   `testWidgets` 体内 `await` 真异步 IO 会挂死（FakeAsync 不排空微任务队列），故不在此复现。
 
@@ -144,8 +148,45 @@ BENCH[after]  big_bodies.epub    chapters=100 iters=3 minMs=4758 medianMs=4833 r
 | `big_20mb.txt`（800 章 ≈20MB） | 403 / 529 ms | 364.3 MB | — | TXT 路径本次未改 |
 | `long_chapter.epub`（单章 12 万字符） | 24 / 28 ms | 414.1 MB | — | 逐段渲染，无单段整章 |
 
-> **M2a-T06（`PERF-01` compute 化）的 before 对照**：上表即为 before 数字。
-> 预期 after：`big_320.epub` 首屏时间下降（解析移出主 isolate，主线程不冻）；
-> RSS 应持平或略降（结构在后台 isolate 解析，主 isolate 只收到纯数据）。
+> **M2a-T06（`PERF-01` compute 化）的 before 对照**：上表即为 before 数字（首屏 / RSS 口径）。
+> **实测 after 与 `maxGapMs` 前后对照见 §7.1**。
 
 **全量测试**：`flutter test` → **279 passed，1 failed**（`cover_store_test` #4：`dart:ui` 缩略图，已知不阻塞）。
+
+### 7.1 M2a-T06（`PERF-01`）接线 before / after —— `maxGapMs` 口径
+
+`maxGapMs` = 主 isolate 心跳（10ms 周期定时器）最大间隔，**含收尾间隔**（微任务链饿死定时器时
+= 整段连续阻塞时长）≈「UI 最长连续无响应时长」，即 `PERF-01` 验收① 的可测代理。
+before / after 均以同版本 `tool/perf_bench.dart`（5 轮、一次进程一样本）实测：
+
+| 样本 | `maxGapMs` before | `maxGapMs` after | 变化 |
+|---|---|---|---|
+| `big_20mb.txt`（800 章 ≈20MB） | 994 | **27** | ≈ −97% |
+| `big_320.epub`（320 章 + 80MB 图） | 475 | **130** | ≈ −73% |
+| `long_chapter.epub`（单章 12 万字符） | 334 | **96** | ≈ −71% |
+| `big_bodies.epub`（100 章 ≈48MB 正文，**无目录**） | 9348 | **3996** | ≈ −57%（仍 >1s，见结论 3） |
+
+after 的首屏与内存（稳态口径不回归）：
+
+| 样本 | 首屏 min / median | 首屏后 RSS | 读完 N 章后 RSS |
+|---|---|---|---|
+| `big_20mb.txt` | 380 / 410 ms | 408.7 MB | — |
+| `big_320.epub` | 43 / 56 ms | 359.3 MB | 360.4 MB（读 50 章，+1.1） |
+| `long_chapter.epub` | 30 / 32 ms | 341.8 MB | — |
+| `big_bodies.epub` | 3835 / 3884 ms | 353.9 MB | 353.8 MB（读 100 章，−0.1） |
+
+结论：
+
+1. **解析移出主 isolate 生效**：EPUB `parseEpubStructureTask` 与 TXT 准备 / 解码
+   （`_txtPrepareTask` / `_txtDecodeTask`）全部后台化后，`maxGapMs` 全线大幅下降
+   （20MB TXT 994 → 27ms，图片大书 475 → 130ms）。
+2. **稳态不回归**（`PERF-02` 口径）：读完 N 章后 RSS 不回升（+1.1 / −0.1 MB，噪声级）。
+3. **残余项（待负责人拍板）**：`big_bodies.epub`（无目录大书）仍有 **3996ms** 连续无响应——
+   源头**不是解析**（已后台化），而是 `chapters()` 的「无目录平坦目录」回退（`RD-01` ④）：
+   `_flatChapter` 逐章 `extractSection(section.rawBytes).title`（解压 + HTML 解析 × 章数）在
+   主 isolate 同步跑（`lib/format/dart_epub_source.dart` `_flatChapter`）。该回退**超出** M2a-T06
+   勘误指定改法（「后台跑 `parseEpubStructure` + 主 isolate 绑定闭包」）范围，处置二选一：
+   （a）平坦目录构建一并 isolate 化；（b）收下残余、记为已知边界。严格口径下，`PERF-01` 验收①
+   （「50MB 书打开期间 UI 无超 1 秒无响应」）在**无目录大书**这一类样本上**未达**。
+
+> 环境：Windows / Dart 3.12（`flutter test` 同款 SDK）。数字随机器与负载波动，**看 before / after 差值**。

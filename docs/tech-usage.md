@@ -482,6 +482,27 @@
 | 玻璃弹窗关闭的测试推进 | 确认框点「取消」后 `_settle`(400ms) 推不完关闭转场，弹窗仍在树上误报 | `test/ui/shelf_page_test.dart` LIB-06 | 关闭断言前换 `await tester.pumpAndSettle()`（对照实验实证：onPressed 已触发、400ms 不够、pumpAndSettle 正常关） |
 
 
+### 2.18 M2a-T06 — PERF-01 解析移出主 isolate（IsolateRunner 接线）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2a-T06（PRD `PERF-01`；改法按 `docs/schedule.md` M2a-T06 勘误：后台跑 `parseEpubStructure` 纯数据 + 主 isolate 绑定闭包） |
+| 提交 | （待补记） |
+| 日期 | 2026-09-24 |
+| 一句话目标 | 书籍解析 / 准备的重活移出主 isolate：后台产纯数据结构，主 isolate 只绑闭包与渲染；isolate 派发失败诚实回落（`RUST-01` 降级语义） |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| 结构解析 / 绑定分离**落地** | 解析真跑在后台 isolate | `lib/epub/epub_parser.dart`、`lib/format/dart_epub_source.dart` | 后台 `parseEpubStructureTask(EpubParseRequest)` 产**无闭包纯数据** `EpubStructure` 传回 → 主 isolate `bindEpubResult(bytes, structure)` 重建索引并绑 `loadBytes` / `readEntry` 闭包。**不是** `compute(parseEpubResult)`——其返回值含闭包，`SendPort` 拒收（v2.8 勘误的根源） |
+| **信封模式（业务错误 / 机制失败分流）** | 回落只兜机制失败，业务错误保持原型原码 | 同上（`EpubParseOutcome`）、`lib/format/dart_txt_source.dart`（`_TxtPrepareOutcome`） | 任务入口把 `MReaderFormatException`（纯数据：`FormatErrorCode` + `String? detail`）捕获进**返回值信封**；`runWithFallback` 的 catch 只应见到「派发失败 / 远端意外」，业务错误由调用方从信封原样抛出（与未接 isolate 前同型同码）。探针实证（Dart 3.12）：Exception 作返回值字段可原样跨 `Isolate.run`；回调内 throw 同 isolate group 异常亦原样传播 |
+| `Isolate.run` 而非 `compute()` | `lib/epub/**` / `lib/format/**` 零 Flutter 铁律不破 | `lib/task/isolate_runner.dart` | Flutter `compute()` 在 `package:flutter/foundation`，纯层一引即破铁律；`dart:isolate` 的 `Isolate.run` 非 web 同构。typedef `IsolateTask<M, R>` = 顶层纯函数（实测顶层函数可直接作消息派发目标） |
+| `runWithFallback` 失败护栏（`RUST-01` 语义） | isolate 派发失败不炸、回落主 isolate | 同上 | `try { run(...) } catch (_) { task(message) }`——入参不可传（web / 远端）或远端意外时同一任务回落现跑，结果与业务错误语义均不变；测试注入 `_FailingRunner` 验回落路径 |
+| runner 构造注入 | 接线可测（不碰真 isolate 也能断言派发） | `lib/format/dart_epub_source.dart`、`lib/format/dart_txt_source.dart` | `{this.runner = const IsolateRunner()}` 公开 final 字段（顺带消 `prefer_initializing_formals`）；测试 `_RecordingRunner` spy 断言 `identical(task, parseEpubStructureTask)` + `_loading ??=` 去重只派一次 |
+| TXT 准备 / 解码后台化 | 20MB TXT 开书不冻 UI | `lib/format/dart_txt_source.dart` | `_txtPrepareTask`（分章分析）+ `_txtDecodeTask`（解码 + 去 BOM）同款信封后台化；`_analyze` / `_pickRule` / `_splitBy*` / `_chunkTitle` 转 `static` 供顶层任务调用（顶层函数触不到实例私有成员） |
+| `maxGapMs` 测量口径 | `PERF-01` 验收①「UI 无超 1 秒无响应」的可测代理 | `tool/perf_bench.dart` | 首屏窗口内 10ms 周期 `Timer.periodic` 心跳，取相邻打点最大间隔；**必须计入收尾间隔**（窗口结束 − 最后打点；整窗无打点 = 整窗时长）——before 整条同步微任务链把定时器饿死一次都排不上队，不计收尾会得 `maxGapMs=0` 的假象 |
+| **不可见字符字面量坑** | 源码绝不落裸 BOM | `lib/format/dart_txt_source.dart`（`_decodeAndStripBom`） | Edit 写 `'\uFEFF'` 转义会被折叠成**真实不可见 BOM** 落进源码（补救 Edit 因新旧串同为不可见字符报 exactly the same）；含不可见字符的字面量一律**纯 ASCII 写法**（`codeUnitAt(0) == 0xFEFF` 比较），取证用 `grep` + `od -c`（BOM = `357 273 277`） |
+| 结果（可复现） | before / after 对照 | `docs/perf-baseline/README.md` §7.1 | `maxGapMs`：20MB TXT **994 → 27ms**、320 章图书 **475 → 130ms**、单超长章 **334 → 96ms**、无目录大书 **9348 → 3996ms**（残余 = 平坦目录取标题在主 isolate 同步跑，`_flatChapter` 逐章 `extractSection(rawBytes)`，待拍板）；稳态 RSS 不回归（读 50 / 100 章 ±1MB 内） |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；

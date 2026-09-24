@@ -3,6 +3,14 @@
 > 格式：Keep a Changelog 简化式。日期用 `YYYY-MM-DD`，**按日期倒序**排列。
 > 书写约定：每条一句话、**不复述过程**（分析、根因链、教训留在 PRD 与 `.workbuddy/memory/`），条目末尾附 commit hash 便于追溯。
 
+## 2026-09-24
+
+### 变更
+
+- M2a-T06 PERF-01 接线：EPUB 解析移出主 isolate——后台 `parseEpubStructureTask`（纯数据 + 信封）跑 `parseEpubStructure`，主 isolate `bindEpubResult` 绑定 `loadBytes`/`readEntry` 闭包；TXT 准备/解码（`_txtPrepareTask`/`_txtDecodeTask`）同款后台化
+- IsolateRunner 升级：`compute()` 改 `dart:isolate` 的 `Isolate.run`（纯层零 Flutter 铁律不破）+ `runWithFallback` 失败护栏（派发失败/远端意外回落主 isolate 现跑，业务错误经信封原样抛出，对齐 RUST-01 降级语义）
+- 性能基线工具 `tool/perf_bench.dart` 增 `maxGapMs`（主 isolate 心跳最大间隔，含收尾间隔）≈「UI 最长连续无响应时长」；before/after 对照入 `docs/perf-baseline/README.md` §7.1——TXT 994→27ms、320 章图书 475→130ms、无目录大书 9348→3996ms（残余为平坦目录取标题，待拍板）
+
 ## 2026-09-23
 
 ### 新增

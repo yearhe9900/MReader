@@ -8,10 +8,12 @@
 //     `loadBytes`（章节正文按需）与 `readEntry`（封面候选按需）的 [EpubBook] / [OpfView]，
 //     供 `lib/meta/epub_meta.dart`（`META-02/03`）与 `DartEpubSource` 消费。
 //
-// ⚠️ **isolate 边界（`PERF-01`）**：`parseEpubResult` 的返回值**不可跨 isolate 传递**——
-//    它内部的 `loadBytes` / `readEntry` 是**闭包**，`SendPort` 会直接拒绝。要「把解析移出
-//    主 isolate」，请在后台 isolate 调 `parseEpubStructure`（纯数据），把结果传回主 isolate
-//    后，再由持有原始 `bytes` 的主 isolate 绑定（见 `docs/schedule.md` M2a-T06）。
+// ⚠️ **isolate 边界（`PERF-01`，`M2a-T06` 已接线）**：`parseEpubResult` 的返回值**不可跨
+//    isolate 传递**——它内部的 `loadBytes` / `readEntry` 是**闭包**，`SendPort` 会直接拒绝。
+//    正确接线（`DartEpubSource._parsedOnce` 已采用）：后台 isolate 跑
+//    [parseEpubStructureTask]（即 [parseEpubStructure] 纯数据）→ 结构经 [EpubParseOutcome]
+//    信封传回 → 再由持有原始 `bytes` 的 isolate 调 [bindEpubResult] 绑定闭包
+//    （见 `docs/schedule.md` M2a-T06 勘误）。
 //
 // `PERF-02` ①（内存收敛）：结构解析阶段**只建「条目名 → ArchiveFile」索引、绝不预解压**；
 //    章节正文由绑定期产出的 `loadBytes` **按需、非驻留**解压（见 `zip_paths.dart` 的
@@ -237,6 +239,88 @@ Future<EpubParseResult> parseEpubResult(
   String fileName = '',
 }) async {
   final _ParsedEpub parsed = _parse(bytes, fileName);
+  return EpubParseResult(
+    book: _bindBook(parsed),
+    opfView: _bindOpfView(parsed),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PERF-01（M2a-T06）：isolate 任务入口（纯数据） + 主 isolate 绑定
+// ---------------------------------------------------------------------------
+
+/// [parseEpubStructureTask] 的入参（纯数据，可跨 isolate）。
+class EpubParseRequest {
+  const EpubParseRequest(this.bytes, {this.fileName = ''});
+
+  /// EPUB 的完整字节。
+  final Uint8List bytes;
+
+  /// 原始文件名（书名缺失时兜底显示）。
+  final String fileName;
+}
+
+/// [parseEpubStructureTask] 的返回信封（纯数据，可跨 isolate）。
+///
+/// 不变量：[structure] 与 [error] **恰一非空**。业务错误（[MReaderFormatException]）
+/// 经信封传递而非 throw —— 让 `IsolateRunner.runWithFallback` 能把「业务错误」与
+/// 「派发失败 / 远端意外」分开处理（只有后者才回落本 isolate 重跑）。
+class EpubParseOutcome {
+  /// 解析成功：携带纯数据结构。
+  const EpubParseOutcome.ok(this.structure) : error = null;
+
+  /// 业务失败（坏文件 / 加密等）：携带原样错误，由调用方 rethrow。
+  const EpubParseOutcome.failed(this.error) : structure = null;
+
+  /// 纯数据结构（成功时非空）。
+  final EpubStructure? structure;
+
+  /// 业务错误（失败时非空）。
+  final MReaderFormatException? error;
+}
+
+/// `PERF-01` 的 **isolate 任务入口**（顶层纯函数，供 `IsolateRunner` 派发）。
+///
+/// 只跑 [parseEpubStructure]（纯数据、无闭包）；业务错误收进 [EpubParseOutcome] 信封。
+/// 取得结构后，由**持有原始 `bytes` 的 isolate** 调 [bindEpubResult] 绑定闭包。
+Future<EpubParseOutcome> parseEpubStructureTask(
+  EpubParseRequest request,
+) async {
+  try {
+    final EpubStructure structure =
+        await parseEpubStructure(request.bytes, fileName: request.fileName);
+    return EpubParseOutcome.ok(structure);
+  } on MReaderFormatException catch (e) {
+    return EpubParseOutcome.failed(e);
+  }
+}
+
+/// **绑定（本 isolate）**——把 [parseEpubStructure] 的纯数据产物绑定成带闭包的
+/// [EpubParseResult]（`PERF-01` 后半程：结构在后台 isolate 解析、绑定在持有原始
+/// [bytes] 的 isolate 进行，闭包从不跨 isolate）。
+///
+/// 内部重新解一次 zip，只为取「条目名 → ArchiveFile」句柄：中央目录扫描 O(条目数)、
+/// **不解压**——`PERF-02` ① 的按需、非驻留解压语义不变（索引构建与 [_parse] 同构）。
+EpubParseResult bindEpubResult(Uint8List bytes, EpubStructure structure) {
+  final Archive? archive = tryDecodeZip(bytes);
+  if (archive == null) {
+    // 病态情形：后台刚解析成功、本侧重解却失败。与 [_parse] 的 zip 失败同码。
+    throw const MReaderFormatException(FormatErrorCode.notZip);
+  }
+  final Map<String, ArchiveFile> byName = <String, ArchiveFile>{};
+  final Map<String, String> lowerIndex = <String, String>{};
+  for (final ArchiveFile f in archive.files) {
+    if (!f.isFile) continue;
+    final String name = normalizeZipPath(f.name);
+    if (name.isEmpty) continue;
+    byName[name] = f;
+    lowerIndex[name.toLowerCase()] = name;
+  }
+  final _ParsedEpub parsed = _ParsedEpub(
+    structure: structure,
+    byName: byName,
+    lowerIndex: lowerIndex,
+  );
   return EpubParseResult(
     book: _bindBook(parsed),
     opfView: _bindOpfView(parsed),

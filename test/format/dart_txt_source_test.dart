@@ -12,6 +12,25 @@ import 'package:mreader/format/book_registry.dart';
 import 'package:mreader/format/book_source.dart';
 import 'package:mreader/format/dart_txt_source.dart';
 import 'package:mreader/meta/meta_source.dart' show kUnknownAuthor;
+import 'package:mreader/task/isolate_runner.dart';
+
+/// 记录派发的 spy runner（真实派发照走，仅旁路记录调用）。
+class _RecordingRunner extends IsolateRunner {
+  final List<(Object?, Object?, String?)> calls = <(Object?, Object?, String?)>[];
+
+  @override
+  Future<R> run<M, R>(IsolateTask<M, R> task, M message, {String? debugLabel}) {
+    calls.add((task, message, debugLabel));
+    return super.run<M, R>(task, message, debugLabel: debugLabel);
+  }
+}
+
+/// 派发必失败的 runner（模拟 spawn 失败 / 派发层故障，验回落路径）。
+class _FailingRunner extends IsolateRunner {
+  @override
+  Future<R> run<M, R>(IsolateTask<M, R> task, M message, {String? debugLabel}) =>
+      throw StateError('isolate 派发失败（模拟）');
+}
 
 /// 一行正文（21 个非空白字 + 换行），用来把「章正文」撑过择优阈值。
 const String _line = '这是本章的正文内容，重复若干次以超过阈值。';
@@ -308,6 +327,60 @@ void main() {
       final Future<ChapterContent> pending = source.content(0);
       await source.dispose();
       expect((await pending).isEmpty, isTrue);
+    });
+  });
+
+  // =====================================================================
+  // PERF-01 接线（M2a-T06）：解码 + 分章经后台 isolate 任务 + 派发失败回落
+  // =====================================================================
+  group('PERF-01 接线（M2a-T06）', () {
+    test('准备派发给后台 isolate 任务且 Future 去重', () async {
+      final _RecordingRunner runner = _RecordingRunner();
+      final Uint8List bytes = _utf8(_twoChaptersText());
+      final DartTxtSource source = DartTxtSource(
+        fileName: 'a.txt',
+        bytes: bytes,
+        runner: runner,
+      );
+      final List<Chapter> chapters = await source.chapters();
+      expect(chapters, hasLength(2), reason: '文本 + 分段经信封回传后分章语义不变');
+      expect(runner.calls, hasLength(1), reason: '准备任务只派发一次（Future 去重）');
+      expect(identical(runner.calls.single.$2, bytes), isTrue,
+          reason: 'message 就是原始字节（可序列化纯数据）');
+      expect(runner.calls.single.$3, isNotEmpty);
+
+      await source.content(0);
+      await source.totalCharCount();
+      expect(runner.calls, hasLength(1), reason: '文本/分段已缓存，后续调用不再派发');
+      await source.dispose();
+    });
+
+    test('派发失败回落主 isolate：结果与业务错误语义均不变', () async {
+      final _FailingRunner runner = _FailingRunner();
+      final DartTxtSource source = DartTxtSource(
+        fileName: 'a.txt',
+        bytes: _utf8(_twoChaptersText()),
+        runner: runner,
+      );
+      expect((await source.chapters()).length, 2, reason: '回落路径分章结果不变');
+      expect((await source.content(0)).paragraphList, isNotEmpty);
+      await source.dispose();
+
+      final DartTxtSource empty = DartTxtSource(
+        fileName: 'e.txt',
+        bytes: _utf8('  \n  '),
+        runner: runner,
+      );
+      await expectLater(
+        empty.chapters(),
+        throwsA(isA<MReaderFormatException>().having(
+          (MReaderFormatException e) => e.code,
+          'code',
+          FormatErrorCode.txtNoContent,
+        )),
+        reason: '空文本业务错误（信封）原样抛出，与未接 isolate 前同型同码',
+      );
+      await empty.dispose();
     });
   });
 }

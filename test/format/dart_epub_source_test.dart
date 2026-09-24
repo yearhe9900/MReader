@@ -17,8 +17,27 @@ import 'package:mreader/format/book_source.dart';
 import 'package:mreader/format/dart_epub_source.dart';
 import 'package:mreader/epub/epub_parser.dart';
 import 'package:mreader/model/epub_book.dart';
+import 'package:mreader/task/isolate_runner.dart';
 
 import 'epub_builder.dart';
+
+/// 记录派发的 spy runner（真实派发照走，仅旁路记录调用）。
+class _RecordingRunner extends IsolateRunner {
+  final List<(Object?, Object?, String?)> calls = <(Object?, Object?, String?)>[];
+
+  @override
+  Future<R> run<M, R>(IsolateTask<M, R> task, M message, {String? debugLabel}) {
+    calls.add((task, message, debugLabel));
+    return super.run<M, R>(task, message, debugLabel: debugLabel);
+  }
+}
+
+/// 派发必失败的 runner（模拟 spawn 失败 / 派发层故障，验回落路径）。
+class _FailingRunner extends IsolateRunner {
+  @override
+  Future<R> run<M, R>(IsolateTask<M, R> task, M message, {String? debugLabel}) =>
+      throw StateError('isolate 派发失败（模拟）');
+}
 
 final Directory _fixturesDir = Directory('test/fixtures');
 final File _baselineFile = File('${_fixturesDir.path}/baseline.json');
@@ -952,5 +971,66 @@ void main() {
     }, skip: _readFixture('fx06_linear_no.epub') == null
         ? '缺少 fixture：fx06_linear_no.epub'
         : null);
+  });
+
+  // =====================================================================
+  // I. PERF-01 接线（M2a-T06）：解析经后台 isolate 任务 + 派发失败回落
+  // =====================================================================
+  group('PERF-01 接线（M2a-T06）', () {
+    test('解析派发给后台 isolate 任务 parseEpubStructureTask（接线断言 + 去重）', () async {
+      final _RecordingRunner runner = _RecordingRunner();
+      final Uint8List bytes = _epub3WithNav();
+      final DartEpubSource source = DartEpubSource(
+        fileName: 'nav3.epub',
+        bytes: bytes,
+        runner: runner,
+      );
+      final BookMeta meta = await source.load();
+      expect(meta.title, '三级目录', reason: '结构经信封回传、主 isolate 绑定后语义不变');
+
+      expect(runner.calls, hasLength(1), reason: '解析任务只派发一次（Future 去重）');
+      final (Object? task, Object? message, String? label) = runner.calls.single;
+      expect(identical(task, parseEpubStructureTask), isTrue,
+          reason: '派发的必须是纯数据任务 parseEpubStructureTask，'
+              '而非含闭包、不可跨 isolate 的 parseEpubResult');
+      expect(message, isA<EpubParseRequest>());
+      final EpubParseRequest req = message as EpubParseRequest;
+      expect(req.fileName, 'nav3.epub');
+      expect(identical(req.bytes, bytes), isTrue);
+      expect(label, isNotEmpty);
+
+      await source.chapters();
+      await source.content(0);
+      expect(runner.calls, hasLength(1), reason: '后续调用复用缓存，不再派发');
+      await source.dispose();
+    });
+
+    test('派发失败回落主 isolate：结果与业务错误语义均不变', () async {
+      final _FailingRunner runner = _FailingRunner();
+      final BookSource source = DartEpubSource(
+        fileName: 'nav3.epub',
+        bytes: _epub3WithNav(),
+        runner: runner,
+      );
+      expect((await source.chapters()).length, 3, reason: '回落路径解析结果不变');
+      expect((await source.content(0)).paragraphList, isNotEmpty);
+      await source.dispose();
+
+      final BookSource bad = DartEpubSource(
+        fileName: 'bad.epub',
+        bytes: Uint8List.fromList(<int>[1, 2, 3]),
+        runner: runner,
+      );
+      await expectLater(
+        bad.chapters(),
+        throwsA(isA<MReaderFormatException>().having(
+          (MReaderFormatException e) => e.code,
+          'code',
+          FormatErrorCode.notZip,
+        )),
+        reason: '业务错误（信封）原样抛出，与未接 isolate 前同型同码',
+      );
+      await bad.dispose();
+    });
   });
 }

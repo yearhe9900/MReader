@@ -3,11 +3,13 @@
 // **纯 Dart 层**：不 import Flutter、不 import `dart:io`，只吃 bytes。
 // M3.5 若把解压层 Rust 化，会新增 `RustEpubSource` 实现同一接口，本文件保持不动。
 //
-// ⚠️ `PERF-01`（解析移出主 isolate）**不是**「把本对象直接丢进 `compute()`」——本对象持有的
-//    `EpubBook.sections[i]` 带 `loadBytes` 闭包、`OpfView.readEntry` 也是闭包，**闭包不可**
-//    被 `SendPort` 序列化。正确做法：后台 isolate 跑 `parseEpubStructure(bytes)`（纯数据、
-//    无闭包）→ 把结构传回主 isolate → 再由持有原始 `bytes` 的主 isolate 绑定
-//    （见 `lib/epub/epub_parser.dart` 顶部说明与 `docs/schedule.md` 的 M2a-T06）。
+// ⚠️ `PERF-01`（解析移出主 isolate，`M2a-T06` 已接线）**不是**「把本对象直接丢进
+//    `compute()`」——本对象持有的 `EpubBook.sections[i]` 带 `loadBytes` 闭包、
+//    `OpfView.readEntry` 也是闭包，**闭包不可**被 `SendPort` 序列化。已接线的做法
+//    （[_parsedOnce]）：经 `IsolateRunner` 在后台 isolate 跑 `parseEpubStructureTask`
+//    （纯数据）→ 结构经信封传回 → 由持有原始 `bytes` 的**本 isolate** 调
+//    `bindEpubResult` 绑定（见 `lib/epub/epub_parser.dart` 顶部说明与
+//    `docs/schedule.md` 的 M2a-T06 勘误）。
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -18,6 +20,7 @@ import '../epub/zip_paths.dart';
 import '../meta/epub_meta.dart';
 import '../meta/meta_source.dart' show kUnknownAuthor;
 import '../model/epub_book.dart';
+import '../task/isolate_runner.dart';
 import 'book_source.dart';
 
 /// 打开本地 EPUB（纯字节入口）。
@@ -30,13 +33,20 @@ import 'book_source.dart';
 /// 实现方式：**每个 `await` 恢复后重查 [_disposed]**（并让 [_bookOnce] 释放后返回 `null`
 /// 而不重新触发解析），不依赖 `!` 断言。
 class DartEpubSource implements BookSource {
-  DartEpubSource({required this.fileName, required this.bytes});
+  DartEpubSource({
+    required this.fileName,
+    required this.bytes,
+    this.runner = const IsolateRunner(),
+  });
 
   /// 原始文件名（书名缺失时兜底显示；错误细节里也用）。
   final String fileName;
 
   /// EPUB 的完整字节。
   final Uint8List bytes;
+
+  /// isolate 派发器（`PERF-01`）：默认派真实后台 isolate，测试可注入 spy / 故障 runner。
+  final IsolateRunner runner;
 
   EpubParseResult? _parsed;
   Future<EpubParseResult>? _loading;
@@ -66,18 +76,37 @@ class DartEpubSource implements BookSource {
 
   /// 惰性解析一次并缓存：构造**不解析**（打开的响应速度由调用方掌控）。
   ///
-  /// 返回 [EpubParseResult]（结构 + `OpfView`，**同一次解压**）。
+  /// 返回 [EpubParseResult]（结构 + `OpfView`）。
   /// **已释放时返回 `null`**（不再触发解析）；竞态中若解析在 dispose 之后才完成，
   /// 也返回 `null` 且**不写回** [_parsed]。
   Future<EpubParseResult?> _parsedOnce() async {
     if (_disposed) return null;
     final EpubParseResult? cached = _parsed;
     if (cached != null) return cached;
-    final EpubParseResult parsed =
-        await (_loading ??= parseEpubResult(bytes, fileName: fileName));
+    final EpubParseResult parsed = await (_loading ??= _parseOffloaded());
     if (_disposed) return null;
     _parsed = parsed;
     return parsed;
+  }
+
+  /// `PERF-01` 接线：结构解析在**后台 isolate**（纯数据往返），绑定在**本 isolate**
+  /// （闭包从不出境）；派发失败经 [IsolateRunner.runWithFallback] 回落本 isolate 现跑，
+  /// 业务错误（[EpubParseOutcome] 信封）与旧直解析路径同型同码。
+  Future<EpubParseResult> _parseOffloaded() async {
+    final EpubParseOutcome outcome =
+        await runner.runWithFallback<EpubParseRequest, EpubParseOutcome>(
+      parseEpubStructureTask,
+      EpubParseRequest(bytes, fileName: fileName),
+      debugLabel: 'mreader-epub-parse',
+    );
+    final MReaderFormatException? error = outcome.error;
+    if (error != null) throw error; // 业务错误：原样抛（与旧路径一致）
+    final EpubStructure? structure = outcome.structure;
+    if (structure == null) {
+      // 不变量：无错必有结构。信封被破坏按坏文件处理。
+      throw const MReaderFormatException(FormatErrorCode.corruptFile);
+    }
+    return bindEpubResult(bytes, structure);
   }
 
   Future<EpubBook?> _bookOnce() async => (await _parsedOnce())?.book;
@@ -88,8 +117,8 @@ class DartEpubSource implements BookSource {
     if (parsed == null) return _disposedMeta; // 已释放 / 竞态
     // `META-02/03`：经 `lib/meta/epub_meta.dart` 产 meta——四来源优先级链（命中即停）、
     // 多作者稳定顺序整体保留、封面候选 -> `PendingCover`（真实字节 + 真实格式）。
-    // 纯 Dart（不引 Flutter / dart:io）；但此处 `opfView` 含 `readEntry` 闭包，**不可**跨 isolate——
-    // 要 compute 的是产出纯数据结构的 `parseEpubStructure`（见文件顶部 ⚠️ 与 `PERF-01`）。
+    // 纯 Dart（不引 Flutter / dart:io）；此处 `opfView` 含 `readEntry` 闭包，**不可**跨
+    // isolate——`PERF-01` 已由 [_parsedOnce] 完成「后台跑纯数据结构、本 isolate 绑定」。
     return buildEpubMeta(opfView: parsed.opfView, fileName: fileName);
   }
 
