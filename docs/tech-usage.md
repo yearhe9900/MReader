@@ -666,6 +666,18 @@
 | 钉档测试法 | `GlassScopeProvider(config: glassTierConfigFor(tier))` 显式钉档（测试专用覆盖口）；断言钉档作用域用「`GlassTopBar` 后代 ∩ `GlassAppBar` 祖先」双重限定（`find.descendant` + `find.ancestor` 套用），防撞玻璃库内部同类型 `GlassIsolationScope`（`GlassScaffold` 给条面也包一层 premium 提示作用域） |
 | 落点 | `lib/ui/glass_runtime.dart`（映射 + 生效态）、`lib/settings/perf_prefs_store.dart`（持久化 + 策略）、`lib/settings/perf_frame_monitor.dart`（帧触发）、`lib/ui/glass_kit.dart`（唯一消费点 + 关档退化）、`lib/ui/glass_scope.dart`（作用域 + Provider 重建） |
 
+### 2.29 M2b-T05 — MOBI/AZW3 原型探针与 Q25 结论（KF8 入口）
+
+| 项 | 值 |
+|---|---|
+| 用法 | `dart run tool/mobi_probe.dart`（自动扫 `tmp_book/` 下 `*.mobi *.azw3 *.azw`）或带文件参数；无样本优雅降级 exit 0。**原型基线工具，不入 `lib/`**；实测数字与原始输出入 `docs/perf-baseline/mobi.md`（挂 `9661ba9`） |
+| **Q25 — KF8 结构在哪** | **同文件尾部**（PDB records）的 FDST / SKEL / FRAG / GUIDE——魔数实测：FDST=`"FDST"`、SKEL/FRAG/GUIDE=`"INDX"`+TAGX/IDXT（两真实样本全命中）。`fdst/frag/skel/guide` 头字段是 **record 相对索引（基准=boundary）**，实现时须验魔数防坏文件 |
+| **Q25 — KF8 入口怎么走** | **双分支都实证**：先 `version>=8` 直入 record 0（纯 KF8/azw3 HIT）；miss 再读 **EXTH 121 boundary** record 重得 KF8 头（combo 文件 HIT：KF6 头 @0 + KF8 头 @boundary，active entry 切到 boundary 后文本记录基准随之切换）。判定顺序即「先直入、后 boundary」 |
+| **EXTH 129/131 偏移入口说** | **NOT SUPPORTED，实现不采信**：129 两样本均为 `kindle:embed:NNNN` 封面 URI 字符串；131 = 1（无魔数佐证）/ 缺失 |
+| 解压三路 | 1 none 直取（剥尾）/ 2 PalmDOC-LZ77（重叠拷贝语义逐字节保持）/ 17480 Huff/CDIC（位级解压 + 异常输入保护，**代码就位、真实样本未覆盖**，待补样本验证） |
+| 口径提醒 | 耗时为开发机（Windows x64）**下界口径**（open 不含 HTML 解析/排版、full 不含清洗/切段），正式判定须 Android 主力机复测；计时对象是 **active entry**（combo 文件 = KF8 头的 `numTextRecords`，非 record 0 头自述值） |
+| 落点 | `tool/mobi_probe.dart`（探针）、`docs/perf-baseline/mobi.md`（基线 + 对 T05 实现的规格输入 §5） |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
