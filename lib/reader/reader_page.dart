@@ -315,6 +315,19 @@ class _ReaderPageState extends State<ReaderPage> {
     return bytes;
   }
 
+  /// 点页 → 全屏缩放查看（`FMT-02` 验收②「缩放后不糊」，M2b-T02）。
+  ///
+  /// 「不糊」口径：全屏查看器对**原始字节**解码（不设 `cacheWidth` 降采样），
+  /// 捏合缩放矩阵作用在原始分辨率位图上；列表内的 fitWidth 适配只影响显示层。
+  /// 单/双页切换（US-12 描述面）不在 FMT-02 验收①②③内，本批未覆盖。
+  void _openImageZoom(Uint8List bytes) {
+    unawaited(Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (BuildContext ctx) => _ImageZoomPage(bytes: bytes),
+      ),
+    ));
+  }
+
   /// 内容就绪后创建控制器（仅一次）。
   ///
   /// 同版面签名时用 `initialScrollOffset` 给出**首帧初始近似**（`RC2`：仅减首帧
@@ -1126,6 +1139,30 @@ class _ReaderPageState extends State<ReaderPage> {
       );
     }
 
+    // 图片页模式（CBZ / PDF 出图，`FMT-02`，M2b-T02）：整页竖向滚动、点页全屏
+    // 缩放（验收②「缩放后不糊」= 全屏查看原始字节解码）；「进度按页」（验收③）由
+    // 「每页一章」的模型映射天然成立（`cbz_source.dart`：href = 页条目路径）。
+    // 单/双页切换（US-12 描述面）不在 FMT-02 验收①②③内，本批未覆盖。
+    final List<String>? imagePages = content.imagePages;
+    if (imagePages != null) {
+      return Padding(
+        key: _chapterKeys[index],
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            for (int p = 0; p < imagePages.length; p++)
+              _ImagePage(
+                key: Key('reader-image-page:${imagePages[p]}'),
+                src: imagePages[p],
+                resolveImage: _resolveImage,
+                onOpen: _openImageZoom,
+              ),
+          ],
+        ),
+      );
+    }
+
     final List<Chapter> chapters = _chapters!;
     final Chapter chapter = chapters[index];
     final String heading =
@@ -1165,6 +1202,129 @@ class _ReaderPageState extends State<ReaderPage> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// 图片页（CBZ 整页图，`FMT-02`）：异步加载原始字节 → 整页宽显示 → 点击全屏缩放。
+///
+/// 生命周期与 `typeset.dart` 的 `_InlineImage` 同款：`initState` 发起加载，rebuild
+/// 不重载；加载中 / 失败给 240 高占位（既是骨架也是稳定的点击热区）。
+/// `Image.memory` **不设 `cacheWidth` 降采样**：保留原始分辨率——验收②「缩放后不糊」
+/// 的前提（全屏查看器缩放的是原始位图）。
+class _ImagePage extends StatefulWidget {
+  const _ImagePage({
+    super.key,
+    required this.src,
+    required this.resolveImage,
+    required this.onOpen,
+  });
+
+  /// 图片的包内条目路径（CBZ = zip 条目名）。
+  final String src;
+
+  /// 图片加载回调（`BookSource.readResource`）。
+  final Future<Uint8List?> Function(String href) resolveImage;
+
+  /// 点击回调：参数为已解出的原始字节（全屏查看器直接消费）。
+  final void Function(Uint8List bytes) onOpen;
+
+  @override
+  State<_ImagePage> createState() => _ImagePageState();
+}
+
+class _ImagePageState extends State<_ImagePage> {
+  Uint8List? _bytes;
+  bool _loading = true;
+  bool _error = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final Uint8List? bytes = await widget.resolveImage(widget.src);
+      if (!mounted) return;
+      setState(() {
+        _bytes = bytes;
+        _loading = false;
+        _error = bytes == null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Uint8List? bytes = _bytes;
+    if (_loading) {
+      return const SizedBox(
+        height: 240,
+        child: Center(
+          child: SizedBox(
+            width: 32,
+            height: 32,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+    if (_error || bytes == null) {
+      return const SizedBox(
+        height: 240,
+        child: Center(child: Icon(Icons.broken_image_outlined, size: 48)),
+      );
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => widget.onOpen(bytes),
+      child: ConstrainedBox(
+        // minHeight：位图未解码完也有稳定点击热区（解码后按宽高比撑开）。
+        constraints: const BoxConstraints(minHeight: 240),
+        child: Image.memory(
+          bytes,
+          fit: BoxFit.fitWidth,
+          width: double.infinity,
+          gaplessPlayback: true,
+        ),
+      ),
+    );
+  }
+}
+
+/// 全屏图片缩放查看器（`FMT-02` 验收②）：`InteractiveViewer` 捏合缩放 + 拖动。
+///
+/// 显示**原始字节**解码的位图（不降采样）——放大到 1:1 以上像素级锐利（「不糊」）。
+class _ImageZoomPage extends StatelessWidget {
+  const _ImageZoomPage({required this.bytes});
+
+  final Uint8List bytes;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      key: const Key('reader-image-zoom'),
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: const Text('缩放查看'),
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          maxScale: 5,
+          minScale: 1,
+          child: Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true),
+        ),
       ),
     );
   }

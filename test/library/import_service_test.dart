@@ -9,6 +9,9 @@ import 'package:mreader/library/import_service.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/platform/app_paths.dart';
 
+import '../format/epub_builder.dart';
+import '../meta/meta_fixtures.dart';
+
 /// 临时目录实现 [AppPaths]，仅用于测试。
 class _TestAppPaths implements AppPaths {
   _TestAppPaths(this._root);
@@ -96,6 +99,42 @@ void main() {
       expect(
         () => service.import(bytes: zipBytes, fileName: 'book.zip'),
         throwsA(isA<MReaderFormatException>()),
+      );
+    });
+
+    test('CBZ 导入：format=cbz、封面物化 StoredCover（META-11 ①）、副本落盘',
+        () async {
+      final Uint8List bytes = zipEntries(<EpubEntry>[
+        EpubEntry('p/2.png', kTinyPng),
+        EpubEntry('p/1.png', kTinyPng),
+      ]);
+      final BookRecord record = await service.import(
+        bytes: bytes,
+        fileName: '测试漫画.cbz',
+      );
+      expect(record.format, 'cbz');
+      expect(record.filePath.endsWith('.cbz'), isTrue);
+      expect(
+        record.cover,
+        isA<StoredCover>(),
+        reason: 'PendingCover → CoverStore.materialize（META-06）',
+      );
+      final File file = File(
+        '${tempDir.path}${Platform.pathSeparator}library${Platform.pathSeparator}${record.filePath}',
+      );
+      expect(await file.exists(), isTrue);
+    });
+
+    test('CBR 导入即拒绝：抛 cbrUnsupported（Q5 与加密文件处理一致）', () async {
+      final Uint8List rarLike =
+          Uint8List.fromList(<int>[0x52, 0x61, 0x72, 0x21, 0x1A, 0x07]); // "Rar!"
+      expect(
+        () => service.import(bytes: rarLike, fileName: '漫画.cbr'),
+        throwsA(isA<MReaderFormatException>().having(
+          (MReaderFormatException e) => e.code,
+          'code',
+          FormatErrorCode.cbrUnsupported,
+        )),
       );
     });
   });

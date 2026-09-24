@@ -9,6 +9,8 @@
 import 'dart:typed_data';
 
 import 'book_source.dart';
+import 'cbz_source.dart';
+import 'cbr_source.dart';
 import 'dart_epub_source.dart';
 import 'dart_txt_source.dart';
 
@@ -16,7 +18,7 @@ import 'dart_txt_source.dart';
 // `export 'error_messages.dart';` 转出，不再单独 import（避免重复导入同一个库）。
 
 /// 格式种类。
-enum FormatKind { epub, txt, unsupported }
+enum FormatKind { epub, txt, cbz, cbr, unsupported }
 
 /// 装配 + 分发点。
 ///
@@ -30,6 +32,9 @@ class BookRegistry {
   ///
   /// - `epub` → [DartEpubSource]；
   /// - `txt`  → [DartTxtSource]（M1-T02B 接入）；
+  /// - `cbz`  → [CbzSource]（M2b-T02 接入，`FMT-02`）；
+  /// - `cbr`  → [CbrSource]（M2b-T02 接入，`FMT-03`：`Q5` 退化「识别 + 明确提示」，
+  ///   `load()` 抛 `cbrUnsupported`、导入即拒绝）；
   /// - `unsupported` → 抛 [MReaderFormatException]（`RD-05`）。
   ///
   /// 返回的永远是 [BookSource] 抽象——调用方无法、也无需知道来源。
@@ -42,6 +47,10 @@ class BookRegistry {
         return DartEpubSource(fileName: fileName, bytes: bytes);
       case FormatKind.txt:
         return DartTxtSource(fileName: fileName, bytes: bytes);
+      case FormatKind.cbz:
+        return CbzSource(fileName: fileName, bytes: bytes);
+      case FormatKind.cbr:
+        return CbrSource(fileName: fileName, bytes: bytes);
       case FormatKind.unsupported:
         throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
     }
@@ -62,6 +71,8 @@ Future<BookSource> openBook({
 /// 规则：
 /// - **EPUB**：扩展名 `.epub`（**以扩展名为主**——`.zip` 改名 `.epub` 也要交给 EPUB 解析器，
 ///   由它给出「不是有效 EPUB」的可读提示，而不是在这里静默拒绝）；
+/// - **CBZ / CBR**：扩展名 `.cbz` / `.cbr`（同样以扩展名为主——坏包由各自解析器
+///   给可读提示；`FMT-03`：CBR 由 `CbrSource` 明确提示暂不支持）；
 /// - **TXT**：非 zip 且（扩展名 `.txt` 或字节可判为文本）；
 /// - 其余：`unsupported`。
 FormatKind sniffFormat({
@@ -71,6 +82,8 @@ FormatKind sniffFormat({
   final String ext = _extensionOf(fileName);
 
   if (ext == 'epub') return FormatKind.epub;
+  if (ext == 'cbz') return FormatKind.cbz;
+  if (ext == 'cbr') return FormatKind.cbr;
   if (_looksLikeZip(bytes)) return FormatKind.unsupported;
   if (ext == 'txt') return FormatKind.txt;
   if (_looksLikeText(bytes)) return FormatKind.txt;

@@ -49,7 +49,15 @@ class ImportService {
     if (kind == FormatKind.unsupported) {
       throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
     }
-    final String format = kind == FormatKind.epub ? 'epub' : 'txt';
+    // 落盘扩展名 = 格式名（`FormatKind.unsupported` 已在上方拦截，该臂不可达）。
+    final String format = switch (kind) {
+      FormatKind.epub => 'epub',
+      FormatKind.txt => 'txt',
+      FormatKind.cbz => 'cbz',
+      FormatKind.cbr => 'cbr',
+      FormatKind.unsupported =>
+        throw const MReaderFormatException(FormatErrorCode.unsupportedFormat),
+    };
 
     // 2. 解析元数据（`BookSource`；finally 保证 dispose，无论成功与否）
     final BookSource source = await openBook(fileName: fileName, bytes: bytes);

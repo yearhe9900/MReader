@@ -11,6 +11,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/format/book_registry.dart';
 import 'package:mreader/format/book_source.dart';
+import 'package:mreader/format/cbz_source.dart';
 import 'package:mreader/format/dart_epub_source.dart';
 import 'package:mreader/format/dart_txt_source.dart';
 
@@ -56,9 +57,15 @@ Uint8List _minimalTxt() => Uint8List.fromList(utf8.encode(
       '正文二。\n',
     ));
 
+/// 一本结构完整的最小 CBZ（2 个图片页；M2b-T02 接入信号）。
+Uint8List _minimalCbz() => zipEntries(<EpubEntry>[
+      EpubEntry('p/2.png', <int>[0x89, 0x50, 0x4E, 0x47, 0, 0, 0, 0]),
+      EpubEntry('p/10.png', <int>[0x89, 0x50, 0x4E, 0x47, 0, 0, 0, 0]),
+    ]);
+
 /// 已注册的实现清单。
 ///
-/// **新增格式实现时在这里追加**（M1-T02B 已加 `dart-txt`）。
+/// **新增格式实现时在这里追加**（M1-T02B 已加 `dart-txt`；M2b-T02 已加 `dart-cbz`）。
 List<BookSourceSample> registeredSources() => <BookSourceSample>[
       BookSourceSample(
         label: 'dart-epub',
@@ -74,6 +81,14 @@ List<BookSourceSample> registeredSources() => <BookSourceSample>[
         create: () => DartTxtSource(
           fileName: 'contract.txt',
           bytes: _minimalTxt(),
+        ),
+      ),
+      BookSourceSample(
+        label: 'dart-cbz',
+        fileName: 'contract.cbz',
+        create: () => CbzSource(
+          fileName: 'contract.cbz',
+          bytes: _minimalCbz(),
         ),
       ),
     ];

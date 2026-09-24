@@ -22,6 +22,8 @@ enum FormatErrorCode {
   corruptFile,
   emptyFile,
   txtNoContent,
+  cbrUnsupported,
+  noImagePages,
 }
 
 /// 格式层统一异常。
@@ -54,8 +56,10 @@ const Map<FormatErrorCode, String> kFormatErrorMessages =
   FormatErrorCode.emptySpine: 'spine 为空：找不到任何可阅读的章节。',
   FormatErrorCode.encryptedEpub: '这是一本加密的 EPUB，暂不支持打开。',
   FormatErrorCode.encryptedMobi: '这是一本加密的 AZW3/MOBI，暂不支持打开。',
-  FormatErrorCode.unsupportedFormat: '暂不支持这种格式（当前支持 EPUB 与 TXT）。',
+  FormatErrorCode.unsupportedFormat: '暂不支持这种格式（当前支持 EPUB、TXT 与 CBZ）。',
   FormatErrorCode.corruptFile: '文件已损坏或不是有效的电子书文件。',
   FormatErrorCode.emptyFile: '文件是空的。',
   FormatErrorCode.txtNoContent: '这个 TXT 里没有找到可阅读的文本。',
+  FormatErrorCode.cbrUnsupported: '这是一本 CBR（RAR 压缩包），暂不支持打开，请转换为 CBZ 后导入。',
+  FormatErrorCode.noImagePages: '压缩包里没有找到任何图片页。',
 };
