@@ -487,7 +487,7 @@
 | 项 | 值 |
 |---|---|
 | 任务 | M2a-T06（PRD `PERF-01`；改法按 `docs/schedule.md` M2a-T06 勘误：后台跑 `parseEpubStructure` 纯数据 + 主 isolate 绑定闭包） |
-| 提交 | （待补记） |
+| 提交 | `5aa0679` |
 | 日期 | 2026-09-24 |
 | 一句话目标 | 书籍解析 / 准备的重活移出主 isolate：后台产纯数据结构，主 isolate 只绑闭包与渲染；isolate 派发失败诚实回落（`RUST-01` 降级语义） |
 
