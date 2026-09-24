@@ -11,6 +11,7 @@ import 'app.dart';
 import 'library/library_repository.dart';
 import 'meta/cover_store.dart';
 import 'platform/app_paths.dart';
+import 'platform/path_provider_app_paths.dart';
 import 'reader/progress_store.dart';
 import 'settings/settings_store.dart';
 import 'ui/shelf_page.dart';
