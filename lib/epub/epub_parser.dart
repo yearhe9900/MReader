@@ -18,6 +18,8 @@
 // `PERF-02` ①（内存收敛）：结构解析阶段**只建「条目名 → ArchiveFile」索引、绝不预解压**；
 //    章节正文由绑定期产出的 `loadBytes` **按需、非驻留**解压（见 `zip_paths.dart` 的
 //    `lazyEntryLoader`），非章节资源（图 / 字 / CSS）在与正文无关的路径上永不读取。
+//    **唯一有界例外**（[_parse] 第 8 步）：无目录书的 `flatTitles` 预取——逐章非缓存
+//    解压取标题后**字节即弃**，不驻留任何解压结果（只留 `href -> 标题` 字符串）。
 //
 // 章节正文的 XHTML -> 文本转换在 section_extractor.dart 里按需调用。
 //
@@ -33,6 +35,7 @@ import '../format/error_messages.dart';
 import '../model/chapter.dart';
 import '../model/epub_book.dart';
 import 'epub_toc.dart';
+import 'section_extractor.dart';
 import 'text_codec.dart';
 import 'xml_util.dart';
 import 'zip_paths.dart';
@@ -109,6 +112,7 @@ class EpubStructure {
     required this.toc,
     required this.coverCandidates,
     required this.entryNames,
+    this.flatTitles = const <String, String>{},
   });
 
   /// `dc:title`（首个非空）；无则空串。
@@ -143,6 +147,14 @@ class EpubStructure {
 
   /// 包内条目名索引：`小写真实名 -> 真实名`（供取得结构的 isolate 重新定位条目）。
   final Map<String, String> entryNames;
+
+  /// 平坦目录预取标题表（`PERF-01` 残余项）：`章 href -> 章标题`，**仅 toc 为空时填充**。
+  ///
+  /// 与 [toc] 的降级语义配套：无目录书的平坦目录标题取自每章正文 h1，若留到消费方
+  /// （`DartEpubSource.chapters()`）现场逐章「解压 + HTML 解析」会冻结主 isolate，
+  /// 故在解析 isolate（[_parse]）一次取好、**字节即弃**只留字符串。值为空串 = 已预取
+  /// 但无标题；查不到键 = 未预取，消费方回退现场取（见 `EpubBook.flatTitles`）。
+  final Map<String, String> flatTitles;
 
   /// 封面候选 href 列表（`coverCandidates` 的 href 投影，便于只看路径的调用方）。
   List<String> get coverCandidateHrefs =>
@@ -495,6 +507,23 @@ _ParsedEpub _parse(Uint8List bytes, String fileName) {
   final List<CoverCandidate> coverCandidates =
       _buildCoverCandidates(opfDoc, opfDir, idToHref, idToMediaType);
 
+  // 8) 平坦目录预取标题（PERF-01 残余项）：**仅无目录的书**填充 `href -> 标题`。
+  //    无目录书的章节表降级为「按 spine 平坦目录」，标题取自每章正文的 h1；若留到
+  //    `DartEpubSource.chapters()` 现场逐章「解压 + HTML 解析」，大书会把主 isolate
+  //    冻住（perf-bench big_bodies 3996ms 实测）。这里是 PERF-02 ①「绝不预解压」的
+  //    **唯一有界例外**：逐章经 lazyEntryLoader **非缓存**解压取 title 后**字节即弃**
+  //    （不走 ArchiveFile.content——它一次解压即永久缓存，会让整本驻留），只留字符串。
+  //    空标题也存（= 已预取但无标题）；缺文件的章跳过（与绑定期 _bindBook 过滤一致，
+  //    键用 href 不用索引，天然不错位）。
+  final Map<String, String> flatTitles = <String, String>{};
+  if (toc.isEmpty) {
+    for (final EpubSectionRef ref in sectionRefs) {
+      final ArchiveFile? file = _resolveFile(byName, lowerIndex, ref.href);
+      if (file == null) continue;
+      flatTitles[ref.href] = extractSection(lazyEntryLoader(file)()).title;
+    }
+  }
+
   final EpubStructure structure = EpubStructure(
     title: title,
     author: author,
@@ -506,6 +535,7 @@ _ParsedEpub _parse(Uint8List bytes, String fileName) {
     toc: toc,
     coverCandidates: coverCandidates,
     entryNames: lowerIndex,
+    flatTitles: flatTitles,
   );
 
   return _ParsedEpub(
@@ -550,6 +580,7 @@ EpubBook _bindBook(_ParsedEpub parsed) {
     fileName: s.fileName,
     sections: sections,
     toc: s.toc,
+    flatTitles: s.flatTitles,
   );
 }
 

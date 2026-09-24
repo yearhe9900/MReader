@@ -18,6 +18,7 @@ class EpubBook {
     required this.fileName,
     required this.sections,
     this.toc = const <Chapter>[],
+    this.flatTitles = const <String, String>{},
   });
 
   /// 书名，来自 OPF 的 dc:title；可能为空字符串。
@@ -43,6 +44,14 @@ class EpubBook {
   /// **空列表表示这本书没有可用目录**，此时调用方应降级为「按 spine 生成平坦目录」。
   /// 默认空列表，保持对既有调用方的向后兼容。
   final List<Chapter> toc;
+
+  /// 平坦目录预取标题表（`PERF-01` 残余项）：`章 href -> 章标题`，**仅 toc 为空时填充**。
+  ///
+  /// 无目录书的章节表降级为「按 spine 平坦目录」，标题须取自每章正文的 h1——在解析
+  /// isolate 一次取好，避免 `chapters()` 现场逐章「解压 + HTML 解析」冻结主 isolate。
+  /// 值为空串 = 已预取但该章无标题（消费方补「第 N 章」占位）；**查不到键** = 未预取
+  /// （手造 EpubBook / 有目录书的 linear=no 补入），消费方回退现场解压取标题。
+  final Map<String, String> flatTitles;
 
   /// 给 UI 用的显示名：书名 -> 文件名 -> 占位。
   String get displayTitle {

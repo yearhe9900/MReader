@@ -39,6 +39,43 @@ class _FailingRunner extends IsolateRunner {
       throw StateError('isolate 派发失败（模拟）');
 }
 
+/// 篡改 flatTitles 的 runner（验 `chapters()` **确实咨询**预取表 / 未命中回退现场取）。
+///
+/// 真实解析照跑，只把 [EpubStructure.flatTitles] 换成注入值——让「预取表内容」与
+/// 「现场解压所得」**故意不一致**，从而可断言消费方的取值优先级（预取表优先）。
+class _FlatTitlesRunner extends IsolateRunner {
+  _FlatTitlesRunner(this.replacement);
+
+  final Map<String, String> replacement;
+
+  @override
+  Future<R> run<M, R>(
+    IsolateTask<M, R> task,
+    M message, {
+    String? debugLabel,
+  }) async {
+    final R out = await super.run<M, R>(task, message, debugLabel: debugLabel);
+    if (out is EpubParseOutcome && out.structure != null) {
+      final EpubStructure s = out.structure!;
+      final EpubStructure tampered = EpubStructure(
+        title: s.title,
+        author: s.author,
+        language: s.language,
+        description: s.description,
+        creators: s.creators,
+        fileName: s.fileName,
+        sections: s.sections,
+        toc: s.toc,
+        coverCandidates: s.coverCandidates,
+        entryNames: s.entryNames,
+        flatTitles: replacement,
+      );
+      return EpubParseOutcome.ok(tampered) as R;
+    }
+    return out;
+  }
+}
+
 final Directory _fixturesDir = Directory('test/fixtures');
 final File _baselineFile = File('${_fixturesDir.path}/baseline.json');
 
@@ -147,6 +184,21 @@ Uint8List _epubNoToc() => zipEntries(<EpubEntry>[
       ),
       textEntry('OEBPS/text/ch1.xhtml',
           xhtmlDoc(title: '一 起', heading: '第一章', paragraphs: <String>['正文。'])),
+    ]);
+
+/// 无目录且**无任何标题**的书（预取值为空串：已预取但无标题 -> 「第 1 章」占位）。
+Uint8List _epubNoTocNoHeading() => zipEntries(<EpubEntry>[
+      textEntry('META-INF/container.xml', containerXml('OEBPS/content.opf')),
+      textEntry(
+        'OEBPS/content.opf',
+        opfXml(
+          title: '无标题章',
+          manifest: itemXml('c1', 'text/ch1.xhtml', 'application/xhtml+xml'),
+          spine: itemrefXml('c1'),
+        ),
+      ),
+      textEntry(
+          'OEBPS/text/ch1.xhtml', xhtmlDoc(paragraphs: <String>['无标题正文。'])),
     ]);
 
 /// nav 的 href 带 `#frag`，且锚点在章节中部。
@@ -1031,6 +1083,72 @@ void main() {
         reason: '业务错误（信封）原样抛出，与未接 isolate 前同型同码',
       );
       await bad.dispose();
+    });
+  });
+
+  // =====================================================================
+  // J. flatTitles 预取（PERF-01 残余项）：无目录书平坦目录取标题移入解析 isolate
+  // =====================================================================
+  group('flatTitles 预取（PERF-01 残余项）', () {
+    test('无目录书：解析期预取 href -> 标题（纯数据结构同样携带）', () async {
+      final EpubStructure structure =
+          await parseEpubStructure(_epubNoToc(), fileName: 'noToc.epub');
+      expect(
+        structure.flatTitles,
+        <String, String>{'OEBPS/text/ch1.xhtml': '第一章'},
+        reason: 'toc 为空 -> 预取表填充；值取自该章正文 h1',
+      );
+
+      final EpubBook book =
+          await parseEpub(_epubNoToc(), fileName: 'noToc.epub');
+      expect(book.flatTitles, structure.flatTitles,
+          reason: 'EpubBook 原样携带预取表');
+    });
+
+    test('有目录书：不填充预取表（标题取自 toc，无需解压正文）', () async {
+      final EpubStructure structure =
+          await parseEpubStructure(_epub2WithNcx(), fileName: 'ncx2.epub');
+      expect(structure.flatTitles, isEmpty);
+    });
+
+    test('无标题章：预取值为空串（已预取但无标题），章节表补「第 1 章」占位', () async {
+      final EpubBook book =
+          await parseEpub(_epubNoTocNoHeading(), fileName: 'noHead.epub');
+      expect(
+        book.flatTitles,
+        <String, String>{'OEBPS/text/ch1.xhtml': ''},
+        reason: '空标题也存：键在 = 已预取，查不到键才是未预取',
+      );
+
+      final BookSource source =
+          await openBook(fileName: 'noHead.epub', bytes: _epubNoTocNoHeading());
+      expect((await source.chapters()).single.title, '第 1 章');
+      await source.dispose();
+    });
+
+    test('chapters() 咨询预取表：注入值压过现场解压所得', () async {
+      final BookSource source = DartEpubSource(
+        fileName: 'noToc.epub',
+        bytes: _epubNoToc(),
+        runner: _FlatTitlesRunner(
+            <String, String>{'OEBPS/text/ch1.xhtml': '注入标题'}),
+      );
+      final List<Chapter> chapters = await source.chapters();
+      expect(chapters.single.title, '注入标题',
+          reason: '预取表命中时不得回退现场解压（现场解压会得「第一章」）');
+      await source.dispose();
+    });
+
+    test('预取表未命中：回退现场解压取标题（手造 EpubBook / 补入路径的旧行为）', () async {
+      final BookSource source = DartEpubSource(
+        fileName: 'noToc.epub',
+        bytes: _epubNoToc(),
+        runner: _FlatTitlesRunner(const <String, String>{}),
+      );
+      final List<Chapter> chapters = await source.chapters();
+      expect(chapters.single.title, '第一章',
+          reason: 'miss -> 现场解压回退，与预取路径同值');
+      await source.dispose();
     });
   });
 }

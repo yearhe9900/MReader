@@ -150,17 +150,29 @@ class DartEpubSource implements BookSource {
         final EpubSection section = book.sections[i];
         if (section.linear) continue;
         if (covered.contains(_matchKey(section.href))) continue;
-        out.add(_flatChapter(section, i, nonLinear: true));
+        out.add(_flatChapter(
+          section,
+          i,
+          nonLinear: true,
+          title: book.flatTitles[section.href],
+        ));
       }
       // 包一层 unmodifiable，避免把 EpubBook 内部列表泄漏给调用方。
       result = List<Chapter>.unmodifiable(out);
     } else {
       // 无目录：降级为「按 spine 的平坦目录」（RD-01 ④）。
       // `CNT-05`：`linear="no"` 章节同样保留，标题追加「（非主线）」。
+      // 标题走 [EpubBook.flatTitles] 预取（PERF-01 残余项：解析 isolate 一次取好，
+      // 此处零解压）；手造 EpubBook 未预取（miss）时回退现场解压（旧行为）。
       final List<Chapter> flat = <Chapter>[];
       for (int i = 0; i < book.sections.length; i++) {
         final EpubSection section = book.sections[i];
-        flat.add(_flatChapter(section, i, nonLinear: !section.linear));
+        flat.add(_flatChapter(
+          section,
+          i,
+          nonLinear: !section.linear,
+          title: book.flatTitles[section.href],
+        ));
       }
       result = List<Chapter>.unmodifiable(flat);
     }
@@ -316,9 +328,21 @@ class DartEpubSource implements BookSource {
 const String kNonLinearTitleSuffix = '（非主线）';
 
 /// 由 spine section 生成一条平坦目录项（无目录降级 / linear=no 补入共用）。
-Chapter _flatChapter(EpubSection section, int index, {required bool nonLinear}) {
-  final String title = extractSection(section.rawBytes).title;
-  final String base = title.isNotEmpty ? title : '第 ${index + 1} 章';
+///
+/// [title] 的三级语义（`PERF-01` 残余项）：
+///   · `null` —— 未预取（有目录书的 linear=no 补入 / 手造 EpubBook）：现场解压取标题
+///     （旧行为；预取表 [EpubBook.flatTitles] 仅在 toc 为空时填充）；
+///   · `''` —— 已预取但该章无标题：直接补「第 N 章」占位，**不再解压**；
+///   · 非空 —— 预取标题，直接采用。
+/// 无目录书一律走预取路径，`chapters()` 不再逐章「解压 + HTML 解析」（大书冻结源）。
+Chapter _flatChapter(
+  EpubSection section,
+  int index, {
+  required bool nonLinear,
+  String? title,
+}) {
+  final String resolved = title ?? extractSection(section.rawBytes).title;
+  final String base = resolved.isNotEmpty ? resolved : '第 ${index + 1} 章';
   return Chapter(
     href: section.href,
     title: nonLinear ? '$base$kNonLinearTitleSuffix' : base,
