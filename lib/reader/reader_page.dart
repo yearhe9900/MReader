@@ -52,6 +52,10 @@
 //   · **`TYP-06` 书签**：当前位置添加书签 / 列表逐条删除，按书持久化
 //     （[BookmarkStore]，增删即时落盘）；列表行点击跳回该语义位置
 //     （href 优先，回退 index）；
+//   · **`CNT-06` 书内搜索**：AppBar 搜索按钮 → [SearchSheet] 全书搜索
+//     （[SearchSession] 按源能力分流后台 isolate / 本 isolate 流式，可取消）；
+//     点命中 → 章内字符偏移换算段落下标 → [_jumpToLink] 段落级对齐 +
+//     关键词高亮（[InlineParagraph.highlightQuery]）；
 //   · **`TYP-07` 字体族**：外观面板三选一（系统默认 / 衬线 / 无衬线），
 //     **不内嵌字体文件**（`pubspec.yaml` 无 `fonts:` 段）——平台族名 +
 //     `reader_fonts.dart` 回退链（Windows 不认通用族名，回退链保中文无豆腐块）；
@@ -77,11 +81,13 @@ import 'package:flutter/material.dart';
 import '../format/book_source.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
+import '../task/search_session.dart';
 import '../typography/anchor.dart';
 import '../typography/reader_settings.dart';
 import '../typography/text_style_resolver.dart';
 import '../typography/typeset.dart';
 import '../ui/glass_kit.dart';
+import '../ui/search_sheet.dart';
 import 'bookmark.dart';
 import 'bookmark_sheet.dart';
 import 'bookmark_store.dart';
@@ -247,6 +253,12 @@ class _ReaderPageState extends State<ReaderPage> {
   /// [_buildChapterItem] 渲染时挂到对应段落的 Padding 上，
   /// [_paragraphPointOffset] 据此精确测量段落顶。
   final Map<String, GlobalKey> _paraKeys = <String, GlobalKey>{};
+
+  /// 搜索高亮关键词（`CNT-06` 验收②；空串 = 不高亮）。
+  ///
+  /// 搜索跳转（[_jumpToSearchHit]）时写入，喂给正文 [InlineParagraph] 的
+  /// `highlightQuery` 做命中高亮；下次跳转到新命中时更新。
+  String _searchHighlight = '';
 
   /// 链接返回栈（`CNT-04c` 验收②）：跳转前压入原位置快照，「返回」按钮弹栈恢复。
   final LinkBackStack _linkStack = LinkBackStack();
@@ -1123,6 +1135,69 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
+  /// 打开全书搜索面板（`CNT-06`）：输入关键词 → 「章节名 + 上下文片段」列表 →
+  /// 点击跳转并高亮。与 [BookmarkSheet] 同款玻璃底部弹窗（`UI-03` / `UI-04`）。
+  void _openSearch() {
+    GlassOverlays.showSheet<void>(
+      context: context,
+      isScrollable: false,
+      builder: (BuildContext sheetContext) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.7,
+        ),
+        child: OpaqueContentSurface(
+          child: SearchSheet(
+            startSearch: _startSearch,
+            onJump: (SearchHit hit, String query) {
+              Navigator.of(sheetContext).pop();
+              unawaited(_jumpToSearchHit(hit, query));
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 发起一次全书搜索：[SearchSession.start] 按源能力自动分流——可序列化
+  /// `searchSpec`（EPUB / TXT）进后台 isolate；句柄源（PDF）本 isolate 流式。
+  SearchSession _startSearch(String query) => SearchSession.start(
+        query: query,
+        spec: widget.source.searchSpec,
+        localSource: widget.source,
+      );
+
+  /// 跳到搜索命中位置（`CNT-06` 验收②）：章内字符偏移 → 段落下标换算
+  /// （段落字符数累加，与 `SearchHit.offset` 同口径），随后复用链接跳转
+  /// 「估算 + 校正」的段落级对齐路径；关键词写入 [_searchHighlight] 高亮。
+  ///
+  /// 图片页（CBZ / PDF）无段落概念 → `paragraphList` 为空、`paraIndex` 保持
+  /// -1，走纯跳章。offset 恰在段末之后的容错：兜到末段（不静默丢弃跳转）。
+  Future<void> _jumpToSearchHit(SearchHit hit, String query) async {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return;
+    final int chapterIndex = hit.chapterIndex.clamp(0, chapters.length - 1);
+    // 目标章可能未加载：先载入（±1 预取不阻塞），再按字符累加定位段落。
+    await _loader?.loadFirstBatch(chapterIndex);
+    if (!mounted) return;
+    int paraIndex = -1;
+    final List<String> paragraphs =
+        _cache.peek(chapterIndex)?.paragraphList ?? const <String>[];
+    int consumed = 0;
+    for (int p = 0; p < paragraphs.length; p++) {
+      final int end = consumed + paragraphs[p].length;
+      if (hit.offset < end) {
+        paraIndex = p;
+        break;
+      }
+      consumed = end;
+    }
+    if (paraIndex < 0 && paragraphs.isNotEmpty) {
+      paraIndex = paragraphs.length - 1;
+    }
+    setState(() => _searchHighlight = query);
+    await _jumpToLink(chapterIndex, paraIndex);
+  }
+
   /// 打开外观面板（`TYP-07` 字体族 / `TYP-08` 亮度与背景色）。
   void _openAppearance() {
     GlassOverlays.showSheet<void>(
@@ -1285,6 +1360,12 @@ class _ReaderPageState extends State<ReaderPage> {
                 ],
               ),
               actions: <Widget>[
+                IconButton(
+                  key: const Key('reader-search'),
+                  tooltip: '搜索',
+                  icon: const Icon(Icons.search),
+                  onPressed: ready ? _openSearch : null,
+                ),
                 IconButton(
                   key: const Key('reader-bookmarks'),
                   tooltip: '书签',
@@ -1629,6 +1710,9 @@ class _ReaderPageState extends State<ReaderPage> {
                 style: bodyStyle,
                 resolveImage: _resolveImage,
                 onLinkTap: _onLinkTapped,
+                // CNT-06 验收②：搜索跳转后关键词高亮（空 = 不高亮）。
+                highlightQuery:
+                    _searchHighlight.isEmpty ? null : _searchHighlight,
               ),
             ),
         ],

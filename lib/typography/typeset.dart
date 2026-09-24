@@ -21,6 +21,12 @@ const String _kIndentPrefix = '\u3000\u3000';
 /// 对纯英文段落亦适用（宽度约 2em，符合中文排版惯例）。
 String withFirstLineIndent(String text) => '$_kIndentPrefix$text';
 
+/// 搜索命中高亮底色（琥珀半透明；`CNT-06` 验收②「关键词高亮」）。
+///
+/// 半透明是为了同时适配亮 / 暗主题与各背景色板（`TYP-08`）：
+/// 叠在任意正文色上都保可读，且不覆盖文字本身的颜色语义（粗体 / 链接下划线）。
+const Color kSearchHighlightColor = Color(0x66FFC107);
+
 /// 白名单：只保留 `<b>` 和 `<i>` 的开闭标签，其它标签在上游已剥离。
 final RegExp _inlineTagPattern = RegExp(r'<(/?)([bi])>');
 
@@ -198,6 +204,66 @@ List<InlineSpan> parseContentSpans(
 TextStyle _linkStyle(TextStyle base) =>
     base.copyWith(decoration: TextDecoration.underline);
 
+/// 对已解析的 span 列表做搜索高亮后处理（`CNT-06` 验收②「关键词高亮」）。
+///
+/// 对每个 [TextSpan] 的文本按 [query] **非重叠**切分（与各格式 `search()`
+/// 的命中计数口径一致），命中片段的样式叠 [color] 背景——原样式的
+/// 颜色 / 粗斜体 / 下划线全保留；[TextSpan.recognizer] **复制**到所有子片段
+/// （链接整段可点性不变，与 `parseContentSpans` 给链接文字挂同一 recognizer
+/// 的既有模式一致）。[WidgetSpan]（图片）原样保留，不参与切分。
+///
+/// [query] 为空或整表无命中时返回原列表；本函数**不创建** recognizer，
+/// 生命周期仍归 [InlineParagraph] 管。`parseContentSpans` 的无标记快路径
+/// 与标记路径产出的都是扁平 span 列表（TextSpan 只有 text 不带 children），
+/// 故这里只做顶层切分、不递归 children。
+List<InlineSpan> highlightSpans(
+  List<InlineSpan> spans,
+  String query, {
+  Color color = kSearchHighlightColor,
+}) {
+  if (query.isEmpty) return spans;
+  final List<InlineSpan> out = <InlineSpan>[];
+  bool any = false;
+  for (final InlineSpan span in spans) {
+    final String? text = span is TextSpan ? span.text : null;
+    if (text == null || !text.contains(query)) {
+      out.add(span);
+      continue;
+    }
+    any = true;
+    final TextSpan textSpan = span as TextSpan;
+    final TextStyle? base = textSpan.style;
+    final TextStyle highlight =
+        (base ?? const TextStyle()).copyWith(backgroundColor: color);
+    int cursor = 0;
+    while (true) {
+      final int at = text.indexOf(query, cursor);
+      if (at < 0) break;
+      if (at > cursor) {
+        out.add(TextSpan(
+          text: text.substring(cursor, at),
+          style: base,
+          recognizer: textSpan.recognizer,
+        ));
+      }
+      out.add(TextSpan(
+        text: query,
+        style: highlight,
+        recognizer: textSpan.recognizer,
+      ));
+      cursor = at + query.length;
+    }
+    if (cursor < text.length) {
+      out.add(TextSpan(
+        text: text.substring(cursor),
+        style: base,
+        recognizer: textSpan.recognizer,
+      ));
+    }
+  }
+  return any ? out : spans;
+}
+
 /// 整段可点链接的段落 widget（`CNT-04b`）：管理 recognizer 生命周期。
 ///
 /// [parseContentSpans] 创建的 [TapGestureRecognizer] 必须 `dispose`：
@@ -212,6 +278,7 @@ class InlineParagraph extends StatefulWidget {
     required this.style,
     required this.resolveImage,
     this.onLinkTap,
+    this.highlightQuery,
   });
 
   /// 含标记的段落文本（`section_extractor` 抽取产物）。
@@ -225,6 +292,11 @@ class InlineParagraph extends StatefulWidget {
 
   /// 链接点击回调（href 为归一化形态）；null = 链接不可点，仅下划线展示。
   final void Function(String href)? onLinkTap;
+
+  /// 搜索高亮关键词（`CNT-06` 验收②）：非空时命中片段叠高亮底色
+  /// （[highlightSpans] 后处理，快路径与标记路径都覆盖）；
+  /// `null` / 空串 = 不高亮。
+  final String? highlightQuery;
 
   @override
   State<InlineParagraph> createState() => _InlineParagraphState();
@@ -245,7 +317,8 @@ class _InlineParagraphState extends State<InlineParagraph> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.text != widget.text ||
         oldWidget.style != widget.style ||
-        oldWidget.onLinkTap != widget.onLinkTap) {
+        oldWidget.onLinkTap != widget.onLinkTap ||
+        oldWidget.highlightQuery != widget.highlightQuery) {
       final List<TapGestureRecognizer> stale = _recognizers;
       _buildSpans();
       // 旧批延后到帧结束释放：当前帧渲染树仍引用旧 span 的 recognizer。
@@ -259,13 +332,19 @@ class _InlineParagraphState extends State<InlineParagraph> {
 
   void _buildSpans() {
     final List<TapGestureRecognizer> sink = <TapGestureRecognizer>[];
-    _spans = parseContentSpans(
+    List<InlineSpan> spans = parseContentSpans(
       widget.text,
       widget.style,
       widget.resolveImage,
       onLinkTap: widget.onLinkTap,
       recognizerSink: sink,
     );
+    // `CNT-06` 验收②：搜索高亮后处理（快路径与标记路径统一在此收口）。
+    final String? query = widget.highlightQuery;
+    if (query != null && query.isNotEmpty) {
+      spans = highlightSpans(spans, query);
+    }
+    _spans = spans;
     _recognizers = sink;
   }
 
