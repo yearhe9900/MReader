@@ -38,3 +38,6 @@ android/key.properties
 # 本工程的 agent 工作数据（记忆、报告），不进源码历史
 .workbuddy/
 deliverables/
+
+# 开发期真实书籍样本（多格式测试用，不入库）
+/tmp_book/
