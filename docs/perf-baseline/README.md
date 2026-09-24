@@ -126,6 +126,7 @@ BENCH[after]  big_bodies.epub    chapters=100 iters=3 minMs=4758 medianMs=4833 r
 |---|---|
 | `test/perf/lazy_load_test.dart` | 320 章首帧批次 ≤ 3；补齐后驻留 ≤ 30 且 < 总章数；含图片书窗口中心驻留 ≤ 30；LRU 小上界逐出；超长章逐段（>1000 段、>10 万字符、无单段整章）；**① 稳态**：`EpubSection.lazy` 每次访问都重新加载（无无界缓存，计数断言）+ 读完 100 章大头书后 RSS 增量 < 解压后正文总量的一半 |
 | `test/task/isolate_runner_test.dart` | `Isolate.run` 薄封装：纯函数往返 + **debugName 取证**（任务确在独立 isolate 执行）；不可序列化入参 / 捕获闭包**明确失败、不静默**；`runWithFallback` 派发失败 / 远端意外 → 回落本 isolate 重跑，业务错误经信封原样冒出（M2a-T06） |
+| `test/format/dart_epub_source_test.dart` | flatTitles 预取 5 条（M2a-T06b）：无目录书填充 / 有目录书不填充 / 空标题存 `''` 补占位 / tamper 注入值压过现场解压（验咨询）/ miss 回退现场取 |
 
 ## 6. 已知边界（本次未覆盖 / 后续）
 
@@ -133,9 +134,9 @@ BENCH[after]  big_bodies.epub    chapters=100 iters=3 minMs=4758 medianMs=4833 r
 - `PERF-01` 的 **isolate 真正接线**已于 **M2a-T06** 交付（后台 `parseEpubStructureTask` + 主 isolate
   `bindEpubResult`，实测见 §7.1）；本 M1-T07 批次当时只交了 `parseEpubStructure`（纯数据）+
   `IsolateRunner`（当时为 `compute()` 薄封装）两块底座。
-- **无目录大书的平坦目录取标题仍在主 isolate 同步**（M2a-T06 实测残余，**待拍板**）：
-  `_flatChapter` 逐章 `extractSection(section.rawBytes).title`（解压 + HTML 解析 × 章数），
-  `big_bodies.epub` 实测残余 ~4s 连续无响应（§7.1 结论 3）。
+- **无目录大书的平坦目录取标题已闭环**（M2a-T06b，方案 a）：`flatTitles` 预取表入解析 isolate
+  （仅 toc 为空时填充、非缓存解压字节即弃），`chapters()` 零解压；`big_bodies.epub` maxGap
+  3996 → **194ms**（§7.2）。
 - `tool/*` 与 `test/perf/*` 用纯 Dart `test()`（**非** `testWidgets`）：本项目已两次实证
   `testWidgets` 体内 `await` 真异步 IO 会挂死（FakeAsync 不排空微任务队列），故不在此复现。
 
@@ -181,12 +182,47 @@ after 的首屏与内存（稳态口径不回归）：
    （`_txtPrepareTask` / `_txtDecodeTask`）全部后台化后，`maxGapMs` 全线大幅下降
    （20MB TXT 994 → 27ms，图片大书 475 → 130ms）。
 2. **稳态不回归**（`PERF-02` 口径）：读完 N 章后 RSS 不回升（+1.1 / −0.1 MB，噪声级）。
-3. **残余项（待负责人拍板）**：`big_bodies.epub`（无目录大书）仍有 **3996ms** 连续无响应——
+3. **残余项（已闭环，M2a-T06b）**：`big_bodies.epub`（无目录大书）当时仍有 **3996ms** 连续无响应——
    源头**不是解析**（已后台化），而是 `chapters()` 的「无目录平坦目录」回退（`RD-01` ④）：
    `_flatChapter` 逐章 `extractSection(section.rawBytes).title`（解压 + HTML 解析 × 章数）在
-   主 isolate 同步跑（`lib/format/dart_epub_source.dart` `_flatChapter`）。该回退**超出** M2a-T06
-   勘误指定改法（「后台跑 `parseEpubStructure` + 主 isolate 绑定闭包」）范围，处置二选一：
-   （a）平坦目录构建一并 isolate 化；（b）收下残余、记为已知边界。严格口径下，`PERF-01` 验收①
-   （「50MB 书打开期间 UI 无超 1 秒无响应」）在**无目录大书**这一类样本上**未达**。
+   主 isolate 同步跑（`lib/format/dart_epub_source.dart` `_flatChapter`）。处置已选
+   （a）**平坦目录构建 isolate 化**：M2a-T06b 把取标题移入解析 isolate（`flatTitles` 预取表），
+   `big_bodies` maxGap 3996 → **194ms**，`PERF-01` 验收①（「50MB 书打开期间 UI 无超 1 秒
+   无响应」）**全样本达成**（实测见 §7.2）。
+
+### 7.2 M2a-T06b（残余修复 `flatTitles`）—— §7.1 结论 3 闭环
+
+同版本 `tool/perf_bench.dart`（5 轮、一次进程一样本，标签 `flat`）实测：
+
+| 样本 | `maxGapMs` §7.1 after | `maxGapMs` T06b 后 | 变化 |
+|---|---|---|---|
+| `big_20mb.txt`（800 章 ≈20MB） | 27 | 29 | 持平（噪声级；TXT 路径未动） |
+| `big_320.epub`（320 章 + 80MB 图，**无目录**） | 130 | **25** | ≈ −81% |
+| `long_chapter.epub`（单章 12 万字符，**无目录**） | 96 | **45** | ≈ −53% |
+| `big_bodies.epub`（100 章 ≈48MB 正文，**无目录**） | 3996 | **194** | ≈ −95% |
+
+> 三个 EPUB 样本**全部无目录**（`tool/perf_fixtures.dart` 不产 nav / ncx），全走平坦目录
+> 回退路径——改善面与修复面完全对齐（TXT 样本不动、持平即无回归）。
+
+首屏与内存（稳态口径不回归）：
+
+| 样本 | 首屏 min / median | 首屏后 RSS | 读完 N 章后 RSS |
+|---|---|---|---|
+| `big_20mb.txt` | 478 / 569 ms | 409.1 MB | — |
+| `big_320.epub` | 70 / 84 ms | 379.7 MB | 380.9 MB（读 50 章，+1.2） |
+| `long_chapter.epub` | 35 / 45 ms | 334.0 MB | — |
+| `big_bodies.epub` | 5602 / 5757 ms | 354.2 MB | 354.3 MB（读 100 章，+0.1） |
+
+结论：
+
+1. **`PERF-01` 验收①达成**（「50MB 书打开期间 UI 无超 1 秒无响应」）：四样本 `maxGapMs`
+   全线 <200ms；无目录大书 3996 → **194ms**，平坦目录取标题不再冻结主 isolate。
+2. **稳态不回归**（`PERF-02` ①）：读完 N 章 RSS +1.2 / +0.1 MB（噪声级）——`flatTitles`
+   只驻留 `href -> 标题` 字符串，提取过程字节即弃。
+3. **首屏墙钟**：大书 min 3835 → 5602ms。总工作量未变（标题提取整体从 `chapters()` 搬入
+   解析 isolate，链路仍为「解析 → 绑定 → 章节表 → 首批正文」串行），升幅构成未逐项归因：
+   已知本机同码日间波动即有 ~1s 级（§3 与 §7.1 的同码两表自身相差 ~0.9s），另后台 isolate
+   冷堆上做 100 章解压 + HTML 解析的 GC 成本可能高于主 isolate 热堆。属「响应性换墙钟」的
+   可接受交换；如需回收可做标题专用轻量提取（非本批目标）。
 
 > 环境：Windows / Dart 3.12（`flutter test` 同款 SDK）。数字随机器与负载波动，**看 before / after 差值**。

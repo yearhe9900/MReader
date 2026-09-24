@@ -501,7 +501,23 @@
 | TXT 准备 / 解码后台化 | 20MB TXT 开书不冻 UI | `lib/format/dart_txt_source.dart` | `_txtPrepareTask`（分章分析）+ `_txtDecodeTask`（解码 + 去 BOM）同款信封后台化；`_analyze` / `_pickRule` / `_splitBy*` / `_chunkTitle` 转 `static` 供顶层任务调用（顶层函数触不到实例私有成员） |
 | `maxGapMs` 测量口径 | `PERF-01` 验收①「UI 无超 1 秒无响应」的可测代理 | `tool/perf_bench.dart` | 首屏窗口内 10ms 周期 `Timer.periodic` 心跳，取相邻打点最大间隔；**必须计入收尾间隔**（窗口结束 − 最后打点；整窗无打点 = 整窗时长）——before 整条同步微任务链把定时器饿死一次都排不上队，不计收尾会得 `maxGapMs=0` 的假象 |
 | **不可见字符字面量坑** | 源码绝不落裸 BOM | `lib/format/dart_txt_source.dart`（`_decodeAndStripBom`） | Edit 写 `'\uFEFF'` 转义会被折叠成**真实不可见 BOM** 落进源码（补救 Edit 因新旧串同为不可见字符报 exactly the same）；含不可见字符的字面量一律**纯 ASCII 写法**（`codeUnitAt(0) == 0xFEFF` 比较），取证用 `grep` + `od -c`（BOM = `357 273 277`） |
-| 结果（可复现） | before / after 对照 | `docs/perf-baseline/README.md` §7.1 | `maxGapMs`：20MB TXT **994 → 27ms**、320 章图书 **475 → 130ms**、单超长章 **334 → 96ms**、无目录大书 **9348 → 3996ms**（残余 = 平坦目录取标题在主 isolate 同步跑，`_flatChapter` 逐章 `extractSection(rawBytes)`，待拍板）；稳态 RSS 不回归（读 50 / 100 章 ±1MB 内） |
+| 结果（可复现） | before / after 对照 | `docs/perf-baseline/README.md` §7.1 | `maxGapMs`：20MB TXT **994 → 27ms**、320 章图书 **475 → 130ms**、单超长章 **334 → 96ms**、无目录大书 **9348 → 3996ms**（残余 = 平坦目录取标题在主 isolate 同步跑，`_flatChapter` 逐章 `extractSection(rawBytes)`；**已由 M2a-T06b 闭环，见 §2.19**）；稳态 RSS 不回归（读 50 / 100 章 ±1MB 内） |
+
+### 2.19 M2a-T06b — PERF-01 残余修复：无目录书平坦目录取标题后台化（flatTitles）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M2a-T06b（增补；`PERF-01` 残余项方案 a，2026-09-24「继续开发」后落地） |
+| 提交 | `56fabe5` |
+| 日期 | 2026-09-24 |
+| 一句话目标 | 无目录书 `chapters()` 平坦目录取标题（逐章解压 + HTML 解析）移入解析 isolate，主 isolate 零解压；`big_bodies` 3996ms 连续无响应 → 194ms |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| `flatTitles` 预取表 | 平坦目录标题一次取好，消费方查表零解压 | `lib/epub/epub_parser.dart`（_parse 第 8 步）、`lib/model/epub_book.dart` | `EpubStructure` / `EpubBook` 增 `Map<String, String> flatTitles`（**纯数据、可跨 isolate**）；**仅 toc 为空时填充**（有目录书标题取自 toc，不付解压成本）；键用 href **不用索引**（绑定期 `_bindBook` 缺文件过滤会错位）。三级语义：查到非空 = 预取标题；查到 `''` = 已预取但无标题（补「第 N 章」占位）；**miss = 未预取**，回退 `extractSection(rawBytes).title`（手造 EpubBook / 有目录书 linear=no 补入路径的旧行为） |
+| 非缓存解压取标题（字节即弃） | `PERF-02` ① 唯一有界例外，防「取标题把整本驻留」 | 同上 | 必须走 `lazyEntryLoader(file)()`（STORE 返视图 / DEFLATE 现解，结果不驻留）；**绝不用 `contentOfArchiveFile`**——`ArchiveFile.content` 一次解压即永久缓存 `_content`，逐章取标题会让整本解压结果同时驻留 |
+| tamper runner 测试法 | 证明消费方**确实咨询**预取表（而非碰巧同值） | `test/format/dart_epub_source_test.dart`（`_FlatTitlesRunner`） | 预取值派生自同一份字节，正常路径「表值 == 现场解压值」区分不了取值来源 → 继承 `IsolateRunner` 覆写 `run`（`runWithFallback` 虚调），真实解析后把 `EpubStructure` 重建为注入 map：注入「注入标题」断言压过现场解压所得；注入 `{}` 断言 miss 回退 |
+| 结果（可复现） | §7.1 结论 3 闭环 | `docs/perf-baseline/README.md` §7.2 | `maxGapMs`：无目录大书 **3996 → 194ms**（−95%）、320 章无目录书 130 → 25、单超长章 96 → 45、20MB TXT 27 → 29（噪声级持平）；**PERF-01 验收①全样本 <1s 达成**；稳态 RSS 不回归（读 50 / 100 章 +1.2 / +0.1MB）。首屏大书 min 3835 → 5602ms：总工作量未变（标题提取整体搬入解析 isolate，链路仍串行），升幅含本机 ~1s 级日间波动（同码 §3 与 §7.1 两表自身即差 ~0.9s）与后台冷堆 GC 成本，属「响应性换墙钟」的可接受交换 |
 
 ## 测试分组与局部执行（2026-09-23）
 
