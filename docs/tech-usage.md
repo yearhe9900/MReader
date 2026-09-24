@@ -654,6 +654,18 @@
 | 修法 | 采样按 `top − (pixels − _laidOutPixels)` 补回滞后；`_laidOutPixels` = 「当前几何所对应的滚动偏移」，`addPostFrameCallback` **帧末**（布局已生效）记录为基线。用 `pixels` 差而非 `notification.scrollDelta`——`jumpTo`/拖动/惯性全自洽（delta 可为 null）；布局突变（占位→真实）不归此管，仍是语义重锚（修 A）职责 |
 | 落点 | `lib/reader/reader_page.dart` `_laidOutPixels` / `_buildBlockSnapshots` |
 
+### 2.28 玻璃质量档位生效链（M2b-T07，UI-05 / UI-06）
+
+| 项 | 值 |
+|---|---|
+| 依赖图（防循环 import） | `perf_prefs_store ← glass_runtime ← glass_scope ← glass_kit ←（业务页 / glass_settings_section）`——映射与生效态的唯一真值 `glass_runtime.dart` 位于**依赖图最底层**，禁止反向 import glass_kit/glass_scope（曾因映射住在 glass_settings_section 且其 import glass_kit 而成环，全家搬进 glass_runtime 解环） |
+| 生效链（只会更省、绝不更费） | 用户档位 →「降低视觉特效」强制 `minimal`（`resolveUserTier`，off 短路优先）→ 低端设备钳 `low`（`isLowEndDevice` 注入位；PRD §11.5 无判定标准，探测待拍板、缝已留）→ 帧预算降档（`noteBudgetDegraded`，会话内不持久化）→ `glassTierConfigFor` 折算生效配置 |
+| 档位 → 质量映射 | 高：不覆盖（`GlassScaffold` 自动提升 `premium`）/ 滚动区 `standard`；中：钉 `standard` 取消提升；低：全 `minimal`（零着色器）；关：`glassEnabled=false` → Material 纯色退化（`UI-06` ② 功能完整可用）。`scrollQuality` 恒拒 `premium`（构造期 assert，`UI-05` ②） |
+| **到底档不得写状态残留（人工推演抓的坑）** | `noteBudgetDegraded` 到底（low→low、off→off）必须**直接 return**：曾写 `_budgetTier = off` 当残留上限 → 用户切回高档被 `min(high, off) = off` 钳死（off 被自动降级「带出」= 违反契约）。回归测试 `glass_runtime_test`「到底档不钉死生效档」两条 |
+| `FrameTiming` 测试注入口 | dart:ui 测试工厂 `FrameTiming({vsyncStart, buildStart, buildFinish, rasterStart, rasterFinish, rasterFinishWallTime})`（微秒、全必填），`rasterDuration = rasterFinish − rasterStart`；`package:flutter/scheduler.dart` 已 re-export 可直接 import。`PerfFrameMonitor.simulateTimings` 喂帧、无需真实渲染循环；超预算判据是**严格 `>` 16ms**（恰 16ms 算预算内，测试有边界用例） |
+| 钉档测试法 | `GlassScopeProvider(config: glassTierConfigFor(tier))` 显式钉档（测试专用覆盖口）；断言钉档作用域用「`GlassTopBar` 后代 ∩ `GlassAppBar` 祖先」双重限定（`find.descendant` + `find.ancestor` 套用），防撞玻璃库内部同类型 `GlassIsolationScope`（`GlassScaffold` 给条面也包一层 premium 提示作用域） |
+| 落点 | `lib/ui/glass_runtime.dart`（映射 + 生效态）、`lib/settings/perf_prefs_store.dart`（持久化 + 策略）、`lib/settings/perf_frame_monitor.dart`（帧触发）、`lib/ui/glass_kit.dart`（唯一消费点 + 关档退化）、`lib/ui/glass_scope.dart`（作用域 + Provider 重建） |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
