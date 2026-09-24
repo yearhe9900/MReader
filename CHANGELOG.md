@@ -13,6 +13,7 @@
 - M2a-T06b PERF-01 残余修复：无目录书平坦目录取标题移入解析 isolate（`flatTitles` 预取表仅 toc 空时填充、非缓存解压字节即弃，`chapters()` 零解压）；big_bodies maxGap 3996→194ms，PERF-01 验收①全样本 <1s 达成 `56fabe5`
 - flatTitles 预取测试 5 条（`_FlatTitlesRunner` tamper 法验 `chapters()` 咨询预取表优先 / miss 回退现场取），parse 组 117→122 全绿 `56fabe5`
 - 进度表重构：阶段/子任务拆分 + 人天加权进度% + 状态/负责人/预计完成时间 `52664ce`
+- 执行序再调整（负责人拍板）：M3.5（Rust 加速层含 ★GATE★）优先级提高，提前到 M2b 之后、统计支线之前（新序 M2a→M2b→M3.5→统计→M4→AI/TTS）；依赖不破、gate 阈值 1/4 基线齐备；全局日历重排挂账
 
 ## 2026-09-23
 
