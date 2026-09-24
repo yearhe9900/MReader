@@ -11,7 +11,7 @@
 |---|---|
 | **主选（推荐）** | **pdfrx 2.6.5**（espresso3389.jp，MIT，2026-09-18）——6/6 全平台（直接消解 §15.3「iOS/Linux 风险最高」）、自带文本层（`loadText`/`loadStructuredText` 字符 bbox，直接消解 §7.2「文字层是否可用于搜索」风险）、渲染可取消 |
 | **备选** | **pdfx 2.11.0**（serge.software，MIT，2026-08-20）——输出 PNG/JPEG bytes 与现有图片页管线**同构**（接线最省），但无文本 API、无 Linux（P2 可按已确认退化「识别+提示」） |
-| 拍板点 | ① 主选二选一；② PDF 是否纳入 CNT-06 全书搜索覆盖（影响文本层权重）；③ pdfrx 的 Windows Developer Mode 构建约束是否可接受（发布产物无要求，构建机一次性设置） |
+| **拍板结论（负责人，2026-09-24）** | ① 主选 = **pdfrx 2.6.5**；② PDF **纳入** CNT-06 全书搜索覆盖面；③ Windows Developer Mode 构建约束**接受**；④ 密码 PDF = **明确拒绝**（对齐加密文件口径）。落地验收条目见 §4 |
 
 ## 1. 硬指标筛选（9 候选 → 2）
 
@@ -61,12 +61,18 @@
 | PERF-02 非驻留纪律 | `PdfImage.dispose()` | `page.close()` 串行 | 两强都要纪律约束；pdfx 的 Android 串行崩溃风险更硬 |
 | 包体积 | PDFium native assets 每平台 +5~10MB（**量级估计，实施时实测**）；WASM 资产可剔除 | 各平台原生库同量级 | 都属「随包分发」红线内的正常代价 |
 
-## 4. Q4 拍板问题清单
+## 4. 拍板记录与落地验收条目（负责人拍板，2026-09-24）
 
-1. **主选**：pdfrx（推荐：文本层 + 全平台 + 可取消渲染；代价 = Windows 构建开 Developer Mode + `PdfImage` 适配层）还是 pdfx（接线最简 + 无构建特殊要求；代价 = 无文本层、无 Linux、Android 串行 close 雷区）？
-2. **PDF 是否纳入 CNT-06 全书搜索覆盖面**？（是 → pdfrx 文本层近乎刚需；否 → 两强差距收窄到接线成本）
-3. **Windows Developer Mode 构建约束**（仅 pdfrx）是否可接受？（构建机一次性设置，发布产物与用户无感；CI 需同步配置）
-4. **密码 PDF 策略**：加密 PDF 明确拒绝（对齐 `encryptedMobi` 口径）还是走 `passwordProvider` 输密码打开？（pdfx 密码支持未确认，若选 pdfx 建议取「明确拒绝」口径）
+**拍板原文**（对应原四问 ①~④）：「1、pdfrx 2.6.5；2、是；3、是；4、拒绝」。
+
+| # | 拍板 | 落地验收条目（**不满足即不算完成**） |
+|---|---|---|
+| ① | 主选 = **pdfrx 2.6.5** | M2b-T01 的 PDF 渲染内核用 pdfrx（拍板基准版本 2.6.5）；渲染能力经 `META-10` ③ **注入式接口**接入，`lib/` 内不直接 import pdfrx（对齐 `RarExtractor` 注入缝模式）；pdfx 退役为历史备选 |
+| ② | PDF **纳入** CNT-06 全书搜索 | M2b-T04 全书搜索覆盖面**须含 PDF**（经 pdfrx `loadText` / `loadStructuredText` 文本层抽取）；验收对齐 CNT-06 ①②③（命中数与实际一致 / 点击跳转高亮 / 可取消不卡 UI） |
+| ③ | Developer Mode 约束**接受** | Windows 构建文档须写明「构建机一次性开启 Developer Mode」；CI/构建说明同步；发布产物与最终用户**无此要求** |
+| ④ | 密码 PDF = **明确拒绝** | 加密 PDF 打开时明确报错拒绝（对齐 `encryptedEpub` / `encryptedMobi` 口径），文案入 `error_messages.dart` 唯一来源表（RD-05，过 `error_messages_test` 1:1 护栏）；**不走** `passwordProvider` 输密码链路 |
+
+**原四问留档**：① 主选二选一（→ pdfrx 2.6.5）；② PDF 是否纳入 CNT-06 全书搜索覆盖面（→ 是）；③ Windows Developer Mode 构建约束是否可接受（→ 是）；④ 密码 PDF 策略：明确拒绝 vs `passwordProvider`（→ 拒绝）。
 
 ## 5. 附录：取证记录（2026-09-24）
 
