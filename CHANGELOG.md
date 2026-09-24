@@ -7,6 +7,7 @@
 
 ### 新增
 
+- M2b-T06 书签/字体/亮度/全屏（`TYP-06/07/08/09`）：`BookmarkStore` 每本一文件（防路径穿越）+ `BookmarkSheet` 增删实时更新且即时落盘；字体族/字号/行距 + 亮度遮罩/背景色/夜间映射（`TYP-07/08`）+ `ReadingPrefs` 持久化；沉浸全屏 + 常驻进度「第 N/M 章 · P%」随滚动实时（`TYP-09`，显示值 `_liveIndex`/`_livePos` 与存档语义值分离、`RC1` 闸门不动）；`reader_harness` 共享装具，reader 179 全绿 `37090e5`
 - M2b-T08 阅读会话采集内核（`STAT-01/02`，无 UI）：`SessionTracker` 空闲 3min（Q12）切会话（前段计「最后活跃 + 3min 宽限」）、跨 0 点按实际秒数拆天（起止坐标取边界前最后活跃）；`SessionStore` 按月分片 `stats/sessions-YYYY-MM.json`（`JsonStore`+`AtomicFile` 原子写入、坏分片隔离 `.corrupt`）、按 id 并集幂等合并（同 id 取较大时长、`duration≤0` 禁写）；`StatsIndex` `day_key`/`book_id` 双索引单遍扫描聚合，`tool/stats_bench.dart` 实测 4 万条 loadIndex 129ms ≤300ms（PASS）；`app_paths` 接口/实现拆分（stats 零平台插件） `377d171`
 - M2b-T01 备料：PDF 渲染插件选型对比（Q4 拍板材料，**不实施**）→ `docs/选型-PDF插件.md`——9 候选按双硬指标（渲染指定页为位图 + Android/Windows）筛至 pdfrx 2.6.5（主选推荐：6/6 全平台、文本层、可取消渲染）与 pdfx 2.11.0（备选：bytes 与图片页管线同构；无文本层、无 Linux）；含 FMT-01 伪分章 / META-10 注入式渲染接口 / §7.2 文字层搜索风险影响分析与 4 项拍板点 `8f4c3b4`
 - M2b-T03 格式嗅探与魔数纠偏（`FMT-06`）：MOBI/AZW3 以 PalmDB `BOOKMOBI` 魔数（偏移 60..68）识别、压过一切后缀（验收①：AZW3 改名 `.txt` 仍识别为 MOBI 系，tmp_book 真实双样本取证）；`FormatKind.mobi` + `mobiUnsupported` 导入即拒绝（口径区分「MOBI 还没支持」与「不认识的格式」，`M2b-T05` 接入解析器）；纯文本改名 `.epub` 取「明确报错」出口（交 EPUB 解析器 notZip 文案，既有锁不动）；中立判据层 `sniffer.dart` `12879fb`
@@ -36,6 +37,8 @@
 
 ### 修复
 
+- M2b-T06 滚动中进度恒不动：`ScrollUpdateNotification` 派发于 layout 之前，采样读 `localToGlobal` 拿到上一帧几何、章内位置恒算 0——`_laidOutPixels` 帧末基线把「滚动已发生、布局未跟上」的滞后补回块 top（`ScrollEnd` 写盘值的同型滞后一并治），见 tech-usage 2.27 `37090e5`
+- M2b-T06 书签删除验收③ 整组跑 30s 超时：`liquid_glass_widgets` 玻璃弹层在 `flutter test` 软件光栅下每帧背景捕获带数百毫秒真实异步开销且累积（对照实验换普通弹层后 28s→1.2s）——落盘收敛断言改条件驱动（满足即 break），见 tech-usage 2.26 `37090e5`
 - 测试夹具 `kTinyPng` 是坏 PNG（IDAT CRC 损坏、chunk 结构崩坏）→ Flutter `instantiateImageCodec` 解码必败；换 zlib 自构造 1×1 RGB PNG（三 chunk CRC 全过）——连带闭环 M1-T09 起挂案的 `cover_store` 缩略图既存失败（同一根因：缩略图生成解码失败） `28e66f8`
 
 ## 2026-09-23

@@ -635,6 +635,25 @@
 | **测试教训：异步匹配器必须 await** | 防假红/假绿 | `pdf_source_test.dart` | `expect(() => source.load(), throwsA(…))` **不等待** → 紧随其后的 `dispose()` 先跑 → `_prepare` 落进「打开完成时已释放」的竞态分支优雅返回空元数据 → 断言永远看不到异常（实测 1 条红即此因，实现无误）。修法：`await expectLater(source.load(), throwsA(…))` |
 | 验收对照（`Q4` 拍板） | 不满足即不算完成 | — | ①注入式接口：`lib/format/**` 零 pdfrx import，唯一适配器文件为 platform 层；②PDF 文本层：`PdfEngineDocument.pageText`（pdfrx `loadText().fullText`）已备好，T04 实现搜索时消费；③Developer Mode：构建文档待补（T09）；④密码 PDF：`encryptedPdf` 拒绝、无 passwordProvider 链路 |
 
+### 2.26 flutter test 下玻璃弹层的每帧开销（M2b-T06 实证）
+
+| 项 | 值 |
+|---|---|
+| 现象 | 含 `GlassOverlays.showSheet` 的用例**单跑秒过、整组跑** `TimeoutException after 0:00:30`；计时探针：打开玻璃弹层后 `tester.runAsync` 里一个真实 8ms `Future.delayed` 实测 620–662ms/次，且**随弹层交互累积**（①② 用例跑完后 ③ 才爆） |
+| 根因 | `liquid_glass_widgets` 背景捕获路径（`toImageSync` / `OffsetLayer.toImage`）在 `flutter test` **软件光栅**下每帧带数百毫秒真实异步开销。对照实验：同用例把玻璃弹层换成普通 `showModalBottomSheet` → 真实 timer 恢复 8–38ms、慢轮 28s→1.2s，元凶钉死 |
+| 修法 | 弹层内异步收敛断言**条件驱动**：循环设上限、满足即 break、每轮用多次 `Future.delayed(Duration.zero)` 让出真实事件循环 + 一次 `pump` 排空假区微任务；**禁固定大轮数**（60 轮必逼近 30s 线，整组并发必炸）；相关用例文件首行 `capTestTimeout()` |
+| 附带纪律 | 时序类探针（print 计时）须 `--plain-name` 单跑——整组并发跑 print 被并发测试交错污染 |
+| 落点 | `test/reader/bookmark_sheet_test.dart` 验收③ |
+
+### 2.27 `ScrollUpdateNotification` 派发于 layout 之前（M2b-T06 / TYP-09 实证）
+
+| 项 | 值 |
+|---|---|
+| 现象 | 滚动中进度恒 0：拖 150px 后（`position.pixels` 8→158，滚动确实发生）章块 `top` 仍报旧值 0.0（真实应为 −150），章内位置 `−top/height` 算出 0，进度不动 |
+| 根因 | `setPixels` → **同步**派发 `ScrollUpdateNotification` + `markNeedsLayout`，布局在本帧稍后才跑——通知处理器里读 `localToGlobal` 拿到的是**上一帧**几何，「滚动已发生、布局未跟上」的滞后被当成真实位置。`ScrollEndNotification` 时的采样（含写盘语义值）有同型滞后 |
+| 修法 | 采样按 `top − (pixels − _laidOutPixels)` 补回滞后；`_laidOutPixels` = 「当前几何所对应的滚动偏移」，`addPostFrameCallback` **帧末**（布局已生效）记录为基线。用 `pixels` 差而非 `notification.scrollDelta`——`jumpTo`/拖动/惯性全自洽（delta 可为 null）；布局突变（占位→真实）不归此管，仍是语义重锚（修 A）职责 |
+| 落点 | `lib/reader/reader_page.dart` `_laidOutPixels` / `_buildBlockSnapshots` |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
