@@ -16,6 +16,7 @@
 
 ### 变更
 
+- Q4 PDF 插件选型拍板（负责人，2026-09-24，原文「1、pdfrx 2.6.5；2、是；3、是；4、拒绝」）：主选 **pdfrx 2.6.5**（经 META-10 ③ 注入式接口接入）；PDF **纳入** CNT-06 全书搜索覆盖面（pdfrx 文本层）；Windows Developer Mode 构建约束**接受**（构建机一次性）；密码 PDF **明确拒绝**（对齐加密文件口径，不走 `passwordProvider`）。落地验收条目见 `docs/选型-PDF插件.md` §4 `f353364`
 - M2a-T06 PERF-01 接线：EPUB 解析移出主 isolate——后台 `parseEpubStructureTask`（纯数据 + 信封）跑 `parseEpubStructure`，主 isolate `bindEpubResult` 绑定 `loadBytes`/`readEntry` 闭包；TXT 准备/解码（`_txtPrepareTask`/`_txtDecodeTask`）同款后台化 `5aa0679`
 - IsolateRunner 升级：`compute()` 改 `dart:isolate` 的 `Isolate.run`（纯层零 Flutter 铁律不破）+ `runWithFallback` 失败护栏（派发失败/远端意外回落主 isolate 现跑，业务错误经信封原样抛出，对齐 RUST-01 降级语义） `5aa0679`
 - 性能基线工具 `tool/perf_bench.dart` 增 `maxGapMs`（主 isolate 心跳最大间隔，含收尾间隔）≈「UI 最长连续无响应时长」；before/after 对照入 `docs/perf-baseline/README.md` §7.1——TXT 994→27ms、320 章图书 475→130ms、无目录大书 9348→3996ms（残余为平坦目录取标题，待拍板） `5aa0679`
