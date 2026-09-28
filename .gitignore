@@ -34,6 +34,10 @@ android/key.properties
 .DS_Store
 *.log
 
+# 临时测试输出（负责人本机重定向产物，随跑随生成）
+/docs/test-output.txt
+.scratch_smoke.txt
+
 # 性能基线样本（由 tool/gen_perf_fixtures.dart 生成，不入库）
 /perf_fixtures/
 
