@@ -15,7 +15,7 @@
 | 1 | `lib/source/capability/` 那套形制复用还是另立？ | **另立目录 `lib/highperf/`，但严格照搬其形制**（接口 + 注册表 + 空实现回落 + 幂等 `warmUp` 探测 + `reasonFor`）。理由见 §A.4——书源功能已排除、`lib/source/**` 属待删原型，且 `Capability`/`ScriptCapability` 的语义域是 JS 求值，与格式解析域不同。 |
 | 2 | MOBI/AZW3 在 Rust 生态有现成 crate 吗？ | **有。`mobi` 0.8.0（MIT · 纯 Rust）完整实现了 HUFF + CDIC 解压**（源码含 `src/compression/huff.rs`，函数 `load_huff` / `load_cdic_record` / `unpack` 均已实证）。**PRD「需移植算法」这一隐含前提在 Rust 侧不成立**——但该 crate **3.9 年未更新**，且**未声明 KF8/AZW3 双格式边界支持**。详见 §I.6。 |
 | 3 | FRB 2.13.x 的 MSRV 与 rustc 1.89.0 匹配？ | **匹配，且余量极大**。FRB 2.13.0 的 `rust-version = "1.70.0"`【事实，crates.io API】，本机 rustc 1.89.0【事实，本次实测】。**注意：本机已装 codegen 是 2.12.0，非 PRD 所写的 2.13.x**（§G.4）。 |
-| 4 | Cargokit 与 Flutter 3.44.9 匹配？ | **官方已有对 Flutter ≥3.32 的修复（`irondash/cargokit` PR #118），3.44.9 理论上适用，但未被任何公开记录在 3.44.9 上验证过**【事实】。**必须走 `Q20` 最小通路验证，验证不过则整条 Rust 线回退纯 Dart**（§G.2）。 |
+| 4 | Cargokit 与 Flutter **3.47.5** 匹配？ | **官方已有对 Flutter ≥3.32 的修复（`irondash/cargokit` PR #118），3.47.5 理论上适用，但未被任何公开记录在该版本上验证过**【事实】（**2026-09-28 版本更正**：原问 3.44.9；项目已于 2026-09-24 升至 **3.47.5 / Dart 3.13.4**，**离已知修复边界 3.32 更远**，故原判断「理论上适用」的把握**只降不升**）。**必须走 `Q20` 最小通路验证，验证不过则整条 Rust 线回退纯 Dart**（§G.2）。 |
 | 5 | 「无 Rust 仍可构建」选哪种机制？ | **运行期 `try/catch` 加载动态库**。理由：五平台都有 `dart:ffi`，**条件导入（`if (dart.library.ffi)`）的编译期分支在五平台恒为真，根本无法区分「有 ffi 但 .so 缺失」**——它解决不了本问题。原生构建侧用「平台构建脚本 guard」，见 §G.3。 |
 | 6 | 等价性判定定义 | **三层字节级 / 字符串级严格相等**：① 章节骨架（归一化 href 序列 + 数量）② 正文块（`title + paragraphs` 字符串序列逐条 `==`）③ 元数据（title/author/language + 封面字节 + 来源标记）。**允许不等价的仅：耗时、内部句柄 id、搜索命中顺序（集合必须相等）、错误文案措辞（错误**类别**必须相等）**。见 §B.1。 |
 | 7 | `panic = "abort"` 处置 | `rust/Cargo.toml` 的 `[profile.dev]`/`[profile.release]` 均**显式** `panic = "unwind"`；并加一道**机械护栏测试** `test/rust_profile_guard_test.dart`（读 Cargo.toml，出现 `panic = "abort"` 即 fail）。见 §D.2。 |
@@ -828,14 +828,16 @@ h.cancel();
 
 > ⚠️ 注意：**各 crate 自己的 MSRV 才是真约束**（FRB 的 MSRV 只约束 FRB 自身）。本节末 §I 逐 crate 列了 MSRV，**全部 ≤ 1.88，均可被 rustc 1.89.0 编译**（唯一需要留意：`encoding_rs 0.8.41` 的 MSRV 是 **1.88**，`ebook 0.1.3` 是 **1.88**——都仍在 1.89 之下）。
 
-#### G.2.2 Cargokit 与 Flutter 3.44.9
+#### G.2.2 Cargokit 与 Flutter 3.47.5
+
+> **版本更正（2026-09-28 回填）**：本节原针对 Flutter **3.44.9**。项目已于 **2026-09-24** 升至 **3.47.5 / Dart 3.13.4**（起因是 `Q4` PDF 选型链，详见 PRD §16 `Q3`）。下面引用的官方原文与事实依据**一字未改**（append-only 留证），仅把「本项目适用版本」更正为 3.47.5。
 
 【事实】FRB 官方 Troubleshooting 原文（https://cjycode.com/flutter_rust_bridge/manual/troubleshooting）：
 
 > 「…then it is probably because the Cargokit (`rust_builder/cargokit`) version in your project … does not match the Flutter version and need the following changes: **Cargokit compatibility with Flutter: To match Flutter >=3.32.0: use Cargokit after that commit or just use it. Or change by yourself like https://github.com/irondash/cargokit/pull/118**」
 
-- 解读：官方已给出**对 Flutter ≥ 3.32 的修复**（`irondash/cargokit` PR #118）。Flutter **3.44.9 > 3.32**，因此「用最新 Cargokit」（即用最新 FRB codegen 生成的 `rust_builder`）**理论上适用**。
-- **但**：【推断】没有任何公开记录证明 3.44.9 被实跑验证过（3.32 是已知边界，3.44 是更高版本，Cargokit/Flutter 的耦合点可能已再变）。
+- 解读：官方已给出**对 Flutter ≥ 3.32 的修复**（`irondash/cargokit` PR #118）。本项目 Flutter **3.47.5 > 3.32**（**2026-09-28 更正**：原写 3.44.9），因此「用最新 Cargokit」（即用最新 FRB codegen 生成的 `rust_builder`）**理论上适用**。
+- **但**：【推断】没有任何公开记录证明 **3.47.5** 被实跑验证过（3.32 是已知边界，3.47 比 3.44 更高、**离边界更远**，Cargokit/Flutter 的耦合点可能已再变）。**故本次版本升级不改变本节的结论强度，反而加重了验证必要性**。
 - **因此**：`Q20` 🔴 的**最小 FRB 通路验证**不是可选项，**它是 Rust 线的唯一前置门槛**（§G.5 T03）。
 
 ### G.3 「无 Rust 仍可构建」的具体机制
@@ -1294,7 +1296,7 @@ strip = "symbols"
 | **L1** 🔴 | **MOBI/AZW3 的 KF8 边界是否仍要自己写？** `mobi` 0.8.0 只证实 MOBI6+PalmDOC+Huff/CDIC+EXTH，**未证实 KF8 boundary**。 | 直接决定阈值 1 的投入产出（§I.6）。若 KF8 也要自写，Rust 优势回落为「位操作更快 + 内存安全」。 | **先把「fork `mobi` + 验证 KF8」放进 T03**（早验证），拿到结论**再决定**是否重估阈值 1。**不要提前假设。** |
 | **L2** 🔴 | **EPUB 的 XHTML→段落（L2）是否纳入 Rust 替换？** 现阶段 Dart `html` 包行为无法被 Rust 逐字节复现 → 等价性验收不成立。 | PRD §15.6.2 把「EPUB 解压与 XHTML 解析」合成一项，未拆分；这会造成 `RUST-02` 无法验收。 | 建议 PRD **拆为两项独立阈值**：EPUB 解压（可 Rust 化）与 XHTML 解析（**暂不**）。**请转交产品经理。** |
 | **L3** | **FRB 版本：本机 codegen 2.12.0 vs PRD 写的 2.13.x vs crates.io 稳定 2.13.0。** | 生成物与运行时包版本必须一致，否则桥接断裂。 | 实施时统一 **2.13.0**（`cargo install flutter_rust_bridge_codegen --version 2.13.0` + `flutter_rust_bridge: 2.13.0`）。**请转交产品经理修订 PRD 措辞。** |
-| **L4** | **Cargokit 在 Flutter 3.44.9 是否可用**（`Q20`）。 | 已知修复到 3.32，3.44.9 未验证。这是 Rust 线唯一可能整体失败的点。 | **T03 必须先做最小通路验证**；不过则整条线回退纯 Dart（并留档，同 §15.6.4 留证原则）。 |
+| **L4** | **Cargokit 在 Flutter 3.47.5 是否可用**（`Q20`）。**2026-09-28 版本更正**：原写 3.44.9，项目已于 2026-09-24 升至 3.47.5（PRD §16 `Q3`）。 | 已知修复到 3.32，**3.47.5** 未验证（比原 3.44.9 更远离边界）。这是 Rust 线唯一可能整体失败的点。 | **T03 必须先做最小通路验证**；不过则整条线回退纯 Dart（并留档，同 §15.6.4 留证原则）。 |
 | **L5** | **`mobi` crate 停更（3.9 年）+ 残留 `println!` 调试输出，是否 fork？** | fork 引入维护成本；不 fork 则日志刷屏 + 无安全更新。 | 建议 **fork 到 `rust/vendor/mobi`**（MIT 允许）+ 清掉 `println!/eprintln!`，pin 死版本。 |
 | **L6** | **编码解码归属**：Rust 只做「探测给编码名」（回 Dart 解码，保 `charset` 行为），还是 Rust 一并解码（`encoding_rs`，可能改变 fx11 等畸形样本输出）？ | 直接决定 `RUST-02` L2 能否成立。 | 建议**首版只做探测**，解码留 Dart；Rust 解码另立阈值。 |
 | **L7** | **「跨边界块 ≤ 1MB」是否也约束「小结构」？** PRD 只写了数据块。 | 影响桥接层断言写法。 | 本设计定义：数据块 ≤ 1MB、小结构 ≤ 64KB（§C.5）。**请确认该细分是否可写入 PRD 口径。** |

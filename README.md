@@ -26,7 +26,7 @@
 
 ```
 MReader/
-├── pubspec.yaml                     # 依赖清单 + SDK 约束（sdk: ^3.12.2）
+├── pubspec.yaml                     # 依赖清单 + SDK 约束（sdk: ^3.13.0）
 ├── analysis_options.yaml            # lint 规则（include flutter.yaml）
 ├── README.md                        # 本文件
 ├── lib/
@@ -226,10 +226,10 @@ flutter test
 | Windows 上 `flutter run -d windows` 报工具链缺失 | 需要 Visual Studio 2022 + 「使用 C++ 的桌面开发」工作负载。 |
 | `Target of URI doesn't exist: package:flutter_lints/flutter_lints.yaml` | `analysis_options.yaml` 里的文件名写错了。**flutter_lints 的规则文件名是 `flutter.yaml`，不是 `flutter_lints.yaml`**（4.x 和 6.x 都叫 `flutter.yaml`）。本工程已写对。 |
 | 中文显示成 □□□ | 系统缺中文字体（Linux 常见）→ `sudo apt install fonts-noto-cjk`。Windows / macOS 自带。 |
-| `Because mreader requires SDK version ^3.12.2 ...` | Flutter 版本过旧 → 用 Flutter 3.44.9-stable（内置 Dart 3.12.2），本机在 `C:\src\flutter`。 |
+| `Because mreader requires SDK version ^3.13.0 ...` | Flutter 版本过旧 → 用 Flutter **3.47.5-stable（内置 Dart 3.13.4）**，本机在 `C:\src\flutter`。（**2026-09-28 更新**：原为 3.44.9 / Dart 3.12.2，已于 2026-09-24 升级，起因见 PRD §16 `Q3`。） |
 | 选文件后提示"未能读取文件内容（bytes 为空）" | 某些平台 `withData` 未生效。本工程已固定 `withData: true`。若仍失败，可把 `FileType.custom` 换成 `FileType.any` 试试。 |
 | `flutter create` 之后 `lib/main.dart` 变成了计数器 demo | 你加了 `--overwrite`。删掉平台目录后，**去掉 `--overwrite`** 重跑；`lib/main.dart` 从本工程的副本还原。（注意 `--overwrite` 还会一起覆盖 `analysis_options.yaml`、`README.md`、`.gitignore`。） |
-| `error: "archive" ... version solving failed` | `archive` 被抬到了 4.x。本项目必须 `^3.6.1`（4.x 的 `ArchiveFile` API 不兼容）。 |
+| `error: "archive" ... version solving failed` | `archive` 版本未对齐。本项目实际用 **`archive: 4.3.0`**（2026-09-24 由 3.x 迁移，`64ae658`）。**4.x 的 `ArchiveFile` API 与 3.x 不兼容，迁移时须同步改调用点**。（**2026-09-28 更新**：原注「本项目必须 `^3.6.1`（4.x 不兼容）」已作废——`pdfrx_engine` 硬要求 `archive ^4.x`，是这次迁移的直接原因；PRD §15.4 已同步。） |
 
 ---
 

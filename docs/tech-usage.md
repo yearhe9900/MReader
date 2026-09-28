@@ -13,8 +13,8 @@
 
 | 技术 | 版本 | 用途 | 引入批次 | 落点文件 |
 |---|---|---|---|---|
-| Dart | 3.12.2（随 Flutter 3.44.9-stable） | 应用与解析全部用 Dart，无 JS/WebView | 工程初始化 | `pubspec.yaml`（`environment.sdk: ^3.12.2`） |
-| Flutter | 3.44.9-stable（已锁定，不升级） | 纯自绘 UI（不走 WebView / foliate-js） | 工程初始化 | `pubspec.yaml`、各平台目录 |
+| Dart | 3.13.4（随 Flutter 3.47.5-stable） | 应用与解析全部用 Dart，无 JS/WebView | 工程初始化；**2026-09-24 由 3.12.2 升级** | `pubspec.yaml`（`environment.sdk: ^3.13.0`） |
+| Flutter | 3.47.5-stable（**2026-09-24 升级**；原「3.44.9 已锁定不升级」随之解除） | 纯自绘 UI（不走 WebView / foliate-js） | 工程初始化；升级缘由见 §2.37 | `pubspec.yaml`、各平台目录 |
 | Material 3 | `useMaterial3: true` + `colorSchemeSeed: Colors.indigo` | 主题三态接线（浅色 / 深色） | M1-T01 | `lib/app.dart` |
 | flutter_lints | 6.0.0 | 静态检查规则集 | 工程初始化 | `analysis_options.yaml`、`pubspec.yaml` |
 
@@ -113,7 +113,7 @@
 
 | 技术点 | 用途 | 落点 | 关键写法或坑 |
 |---|---|---|---|
-| Flutter 工程脚手架 + 五平台目录 | 项目基线 | `pubspec.yaml`、`android/`…`linux/` | `environment.sdk: ^3.12.2` 对齐 Flutter 3.44.9 内置 Dart |
+| Flutter 工程脚手架 + 五平台目录 | 项目基线 | `pubspec.yaml`、`android/`…`linux/` | `environment.sdk: ^3.13.0` 对齐 Flutter 3.47.5 内置 Dart（原 `^3.12.2` / 3.44.9，2026-09-24 升级） |
 | 依赖版本锁定 | 稳定性 | `pubspec.yaml` / `pubspec.lock` | `archive` 锁 3.x（4.x 改 API）；`file_picker` / `xml` / `html` / `charset` / `path` |
 | Dart 包结构（`lib/` 分层） | 解析链路可单测 | `lib/epub/`、`lib/model/`、`lib/ui/` | 业务层不 import `dart:io` 目录 API |
 
@@ -269,16 +269,16 @@
 
 | 技术点 | 用途 | 落点 | 关键写法或坑 |
 |---|---|---|---|
-| **精确锁定** `liquid_glass_widgets: 1.6.2`（**不带 `^`**） | PRD §11.4 的全部「已知限制与应对」都是针对 1.6.2 **逐条实测**得出 | `pubspec.yaml` | `^1.6.2` 会解析到 1.7.0（2026-09-20 发布），与「针对 1.6.2 实测」**自相矛盾**；`pubspec.lock` 解析值 = `1.6.2`。库自身约束 `flutter >= 3.41.0`（本机 3.44.9 满足），且**零 `flutter/material.dart` 依赖**、**未引入任何额外传递包** |
+| **精确锁定** `liquid_glass_widgets: 1.7.0`（**不带 `^`**） | PRD §11.4 的「已知限制与应对」**原针对 1.6.2 逐条实测**；**2026-09-21 由负责人决定升 1.7.0**（`c996106`）→ 关键断言已在 1.7.0 上复核（见下三行，2026-09-28） | `pubspec.yaml` | 锁定纪律 = 精确版本、不带 `^`。`pubspec.lock` 解析值 = `1.7.0`（`sha256:547fe867…`，源 `pub.flutter-io.cn`）。库自身约束 `flutter >= 3.41.0` / `sdk >=3.5.0 <4.0.0`（本机 3.47.5 满足），且**零 `flutter/material.dart` 依赖**、**未引入任何额外传递包** |
 | `cupertino_icons` 必须保留 | PRD §11.4 列为**强制依赖** | `pubspec.yaml` | 从 pubspec 删掉会让玻璃图标渲染成 `?`（库内部用具名图标） |
 | 有效亮度跟随**应用 ThemeMode**（`UI-01` ②） | 否则「应用切深色、系统仍浅色」时玻璃亮度错位 | `lib/theme/app_theme.dart`（纯函数 `resolveBrightness`）、`lib/main.dart` | 三态：`light`/`dark` 恒取自身，`system` 取平台亮度。接线方式是 `LiquidGlassWidgets.wrap(brightnessResolver: Theme.maybeBrightnessOf)`，**包裹位置在 `MReaderApp` 之外**——`lib/app.dart` 里 `MaterialApp.builder` 那层透明 `Material` 一字未动 |
 | 档位唯一出口 `GlassKit`（`UI-05` 预留） | P0 固定 `standard`，**不引入 `premium`** | `lib/ui/glass_kit.dart` | `kAppGlassQuality = standard`；固定表面的覆盖值 `fixedSurfaceQualityOverride` **恒为 `null`**（传 `null` 即「不覆盖」）。浮层（`GlassDialog.show` / `GlassSheet.show`）显式传 `standard` |
-| 「固定表面自动升 premium」是**库的行为**，不是我们的 | 佐证「本项目从不手传 `premium`」 | 复核来源：`liquid_glass_widgets-1.6.2/lib/widgets/surfaces/glass_scaffold.dart:559 / :584` | `GlassScaffold` 对 `appBar` / `bottomBar` 传 `defaultQuality: GlassQuality.premium`，经 `GlassIsolationScope` 下发为子控件的档位提示。**手写 `premium` 会绕过该隔离策略** |
+| 「固定表面自动升 premium」是**库的行为**，不是我们的 | 佐证「本项目从不手传 `premium`」 | 复核来源：**1.7.0** `lib/widgets/surfaces/glass_scaffold.dart:559 / :584` | `GlassScaffold` 对 `appBar` / `bottomBar` 传 `defaultQuality: GlassQuality.premium`，经 `GlassIsolationScope` 下发为子控件的档位提示。**手写 `premium` 会绕过该隔离策略**。**1.7.0 复核（2026-09-28）：行号 559 / 584 与 1.6.2 逐字一致** |
 | `OpaqueContentSurface`＝「不透明」唯一出口（`UI-04`） | 内容层各页统一走它，避免各页自己写 `Container(color:)` 各自失守 | 同上 | 底色经 `fullyOpaque()` 强制 `alpha = 1`；内部用 `Material` 同时补上「玻璃库没有 Material 祖先」的坑；**debug 下 `assert` 拒绝玻璃子控件**（玻璃不可嵌套） |
-| `isGlassWidget()` 红线可判定化 | 把「不得嵌套玻璃」从文档约定变成可断言的形式 | 同上 | 覆盖库中 37 个 `Glass*` 表面类型（容器 / 交互 / 输入 / 导航 / 浮层）。**已逐类型核对存在于 1.6.2**（`lib/widgets/**/*.dart` 的类声明） |
+| `isGlassWidget()` 红线可判定化 | 把「不得嵌套玻璃」从文档约定变成可断言的形式 | 同上 | 判定表覆盖 **35 个** `Glass*` 表面类型（容器 / 交互 / 输入 / 导航 / 浮层）＝ `lib/ui/glass_kit.dart` 中 `isGlassWidget` 的 `widget is Glass*` 分支数（`sed -n '71,105p' lib/ui/glass_kit.dart`）。**已逐类型核对存在于 1.7.0，零缺失**（2026-09-28）。⚠️ **勘误**：原文写「37 个」**不可复现**——该判定表在 `08c2b65` / `9519c5f` / `5b96ca6` 三个提交上**始终为 35**；而库 `lib/widgets` 下 `class Glass*`（含 `*Scope` / `*Controller` / `*Painter` 等非表面类）实为 **90**（1.6.2 与 1.7.0 完全相同）。「37」与两者均不符，属**原文计数错误**，与版本升级无关 |
 | `GlassScope`（`InheritedWidget`） | 有效亮度 / 档位 / 玻璃隔离范围收敛一处，下游不必各自猜 | `lib/ui/glass_scope.dart` | `brightnessOf` 三级回退：本作用域 → `GlassTheme.brightnessOf`（库级联）→ …；`qualityOf` → `GlassAdaptiveScopeData.maybeOf(...)?.effectiveQuality` → `kAppGlassQuality`。**本批只备好，尚未接入业务页**（`GlassScopeProvider` 当前无调用方，属预期） |
 | 着色器预热 + 诚实降级（`UI-01` ①） | 避免首帧白闪 | `lib/main.dart`（`_warmUpGlassShaders`） | `await LiquidGlassWidgets.initialize()` 包在 `try/catch` 里：**失败只 `debugPrint`、不抛、不阻塞**。⚠️ **待优化**：当前是在 `settings.load()` **之前**串行 `await`，会给冷启动叠加一段着色器预编译时间（`v2.3` 冷启动是硬指标）——可改为与 `appPaths.dataDir()` / `settings.load()` 并行（`Future.wait`） |
-| Windows / Linux 被库**静态封顶 `standard`** | 佐证 `NF-C8`「不得宣称五平台等价」与排期「不在本机 Windows 上反复调视觉」（`Q3` / `R8`） | 复核来源：`liquid_glass_widgets-1.6.2/lib/liquid_glass_setup.dart` 的 `_shouldSkipPremiumPreload()` | 对 `kIsWeb` / `windows` / `linux` 返回 `true` → `initialize()` 跳过 premium 多趟着色器预载，`GlassAdaptiveScope` 把这些平台上限压到 `standard`。**本机（Windows）看到的观感与 Android 不一致是库的既定行为，不是配置错误** |
+| Windows / Linux 被库**静态封顶 `standard`** | 佐证 `NF-C8`「不得宣称五平台等价」与排期「不在本机 Windows 上反复调视觉」（`Q3` / `R8`） | 复核来源：**1.7.0** `lib/liquid_glass_setup.dart` 的 `_shouldSkipPremiumPreload()`（`:148-153`） | 对 `kIsWeb` / `windows` / `linux` 返回 `true` → `initialize()` 跳过 premium 多趟着色器预载，`GlassAdaptiveScope` 把这些平台上限压到 `standard`。**本机（Windows）看到的观感与 Android 不一致是库的既定行为，不是配置错误**。**1.7.0 复核（2026-09-28）：`:148-153` 判定式与 1.6.2 `:148` 逐行一致** |
 | 红线自检形式（测试） | 防「地基被误删 / 档位被偷改」 | `test/ui/glass_kit_test.dart` | 断言：档位恒 `standard`、固定表面覆盖值恒 `null`、`OpaqueContentSurface` 底色 `alpha == 1`、内容层嵌套玻璃触发 `AssertionError` |
 | 纯逻辑先于依赖可测 | 主题三态解析不依赖玻璃库，`pub get` 前即可跑 | `test/ui/app_theme_test.dart` | `lib/theme/app_theme.dart` **不 import 任何玻璃库**；`Settings.defaultFontSize`(18) / `defaultLineHeight`(1.6) 以具名常量转出，供 M1-T05（合成封面取主题色）与 M1-T06（排版）复用 |
 | 黄色下划线回归护栏 | `UI-04` / PRD §11.4 防护 | `test/ui/app_material_layer_test.dart` | 断言 `app.dart` 那层 `Material(type: MaterialType.transparency)` 仍在，且首屏 `DefaultTextStyle` 不命中 `WidgetsApp` 的 fallback（黄底双下划线） |
@@ -835,6 +835,42 @@
 改写为**回归②「深章节恢复必须收敛并写回语义坐标」**（同一 fixture：20 章、仅 `[4,5,6]` 可载、下标 4 为真实长章；
 断言目标章标题/正文进树 + 存档坐标回到 0.5±），并新增**回归②b「恢复校正未落定即关书 → 一次都不写盘」**
 （用「轮询到遮罩在位 = 校正进行中」抓中间态，保住 `RC1` 闸门覆盖）。
+
+### 2.37 文档-现实脱节回填：Flutter 3.47.5 / 玻璃库 1.7.0 / `archive` 4.3.0（2026-09-28）
+
+| 项 | 值 |
+|---|---|
+| 事项 | 版本事实回填 + 「被侧向推翻的定案」复核——把「文档写的」对齐「实际跑的」 |
+| 触发 | 讨论「要不要自绘 canvas / 能否参考 567Reader 提速」时核查引擎事实，**用户当场指出「Flutter 现版本已经是 Impeller」** → 顺着查 `project.dart` 才发现文档与实机差了三个小版本 |
+| 提交 | 见 `CHANGELOG.md` 2026-09-28 段「文档回填」条 |
+| 一句话结论 | 4 份文档共 **24 处**版本引用过时；**最严重的一处落在 ★GATE★ 的判据上**（`M35-T03` / `Q20` / `R2` / 架构 `L4` 把 Cargokit 验证对象写成 3.44.9，实机是 **3.47.5**） |
+
+**三处独立脱节（不是同一个错的三种表现，必须分开处置）**
+
+| # | 脱节 | 事实 | 处置 |
+|---|---|---|---|
+| 1 | **版本引用**：24 处写 `3.44.9` / `3.12.2`（PRD 10 / architecture 5 / tech-usage 4 / schedule 3 / README 2） | 实机 Flutter **3.47.5** / Dart **3.13.4**（2026-09-24 升级；`pubspec.yaml:6-9`、`bin/cache/flutter.version.json` 双复核） | 本次全量回填；`CHANGELOG.md` 此前**零记录**，一并补记 |
+| 2 | **被侧向推翻的定案**：PRD §16 `Q3` 仍标 🟡「本期不升级，接受 Windows 走 Skia 轻量路径」 | 实际**已升级**——但它不是按 `Q3` 自己立项走的，而是被 **`Q4` PDF 选型链侧向推翻**（`pdfrx 2.6.5` 需 Flutter ≥3.47 / Dart ≥3.13；`pdfrx_engine` 0.1.0 起**硬要求 `archive ^4.x`**） | 按项目「推翻定案」流程**完整改写**：原定案 / 决定性论据 / **未被推翻的部分** / 代价已发生 —— 四段俱在，状态改 ✅ |
+| 3 | **★GATE★ 判据版本错**（**最高优先级**）：`M35-T03` / `Q20` / `R2` / 架构 `L4` 均写「Cargokit × Flutter **3.44.9** 未验证」 | 实机 **3.47.5**，**且距已知修复边界（≥3.32）比 3.44.9 更远** | 四处全部更正为 3.47.5。风险**性质**不变、**级别不改**（🟡），但**验证必要性只增不减**——已写进 `R2` 的应对栏 |
+
+**连带发现（顺手一并修正，均属事实性错误）**
+
+| 项 | 原文 | 实际 |
+|---|---|---|
+| `archive` 约束（PRD §15.4、`README` §故障速查） | 「本项目**必须锁 3.x**，4.x 的 `ArchiveFile` API 不兼容」 | `archive: 4.3.0`（2026-09-24 迁移 `64ae658`）——**是 `pdfrx_engine` 硬要求 `^4.x` 逼出来的迁移**，原「必须锁 3.x」已作废 |
+| PDF 置信度举例（`schedule.md` §0.6 低置信度表） | 「`FMT-01` PDF（**插件未选型**）」 | 已选型 `pdfrx 2.6.5`（`Q4` 已闭环）→ 改写为「**集成成本未实测**」，不再算「需外部选型」 |
+| `R9`（`schedule.md` §5 风险表） | 🟢「依赖版本锁定与 Flutter 升级的两难」，处置 =「**本期不升级**」 | 升级**已发生**且**实际 ≈ 0 额外成本**（作为 2026-09-24 独立批次一次做完，原估的 +3~+6 周**未发生**）→ **整条关闭**；「依赖版本锁定」半条仍有效（玻璃库仍精确锁 1.7.0 不带 `^`、FRB 2.13.0 仍须 codegen ≡ runtime） |
+| `isGlassWidget` 计数（§2.8） | 「**37 个** `Glass*` 类型」 | 判定表实为 **35**（`08c2b65` / `9519c5f` / `5b96ca6` 三提交上**始终为 35**）；库 `lib/widgets` 下 `class Glass*` 为 **90**（1.6.2 与 1.7.0 **完全相同**）。「37」**与两者均不符 → 原文计数错误**，与版本升级无关 |
+| Windows 玻璃「为什么不一样」（`NF-C8` / §15.3 / `build-windows.md` §3.2 / `schedule` N-5 与 R8） | 「本机 Windows 走 **Skia 轻量路径**」——其**前提**是 3.44.9 不满足「Windows 获得 Impeller ANGLE 需 Flutter ≥3.47」 | 前提**已失效**（已升 3.47.5，门槛满足）。但**库自身仍把 Windows / Linux 静态封顶 `standard`** → **观感差异仍在，只是原因变了**。⚠️ 两层原因必须分开表述，不能混成一句 |
+
+**复核边界（哪些结论能读源码复核、哪些不能——不伪造复核记录）**
+
+- **可复核 → 已复核**：三条依赖 1.6.2 **源码**的关键断言，已在 1.7.0 上逐条核对：① `glass_scaffold.dart:559 / :584` 的 `defaultQuality: GlassQuality.premium`；② 判定表 **35 个类型零缺失**；③ `_shouldSkipPremiumPreload()` 对 `kIsWeb` / `windows` / `linux` 返回 `true`（`:148-153`）——**行号与判定式逐字一致**。
+- **不可复核 → 明确标注**：§11.4 中依赖**运行观感 / 性能实测**的条目（如「Windows 与 Android 的实际观感差异」）**无法由读源码得出** → **保留「针对 1.6.2 实测」的原始表述，标注「待在 1.7.0 上重新验收」**，**不写「已复核」**。
+
+**闸门结论**：本次回填**不改动任何验收结论**——`NF-C8` 的「按平台分别判定」口径一字未动、PRD §15.6.3 阈值表一字未动。**唯一实质影响 = `M35-T03` 的验证对象**（3.44.9 → 3.47.5）。
+
+**遗留（不在本批范围，交负责人拍板）**：`schedule.md` §6 周序、7 条 lint、总体人天百分比、工作区行尾翻新（`R9` 已关闭但行尾策略 `a0c7c71` 的「本批不翻新现存工作区」仍挂账）。
 
 ## 测试分组与局部执行（2026-09-23）
 

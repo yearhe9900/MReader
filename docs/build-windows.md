@@ -77,7 +77,15 @@ Android 目标（`flutter build apk`）另需 **Android SDK / JDK 17**（本机 
 
 ### 3.2 玻璃特效观感（`Q3`）
 
-本机 Windows 走 **Skia 轻量路径**，与 Android 主力机的 Impeller/原生模糊**观感不一致**。
+本机 Windows 的玻璃被库**静态封顶 `standard`**（PRD §11.4 末条，1.7.0 已复核），与
+Android 主力机（Impeller 默认启用）**观感不一致**。
+
+> ⚠️ **2026-09-28 修正**：原注「本机 Windows 走 **Skia 轻量路径**」的前提**已失效**——
+> 项目已于 **2026-09-24 升至 Flutter 3.47.5**，而 Windows 获得 Impeller ANGLE 渲染路径
+> 只需 Flutter ≥3.47，**门槛现已满足**。Windows 与 Android 观感仍可能不同，但**原因已转为
+> 库自身的平台封顶策略**（`_shouldSkipPremiumPreload()` 对 `windows` 返回 `true`），
+> 不再是「没有 Impeller ANGLE」。**实际观感差异待在 Windows 上重新实测**。
+
 **不要在 Windows 上反复调玻璃视觉**——视觉调优集中在 Android 真机一次性完成
 （PRD `Q1`/`Q3`；`schedule.md` §4.2 的 N-5 已写明该约束）。
 
