@@ -21,7 +21,7 @@ import 'settings/perf_frame_monitor.dart';
 import 'settings/perf_prefs_store.dart';
 import 'settings/settings_store.dart';
 import 'ui/glass_runtime.dart';
-import 'ui/shelf_page.dart';
+import 'ui/home_shell.dart';
 
 Future<void> main() async {
   // path_provider 等插件在访问前需要先初始化绑定。
@@ -86,14 +86,18 @@ Future<void> main() async {
   // `UI-01` ②：`brightnessResolver: Theme.maybeBrightnessOf` 让玻璃控件跟随
   // **应用 ThemeMode**（light / dark / system），而非仅系统亮度。
   // 包裹位置在 `MReaderApp` **之外**，`app.dart` 里 builder 的透明 Material 地基一字不动。
+  //
+  // 2026-09-28：`home` 由 `ShelfPage` 改为 [HomeShell]——五 tab（书架 / 统计 / AI /
+  // 笔记 / 设置）+ 玻璃浮动底栏；书架成为其中一个 tab，依赖原样透传。
   runApp(
     LiquidGlassWidgets.wrap(
       child: MReaderApp(
         settings: settings,
-        home: ShelfPage(
+        home: HomeShell(
           repository: repository,
           coverStore: coverStore,
           progressStore: progressStore,
+          perfPrefs: perfPrefs,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,

@@ -40,8 +40,11 @@ import 'glass_scope.dart';
 
 /// 玻璃对话框动作按钮类型（[GlassOverlays.showAlert] 的参数元素）——
 /// 在此 re-export，调用方只需 import 本文件。
+///
+/// 同 `GlassTab` / `GlassTabBarExtraButton`：导航壳层（`home_shell.dart`）需要它们
+/// 构造底栏标签，re-export 后全仓页面**不必直接 import 玻璃库**。
 export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
-    show GlassDialogAction;
+    show GlassDialogAction, GlassTab, GlassTabBarExtraButton;
 
 /// 应用默认玻璃质量档位（PRD §11.3，= 高档的滚动区档位）。
 ///
@@ -228,17 +231,34 @@ class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-/// 导航层底栏（薄封装 [GlassTabBar.bottom]）。
+/// 导航层底栏（薄封装 [GlassTabBar.bottom]；库的原生形态即 **iOS 26 浮动胶囊**——
+/// 左右 / 底部各留内边距、圆角、64 高，**不是贴底通栏**）。
 ///
 /// 显式传档位（高档 `null` = 吃 `GlassScaffold` 的 `premium` 提示）；
 /// 「关」档退化为 Material [NavigationBar]。
+///
+/// 各尺寸参数的默认值与库一致——传出去等价于不传，**只作显式化**，
+/// 便于将来按平台/档位微调（`UI-05`）。**不暴露 `barBorderRadius`**：
+/// 库的默认圆角是私有常量，硬编码会与库升级脱钩。
 class GlassNavBar extends StatelessWidget {
-  /// 创建玻璃底栏。
+  /// 创建玻璃底栏（默认即浮动胶囊形态）。
   const GlassNavBar({
     super.key,
     required this.tabs,
     required this.selectedIndex,
     required this.onTabSelected,
+    this.extraButton,
+    this.standalone = false,
+    this.barHeight = 64,
+    this.horizontalPadding = 20,
+    this.verticalPadding = 20,
+    this.spacing = 8,
+    this.iconSize = 24,
+    this.labelFontSize = 11,
+    this.showIndicator = true,
+    this.indicatorColor,
+    this.selectedIconColor,
+    this.unselectedIconColor,
   });
 
   /// 标签页配置。
@@ -249,6 +269,54 @@ class GlassNavBar extends StatelessWidget {
 
   /// 选中回调。
   final ValueChanged<int> onTabSelected;
+
+  /// 胶囊内的醒目附加按钮（贴右侧、与标签区分开，如「＋」/ 主操作）。
+  ///
+  /// 「关」档（Material [NavigationBar]）**不渲染**该按钮——退化档以功能完整为准，
+  /// 需要它的页面应另有入口（如顶栏按钮）。
+  final GlassTabBarExtraButton? extraButton;
+
+  /// 是否作为**独立浮层**使用（没有 [GlassScaffold] 祖先，例如 `Stack` 里浮起的胶囊）。
+  ///
+  /// 库的固定表面 `premium` 提升来自 `GlassScaffold` 内层注入的
+  /// `GlassIsolationScope(defaultQuality: premium)`（`UI-05 ①`）。脱离该祖先时
+  /// `GlassThemeHelpers.resolveQuality` 会落到 `fallback = GlassQuality.standard`，
+  /// 高档就跟不上设计意图。`standalone: true` 时本封装**只在高档**显式声明
+  /// `premium`，语义与「库自动提升」等价——**不是「写死 premium」**：
+  /// 中 / 低档仍由 [GlassScope] 的 `fixedSurfaceQualityOverride` 钉 standard / minimal。
+  ///
+  /// `GlassNavScaffold` 内的常规用法保持 `false`。
+  final bool standalone;
+
+  /// 胶囊高度。
+  final double barHeight;
+
+  /// 胶囊左右外边距（`>0` 即「悬浮」、内容在其两侧可见）。
+  final double horizontalPadding;
+
+  /// 胶囊底部外边距（浮起高度，安全区由此之上叠加）。
+  final double verticalPadding;
+
+  /// 标签之间的间距。
+  final double spacing;
+
+  /// 图标尺寸。
+  final double iconSize;
+
+  /// 标签文字字号。
+  final double labelFontSize;
+
+  /// 是否显示选中指示器（滑动胶囊）。
+  final bool showIndicator;
+
+  /// 指示器颜色（缺省随主题 `colorScheme.primary`）。
+  final Color? indicatorColor;
+
+  /// 选中态图标颜色。
+  final Color? selectedIconColor;
+
+  /// 未选中态图标颜色。
+  final Color? unselectedIconColor;
 
   @override
   Widget build(BuildContext context) {
@@ -272,9 +340,23 @@ class GlassNavBar extends StatelessWidget {
       tabs: tabs,
       selectedIndex: selectedIndex,
       onTabSelected: onTabSelected,
-      // 固定表面：高档不传 → 库在 GlassScaffold 内自动提升 premium（§11.3 / UI-05 ①）；
-      // 中 / 低档显式钉 standard / minimal（取消提升）。**切勿写死 premium**。
-      quality: config.fixedSurfaceQualityOverride,
+      extraButton: extraButton,
+      barHeight: barHeight,
+      horizontalPadding: horizontalPadding,
+      verticalPadding: verticalPadding,
+      spacing: spacing,
+      iconSize: iconSize,
+      labelFontSize: labelFontSize,
+      showIndicator: showIndicator,
+      indicatorColor: indicatorColor,
+      selectedIconColor: selectedIconColor,
+      unselectedIconColor: unselectedIconColor,
+      // 固定表面档位：中 / 低档由 `fixedSurfaceQualityOverride` 钉死（取消提升）；
+      // 高档为 `null` —— 在 [GlassScaffold] 祖先内（默认用法）库会自动提升 `premium`
+      // （§11.3 / `UI-05 ①`）；若是独立浮层（[standalone]），该祖先不存在、
+      // `resolveQuality` 会落到 `fallback = standard`，故显式补上 `premium`。
+      quality: config.fixedSurfaceQualityOverride ??
+          (standalone ? GlassQuality.premium : null),
     );
   }
 }

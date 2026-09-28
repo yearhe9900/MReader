@@ -28,6 +28,8 @@ import '../reader/reader_page.dart';
 import 'book_card.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
+import 'home_shell.dart' show kShellBottomInset;
+import 'library_search_page.dart';
 
 /// 书架首页。
 class ShelfPage extends StatefulWidget {
@@ -256,6 +258,42 @@ class _ShelfPageState extends State<ShelfPage> {
     }
   }
 
+  /// 顶栏假搜索框 → 书库搜索页；选中结果直接进详情页。
+  ///
+  /// 搜索做成**独立页面**（而非就地输入）：查询与书架状态解耦，
+  /// 也不必在当前子树里处理键盘遮挡。与 anx-reader 的做法一致。
+  Future<void> _openSearch() async {
+    final BookRecord? picked = await Navigator.of(context).push<BookRecord>(
+      MaterialPageRoute<BookRecord>(
+        builder: (_) => LibrarySearchPage(books: _books),
+      ),
+    );
+    if (picked != null && mounted) {
+      await _openDetail(picked);
+    }
+  }
+
+  /// 书架背景渐变（**两个色标都完全不透明**）。
+  ///
+  /// anx-reader 用 `colorScheme.primary.withAlpha(5)` 叠在 Scaffold 底色上做出
+  /// 极淡的右上角光晕。本项目 `UI-04` 要求内容层不得半透明，故选**先把半透明色
+  /// 与底色合成**（[Color.alphaBlend]）——合成的结果 alpha 恒为 1，
+  /// 观感与「半透明叠底」等价，红线不破。
+  BoxDecoration _shelfBackground(ThemeData theme) {
+    final Color base = theme.scaffoldBackgroundColor;
+    final Color glow = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.02),
+      base,
+    );
+    return BoxDecoration(
+      gradient: RadialGradient(
+        center: Alignment.topRight,
+        radius: 1,
+        colors: <Color>[glow, base],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -273,7 +311,8 @@ class _ShelfPageState extends State<ShelfPage> {
 
     return GlassNavScaffold(
       appBar: GlassTopBar(
-        title: const Text('书架'),
+        // 标题位放「假搜索框」——外观是搜索框，点击进搜索页（照搬 anx-reader）。
+        title: _BookSearchEntry(onTap: _openSearch),
         actions: <Widget>[
           if (_importing)
             const Padding(
@@ -293,7 +332,10 @@ class _ShelfPageState extends State<ShelfPage> {
         ],
       ),
       body: OpaqueContentSurface(
-        child: _books.isEmpty ? _buildEmptyState(theme) : _buildBookGrid(theme),
+        child: DecoratedBox(
+          decoration: _shelfBackground(theme),
+          child: _books.isEmpty ? _buildEmptyState(theme) : _buildBookGrid(theme),
+        ),
       ),
     );
   }
@@ -345,10 +387,12 @@ class _ShelfPageState extends State<ShelfPage> {
       children: <Widget>[
         Expanded(
           child: GridView.builder(
-            padding: const EdgeInsets.all(12),
+            // 底部留给壳层的浮动胶囊（[kShellBottomInset]）——胶囊是浮层、
+            // 不占布局高度，不预留的话最后一行会被压住。
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, kShellBottomInset),
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 180,
-              childAspectRatio: 0.55,
+              childAspectRatio: 0.5,
               crossAxisSpacing: 8,
               mainAxisSpacing: 8,
             ),
@@ -371,10 +415,13 @@ class _ShelfPageState extends State<ShelfPage> {
   }
 
   /// 导入失败清单（LIB-04 验收要点 ②）。
+  ///
+  /// 贴在网格下方，因此也要为壳层浮动胶囊留出底部空白（[kShellBottomInset]），
+  /// 否则清单末行会被胶囊盖住。
   Widget _buildErrorList(ThemeData theme) {
     return Container(
       color: theme.colorScheme.errorContainer,
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8 + kShellBottomInset),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -392,6 +439,64 @@ class _ShelfPageState extends State<ShelfPage> {
                 ),
               )),
         ],
+      ),
+    );
+  }
+}
+
+/// 顶栏里的「假搜索框」——外观是搜索框，点击进搜索页（照搬 anx-reader）。
+///
+/// 为什么不做成可就地输入：搜索是**独立页面**（[LibrarySearchPage]），
+/// 顶栏只做入口。就地输入会把查询状态绑进书架子树，还要在当前布局里
+/// 处理键盘遮挡与结果覆盖层，收益不抵复杂度。
+class _BookSearchEntry extends StatelessWidget {
+  const _BookSearchEntry({required this.onTap});
+
+  /// 点击回调（打开搜索页）。
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 400),
+      // 玻璃库无 Material 祖先（PRD §11.4），而 `InkWell` 的水波纹由最近的
+      // Material 绘制，故需自带一层。`MaterialType.transparency` 不绘制底色，
+      // 不破坏玻璃观感。
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest
+                  .withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              children: <Widget>[
+                Icon(
+                  Icons.search,
+                  size: 18,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '搜索书名、作者',
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

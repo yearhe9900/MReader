@@ -1,8 +1,17 @@
-// `LIB-01`：书架上的单本书卡片（封面缩略图 + 书名 + 作者 + 格式标签）。
+// `LIB-01`：书架上的单本书卡片。
 //
-// 手势：`Card(child: InkWell(...))`——按压有 ripple 反馈（缓解 GridView 滚动拖拽
-// 识别器在手势竞技场吞点）；封面等不透明内容用 `Ink.image` / `Ink` 画在 Card 的
-// Material 上，ripple 才不会被不透明子组件盖住。
+// 视觉（2026-09-28 改版，参考 anx-reader `widgets/bookshelf/book_item.dart`）：
+// **不用卡片底板**——封面直接浮在书架渐变背景上，靠 `BoxShadow` 投出层次；
+// 下方信息区为「书名（两行加粗）+ 作者 · 阅读进度百分比 + 格式标签」。
+//
+// 手势：`Card(child: InkWell(...))` 结构**保留**——按压有 ripple 反馈，
+// 且能缓解 GridView 滚动/拖拽识别器在手势竞技场吞点（既有实证结论）。
+// 只是把 `Card` 本身做成「无色、无 elevation、不裁剪、零外边距」，
+// 于是观感上没有卡片，但手势链路不变。
+//
+// 封面等不透明内容仍用 `Ink.image` / `Ink` 画在 `Card` 的 Material 上——
+// ripple 才不会被不透明子组件盖住（信息区透明，封面区被盖属预期）。
+//
 // 打开准备中（[BookCard.loading]）：整卡蒙层 + 转圈，让用户看得见「在响应」。
 import 'dart:typed_data';
 
@@ -12,12 +21,16 @@ import '../library/book_record.dart';
 import '../meta/cover_store.dart';
 import '../model/book_meta.dart';
 
+/// 封面圆角（书卡与占位块共用，保证切换时不跳变）。
+const double _kCoverRadius = 6;
+
 /// 书架上的单本书卡片。
 ///
 /// 封面来源：
 /// - [StoredCover]：从 [CoverStore.readThumb] 异步加载（`Ink.image` 保 ripple 可见）；
 /// - [NoCover] / [SyntheticCover]：显示占位色块 + 书名首字。
 class BookCard extends StatefulWidget {
+  /// 创建书卡。
   const BookCard({
     super.key,
     required this.record,
@@ -27,9 +40,16 @@ class BookCard extends StatefulWidget {
     this.loading = false,
   });
 
+  /// 书目记录。
   final BookRecord record;
+
+  /// 封面存储（缩略图）。
   final CoverStore coverStore;
+
+  /// 点击（进入详情页）。
   final VoidCallback onTap;
+
+  /// 长按（后续接底部操作单）。
   final VoidCallback onLongPress;
 
   /// 是否处于「打开准备中」：显示 loading 覆盖层（转圈），提示卡片正在响应。
@@ -69,7 +89,11 @@ class _BookCardState extends State<BookCard> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     return Card(
-      clipBehavior: Clip.antiAlias,
+      // 无卡片观感：透明底 + 零 elevation + 不裁剪（阴影要画到卡片外）+ 零外边距。
+      color: Colors.transparent,
+      elevation: 0,
+      clipBehavior: Clip.none,
+      margin: EdgeInsets.zero,
       child: InkWell(
         onTap: widget.onTap,
         onLongPress: widget.onLongPress,
@@ -79,36 +103,15 @@ class _BookCardState extends State<BookCard> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                // 封面区域
-                Expanded(child: _buildCover(theme)),
-                // 信息区域
-                Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        widget.record.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        widget.record.author,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      _FormatTag(format: widget.record.format),
-                    ],
+                // 封面区：Hero 共享元素过渡（与详情页封面同 tag）。
+                Expanded(
+                  child: Hero(
+                    tag: 'book-cover-${widget.record.bookId}',
+                    child: _buildCoverSurface(theme),
                   ),
                 ),
+                const SizedBox(height: 6),
+                _buildInfo(theme),
               ],
             ),
             // 打开准备中：整卡蒙层 + 转圈（per-card 可见反馈）。
@@ -122,6 +125,29 @@ class _BookCardState extends State<BookCard> {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 封面外框：投影 + 圆角裁剪（投影画在封面之外，故与封面本体分层）。
+  Widget _buildCoverSurface(ThemeData theme) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(_kCoverRadius),
+        // 投影让封面「浮」在渐变背景上——这是本版视觉的主要层次来源
+        // （anx-reader 同一手法：eInk 模式除外，本项目暂无该开关）。
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: theme.colorScheme.shadow.withValues(alpha: 0.28),
+            blurRadius: 10,
+            spreadRadius: 1,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(_kCoverRadius),
+        child: _buildCover(theme),
       ),
     );
   }
@@ -159,6 +185,57 @@ class _BookCardState extends State<BookCard> {
             fontWeight: FontWeight.bold,
           ),
         ),
+      ),
+    );
+  }
+
+  /// 信息区：书名（两行）/ 作者 · 进度 / 格式标签。
+  Widget _buildInfo(ThemeData theme) {
+    final double? progress = widget.record.readProgress;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            widget.record.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  widget.record.author.isEmpty ? '未知作者' : widget.record.author,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontSize: 11,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              // 阅读进度（照搬 anx-reader 的右下角百分比）；未曾开书则为 null。
+              if (progress != null)
+                Text(
+                  '${(progress * 100).round()}%',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          _FormatTag(format: widget.record.format),
+        ],
       ),
     );
   }
