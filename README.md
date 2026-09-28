@@ -66,7 +66,7 @@ MReader/
 | 依赖 | 版本 | 为什么需要它 |
 |---|---|---|
 | `file_picker` | `^8.1.2` | 选择本地文件（Android/iOS/Windows/macOS/Linux）。不直接用 `dart:io` 读路径：各平台沙箱策略不同，统一走 bytes。 |
-| `archive` | `^3.6.1` | EPUB 本质是 zip，需要解压。**用 `archive/archive.dart` 分支**（不 import `dart:io`，让核心解析链路保持可纯 Dart 单测）。**固定在 3.x**：4.x 改了 `ArchiveFile` 的 API（`content` 被 `readBytes()` 取代）。 |
+| `archive` | `4.3.0`（精确锁定，不带 `^`） | EPUB 本质是 zip，需要解压。**用 `archive/archive.dart` 分支**（不 import `dart:io`，让核心解析链路保持可纯 Dart 单测）。⚠️ **2026-09-28 更正**：原写「`^3.6.1`，固定在 3.x（4.x 改了 `ArchiveFile` 的 API）」**已作废**——2026-09-24 已迁到 **4.3.0**（决定性原因：`pdfrx_engine` 0.1.0 起全线硬要求 `archive ^4.x`；迁移详见 `CHANGELOG` 2026-09-24）。 |
 | `xml` | `^6.5.0` | `META-INF/container.xml` 和 OPF 是**严格 XML**。虽然"容器"是 HTML 解析器也能糊弄，但 OPF 的命名空间/属性解析用真 XML 解析器才稳。 |
 | `path` | `^1.9.0` | 用 `p.posix` 做**包内路径归一化**（处理 `../`、`./`、重复斜杠）。纯字符串运算；不用手写字符串拼接。 |
 | `html` | `^0.15.4` | 把 XHTML 解析成 DOM 好遍历。**它的"宽松解析"正是我们要的**：真实 EPUB 的 XHTML 常年不合法（未闭合标签、裸 `&`），`xml` 包遇到这种直接抛异常，`html` 包能扛过去。 |

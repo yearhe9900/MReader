@@ -1204,7 +1204,7 @@ dependencies:
 dev_dependencies:
   integration_test: { sdk: flutter } # FRB 模板建议（最小通路验证用）
 ```
-> **现有依赖全部保留不变**（`archive ^3.6.1` 锁 3.x 等），Rust 层**不替换** Dart 依赖——纯 Dart 基线必须继续可用。
+> **现有依赖全部保留不变**（如 `archive: 4.3.0`——2026-09-24 由 3.x 迁移，见 `CHANGELOG` 2026-09-24；**2026-09-28 更正**：原文写「`archive ^3.6.1` 锁 3.x」，该约束随 `pdfrx_engine` 硬要求 `archive ^4.x` 已作废），Rust 层**不替换** Dart 依赖——纯 Dart 基线必须继续可用。
 
 **Rust（`rust/Cargo.toml`）**
 ```toml
