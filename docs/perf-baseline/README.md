@@ -3,6 +3,16 @@
 > 本目录记录 **M1-T07** 的「改前 / 改后」可复现性能数字。
 > 样本由 `tool/gen_perf_fixtures.dart` 生成到**系统临时目录**，**不入库**（见 `.gitignore`）。
 
+> **目录索引（该目录已被三批任务共用，先看这里）**
+>
+> | 文件 | 属于 | 口径 | 用途 |
+> |---|---|---|---|
+> | `README.md`（本文件） | M1-T07 / M2a | **内存 / 首屏墙钟**的 before / after | `PERF-02` 内存收敛、`PERF-03` 分段渲染、`PERF-01` 接线 |
+> | `thresholds.md` | **M3.5-T02** | **门槛判定**（§H.1 计时协议 + §H.4 三段式） | `RUST-06` 先测后引：六项候选「上不上 Rust」结论（含「不上」也是交付物） |
+> | `mobi.md` | M2b-T05 | 纯 Dart MOBI 原型探针下界 | 候选 1 基线（解析器属 M4，`thresholds.md` 直接引用） |
+> | `search.md` | M2b-T04 | 阈值 4 早期基线（`tool/search_bench.dart`，3 轮） | `CNT-06` 搜索首屏 / 帧时间口径 |
+> | `<YYYY-MM-DD>-<device>.json` | 各批 | §H.2 机读原始记录信封 | 每次实测留档，**人工 commit**（决定判定的是 `judging: true` 的那份，即 Android 主力机） |
+
 ## 1. 结论（TL;DR）
 
 ### 1.1 首屏（打开即用）
@@ -241,3 +251,60 @@ after 的首屏与内存（稳态口径不回归）：
 不回归（读 50/100 章 +1.0 / −0.6 MB）；`big_bodies` 首屏墙钟 5576ms 与 §7.2 的 5602ms 持平。
 
 > 环境：Windows / Dart 3.12（`flutter test` 同款 SDK）。数字随机器与负载波动，**看 before / after 差值**。
+
+## 8. M3.5-T02 门槛基线：用法与留档模板（架构 §H.2）
+
+判定「上不上 Rust」的测量与留档走 `thresholds.md` 那一套，**与本文件 §1~§7 的内存口径不要混用**
+（一个测**内存**、一个测**门槛**）。
+
+### 8.1 怎么跑
+
+```bash
+# 生成样本（一次即可；写到临时目录，不入库）
+dart run tool/gen_perf_fixtures.dart "$TMPDIR/mreader_perf"
+
+# 测量：整组默认 skip，必须置 MREADER_PERF_BENCH=1
+MREADER_PERF_BENCH=1 \
+MREADER_PERF_DIR="$TMPDIR/mreader_perf" \
+MREADER_PERF_DEVICE="<机型>" \
+MREADER_PERF_OUT=docs/perf-baseline/<YYYY-MM-DD>-<机型>.json \
+flutter test test/perf/baseline_harness.dart
+
+# 候选 1（MOBI/AZW3）另需真实样本
+MREADER_PERF_MOBI="tmp_book/<真实 azw3>" …
+```
+
+- 真实脏书自动从 `tmp_book/` 扫（**不入库**；没有该目录时这部分不声明、不红）。
+- 会话默认 `skip`：单次约 6 分钟（7 轮 × 全书解压 + 8 次完整后台搜索），不进日常分组回归。
+- 单条用例自带 5 分钟超时（`kBenchTimeout`），**不必**再传 `--timeout`。
+- `MREADER_PERF_OUT` 只是免去手抄：**留档仍由人复核后 commit**（§H.2 要求人工留档）。
+
+### 8.2 留档表格模板（人工填写；机读记录在 JSON 里）
+
+```markdown
+### <YYYY-MM-DD> · <机型 / 系统>（judging: <true|false>）
+
+| # | 候选能力 | 阈值 | 实测中位数（N=7） | min / max / p90 | 判定 | 结论 |
+|---|---|---|---|---|---|---|
+| 1 | MOBI/AZW3 解压 | 3s / 2s | | | | |
+| 2a | EPUB 解压（分层，仅归因） | 400ms | | | | |
+| 2 | EPUB 2a+2b 合计（触发口径） | 800ms / 50MB 2s | | | | |
+| 2b | XHTML → 段落（首版不纳入） | 合并触发 | | | | |
+| 3 | TXT 编码探测与分章 | 800ms | | | | |
+| 4 | 搜索首屏 | 1.5s | | | | |
+| 4' | 搜索单帧 | 16ms | | | | |
+| 5 | BM25 索引 | 10s / 1.5× | | | | |
+
+- 样本：<生成 / 真实脏书，文件名 + 规模>
+- 冷读（含 IO，不参与判定）：<ms>
+- 结论偏离 / 口径备注：<如「2a 含无目录书 flatTitles 预取 → 下界 = 2b」>
+```
+
+### 8.3 判定纪律（写在模板旁边，防事后走样）
+
+1. **只认中位数**（§H.1），不拿第一轮 / min 去判；
+2. **只有 `judging: true`（Android 主力机）的那份是正式判定**，桌面 / 开发机只作劣化哨兵（§H.3）；
+3. **`over` 才能授权上 Rust，`borderline` 与 `under` 都不得实施**（`RUST-06` 反向硬约束）；
+4. **未超阈值的结论同样要留档**（`RUST-06` ④）——「不上 Rust」是一份合格的交付结论，不是空缺；
+5. 「零命中 / 样本缺失 / 前置条件未满足」一律记 `notMeasured`，**不得**当作「达标」或「超标」；
+6. 阈值调整**只许一次且必须写回 PRD**（`Q22`）——改 `threshold_judge.dart` 不改 PRD 会红测。

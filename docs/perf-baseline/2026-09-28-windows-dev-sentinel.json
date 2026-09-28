@@ -1,0 +1,1029 @@
+{
+  "generatedAt": "2026-09-28T12:09:21.370719",
+  "harness": "test/perf/baseline_harness.dart",
+  "iters": 7,
+  "device": "Windows 开发机（哨兵，非判定基准）",
+  "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+  "judging": false,
+  "fixtures": {
+    "dir": "C:/Users/zmt/AppData/Local/Temp/mreader_perf",
+    "realBookDir": "tmp_book",
+    "epub": [
+      "big_bodies.epub（生成）",
+      "big_320.epub（生成）",
+      "long_chapter.epub（生成）",
+      "fmt_gen_cjk_nav.epub（真实脏书）",
+      "fmt_gen_flat_titles.epub（真实脏书）",
+      "fmt_gen_legacy_ncx.epub（真实脏书）",
+      "王晋康作品选 (套装共27册）.epub（真实脏书）"
+    ],
+    "txt": [
+      "big_20mb.txt（生成）",
+      "fmt_gen_big_chapter.txt（真实脏书）",
+      "fmt_gen_gbk_chapters.txt（真实脏书）",
+      "fmt_gen_utf8_volumes.txt（真实脏书）",
+      "《我师兄实在太稳健了》（校对版全本）作者：言归正传.txt（真实脏书）"
+    ]
+  },
+  "records": [
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "big_bodies.epub（2a 分层值，仅归因）",
+      "samples": [
+        8041,
+        8020,
+        7670,
+        7591,
+        7608,
+        7497,
+        7602
+      ],
+      "median": 7608,
+      "min": 7497,
+      "max": 8041,
+      "p90": 8041,
+      "bytesInMemory": 692061,
+      "peakMemBytes": 185012224,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "over",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（big_bodies.epub（2a 分层值，仅归因））：实测 7608ms / 阈值 800ms（9.51×）→ **越过阈值 → 允许上 Rust**",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：生成样本；2a 口径 = `load()` + `chapters()`（含无目录书的 flatTitles 预取 → 对无目录样本是 2a 的**上界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "big_320.epub（2a 分层值，仅归因）",
+      "samples": [
+        84,
+        79,
+        86,
+        85,
+        71,
+        90,
+        81
+      ],
+      "median": 84,
+      "min": 71,
+      "max": 90,
+      "p90": 90,
+      "bytesInMemory": 488019,
+      "peakMemBytes": 192712704,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（big_320.epub（2a 分层值，仅归因））：实测 84ms / 阈值 800ms（0.10×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：生成样本；2a 口径 = `load()` + `chapters()`（含无目录书的 flatTitles 预取 → 对无目录样本是 2a 的**上界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "long_chapter.epub（2a 分层值，仅归因）",
+      "samples": [
+        19,
+        26,
+        20,
+        20,
+        25,
+        24,
+        21
+      ],
+      "median": 21,
+      "min": 19,
+      "max": 26,
+      "p90": 26,
+      "bytesInMemory": 5369,
+      "peakMemBytes": 193626112,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（long_chapter.epub（2a 分层值，仅归因））：实测 21ms / 阈值 800ms（0.03×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：生成样本；2a 口径 = `load()` + `chapters()`（含无目录书的 flatTitles 预取 → 对无目录样本是 2a 的**上界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_cjk_nav.epub（2a 分层值，仅归因）",
+      "samples": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "median": 0,
+      "min": 0,
+      "max": 1,
+      "p90": 1,
+      "bytesInMemory": 3891,
+      "peakMemBytes": 193830912,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（fmt_gen_cjk_nav.epub（2a 分层值，仅归因））：实测 0ms / 阈值 800ms（0.00×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；2a 口径 = `load()` + `chapters()`（含无目录书的 flatTitles 预取 → 对无目录样本是 2a 的**上界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_flat_titles.epub（2a 分层值，仅归因）",
+      "samples": [
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2
+      ],
+      "median": 1,
+      "min": 1,
+      "max": 2,
+      "p90": 2,
+      "bytesInMemory": 2267,
+      "peakMemBytes": 195039232,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（fmt_gen_flat_titles.epub（2a 分层值，仅归因））：实测 1ms / 阈值 800ms（0.00×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；2a 口径 = `load()` + `chapters()`（含无目录书的 flatTitles 预取 → 对无目录样本是 2a 的**上界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_legacy_ncx.epub（2a 分层值，仅归因）",
+      "samples": [
+        0,
+        0,
+        1,
+        1,
+        1,
+        0,
+        0
+      ],
+      "median": 0,
+      "min": 0,
+      "max": 1,
+      "p90": 1,
+      "bytesInMemory": 3615,
+      "peakMemBytes": 195706880,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（fmt_gen_legacy_ncx.epub（2a 分层值，仅归因））：实测 0ms / 阈值 800ms（0.00×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；2a 口径 = `load()` + `chapters()`（含无目录书的 flatTitles 预取 → 对无目录样本是 2a 的**上界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "王晋康作品选 (套装共27册）.epub（2a 分层值，仅归因）",
+      "samples": [
+        63,
+        48,
+        48,
+        40,
+        43,
+        52,
+        42
+      ],
+      "median": 48,
+      "min": 40,
+      "max": 63,
+      "p90": 63,
+      "bytesInMemory": 15506788,
+      "peakMemBytes": 214069248,
+      "coldReadMs": 4,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（王晋康作品选 (套装共27册）.epub（2a 分层值，仅归因））：实测 48ms / 阈值 800ms（0.06×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：4ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；2a 口径 = `load()` + `chapters()`（含无目录书的 flatTitles 预取 → 对无目录样本是 2a 的**上界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "big_bodies.epub（2b 分层值，仅归因）",
+      "samples": [
+        7536,
+        7533,
+        7567,
+        7608,
+        7508,
+        7815,
+        7434
+      ],
+      "median": 7536,
+      "min": 7434,
+      "max": 7815,
+      "p90": 7815,
+      "bytesInMemory": 692061,
+      "peakMemBytes": 198873088,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "over",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（big_bodies.epub（2b 分层值，仅归因））：实测 7536ms / 阈值 800ms（9.42×）→ **越过阈值 → 允许上 Rust**",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：生成样本；2b 口径 = 全书 `content(i)` 之和（`chapters()` 在外层、已缓存 → 本值即真 2b，是**合计的无条件下界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "big_320.epub（2b 分层值，仅归因）",
+      "samples": [
+        84,
+        82,
+        73,
+        55,
+        74,
+        69,
+        67
+      ],
+      "median": 73,
+      "min": 55,
+      "max": 84,
+      "p90": 84,
+      "bytesInMemory": 488019,
+      "peakMemBytes": 188174336,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（big_320.epub（2b 分层值，仅归因））：实测 73ms / 阈值 800ms（0.09×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：生成样本；2b 口径 = 全书 `content(i)` 之和（`chapters()` 在外层、已缓存 → 本值即真 2b，是**合计的无条件下界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "long_chapter.epub（2b 分层值，仅归因）",
+      "samples": [
+        25,
+        27,
+        19,
+        23,
+        25,
+        29,
+        19
+      ],
+      "median": 25,
+      "min": 19,
+      "max": 29,
+      "p90": 29,
+      "bytesInMemory": 5369,
+      "peakMemBytes": 191688704,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（long_chapter.epub（2b 分层值，仅归因））：实测 25ms / 阈值 800ms（0.03×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：生成样本；2b 口径 = 全书 `content(i)` 之和（`chapters()` 在外层、已缓存 → 本值即真 2b，是**合计的无条件下界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_cjk_nav.epub（2b 分层值，仅归因）",
+      "samples": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "median": 0,
+      "min": 0,
+      "max": 0,
+      "p90": 0,
+      "bytesInMemory": 3891,
+      "peakMemBytes": 185782272,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（fmt_gen_cjk_nav.epub（2b 分层值，仅归因））：实测 0ms / 阈值 800ms（0.00×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；2b 口径 = 全书 `content(i)` 之和（`chapters()` 在外层、已缓存 → 本值即真 2b，是**合计的无条件下界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_flat_titles.epub（2b 分层值，仅归因）",
+      "samples": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "median": 0,
+      "min": 0,
+      "max": 0,
+      "p90": 0,
+      "bytesInMemory": 2267,
+      "peakMemBytes": 186621952,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（fmt_gen_flat_titles.epub（2b 分层值，仅归因））：实测 0ms / 阈值 800ms（0.00×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；2b 口径 = 全书 `content(i)` 之和（`chapters()` 在外层、已缓存 → 本值即真 2b，是**合计的无条件下界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_legacy_ncx.epub（2b 分层值，仅归因）",
+      "samples": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "median": 0,
+      "min": 0,
+      "max": 1,
+      "p90": 1,
+      "bytesInMemory": 3615,
+      "peakMemBytes": 187486208,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（fmt_gen_legacy_ncx.epub（2b 分层值，仅归因））：实测 0ms / 阈值 800ms（0.00×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；2b 口径 = 全书 `content(i)` 之和（`chapters()` 在外层、已缓存 → 本值即真 2b，是**合计的无条件下界**）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "王晋康作品选 (套装共27册）.epub（2b 分层值，仅归因）",
+      "samples": [
+        1387,
+        1304,
+        1289,
+        1375,
+        1322,
+        1359,
+        1299
+      ],
+      "median": 1322,
+      "min": 1289,
+      "max": 1387,
+      "p90": 1387,
+      "bytesInMemory": 15506788,
+      "peakMemBytes": 233259008,
+      "coldReadMs": 9,
+      "thresholdNo": 2,
+      "verdict": "over",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（王晋康作品选 (套装共27册）.epub（2b 分层值，仅归因））：实测 1322ms / 阈值 800ms（1.65×）→ **越过阈值 → 允许上 Rust**",
+      "notes": [
+        "冷读（含 IO）参考：9ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；2b 口径 = 全书 `content(i)` 之和（`chapters()` 在外层、已缓存 → 本值即真 2b，是**合计的无条件下界**）"
+      ]
+    },
+    {
+      "capability": "txt-chapterize",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "big_20mb.txt",
+      "samples": [
+        855,
+        833,
+        816,
+        821,
+        829,
+        807,
+        817
+      ],
+      "median": 821,
+      "min": 807,
+      "max": 855,
+      "p90": 855,
+      "bytesInMemory": 21736984,
+      "peakMemBytes": 259502080,
+      "coldReadMs": 10,
+      "thresholdNo": 3,
+      "verdict": "borderline",
+      "judging": false,
+      "conclusion": "阈值 3 · 20MB TXT 分章 > 800ms（big_20mb.txt）：实测 821ms / 阈值 800ms（1.03×）→ 临界 · 暂不上（进观察名单，下一轮样本 / 机型更新后重测再判）",
+      "notes": [
+        "冷读（含 IO）参考：10ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：生成样本；口径 = `load()`（编码探测 + 全量解码 + 分章）+ `chapters()`"
+      ]
+    },
+    {
+      "capability": "txt-chapterize",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_big_chapter.txt",
+      "samples": [
+        14,
+        16,
+        14,
+        14,
+        13,
+        13,
+        14
+      ],
+      "median": 14,
+      "min": 13,
+      "max": 16,
+      "p90": 16,
+      "bytesInMemory": 34241,
+      "peakMemBytes": 259567616,
+      "coldReadMs": 0,
+      "thresholdNo": 3,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 3 · 20MB TXT 分章 > 800ms（fmt_gen_big_chapter.txt）：实测 14ms / 阈值 800ms（0.02×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；口径 = `load()`（编码探测 + 全量解码 + 分章）+ `chapters()`",
+        "真实脏书体量未必等于阈值口径的 20MB——本值供「同量级比对」，结论按 MREADER_PERF_DEVICE 标注的机型在 docs/perf-baseline/ 里裁"
+      ]
+    },
+    {
+      "capability": "txt-chapterize",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_gbk_chapters.txt",
+      "samples": [
+        10,
+        10,
+        10,
+        9,
+        10,
+        10,
+        9
+      ],
+      "median": 10,
+      "min": 9,
+      "max": 10,
+      "p90": 10,
+      "bytesInMemory": 13872,
+      "peakMemBytes": 262180864,
+      "coldReadMs": 0,
+      "thresholdNo": 3,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 3 · 20MB TXT 分章 > 800ms（fmt_gen_gbk_chapters.txt）：实测 10ms / 阈值 800ms（0.01×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；口径 = `load()`（编码探测 + 全量解码 + 分章）+ `chapters()`",
+        "真实脏书体量未必等于阈值口径的 20MB——本值供「同量级比对」，结论按 MREADER_PERF_DEVICE 标注的机型在 docs/perf-baseline/ 里裁"
+      ]
+    },
+    {
+      "capability": "txt-chapterize",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_utf8_volumes.txt",
+      "samples": [
+        11,
+        12,
+        12,
+        12,
+        12,
+        11,
+        12
+      ],
+      "median": 12,
+      "min": 11,
+      "max": 12,
+      "p90": 12,
+      "bytesInMemory": 27599,
+      "peakMemBytes": 262180864,
+      "coldReadMs": 0,
+      "thresholdNo": 3,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 3 · 20MB TXT 分章 > 800ms（fmt_gen_utf8_volumes.txt）：实测 12ms / 阈值 800ms（0.01×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；口径 = `load()`（编码探测 + 全量解码 + 分章）+ `chapters()`",
+        "真实脏书体量未必等于阈值口径的 20MB——本值供「同量级比对」，结论按 MREADER_PERF_DEVICE 标注的机型在 docs/perf-baseline/ 里裁"
+      ]
+    },
+    {
+      "capability": "txt-chapterize",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "《我师兄实在太稳健了》（校对版全本）作者：言归正传.txt",
+      "samples": [
+        401,
+        366,
+        379,
+        399,
+        398,
+        423,
+        386
+      ],
+      "median": 398,
+      "min": 366,
+      "max": 423,
+      "p90": 423,
+      "bytesInMemory": 7911162,
+      "peakMemBytes": 218791936,
+      "coldReadMs": 5,
+      "thresholdNo": 3,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 3 · 20MB TXT 分章 > 800ms（《我师兄实在太稳健了》（校对版全本）作者：言归正传.txt）：实测 398ms / 阈值 800ms（0.50×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：5ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；口径 = `load()`（编码探测 + 全量解码 + 分章）+ `chapters()`",
+        "真实脏书体量未必等于阈值口径的 20MB——本值供「同量级比对」，结论按 MREADER_PERF_DEVICE 标注的机型在 docs/perf-baseline/ 里裁"
+      ]
+    },
+    {
+      "capability": "full-text-search",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "big_bodies.epub（首屏命中耗时）",
+      "samples": [
+        7599,
+        7660,
+        7621,
+        7569,
+        7643,
+        7502,
+        7623
+      ],
+      "median": 7621,
+      "min": 7502,
+      "max": 7660,
+      "p90": 7660,
+      "bytesInMemory": 692061,
+      "peakMemBytes": 206450688,
+      "coldReadMs": 0,
+      "thresholdNo": 4,
+      "verdict": "over",
+      "judging": false,
+      "conclusion": "阈值 4 · 50MB 书全库搜索首屏结果 > 1.5s，或搜索期间出现单帧 > 16ms（big_bodies.epub（首屏命中耗时））：实测 7621ms / 阈值 1500ms（5.08×）→ **越过阈值 → 允许上 Rust**",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：生成样本；搜索词 = \"第1章第1段\"（与 docs/perf-baseline/search.md 同词，便于对比）",
+        "命中数 > 0（零命中的样本会改判 notMeasured，不进判定）",
+        "预热轮首屏 = 7681ms（不计入样本）",
+        "链路：`SearchSession.start(spec:)` → 后台 isolate 重建源 → 首个命中（含建销；阈值 4 测的就是这条真实路径）"
+      ]
+    },
+    {
+      "capability": "full-text-search",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "big_320.epub（首屏命中耗时）",
+      "samples": [
+        57,
+        70,
+        61,
+        63,
+        64,
+        72,
+        63
+      ],
+      "median": 63,
+      "min": 57,
+      "max": 72,
+      "p90": 72,
+      "bytesInMemory": 488019,
+      "peakMemBytes": 199593984,
+      "coldReadMs": 0,
+      "thresholdNo": 4,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 4 · 50MB 书全库搜索首屏结果 > 1.5s，或搜索期间出现单帧 > 16ms（big_320.epub（首屏命中耗时））：实测 63ms / 阈值 1500ms（0.04×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：生成样本；搜索词 = \"第1章第1段\"（与 docs/perf-baseline/search.md 同词，便于对比）",
+        "命中数 > 0（零命中的样本会改判 notMeasured，不进判定）",
+        "预热轮首屏 = 79ms（不计入样本）",
+        "链路：`SearchSession.start(spec:)` → 后台 isolate 重建源 → 首个命中（含建销；阈值 4 测的就是这条真实路径）"
+      ]
+    },
+    {
+      "capability": "full-text-search",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "long_chapter.epub（首屏命中耗时）",
+      "samples": [
+        53,
+        46,
+        48,
+        47,
+        53,
+        50,
+        52
+      ],
+      "median": 50,
+      "min": 46,
+      "max": 53,
+      "p90": 53,
+      "bytesInMemory": 5369,
+      "peakMemBytes": 199790592,
+      "coldReadMs": 0,
+      "thresholdNo": 4,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 4 · 50MB 书全库搜索首屏结果 > 1.5s，或搜索期间出现单帧 > 16ms（long_chapter.epub（首屏命中耗时））：实测 50ms / 阈值 1500ms（0.03×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：生成样本；搜索词 = \"第1段\"（与 docs/perf-baseline/search.md 同词，便于对比）",
+        "命中数 > 0（零命中的样本会改判 notMeasured，不进判定）",
+        "预热轮首屏 = 43ms（不计入样本）",
+        "链路：`SearchSession.start(spec:)` → 后台 isolate 重建源 → 首个命中（含建销；阈值 4 测的就是这条真实路径）"
+      ]
+    },
+    {
+      "capability": "full-text-search",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "王晋康作品选 (套装共27册）.epub（首屏命中耗时）",
+      "samples": [
+        75,
+        61,
+        65,
+        61,
+        61,
+        72,
+        65
+      ],
+      "median": 65,
+      "min": 61,
+      "max": 75,
+      "p90": 75,
+      "bytesInMemory": 15506788,
+      "peakMemBytes": 240574464,
+      "coldReadMs": 6,
+      "thresholdNo": 4,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 4 · 50MB 书全库搜索首屏结果 > 1.5s，或搜索期间出现单帧 > 16ms（王晋康作品选 (套装共27册）.epub（首屏命中耗时））：实测 65ms / 阈值 1500ms（0.04×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：6ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "来源：tmp_book；搜索词 = \"少年儿童出版\"（从该书首章正文派生，不冻结任何作品专有词）",
+        "命中数 > 0（零命中的样本会改判 notMeasured，不进判定）",
+        "预热轮首屏 = 47ms（不计入样本）",
+        "链路：`SearchSession.start(spec:)` → 后台 isolate 重建源 → 首个命中（含建销；阈值 4 测的就是这条真实路径）"
+      ]
+    },
+    {
+      "capability": "full-text-search",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "单帧 > 16ms",
+      "samples": [],
+      "median": null,
+      "min": null,
+      "max": null,
+      "p90": null,
+      "bytesInMemory": 0,
+      "peakMemBytes": 240574464,
+      "thresholdNo": 4,
+      "verdict": "notMeasured",
+      "judging": false,
+      "scale": {
+        "thresholdNo": 4,
+        "condition": "单帧 > 16ms"
+      },
+      "conclusion": "未判定：帧时间口径需真机帧回调 / 时间线取证（Windows 本底 15~25ms 无区分力，见 docs/perf-baseline/search.md §3）",
+      "notes": [
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」"
+      ]
+    },
+    {
+      "capability": "mobi-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "真实 AZW3（未提供）",
+      "samples": [],
+      "median": null,
+      "min": null,
+      "max": null,
+      "p90": null,
+      "bytesInMemory": 0,
+      "peakMemBytes": 240734208,
+      "thresholdNo": 1,
+      "verdict": "notMeasured",
+      "judging": false,
+      "scale": {
+        "thresholdNo": 1,
+        "condition": "打开 20MB AZW3 > 3s，或单本解压 + 解析 > 2s",
+        "priorLowerBoundMs": 176
+      },
+      "conclusion": "未测量：MOBI 解析器属 M4-T07（FMT-04），本 harness 只做「样本可达性」登记；已有下界见 docs/perf-baseline/mobi.md（M2b-T05：24MB 样本 open 12.7ms / full 23.7~176.5ms，距阈值 1 的 3s / 2s 共 1~2 个数量级）→ **阈值 1 暂无「纯 Dart 超标」信号**，但按 PRD §15.6.2 该候选的最终基线在 M4，**不得据此提前实施 Rust**",
+      "notes": [
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "样本清单：tmp_book/ 内可见 2 个：《牧神记》（校对版全本）作者：宅猪 - 嘒彼小星.azw3、-《最强反派系统》（校对版全本）作者：封七月.mobi"
+      ]
+    },
+    {
+      "capability": "bm25-index",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "单本 20MB 书",
+      "samples": [],
+      "median": null,
+      "min": null,
+      "max": null,
+      "p90": null,
+      "bytesInMemory": 0,
+      "peakMemBytes": 240734208,
+      "thresholdNo": 5,
+      "verdict": "notMeasured",
+      "judging": false,
+      "scale": {
+        "thresholdNo": 5,
+        "condition": "单本 20MB 书索引构建 > 10s，或索引占用内存 > 原文的 1.5 倍"
+      },
+      "conclusion": "未测量：依赖 AI 跟书问答（AI-06）的纯 Dart 基线，PRD §15.6 明文「阈值 5 基线待 AI 后补」（M3 殿后）→**本时点不得实施 Rust 版本**（RUST-06 反向硬约束）",
+      "notes": [
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "big_bodies.epub（2a=7608ms + 2b=7536ms；下界=7536ms）",
+      "samples": [
+        15144
+      ],
+      "median": 15144,
+      "min": 15144,
+      "max": 15144,
+      "p90": 15144,
+      "bytesInMemory": 692061,
+      "peakMemBytes": 242118656,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "over",
+      "judging": false,
+      "scale": {
+        "measuredMs": 15144,
+        "limitMs": 2000,
+        "text": "50MB 口径：合计 > 2s"
+      },
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（big_bodies.epub（2a=7608ms + 2b=7536ms；下界=7536ms））：实测 15144ms / 阈值 800ms（18.93×）→ **越过阈值 → 允许上 Rust**；50MB 口径：合计 > 2s：实测 15144ms / 2000ms → over",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "合计数 = 2a / 2b 两轮中位数**相加**（§15.6.2 处置 4 的成本边界）。本行 `samples` 只有 1 个元素（合计值本身），不是 N=7 样本；组成它的两个分层值各自是 N=7 中位数",
+        "**口径缺陷（如实登记）**：无目录样本的 2a 含 flatTitles 预取（2b 性质），故「2a+2b」对无目录书**高估** F；下界 = 2b 分层值（真 2a ≥ 0 ⇒ 真合计 ≥ 真 2b），冷读字段对本行取真冷读、与合计值无关",
+        "**over 与口径无关**：下界 7536ms 自身已越死区（>880ms）——无论 flatTitles 算进 2a 还是 2b，合计都必然越阈值",
+        "本样本按 50MB 口径（合计 > 2s）另行判定——与 docs/perf-baseline/search.md 的样本口径一致",
+        "本样本压缩态仅 ~675KB、**解压后正文 ≈48MB**；`bytesInMemory` 报的是压缩态（真正的输入），勿按 675KB 读结论"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "big_320.epub（2a=84ms + 2b=73ms；下界=73ms）",
+      "samples": [
+        157
+      ],
+      "median": 157,
+      "min": 157,
+      "max": 157,
+      "p90": 157,
+      "bytesInMemory": 488019,
+      "peakMemBytes": 243101696,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（big_320.epub（2a=84ms + 2b=73ms；下界=73ms））：实测 157ms / 阈值 800ms（0.20×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "合计数 = 2a / 2b 两轮中位数**相加**（§15.6.2 处置 4 的成本边界）。本行 `samples` 只有 1 个元素（合计值本身），不是 N=7 样本；组成它的两个分层值各自是 N=7 中位数",
+        "**口径缺陷（如实登记）**：无目录样本的 2a 含 flatTitles 预取（2b 性质），故「2a+2b」对无目录书**高估** F；下界 = 2b 分层值（真 2a ≥ 0 ⇒ 真合计 ≥ 真 2b），冷读字段对本行取真冷读、与合计值无关",
+        "【注意】本 over **依赖上界口径**：下界 73ms 未越死区，本 over 由 2a+2b 相加得出、可能含 flatTitles 重复计数 →**必须补一个有目录（toc 非空）的大样本复核**后才可据此开工（RUST-06）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "long_chapter.epub（2a=21ms + 2b=25ms；下界=25ms）",
+      "samples": [
+        46
+      ],
+      "median": 46,
+      "min": 46,
+      "max": 46,
+      "p90": 46,
+      "bytesInMemory": 5369,
+      "peakMemBytes": 243101696,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（long_chapter.epub（2a=21ms + 2b=25ms；下界=25ms））：实测 46ms / 阈值 800ms（0.06×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "合计数 = 2a / 2b 两轮中位数**相加**（§15.6.2 处置 4 的成本边界）。本行 `samples` 只有 1 个元素（合计值本身），不是 N=7 样本；组成它的两个分层值各自是 N=7 中位数",
+        "**口径缺陷（如实登记）**：无目录样本的 2a 含 flatTitles 预取（2b 性质），故「2a+2b」对无目录书**高估** F；下界 = 2b 分层值（真 2a ≥ 0 ⇒ 真合计 ≥ 真 2b），冷读字段对本行取真冷读、与合计值无关",
+        "【注意】本 over **依赖上界口径**：下界 25ms 未越死区，本 over 由 2a+2b 相加得出、可能含 flatTitles 重复计数 →**必须补一个有目录（toc 非空）的大样本复核**后才可据此开工（RUST-06）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_cjk_nav.epub（2a=0ms + 2b=0ms；下界=0ms）",
+      "samples": [
+        0
+      ],
+      "median": 0,
+      "min": 0,
+      "max": 0,
+      "p90": 0,
+      "bytesInMemory": 3891,
+      "peakMemBytes": 243101696,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（fmt_gen_cjk_nav.epub（2a=0ms + 2b=0ms；下界=0ms））：实测 0ms / 阈值 800ms（0.00×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "合计数 = 2a / 2b 两轮中位数**相加**（§15.6.2 处置 4 的成本边界）。本行 `samples` 只有 1 个元素（合计值本身），不是 N=7 样本；组成它的两个分层值各自是 N=7 中位数",
+        "**口径缺陷（如实登记）**：无目录样本的 2a 含 flatTitles 预取（2b 性质），故「2a+2b」对无目录书**高估** F；下界 = 2b 分层值（真 2a ≥ 0 ⇒ 真合计 ≥ 真 2b），冷读字段对本行取真冷读、与合计值无关",
+        "【注意】本 over **依赖上界口径**：下界 0ms 未越死区，本 over 由 2a+2b 相加得出、可能含 flatTitles 重复计数 →**必须补一个有目录（toc 非空）的大样本复核**后才可据此开工（RUST-06）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_flat_titles.epub（2a=1ms + 2b=0ms；下界=0ms）",
+      "samples": [
+        1
+      ],
+      "median": 1,
+      "min": 1,
+      "max": 1,
+      "p90": 1,
+      "bytesInMemory": 2267,
+      "peakMemBytes": 243101696,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（fmt_gen_flat_titles.epub（2a=1ms + 2b=0ms；下界=0ms））：实测 1ms / 阈值 800ms（0.00×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "合计数 = 2a / 2b 两轮中位数**相加**（§15.6.2 处置 4 的成本边界）。本行 `samples` 只有 1 个元素（合计值本身），不是 N=7 样本；组成它的两个分层值各自是 N=7 中位数",
+        "**口径缺陷（如实登记）**：无目录样本的 2a 含 flatTitles 预取（2b 性质），故「2a+2b」对无目录书**高估** F；下界 = 2b 分层值（真 2a ≥ 0 ⇒ 真合计 ≥ 真 2b），冷读字段对本行取真冷读、与合计值无关",
+        "【注意】本 over **依赖上界口径**：下界 0ms 未越死区，本 over 由 2a+2b 相加得出、可能含 flatTitles 重复计数 →**必须补一个有目录（toc 非空）的大样本复核**后才可据此开工（RUST-06）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "fmt_gen_legacy_ncx.epub（2a=0ms + 2b=0ms；下界=0ms）",
+      "samples": [
+        0
+      ],
+      "median": 0,
+      "min": 0,
+      "max": 0,
+      "p90": 0,
+      "bytesInMemory": 3615,
+      "peakMemBytes": 243101696,
+      "coldReadMs": 0,
+      "thresholdNo": 2,
+      "verdict": "under",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（fmt_gen_legacy_ncx.epub（2a=0ms + 2b=0ms；下界=0ms））：实测 0ms / 阈值 800ms（0.00×）→ 未越阈值 → 不上 Rust（合格结论，留档）",
+      "notes": [
+        "冷读（含 IO）参考：0ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "合计数 = 2a / 2b 两轮中位数**相加**（§15.6.2 处置 4 的成本边界）。本行 `samples` 只有 1 个元素（合计值本身），不是 N=7 样本；组成它的两个分层值各自是 N=7 中位数",
+        "**口径缺陷（如实登记）**：无目录样本的 2a 含 flatTitles 预取（2b 性质），故「2a+2b」对无目录书**高估** F；下界 = 2b 分层值（真 2a ≥ 0 ⇒ 真合计 ≥ 真 2b），冷读字段对本行取真冷读、与合计值无关",
+        "【注意】本 over **依赖上界口径**：下界 0ms 未越死区，本 over 由 2a+2b 相加得出、可能含 flatTitles 重复计数 →**必须补一个有目录（toc 非空）的大样本复核**后才可据此开工（RUST-06）"
+      ]
+    },
+    {
+      "capability": "epub-decompress",
+      "device": "Windows 开发机（哨兵，非判定基准）",
+      "os": "windows \"Windows 11 家庭版 中文版\" 10.0 (Build 26200)",
+      "sample": "王晋康作品选 (套装共27册）.epub（2a=48ms + 2b=1322ms；下界=1322ms）",
+      "samples": [
+        1370
+      ],
+      "median": 1370,
+      "min": 1370,
+      "max": 1370,
+      "p90": 1370,
+      "bytesInMemory": 15506788,
+      "peakMemBytes": 274116608,
+      "coldReadMs": 8,
+      "thresholdNo": 2,
+      "verdict": "over",
+      "judging": false,
+      "conclusion": "阈值 2 · 单本「2a + 2b」合计 > 800ms（王晋康作品选 (套装共27册）.epub（2a=48ms + 2b=1322ms；下界=1322ms））：实测 1370ms / 阈值 800ms（1.71×）→ **越过阈值 → 允许上 Rust**",
+      "notes": [
+        "冷读（含 IO）参考：8ms（不参与判定，§H.1）",
+        "本机为开发机 / 桌面：**仅作劣化哨兵，不作为判定基准**（§H.3）——PRD 阈值取自移动体验导向的 NF-P2 / NF-P3，桌面上判定会「永远测不过」",
+        "合计数 = 2a / 2b 两轮中位数**相加**（§15.6.2 处置 4 的成本边界）。本行 `samples` 只有 1 个元素（合计值本身），不是 N=7 样本；组成它的两个分层值各自是 N=7 中位数",
+        "**口径缺陷（如实登记）**：无目录样本的 2a 含 flatTitles 预取（2b 性质），故「2a+2b」对无目录书**高估** F；下界 = 2b 分层值（真 2a ≥ 0 ⇒ 真合计 ≥ 真 2b），冷读字段对本行取真冷读、与合计值无关",
+        "**over 与口径无关**：下界 1322ms 自身已越死区（>880ms）——无论 flatTitles 算进 2a 还是 2b，合计都必然越阈值"
+      ]
+    }
+  ]
+}

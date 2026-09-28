@@ -8,11 +8,22 @@
 ### 新增
 
 - M2b-T09 交付验收备料（§17 M2 第 1/3/4/5 条 + FMT-01/02 样本）：`tool/gen_real_samples.py`（**纯 stdlib、不联网**）生成「代表性真实结构样本」到 `tmp_book/`（不入库）——真结构 PDF（FlateDecode 内嵌位图 + Helvetica 文字层）/ CBZ（自然序、混大小写扩展名、`ComicInfo.xml` 与 `__MACOSX` 过滤、大图页）/ EPUB3+nav、EPUB2+ncx、无 nav / TXT（UTF-8 卷章、GBK、超长单章）；`test/format/real_samples_smoke_test.dart` 端到端冒烟（`openBook→load→chapters→content(0)→readResource` + 真书正文派生查询词搜索；无 `tmp_book/` 整组 skip；PDF 真渲染默认关、`MREADER_REAL_PDF=1` 开启），实测四类各 ≥3 样本全通过（EPUB 4 / TXT 4 / PDF 3 / CBZ 3，`All tests passed!`）；新增 Windows 构建文档 `docs/build-windows.md`（Developer Mode 闭环 `Q4 ③`）与验收报告 `docs/acceptance-M2b.md`（§17 判定对照 + 五平台冒烟备料） `63afc3b`
+- M35-T01 加速层脚手架与回落骨架（`RUST-01`，架构 §A 能力抽象 / §F 统一后台任务，**纯 Dart 零 Rust**）：`lib/highperf/*`（`HighPerfCapability` 五能力枚举 + ABI 版本常量 `kRustAbiVersion`；`HighPerfRegistry` 三态探测 `bool?`、幂等 `warmUp`、`probeTimeout=3s`、探测失败 5 情形（含 ABI 版本哨兵与「首次调用失败不翻转状态、连续 2 次才惰性降级」）、强制纯 Dart 三级开关、`Provider` 注入缝；`NullHighPerfEngine`；`HighPerfException` 分调用期 6 值 / 探测期 4 值且**永不接 UI**）+ `lib/task/*`（`BackgroundRunner`/`BackgroundTask`/`TaskContext`/`TaskHandle`/`TaskRunnerRegistry` + `IsolateBackgroundRunner` 与 `SyncBackgroundRunner` 两后端，后端可换是 T04 的挂载点）；`BookRegistry.capabilityFor` 格式 ↔ 能力**唯一映射点**，`main.dart` 组合根接线 + `kDebugMode` 下 `describe()` 打印；测试 48 条（registry 21 + task 27，含真派发 `debugName` 取证、进度节流与终值、kill 取消 <1s、远端失败转述、派发失败回落本 isolate）`187b5ad`
+- M35-T02 门槛基线测量基建（`RUST-06` 先测后引，「阈值先是数字、再是代码」）：`test/perf/threshold_judge.dart`（PRD §15.6.3 阈值表**唯一机读来源**逐字照抄 + §H.4 三段式判定**唯一实现**含 10% 死区 + `BaselineRecord` 留档 schema）、`threshold_judge_test.dart` 19 条（780/830/900 与边界 799/800/880/881、阈值表与 PRD 一致性、schema）、`baseline_harness.dart` 33 条（§H.1 协议：纯解析入口计时、不含 IO、含解压、N=7 中位数、预热不计入；样本 = 生成大文件样本 + `tmp_book/` 真实脏书；脏书容错；`MREADER_PERF_OUT` 落盘信封 JSON；整组默认 skip、单条自带 5 分钟超时）`0caf0d8`
+- 六项候选门槛结论留档（`docs/perf-baseline/thresholds.md` + `2026-09-28-windows-dev-sentinel.json` 33 条机读记录）：阈值 2 真实脏书（15.5MB **有目录** EPUB）合计 **1370ms → 1.71× over，且下界 1322ms 自身越死区 = over 与口径无关**；50MB 口径样本 **15144ms**；阈值 4 **7621ms → 5.08× over（仅无 toc 大书，根因 flatTitles 已挂账）**；阈值 3 **821ms → 1.03× borderline**；候选 1/5 与「单帧 > 16ms」如实 `notMeasured`（`0caf0d8`）
 
 ### 变更
 
 - `docs/tech-usage.md` 增 §2.31「真样本目录与端到端冒烟」（含 TXT 分章阈值坑：章体须 >1000 字，否则被当「疑似卷」否决整条规则）
 - 进度表刷新：M2b T04~T09 状态对齐（T09 备料完成，全量回归 + 五平台冒烟待负责人下令回填）；总览总体累计约 40%
+- `docs/perf-baseline/README.md` 增目录索引（该目录已被 M1-T07 / M2b-T04 / M2b-T05 / M3.5-T02 四批共用，**先看口径再读数字**）+ §8「门槛基线用法与留档模板 + 判定纪律六条」；`docs/tech-usage.md` 增 §2.32 / §2.33（T01 与 T02 的技术使用记录，含两批的坑与如实登记的未做项）
+- 进度表刷新（M3.5）：M35-T01 ✅ 100%、M35-T02 🔄 80%（基建与桌面哨兵留档已出，**正式判定待负责人 Android 主力机复跑回填**）、M3.5 小计 🔄 53%（A 线 6.4/12）
+- **口径更正（`docs/perf-baseline/thresholds.md` §3）**：此前「2a 含无目录书 `flatTitles` 预取属**中性重叠**、合计不受影响」的说法**是错的**——该预取是**逐章解压 + XHTML 解析（2b 性质）**，跑在 `load()` 里 → 「2a+2b」对无目录书是**重复计数、高估**。实测坐实：有目录真书 2a = 48ms、无目录 `big_bodies` 2a = 7608ms（同一解析器差 158 倍）。处置：判定同时给**无条件下界 = 2b 分层值**（2b 只计 `content(i)` 循环 ⇒ 等于真 2b；真 2a ≥ 0 ⇒ 真合计 ≥ 真 2b），并据此区分「over 与口径无关」与「over 依赖上界口径、须补有目录大样本复核」
+
+### 修复
+
+- 基线 harness 三处会产出**假结论**的错误（`0caf0d8`）：①零命中（`firstHitElapsed` 为 null 记 -1）会被三段式判成 `under`「不上 Rust」→ 改为任一样本 < 0 即整条 `notMeasured`；②真实脏书搜索词派生不可靠——首章常是图片页、`extractSection` 对图片产出 `IMG:…` 占位符（首跑把 `IMG:OE` 当成查询词），且 `content(i)` 在 `chapter.locate` 非空时走**片段**抽取而 `search()` 走**整节**抽取 → 改为「只取纯汉字连续段 + 只取 `locate` 为空的章」；③生成样本沿用大书的固定词对 `long_chapter.epub`（正文是「第N段…」）零命中 → 显式词表，表里没有不猜
+- `BaselineRecord.coldReadMs` 由「只写在 `notes` 人话里」改为**正式字段**（§H.1 要求额外记录冷读；只写文本则 harness 打印永远是 `null`，机读取不到）`0caf0d8`
 
 ## 2026-09-24
 

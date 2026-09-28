@@ -702,6 +702,60 @@
 | TXT 分章阈值（生成样本必读） | `_longGapChars=1000` / `_shortGapChars=100`：**与上一标题间隔 > 1000 字才算正式章**，间隔 < 100 字反被记为「疑似卷」并可能**否决整条规则**。故代表性 TXT 样本每章正文须 > 1000 字（≈40 个段落），否则整本退化成单章（本批实证：84 字/章 → 1 章；1160 字/章 → 规则命中、正确分章） |
 | 落点 | `tool/gen_real_samples.py`、`test/format/real_samples_smoke_test.dart`、`docs/acceptance-M2b.md`（§17 对照 + 五平台冒烟备料）、`docs/build-windows.md`（Developer Mode 闭环 `Q4 ③`） |
 
+### 2.32 M35-T01 — 加速层脚手架与回落骨架（纯 Dart 零 Rust）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M35-T01（`RUST-01` 探测回落协议；架构 §A 能力抽象 / §F 统一后台任务 / §J.3 任务号） |
+| 提交 | `187b5ad` |
+| 日期 | 2026-09-28 |
+| 一句话目标 | 把「有没有 Rust 加速」变成一个**可探测、可回落、上层无感**的三态量；本批**零 Rust 代码、零 Rust 依赖**，是 T02/T03 的共同地基 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| 三态探测（§A.2） | 「未探测 / 可用 / 不可用」不可用 `bool` 表达 | `HighPerfRegistry._probeOk`（`bool?`） | `null` = 未探测、`false` = 已定型不可用、`true` = 可用；`warmUp()` **幂等**（重复调用只探测一次，`probeTimeout = 3s`）；`has()` / `reasonFor()` / `describe()` 只读三态，**不做探测** |
+| 探测失败 5 情形（§A.3） | 失败原因必须可区分（否则无法诊断） | `HighPerfException`（`HighPerfErrorKind` 分**调用期 6 值**与**探测期 4 值**两组） | ①未编译 ②符号缺失 ③**版本不匹配**（比对 `kRustAbiVersion`，唯一可靠哨兵）④平台不支持（`kRustSupportedPlatform` 编译期短路）⑤**首次调用失败**——⑤**不翻转** `probeOk`，靠 `noteFailure()` 累计 `kHighPerfFailureStreakLimit = 2` 次才惰性降级该能力（冷启动一次抖动不该把加速层关掉） |
+| 强制纯 Dart 开关（§A.5） | 调试 / 排查现场问题 | `kForcePureDartFromEnvironment`（`--dart-define MRUN_FORCE_PURE_DART`）> `HighPerfRegistry.debugForcePureDart`（隐藏设置项）> 默认探测 | 优先级写死在 `fromEnvironment()` 一处；`HighPerfRegistry.fallback()` 是**共享只读常量实例**（`static final _pureDartFallback`），避免每次回落都建新对象 |
+| 组合根注入缝 | 上层零感知 | `HighPerfRegistryProvider.current`（同 `PdfEngineProvider` 模式） | UI / 业务层**不得出现任何「是否为 Rust」的分支**；`BookRegistry({HighPerfRegistry? highPerf})` 走**构造注入**（默认回落 `Provider.current`），`capabilityFor(FormatKind)` 给出格式 ↔ 能力映射，`open()` 本批**保留纯 Dart 实现**、注释写明 T04 在此插入 `has(...)` 择一 |
+| 文案隔离 | 用户可见文案唯一来源仍是 `RD-05` | `lib/highperf/high_perf_error.dart` 文件头 | 探测期 4 类原因（`kHighPerfProbeReasonZh`）**永不接 UI**，只进日志 / 诊断；`HighPerfException.toString()` 只吐 `messageZh`，**不泄漏 `detail`** |
+| 统一后台任务抽象（§F） | Rust 版与 isolate 版**同一套调用面** | `lib/task/background_runner.dart`：`BackgroundRunner` / `BackgroundTask<T>` / `TaskContext` / `TaskHandle` / `TaskRunnerRegistry` | `TaskContext` 把「取消 + 进度」做成**注入的协作者**（`TaskCancelSignal` / `TaskProgressSink`）而非 Stream——**isolate 内拿不到持 `StreamController` 的句柄**，这是相对 §F 原型的显式偏离；`TaskHandle.progress` 是**广播流、不重放**（订阅前发的事件收不到，契约写进文档注释） |
+| 「同步后端丢首个进度」的坑 | 防测试与真机误判 | `runTaskLocally()` | `SyncBackgroundRunner` 若**同步**跑任务体，会在 `start()` 返回前就发完全部进度 → 调用方 `start(); handle.progress.listen(...)` 永远收不到第一帧（实测 `Bad state: No element`）。修法：`scheduleMicrotask` **让出一轮微任务**再跑任务体 |
+| isolate 后端的泛型转型坑 | 防派发期类型错误 | `IsolateBackgroundRunner` + `IsolateBackgroundTask.dispatcher` | 后端只持 `BackgroundTask<T>`（拿不到具体消息类型 `M`），`is IsolateBackgroundTask<Object?, T>` 判型后 `M` 被**协变提升为 `Object?`**，与真实运行时函数类型不符 → 必须由 `IsolateBackgroundTask` **在定义处**暴露 `dispatcher`（本实例真实类型实参）完成转型，后端只用 `task.dispatcher` |
+| isolate 后端的取消与收尾 | 不留线程、不误报失败 | `_start<T>()`：progress/done/exit 三端口 + `kIsolateProgressThrottle = 100ms` 节流 + `kIsolateExitGrace = 200ms` 宽限 | 取消 = `Isolate.kill(immediate)` + `backendCancelled()`（**协议级取消，不留后台线程**）；`exitPort` 宽限兜「意外退出」；`spawn` 的 `onError` → 回落 `runTaskLocally`（诚实降级，结果与从未接过 isolate 一致） |
+| 测试「状态钉」 | 防 T04 落地时忘记改写 | `test/highperf_registry_test.dart` | 有一条**故意钉住 T01 阶段行为**的用例：「探测通过也不改分发结果（Rust 源属 T04）」——T04 真正接入 Rust 源时**必须改写该用例**，否则它会变成假的护栏 |
+| 验收对照 | 不满足即不算完成 | — | ①零 Rust：`lib/highperf/**` 无任何 Rust/FFI import、`flutter build`/`test` 不依赖 cargo；②三态 + 幂等 `warmUp`；③强制纯 Dart 开关三级优先；④`describe()` 可观测；⑤上层零分支（`BookRegistry.capabilityFor` 是唯一映射点） |
+
+> **本批未做（属 T04 / T05，如实登记）**：`RustEpubSource` / `RustTxtSource` / FFI 引擎（`lib/highperf/ffi/**`）/ `rust_background_runner` 属 **T04**；`RUST-10` 设置页两项开关的 UI 与持久化属 **T05**。本批 `HighPerfCapability` 只冻结**能力声明与枚举**，各能力的真实方法由 T04 增补。
+
+### 2.33 M35-T02 — 门槛基线测量基建与六项候选结论（先测后引）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M35-T02（`RUST-06`；PRD §15.6.2/§15.6.3 阈值表；架构 §H 测量协议 / §H.4 三段式判定） |
+| 提交 | （见本批 docs 提交） |
+| 日期 | 2026-09-28 |
+| 一句话目标 | 把「上不上 Rust」变成**可证伪**的：阈值先是数字（照抄 PRD）、判定只有一处实现、结论（**含「不上 Rust」**）必须留档 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| 阈值表的**唯一机读来源** | 防「门槛拆松 / 焊死」与手抄漂移 | `test/perf/threshold_judge.dart::kThresholdSpecs` | 5 行**逐字照抄** PRD §15.6.3（3s / 800ms / 800ms / 1.5s / 10s），含 `condition` 原文、`basis` 取值依据、候选 2 的 `scaleLimit`（50MB 口径 2s）与 2b/3/5 的**前置条件**；调整阈值**必须同步改 PRD**（`Q22`：只许调一次且必须写回文档）——测试逐条钉住，改代码不改 PRD 会红 |
+| §H.4 三段式的**唯一实现** | 「780ms vs 800ms」只能有一个答案 | `judgeDuration()` | `M < 阈值` → `under`（不上）；`阈值 ≤ M ≤ 阈值×1.1` → `borderline`（临界·暂不上，进观察名单）；`M > 阈值×1.1` → `over`（允许上）；`kBorderlineFactor = 1.1` 写死。`allowsRust` 只对 `over` 为真（`RUST-06` 反向硬约束：未超阈值**不得**实施） |
+| 留档 schema | §H.2 固定字段 + 机读 | `BaselineRecord` | `{capability, device, os, samples[], median, min, max, p90, bytesInMemory, peakMemBytes, conclusion}` 逐字对齐，另补 `thresholdNo`（`RUST-06 ⑤` 要能指出阈值编号）/ `verdict` / `judging`（§H.3 桌面标 `false`）/ `scale` / `coldReadMs` |
+| **`coldReadMs` 必须进 schema**（首跑踩坑） | 「有没有测冷读」要**机读** | `BaselineRecord.coldReadMs` + `toJson()` | 首跑只把它写进 `notes` **人话**里，于是 harness 打印永远是 `null`（`json['coldReadMs']` 取不到）——留档字段必须是字段，不是文本 |
+| 测量协议（§H.1） | 让数字可比、可复现 | `test/perf/baseline_harness.dart` | 计时对象 = 纯解析入口（`load`/`chapters`/`content(i)`），**从「bytes 已在内存」到 `return`**：①IO 排除（另测一次冷读作参考、不参与判定）②含解压③不含渲染④`N = 7` 取中位数 + min/max/p90⑤预热 1 次不计入⑥**判定只用中位数**；`dispose()` 放计时外（生命周期收尾不是解析工作） |
+| 测量专用 runner | 把「算法」与「派发成本」分开 | `_LocalRunner extends IsolateRunner` | `PERF-01` 后解析在后台 isolate，公开入口含**建销成本**；阈值测的是算法 → 测量时把派发换成现跑（复用既有 `runner` 注入缝，**不改产品代码**）。**候选 4 例外**：阈值 4 的口径就是真实用户路径（含建销与协议开销），那里**不换** runner |
+| 成本边界与**本实现暴露的口径缺陷** | 合计口径的前提必须写清楚 | `baseline_harness.dart` 文件头 + 合计组 `notes` | §15.6.2 处置 4：2a = zip + container/OPF → 骨架；2b = 各章 XHTML → 段落；合计才对。**但无目录书的 2a（`load()`）内含 `flatTitles` 预取**（逐章解压 + XHTML 解析，2b 性质）→ 「2a+2b」对无目录书**高估**（该量被算两遍），**不是早前以为的「中性重叠」**。实测坐实：无目录 `big_bodies` 2a = 7853ms，而有目录真书 2a = **40ms**（同口径差 200 倍，只可能来自逐章 XHTML 解析） |
+| 口径缺陷的**无条件下界** | 让 over 结论不依赖有缺陷的口径 | 合计组 `lowerBound = 2b 分层值` | 2b 的测量**只计 `content(i)` 循环**（`chapters()` 已在外层调用并被缓存）→ 它等于真 2b；又因真 2a ≥ 0，故 **真合计 ≥ 2b 分层值**。下界自身已越死区 → 结论里写「**over 与口径无关**」；仅上界越死区 → 写「**over 依赖上界口径，必须补有目录大样本复核**」（`RUST-06` 的开工纪律） |
+| **零命中 ≠ 达标**（首跑踩坑） | 防假结论误导 gate | 候选 4 分组守卫 | `SearchSession.firstHitElapsed` 零命中时为 `null`，harness 记 `-1`；而 `-1 < 1500ms` 会被三段式判成 **`under`（不上 Rust）**——**根本没测到东西却给出「达标」**。守卫：任一样本 < 0 → 整条改判 `notMeasured` |
+| 真实脏书搜索词派生（首跑踩坑两处） | 不冻结作品专有词，又要**必然命中** | `_queryFor()` + `_longestHanRun()` | ①首跑把 `IMG:OE` 当查询词——首章是图片页，`extractSection` 对图片产出**占位符**；故**只取纯汉字连续段**（U+4E00–U+9FFF，纯 ASCII 写法判区间）②`content(i)` 在 `chapter.locate` 非空时走**片段**抽取，而 `search()` 一律走**整节**抽取 → 只取 `locate` 为空的章，两条路径同源、派生词必然可命中 |
+| 生成样本的搜索词表 | 与既有 `search.md` 读数可比 | `_generatedQueries` | 每个词必须**真的在该样本正文里**：`long_chapter.epub` 生成的是「第N段字字字…」（无「第N章」前缀），沿用大书的「第1章第1段」会零命中（首跑实证）→ 单独给词 `第1段`；**表里没有就不测**，不猜 |
+| 自带的用例超时 | 不依赖调用方记得传 `--timeout` | `kBenchTimeout = Timeout(5min)` | harness 是重任务（7 轮 × 全书解压 + 8 次完整后台搜索，本机约 6 分钟）；默认超时不够（`test_config.dart` 已记：CLI 默认值会被显式值压过）→ 写死在用例上。**整组默认 skip**（`MREADER_PERF_BENCH=1` 才跑），不拖慢 `reader` 分组回归 |
+| 结果落盘 | §H.2 要求人工 commit，但不必手抄 | `MREADER_PERF_OUT` | 置位时落盘信封 JSON `{generatedAt, device, os, judging, fixtures, records[]}`，stdout 仍逐条打 `BASELINE_JSON{...}` + 人类可读行；**commit 仍由人做**（自动落盘只为免去抄错） |
+| 脏书容错 | 一个解析不了的样本不该毁掉整轮 bench | 各分组 `try/catch` + `_emitMeasurementFailure()` | 失败如实记成 `notMeasured` 记录（含异常类型与文本），**不中断整轮**——bench 的产物是数据，不是绿测 |
+| 结论（桌面哨兵口径，`judging: false`） | `RUST-06 ④`「未超阈值也是交付物」 | `docs/perf-baseline/thresholds.md` | 阈值 4 无 toc 大书搜索 **5.09× 越阈值**；阈值 2 合计真书 **1.77× 越阈值（下界无条件成立）**、50MB 样本 **15.5s**；阈值 3 生成 20MB TXT **1.08× 临界**；候选 1/5 未测（解析器属 M4 / 基线待 AI）**如实登记**。**正式判定须 Android 主力机复测**（§H.3 桌面快一个数量级，用它判定会「永远测不过」） |
+
+> **本批未做（如实登记，非遗漏）**：①`test/perf/rust_harness.dart`（§H.2 列的「Rust 实现测量，无 Rust 时 skip」）**留到 T03 gate 通过后由 T04 补**——Rust 侧入口尚不存在，先写只会是猜测（工程约定：「规格引用第三方 API / 脚手架结构先读真实源码再下笔」）；②任务书文件列里的 `lib/format/dart_epub_source.dart` / `dart_txt_source.dart` **经核查无需改动**——测量所需的入口（`load`/`chapters`/`content`）与注入缝（`runner`）都已存在，本批零产品代码改动（该列系排期前的预估，实测未成立）。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
