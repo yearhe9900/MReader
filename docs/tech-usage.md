@@ -691,6 +691,17 @@
 | 阈值 4 基线 | `dart run tool/search_bench.dart <dir> <fixture> <label> [query] [iters]`（`2b6f05e`）：首屏 = `firstHitElapsed`（含 isolate 往返）、卡顿 = 主 isolate 心跳 `maxGapMs`（含收尾间隔）。实测与根因入 `docs/perf-baseline/search.md`——TXT 20.7MB 首屏 0.45s 达标 / **无 toc 48M 字符 EPUB 4.2s 超标**（flatTitles 全书预解压，`epub_parser.dart:518-523`）/ **心跳法 Windows 本底 15~25ms 不具 16ms 区分力**（UI 帧级判定走 `FrameTiming` 真机口径） |
 | 落点 | `lib/task/search_session.dart`（会话唯一收口）、`lib/ui/search_sheet.dart`（面板）、`lib/typography/typeset.dart`（`highlightSpans` / `highlightQuery`）、`lib/reader/reader_page.dart` `_openSearch` / `_startSearch` / `_jumpToSearchHit`、`tool/search_bench.dart` |
 
+### 2.31 M2b-T09 — 真样本目录与端到端冒烟（§17 M2 第 1/3/4/5 条）
+
+| 项 | 值 |
+|---|---|
+| 样本目录 | `tmp_book/`（`.gitignore` 已含 `/tmp_book/`：「开发期真实书籍样本，多格式测试用，不入库」）。真实出版物由人放入，生成样本由工具产出；**干净 checkout 无此目录** |
+| 样本生成器 | `tool/gen_real_samples.py`（**纯 Python 标准库、不联网**，与 `test/fixtures/make_fixtures.py` 同纪律）：自造真结构 PDF（FlateDecode 内嵌 DeviceRGB 位图 + Helvetica 文字层、xref 可定位）与真结构 PNG→CBZ（自然序命名、混合大小写扩展名、`ComicInfo.xml`/`__MACOSX/` 干扰项、大图页）；并补 EPUB3(nav)/EPUB2(ncx)/无 nav 与 UTF-8 卷章 / GBK / 超长单章 TXT。运行 `python tool/gen_real_samples.py`（`--list` 只列清单） |
+| 冒烟测试 | `test/format/real_samples_smoke_test.dart`：`openBook → load → chapters → content(0) → readResource`；另用**真书正文派生查询词**跑一次 `BookSource.search` 作第 3 条辅助证据。**无 `tmp_book/` 时整组 skip**（不红、不阻塞全量） |
+| PDF 真渲染开关 | 默认**只校验路由**（样本是否被判为 PDF 并交 `PdfSource`）——无头 `flutter test` 可能加载不到 pdfium 原生库；要真开页设 **`MREADER_REAL_PDF=1`** 再跑本文件，或**在 App 内人工冒烟**。该文件 `main()` 首行调 `capTestTimeout()`（30s 兜底防原生挂起拖垮全量） |
+| TXT 分章阈值（生成样本必读） | `_longGapChars=1000` / `_shortGapChars=100`：**与上一标题间隔 > 1000 字才算正式章**，间隔 < 100 字反被记为「疑似卷」并可能**否决整条规则**。故代表性 TXT 样本每章正文须 > 1000 字（≈40 个段落），否则整本退化成单章（本批实证：84 字/章 → 1 章；1160 字/章 → 规则命中、正确分章） |
+| 落点 | `tool/gen_real_samples.py`、`test/format/real_samples_smoke_test.dart`、`docs/acceptance-M2b.md`（§17 对照 + 五平台冒烟备料）、`docs/build-windows.md`（Developer Mode 闭环 `Q4 ③`） |
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；

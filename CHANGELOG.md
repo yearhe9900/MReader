@@ -3,6 +3,17 @@
 > 格式：Keep a Changelog 简化式。日期用 `YYYY-MM-DD`，**按日期倒序**排列。
 > 书写约定：每条一句话、**不复述过程**（分析、根因链、教训留在 PRD 与 `.workbuddy/memory/`），条目末尾附 commit hash 便于追溯。
 
+## 2026-09-28
+
+### 新增
+
+- M2b-T09 交付验收备料（§17 M2 第 1/3/4/5 条 + FMT-01/02 样本）：`tool/gen_real_samples.py`（**纯 stdlib、不联网**）生成「代表性真实结构样本」到 `tmp_book/`（不入库）——真结构 PDF（FlateDecode 内嵌位图 + Helvetica 文字层）/ CBZ（自然序、混大小写扩展名、`ComicInfo.xml` 与 `__MACOSX` 过滤、大图页）/ EPUB3+nav、EPUB2+ncx、无 nav / TXT（UTF-8 卷章、GBK、超长单章）；`test/format/real_samples_smoke_test.dart` 端到端冒烟（`openBook→load→chapters→content(0)→readResource` + 真书正文派生查询词搜索；无 `tmp_book/` 整组 skip；PDF 真渲染默认关、`MREADER_REAL_PDF=1` 开启），实测四类各 ≥3 样本全通过（EPUB 4 / TXT 4 / PDF 3 / CBZ 3，`All tests passed!`）；新增 Windows 构建文档 `docs/build-windows.md`（Developer Mode 闭环 `Q4 ③`）与验收报告 `docs/acceptance-M2b.md`（§17 判定对照 + 五平台冒烟备料） `63afc3b`
+
+### 变更
+
+- `docs/tech-usage.md` 增 §2.31「真样本目录与端到端冒烟」（含 TXT 分章阈值坑：章体须 >1000 字，否则被当「疑似卷」否决整条规则）
+- 进度表刷新：M2b T04~T09 状态对齐（T09 备料完成，全量回归 + 五平台冒烟待负责人下令回填）；总览总体累计约 40%
+
 ## 2026-09-24
 
 ### 新增
