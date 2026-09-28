@@ -884,6 +884,60 @@
 
 **遗留（不在本批范围，交负责人拍板）**：`schedule.md` §6 周序、7 条 lint、总体人天百分比、工作区行尾翻新（`R9` 已关闭但行尾策略 `a0c7c71` 的「本批不翻新现存工作区」仍挂账）。
 
+### 2.38 UI 重做：五 tab 壳层与书架保真度（2026-09-28）
+
+| 项 | 值 |
+|---|---|
+| 事项 | 负责人提出「当前 UI 设计和交互不是我想要的」→ 参考 `D:\Projects\anx-reader` 重做书架 + 加五 tab 底栏 |
+| 拍板（四项全选推荐档） | 底栏 = **悬浮胶囊 + 液体玻璃**（复用 `liquid_glass_widgets`，**不引新依赖**）／书架视觉 = **照搬 anx 全套**／交互保真度 = **L1+L2+L3 全要**／统计·AI·笔记 = **只建占位页** |
+| 提交 | `06063c8`（壳层 + 书架视觉 L1）、`0991c43`（筛选/排序 L2 + 长按操作单）；**L3 未动工** |
+
+**关键 API 事实（本批逐条读 1.7.0 真实源码复核，非凭记忆）**
+
+| 事实 | 出处（源码行） | 对本项目的影响 |
+|---|---|---|
+| `GlassTabBar.bottom` **本身就是浮动胶囊**（iOS 26 `UITabBarController` 等价物） | `glass_tab_bar.dart:183` 签名；`:194` `spacing = 8`、`:195` `horizontalPadding = 20`、`:196` `verticalPadding = 20`、`:197` `barHeight = 64` | **无需**引入 `flutter_floating_bottom_bar`（anx-reader 用的那个包），也**无需**自绘毛玻璃 → 依赖表零变更 |
+| **玻璃库不含侧栏组件** | `lib/widgets/surfaces/` 实为 8 个文件：`glass_app_bar` / `glass_bar_item` / `glass_large_title` / `glass_navigation_shell` / `glass_pinned_bar_chrome` / `glass_scaffold` / `glass_tab_bar` / `glass_toolbar`（+ `shared/`） | 宽屏侧栏用 Material `NavigationRail`（与 anx-reader 同选择）。⚠️ `glass_navigation_shell.dart` **不是侧栏**——它是「pinned navigation chrome」的管理器（`GlassNavBarRegistration` 由 `GlassAppBar.pinned` 交进来），勿望文生义 |
+| 无祖先时 `resolveQuality` 落 `fallback`，默认 **`standard`** | `glass_theme_helpers.dart:160` 定义、`:163` `GlassQuality fallback = GlassQuality.standard` | **这是 `standalone` 参数存在的全部理由**：浮动胶囊脱离 `GlassScaffold`（本该由它内层 `GlassIsolationScope(defaultQuality: premium)` 自动提升）后，高档会静默掉到 `standard` → 封装里显式补 `premium` |
+
+**本项目侧的三处结构决策**
+
+1. **壳层外层刻意不用 `Scaffold`，用 `Stack`**：五个子页各自持有 `GlassNavScaffold`（含自己的顶栏）。外层若再套 `GlassScaffold` 即构成**玻璃套玻璃**，违反 `UI-04`。故 `home_shell.dart` 用 `Stack` + `Positioned(bottom: 0)` 浮底栏——与 anx-reader 同结构。
+   - 对应地 `GlassNavBar` 增 `standalone`，实现为 `quality: config.fixedSurfaceQualityOverride ?? (standalone ? GlassQuality.premium : null)`（`glass_kit.dart:358-359`）：**只有高档**显式声明 `premium`，中/低档仍由 `GlassScope` 的 `fixedSurfaceQualityOverride` 钉 `standard` / `minimal`——**非写死**，档位链不破。
+2. **`kShellBottomInset = 96`（`home_shell.dart:49`）的由来与必要性**：浮动胶囊**不占布局高度**，`Positioned` 也不会为 `IndexedStack` 让位 → 各页可滚动内容必须**自留底部空白**，否则最后一行被胶囊压住。已接三处：书架网格、`library_search_page` 结果列表、导入失败清单。`library_search_page.dart` 经 `import 'home_shell.dart' show kShellBottomInset;` 取用（**曾漏此 import 导致 `Undefined name` 编译错**）。
+3. **保 `UI-04` 红线做渐变背景**：anx-reader 用 `primary.withAlpha(5)` **半透明叠底**——在本项目是红线违规。本实现改用 `Color.alphaBlend(半透明光晕, 底色)` **预先合成为完全不透明**再交给 `RadialGradient`（`shelf_page.dart::_shelfBackground`）：观感等价，内容层仍然不透明。
+
+**踩中的真 bug（玻璃浮层无 Material 祖先）**
+
+- 现象：`test/ui` 首跑 5 个失败，全为 `No Material widget found. ListTile widgets require a Material widget ancestor`。
+- 根因：长按操作单由 `GlassOverlays.showSheet` 承载 → 玻璃浮层**没有 Material 祖先**（PRD §11.4 已写明这条约束），`ListTile` 直接抛断言。
+- 修法：`_BookActionSheet` 最外层包 `Material(type: MaterialType.transparency, child: SafeArea(...))`——**这是玻璃浮层内放任何 Material 系控件的标准做法**（`library_search_page` 的 `TextField` 同理）。
+
+**改动面（含测试）**
+
+- 新增：`lib/ui/home_shell.dart`（约 230 行）、`lib/ui/placeholder_page.dart`、`lib/ui/stats_page.dart` / `ai_page.dart` / `notes_page.dart`（占位）、`lib/ui/library_search_page.dart`（约 200 行，**只过滤元数据**：书名/作者/文件名，大小写不敏感；与阅读页内 `CNT-06` `SearchSheet`（正文级全书搜索）**分工不同**）、`lib/settings/shelf_prefs_store.dart`（约 210 行）。
+- 重写：`lib/ui/book_card.dart`（约 250 行）——去卡片底板、封面浮层 + `BoxShadow`、标题 13px w600 两行、作者 + 右下角进度百分比（`readProgress` 为 null 则不显示）、`Hero(tag: 'book-cover-${bookId}')`。
+- 修改：`lib/ui/glass_kit.dart`（`GlassNavBar` 暴露胶囊参数 + `standalone` + re-export `GlassTab` / `GlassTabBarExtraButton`）、`lib/ui/shelf_page.dart`（约 850 行）、`lib/main.dart`（组合根改 `HomeShell` + 并行加载 `ShelfPrefsStore`）。
+- 测试：`ShelfPage` 新增**必填**参数 `shelfPrefs`，`test/ui/shelf_page_test.dart` / `test/widget_test.dart` / `test/meta/detail_test.dart` 三处同步补注入；`LIB-06` 四处 + 回归③ 由「长按即出确认框」改写为**两步流程**（长按 → 断言操作单出现 / **断言确认框不该出现** → 点「移出书架」→ 确认框）——这是**预期行为变更改测试**，不是改代码迁就测试。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze      # 全仓：无新增问题（7 条 info 均为既有）
+bash tool/test.sh ui                                        # 00:39 +57: All tests passed!
+bash tool/test.sh data                                      # 00:12 +205: All tests passed!
+```
+
+> ⚠️ Dart 可执行文件是 **`/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe`**——`C:/src/flutter/bin/dart.exe` **不存在**（本批踩过）。
+
+**复核边界（不伪造复核记录）**
+
+- **可复核 → 已复核**：上表三条第三方 API 事实的行号与默认值**逐字对上**；本项目 `glass_kit.dart:358-359` 的 `quality` 表达式、`home_shell.dart:49 / :52` 两个常量、`surfaces/` 目录清单均为 `grep` / `ls` 实测。
+- **不可复核 → 未声称**：**书架视觉与 anx-reader 的「观感是否一致」无法由读源码判定**，须在真机/桌面上看。本批**只对代码结构负责**，未写「视觉已验收」；L1 视觉验收**待在负责人设备上确认**。
+- **L2 筛选判据的依据是读源码得出**：`BookRecord.readProgress` 由 `reader_page.dart` 的 `_overallProgress(index, _chapterPos)` 经 `markRead` 真实回写（**非空字段**），故「未读 / 在读 / 已读完」三档成立；排序字段 `importedAt` / `lastReadAt` / `title` / `author` **均已在 `BookRecord` 中存在 → 本轮无需改序列化**，故不存在旧索引兼容问题。
+
+**未做（如实登记，交负责人）**：**L3**（长按拖拽重排 / 拖到书上建文件夹 / 桌面拖文件入窗导入）**一行未写**——它会改动 `BookRecord` 的持久化结构（或另建布局文件），涉及 `index.json` 向后兼容设计与可能的两个新依赖（`flutter_reorderable_grid_view`、`desktop_drop`），**须先拍板方案再动工**。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
