@@ -78,6 +78,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../diagnostics/perf_log.dart';
 import '../format/book_source.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
@@ -317,9 +318,15 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 取元数据 + 章节表 + 已存进度 → 定位；**首帧只等「目标章 ±1」**，随后后台补齐。
   Future<void> _open() async {
+    final Stopwatch openClock = Stopwatch()..start();
     try {
+      final PerfWatch loadWatch = PerfLog.watch('reader.load');
       final BookMeta meta = await widget.source.load();
+      loadWatch.done('impl=${widget.source.implId}');
+      final PerfWatch chaptersWatch = PerfLog.watch('reader.chapters');
       final List<Chapter> chapters = await widget.source.chapters();
+      chaptersWatch.done('count=${chapters.length}');
+      final PerfWatch storesWatch = PerfLog.watch('reader.stores');
       final ReadingProgress? progress =
           await widget.progressStore.load(widget.record.bookId);
       // TYP-06~09：书签（按书）与阅读偏好（全局）。store 未接线时为 null / 空，
@@ -328,6 +335,7 @@ class _ReaderPageState extends State<ReaderPage> {
           await widget.bookmarkStore?.load(widget.record.bookId) ??
               <Bookmark>[];
       final ReadingPrefs? prefs = await widget.readingPrefsStore?.load();
+      storesWatch.done();
       if (!mounted) return;
 
       // 定位：先按 href（稳定身份）匹配，匹配不到退回 index 并 clamp。
@@ -366,9 +374,14 @@ class _ReaderPageState extends State<ReaderPage> {
       _loader = loader;
 
       // 首帧：只等目标章（±1 邻章预取不阻塞；`PERF-02`：不一次性解析全书）。
+      final PerfWatch firstWatch = PerfLog.watch('reader.firstBatch');
       await loader.loadFirstBatch(index);
+      firstWatch.done('target=$index');
       if (!mounted || _disposed) return;
       setState(() => _ready = true);
+      // 开书到「首帧可渲染」的总时长（用户感知的等待上限；恢复校正另计 restore.*）。
+      PerfLog.step('reader.ready', openClock.elapsedMilliseconds,
+          'target=$index pos=${pos.toStringAsFixed(3)} chapters=${chapters.length}');
       _scheduleEstimateRefresh();
       _ensureAutoFill();
     } catch (error) {
@@ -389,10 +402,13 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 读取第 [index] 章正文；单章失败就地降级为一行提示，不拖垮整本书。
   Future<ChapterContent> _contentAt(int index) async {
     if (_disposed) return ChapterContent.paragraphs(const <String>[]);
+    final PerfWatch watch = PerfLog.watch('reader.content');
     try {
       final ChapterContent content = await widget.source.content(index);
+      watch.done('index=$index paras=${content.paragraphList.length}');
       return content;
     } catch (error) {
+      watch.done('index=$index FAILED');
       return ChapterContent.paragraphs(<String>['[本章解析失败] $error']);
     }
   }
@@ -459,12 +475,16 @@ class _ReaderPageState extends State<ReaderPage> {
       // ≤8 帧）——不允许「复制完就返回」。
       _controller = ScrollController(initialScrollOffset: hint.scrollOffset);
       _cache.touch(_restoreIndex);
+      PerfLog.mark('reader.seed',
+          'branch=exact seed=${hint.scrollOffset.toStringAsFixed(1)}');
       _beginScrollTo(_restoreIndex, _restorePos);
       return;
     }
     // 回退分支（backlog① 方案 A）：同版面时 seed，否则 0。
     final double seed = sameLayout ? hint.scrollOffset : 0.0;
     _controller = ScrollController(initialScrollOffset: seed);
+    PerfLog.mark('reader.seed',
+        'branch=${sameLayout ? 'fallback-seed' : 'zero'} seed=${seed.toStringAsFixed(1)}');
     _beginScrollTo(_restoreIndex, _restorePos);
   }
 
@@ -480,6 +500,8 @@ class _ReaderPageState extends State<ReaderPage> {
     _restoreFrames = 0;
     _restoring = true;
     _positionConverged = false; // `RC1`：程序化移动开始 → 先关写盘闸门
+    PerfLog.mark('restore.begin',
+        'index=$_restoreIndex pos=${_restorePos.toStringAsFixed(3)} para=$paraIndex');
     WidgetsBinding.instance.addPostFrameCallback((_) => _restoreStep());
   }
 
@@ -506,10 +528,14 @@ class _ReaderPageState extends State<ReaderPage> {
       final int total = math.max(1, _chapters?.length ?? 1);
       final double estimate =
           maxExtent * ((_restoreIndex + _restorePos) / total);
+      PerfLog.mark('restore.step',
+          'frame=${_restoreFrames + 1} kind=estimate jumpTo=${estimate.clamp(0.0, maxExtent).toStringAsFixed(0)} maxExtent=${maxExtent.toStringAsFixed(0)}');
       controller.jumpTo(estimate.clamp(0.0, maxExtent));
       _restoreFrames++;
     } else {
       final double delta = target - controller.offset;
+      PerfLog.mark('restore.step',
+          'frame=${_restoreFrames + 1} kind=${paraIndex != null ? 'para' : 'chapter'} delta=${delta.toStringAsFixed(1)} target=${target.toStringAsFixed(0)} offset=${controller.offset.toStringAsFixed(0)}');
       if (delta.abs() <= 1.0) {
         _finishRestore(converged: true); // `RC1`：真正收敛 → 闸门开，可写盘
         return;
@@ -546,6 +572,8 @@ class _ReaderPageState extends State<ReaderPage> {
     _positionConverged = converged;
     if (!mounted) return;
     _positionSampled = _detectCurrentChapter();
+    PerfLog.mark('restore.end',
+        'frames=$_restoreFrames converged=$converged sampled=$_positionSampled');
     _cache.touch(_currentIndex);
     setState(() {});
     _ensureAutoFill();
@@ -748,7 +776,9 @@ class _ReaderPageState extends State<ReaderPage> {
     // `RC1`：用户主动滚动 → 当前落点即用户认可的位置（视为已收敛）；
     // 是否可写还取决于本轮是否采到完整语义坐标（未采到则闸门关、不落盘）。
     _positionConverged = true;
+    final PerfWatch watch = PerfLog.watch('scroll.detect');
     _positionSampled = _detectCurrentChapter();
+    watch.done('index=$_currentIndex sampled=$_positionSampled');
     _cache.touch(_currentIndex);
     _ensureAutoFill();
     unawaited(_saveProgress());
@@ -765,15 +795,24 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 后台补齐循环：每批 [kLoadBatchSize] 章，逐批合入（经 [_applyLayoutChange]
   /// 做语义重锚）；直到「当前窗口内全部驻留」为止。滚动后由 [_ensureAutoFill] 再触发。
   Future<void> _autoFillLoop() async {
+    int batches = 0;
+    final Stopwatch clock = Stopwatch()..start();
     try {
       while (mounted && !_disposed) {
         final ChapterAutoLoader? loader = _loader;
         if (loader == null) return;
+        final PerfWatch batchWatch = PerfLog.watch('autofill.batch');
         final bool more = await loader.fillOnce(_currentIndex);
+        batches++;
+        batchWatch.done('current=$_currentIndex batch=$batches more=$more');
         if (!mounted || _disposed) return;
-        if (!more) return;
+        if (!more) {
+          PerfLog.mark('autofill.end',
+              'batches=$batches ms=${clock.elapsedMilliseconds}');
+          return;
+        }
         // 修 A：占位→真实合入会改总高，重锚后再采样（修 C，随收敛走）。
-        _applyLayoutChange(() => setState(() {}));
+        _applyLayoutChange(() => setState(() {}), reason: 'autofill-merge');
         _scheduleEstimateRefresh();
       }
     } finally {
@@ -804,7 +843,7 @@ class _ReaderPageState extends State<ReaderPage> {
   ///     自会吸收本次突变（也防叠加过校正）；
   ///   · 用户手势滚动中（`isScrolling`）——`jumpTo` 会掐掉用户的甩动；
   ///   · 锚点抓取失败（章块未布局 / 控制器未挂）——无可锚语义。
-  void _applyLayoutChange(VoidCallback mutate) {
+  void _applyLayoutChange(VoidCallback mutate, {String reason = 'merge'}) {
     final ScrollController? controller = _controller;
     final bool canAnchor = !_restoring &&
         controller != null &&
@@ -818,6 +857,8 @@ class _ReaderPageState extends State<ReaderPage> {
             chapterIndex: _currentIndex,
           )
         : null;
+    PerfLog.mark(
+        'layout.reanchor', 'reason=$reason anchored=${anchor != null}');
     mutate();
     if (anchor != null) {
       _beginScrollTo(anchor.chapterIndex, anchor.relativePos);
@@ -846,8 +887,11 @@ class _ReaderPageState extends State<ReaderPage> {
     if ((median - _estimatedChapterHeight).abs() > 0.5) {
       // 修 A：占位高是**所有**未加载章的渲染高度——一改就是全局高度突变，
       // 与合入同样走语义重锚（`_applyLayoutChange`）。
+      PerfLog.mark('layout.height',
+          'old=${_estimatedChapterHeight.toStringAsFixed(1)} new=${median.toStringAsFixed(1)}');
       _applyLayoutChange(
-          () => setState(() => _estimatedChapterHeight = median));
+          () => setState(() => _estimatedChapterHeight = median),
+          reason: 'height-refresh');
     }
   }
 
@@ -863,6 +907,7 @@ class _ReaderPageState extends State<ReaderPage> {
       return;
     }
     final int target = index.clamp(0, chapters.length - 1);
+    PerfLog.mark('nav.goto', 'target=$target from=$_currentIndex');
     // 保存旧位置（此时 _currentIndex / _chapterPos 仍是旧位置）。
     await _saveProgress();
     if (!mounted) return;
@@ -873,7 +918,9 @@ class _ReaderPageState extends State<ReaderPage> {
       _livePos = 0.0;
     });
     // 先把目标章载入（邻章 ±1 预取不阻塞），避免跳到占位块后高度回填引起漂移。
+    final PerfWatch watch = PerfLog.watch('nav.goto.firstBatch');
     await loader?.loadFirstBatch(target);
+    watch.done('target=$target');
     if (!mounted) return;
     _beginScrollTo(target, 0.0);
     _ensureAutoFill();

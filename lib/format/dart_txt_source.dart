@@ -46,6 +46,7 @@
 // 本实现的定位是「正确且可测的纯 Dart 基线」，内存收敛交给 M1-T07。
 import 'dart:typed_data';
 
+import '../diagnostics/perf_log.dart';
 import '../epub/text_codec.dart';
 import '../meta/meta_source.dart' show kUnknownAuthor;
 import '../meta/txt_meta.dart';
@@ -327,6 +328,7 @@ class DartTxtSource implements BookSource {
   // ---------------------------------------------------------------------------
 
   static List<_Segment> _analyze(String text) {
+    final Stopwatch clock = Stopwatch()..start();
     // **只在首个 512KB 块上做规则择优**（对照参考实现：`getChapterList()` 只把
     // 首个 `bufferSize = 512000` 字节的块交给 `getTocRule()`）。这既是忠实照译，
     // 也避免对整本大书跑 12 条带 lookbehind 的规则（实测 20MB 会从分钟级降到百毫秒级）。
@@ -335,8 +337,13 @@ class DartTxtSource implements BookSource {
         : text;
     final _TocRule? rule = _pickRule(sample);
     // 无任何规则命中 -> 按 10KB 分块（RD-02 ②）。
-    if (rule == null) return _splitByLength(text, 0, text.length);
-    return _splitByRule(text, rule);
+    final List<_Segment> segments = rule == null
+        ? _splitByLength(text, 0, text.length)
+        : _splitByRule(text, rule);
+    // 耗时日志（perf_log 顶部「用途」）：rule 直接回答「这本书被切成多少章」。
+    PerfLog.step('txt.analyze', clock.elapsedMilliseconds,
+        'rule=${rule?.name ?? 'none'} chapters=${segments.length} chars=${text.length}');
+    return segments;
   }
 
   /// 规则择优（对照参考实现 `getTocRule()`）。
@@ -546,13 +553,21 @@ String _txtDecodeTask(Uint8List bytes) => _decodeAndStripBom(bytes);
 /// `PERF-01` 的 TXT 准备任务（顶层纯函数）：解码 + 空检 + 分章一并在后台 isolate
 /// 算完；业务错误（[FormatErrorCode.txtNoContent]）收进 [_TxtPrepareOutcome] 信封。
 _TxtPrepareOutcome _txtPrepareTask(Uint8List bytes) {
+  final Stopwatch clock = Stopwatch()..start();
   final String text = _decodeAndStripBom(bytes);
+  final int decodeMs = clock.elapsedMilliseconds;
   if (text.trim().isEmpty) {
     return _TxtPrepareOutcome.failed(
       const MReaderFormatException(FormatErrorCode.txtNoContent),
     );
   }
-  return _TxtPrepareOutcome.ok(text, DartTxtSource._analyze(text));
+  final List<_Segment> segments = DartTxtSource._analyze(text);
+  // 耗时日志：decode（编码探测 + 全量解码）与 analyze（择优 + 分章）的分账。
+  PerfLog.step('txt.prepare', clock.elapsedMilliseconds,
+      'bytes=${bytes.length} decode=${decodeMs}ms '
+      'analyze=${clock.elapsedMilliseconds - decodeMs}ms '
+      'chapters=${segments.length}');
+  return _TxtPrepareOutcome.ok(text, segments);
 }
 
 /// 一条 TXT 目录规则（章名 + 正则源码）。

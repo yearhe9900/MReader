@@ -31,6 +31,7 @@ import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 import 'package:xml/xml.dart';
 
+import '../diagnostics/perf_log.dart';
 import '../format/error_messages.dart';
 import '../model/chapter.dart';
 import '../model/epub_book.dart';
@@ -298,9 +299,15 @@ class EpubParseOutcome {
 Future<EpubParseOutcome> parseEpubStructureTask(
   EpubParseRequest request,
 ) async {
+  final Stopwatch clock = Stopwatch()..start();
   try {
     final EpubStructure structure =
         await parseEpubStructure(request.bytes, fileName: request.fileName);
+    // 耗时日志（后台 isolate 内打印同样落 stdout）：结构解析总时长 +
+    // 章节数 / 目录数（无目录书 flatTitles 的分账见 _parse 第 8 步）。
+    PerfLog.step('epub.parse', clock.elapsedMilliseconds,
+        'bytes=${request.bytes.length} sections=${structure.sections.length} '
+        'toc=${structure.toc.length}');
     return EpubParseOutcome.ok(structure);
   } on MReaderFormatException catch (e) {
     return EpubParseOutcome.failed(e);
@@ -517,11 +524,16 @@ _ParsedEpub _parse(Uint8List bytes, String fileName) {
   //    键用 href 不用索引，天然不错位）。
   final Map<String, String> flatTitles = <String, String>{};
   if (toc.isEmpty) {
+    // 耗时日志：无目录书的标题预取是「打开」的已知大户（逐章解压 + XHTML 解析），
+    // 单独分账——真机若在此处出现秒级耗时即命中该路径（挂账 #6）。
+    final Stopwatch flatClock = Stopwatch()..start();
     for (final EpubSectionRef ref in sectionRefs) {
       final ArchiveFile? file = _resolveFile(byName, lowerIndex, ref.href);
       if (file == null) continue;
       flatTitles[ref.href] = extractSection(lazyEntryLoader(file)()).title;
     }
+    PerfLog.step('epub.flatTitles', flatClock.elapsedMilliseconds,
+        'sections=${sectionRefs.length}');
   }
 
   final EpubStructure structure = EpubStructure(

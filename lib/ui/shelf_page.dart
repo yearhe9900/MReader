@@ -17,6 +17,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../diagnostics/perf_log.dart';
 import '../format/book_registry.dart';
 import '../format/book_source.dart';
 import '../library/book_record.dart';
@@ -210,7 +211,10 @@ class _ShelfPageState extends State<ShelfPage> {
     _opening = true;
     setState(() => _openingBookId = record.bookId); // 该卡显示 loading 覆盖层
     try {
+      final PerfWatch readWatch = PerfLog.watch('open.readBytes');
       final Uint8List? bytes = await widget.repository.readBookBytes(record);
+      readWatch.done(
+          'book=${record.title} sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
       if (bytes == null || bytes.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -220,10 +224,12 @@ class _ShelfPageState extends State<ShelfPage> {
         return;
       }
 
+      final PerfWatch sniffWatch = PerfLog.watch('open.sniff');
       final BookSource source = await openBook(
         fileName: record.fileName,
         bytes: bytes,
       );
+      sniffWatch.done('impl=${source.implId}');
       // 不在导航前 eager 解析：全量 load() 在主 isolate 同步执行会冻结 UI，
       // 导致首击「无响应」、用户补点第二次（PERF）。解析与 loading 交给
       // ReaderPage._open() 承担（其自带 spinner + 错误态，RD-05 仍满足）。

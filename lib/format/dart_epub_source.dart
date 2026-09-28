@@ -14,6 +14,7 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
+import '../diagnostics/perf_log.dart';
 import '../epub/epub_parser.dart';
 import '../epub/section_extractor.dart';
 import '../epub/zip_paths.dart';
@@ -106,7 +107,11 @@ class DartEpubSource implements BookSource {
       // 不变量：无错必有结构。信封被破坏按坏文件处理。
       throw const MReaderFormatException(FormatErrorCode.corruptFile);
     }
-    return bindEpubResult(bytes, structure);
+    // 耗时日志：绑定（主 isolate 重扫 zip 中央目录 + 绑闭包）与后台结构解析分账。
+    final PerfWatch bindWatch = PerfLog.watch('epub.bind');
+    final EpubParseResult result = bindEpubResult(bytes, structure);
+    bindWatch.done('bytes=${bytes.length}');
+    return result;
   }
 
   Future<EpubBook?> _bookOnce() async => (await _parsedOnce())?.book;
