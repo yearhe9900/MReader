@@ -778,6 +778,29 @@
 
 > **未做（如实登记）**：①**未翻新现存工作区**（负责人拍板，理由见上）；②未处理 `w/crlf` 中属于「属性为 CRLF 且本来就是 CRLF」的 70 个文件（它们与规则一致，无需动作）。
 
+### 2.35 开书 / 滚动链路耗时日志（`[perf]`，真机诊断用）
+
+| 项 | 值 |
+|---|---|
+| 事项 | 真机反馈「打开大书（如绍宋，700+ 章）到深章节（428 章）非常慢」——先埋点取数，再定优化 |
+| 日期 | 2026-09-28 |
+| 一句话目标 | 把「慢」从体感变成**逐段毫秒数**：跑一遍真机 logcat，直接看出秒级耗时花在哪一步 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| `lib/diagnostics/perf_log.dart`（零依赖、纯 Dart、可进 isolate） | 全项目唯一打点出口 | `PerfLog.step`（耗时）/ `PerfLog.mark`（瞬时）/ `PerfLog.watch`（Stopwatch 薄封装） | 纯层（`lib/format/**` 等）可直接用——`print` 是 `dart:core` 非 Flutter API；**产品逻辑不得依赖它**（只许观察不许分支）。内存留档 `PerfLog.records` 环形上限 500；`--dart-define=MREADER_PERF_LOG=false` 整体静音 |
+| 输出通道 | 真机零工具读取 | `print` → stdout → Android logcat `I/flutter` 行 | `adb logcat -s flutter \| grep '\[perf\]'`；后台 isolate 内的 `print`（如 `txt.prepare`）**同样落 stdout**，与主线程打点混排在同一条时间线 |
+| **首行 `session product=`** | 读数前必看 | 自动打在第一条 `[perf]` 前 | `product=false` = debug/profile（JIT + 断言，普遍比 release AOT **慢数倍**）、`true` = release。**debug APK 测出的耗时不能当产品结论**——先确认构建档位再归因 |
+| 行格式 | 可 grep、可肉眼扫 | `[perf] <名字> <ms>ms  k=v k=v …`；瞬时事件无 ms 段 | 名字即链路段：`open.*`（书架读字节/嗅探）→ `reader.*`（load/chapters/stores/firstBatch/ready/content/seed 分支）→ `restore.*`（begin/逐帧 step/收敛 end）→ `autofill.*`（逐批+总）→ `layout.*`（重锚/占位高刷新）→ `nav.*`（跳章）→ `txt.*`/`epub.*`（解析源内部分账） |
+| 解析源内部再分账 | 区分「解码」vs「分章」vs「标题预取」 | `txt.prepare`（decode/analyze 分列 + chapters 数）、`txt.analyze`（**命中的规则名** + 章数）、`epub.parse`/`epub.bind`（后台结构 vs 主 isolate 绑定）、`epub.flatTitles`（无目录书全书标题预取，已知大户） | `txt.analyze` 的 `chapters=` 直接回答「这本书被切成多少章」；`epub.flatTitles` 若出现秒级 = 命中挂账 #6 的无 toc 大书路径 |
+| 恢复校正逐帧打点 | 直接看出「深章节落点」在哪一步打转 | `restore.step frame=n kind=estimate\|chapter\|para delta=…` | `kind=estimate` 连续多帧 = 目标章一直没进布局窗口（`maxScrollExtent` 外推估计的振荡形态）；`restore.end converged=false` = 校正放弃（`RC1` 闸门关闭不写盘） |
+
+> **桌面参照（2026-09-28 一次性探针，`product=false`，`tmp_book/` 真实 7.7MB TXT / 762 章）**：
+> `open.readBytes` 17ms（7.9MB）→ `txt.prepare` **265ms**（decode **247ms** + analyze 18ms，`rule=目录(去空白)`，
+> 762 章）→ `reader.content`（第 457 章）**0ms**。结论预读：**数据面开书成本 ≈ 全书解码 + 分章一次性成本**，
+> 与「停在哪一章」无关；深章节的额外慢若有，只能出在**恢复校正 / 占位补齐的 UI 链路**（`restore.*`/`autofill.*`/`layout.*`）
+> 或 **debug 构建档位**上——真机 logcat 按上表逐段对号即可定位。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
