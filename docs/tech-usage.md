@@ -756,6 +756,28 @@
 
 > **本批未做（如实登记，非遗漏）**：①`test/perf/rust_harness.dart`（§H.2 列的「Rust 实现测量，无 Rust 时 skip」）**留到 T03 gate 通过后由 T04 补**——Rust 侧入口尚不存在，先写只会是猜测（工程约定：「规格引用第三方 API / 脚手架结构先读真实源码再下笔」）；②任务书文件列里的 `lib/format/dart_epub_source.dart` / `dart_txt_source.dart` **经核查无需改动**——测量所需的入口（`load`/`chapters`/`content`）与注入缝（`runner`）都已存在，本批零产品代码改动（该列系排期前的预估，实测未成立）。
 
+### 2.34 仓库行尾策略（`.gitattributes` 拍板 CRLF，2026-09-28）
+
+| 项 | 值 |
+|---|---|
+| 事项 | 待决策 #1「仓库无 `.gitattributes`（`core.autocrlf=true`，文档 LF 约定冲突）」闭环（`docs/进度表.md` §四） |
+| 提交 | `a0c7c71` |
+| 日期 | 2026-09-28 |
+| 一句话目标 | 把「行尾」从**机器本地配置的隐含行为**（`core.autocrlf=true`）变成**仓库里可读、可审、可随 clone 继承的策略** |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| **`eol=crlf` ≠ 索引里存 CRLF**（最先要讲清的一条） | 防把「规则没生效」当结论 | `.gitattributes` 文件头（写进注释） | `eol` 只作用于**工作区**；决定「提交时归一化为 LF 存入 blob」的是 `text` 属性。故 CRLF 策略下**索引永远是 LF**、工作区才是 CRLF。唯一权威自查口径 = `git ls-files --eol`（`i/` 索引、`w/` 工作区、`attr/` 命中的属性，期望文本文件为 `i/lf w/crlf`）。**别用** `git grep $'\r$'` / `od -c \| grep -c '\r'` 判定——索引里根本查不到 CR，结论会与事实自相矛盾 |
+| 覆盖顺序 | 让「默认 → 例外」的写法安全 | 文件结构 | 后写的规则覆盖先写的：先 `* text=auto eol=crlf` → 再二进制 → 再脚本/文档例外 |
+| 二进制例外 | 防 git 对二进制做行尾转换与文本 diff | `*.png` / `*.epub` / `*.ico` 等 → `binary` | `binary` 宏 = `-text -diff`。**可核对的写法**：显式声明的三类（png 30 + epub 15 + ico 1 = **46**）必须**正好等于** `git ls-files --eol` 里 `i/-text` 的计数——不等就说明漏声明或有未预期的二进制混进来。未显式声明的二进制靠 `text=auto` 的内容嗅探兜底 |
+| **shebang 脚本必须 LF**（硬约束，非风格偏好） | CRLF 让 `#!` 行解析失败 | `*.sh` / `*.bash` / `*.py` → `text eol=lf` | 首行会变成 `#!/usr/bin/env bash\r` → Git Bash 执行直接 bad interpreter。用**通配符**而非逐文件，覆盖后续新增脚本。**既存隐患实证**：规则落地时发现 `test/fixtures/make_fixtures.py` 工作区本来就是 CRLF——因为它一直是以 `python x.py` 方式被调用（Python 容忍 CRLF），从没人直接执行过它，所以一直没暴露 |
+| 文档例外（既有工程约定的延续） | 不顺手推翻已定约定 | `*.md` / `*.mermaid` / `docs/**` → `text eol=lf` | 「文档 UTF-8 无 BOM / LF / 结尾换行」是仓库既有工程约定（含 `docs/perf-baseline/*.json` 留档机读记录）→ 落地时**显式延续**，而非默认继承 CRLF。负责人 2026-09-28 明确「保持 LF」。若要改，删掉该节即可（文件内有对应注释） |
+| 索引**不需要** renormalize | 免做一次无意义的全量重写 | — | 因 `core.autocrlf=true` 早已把索引归成 LF，且 `eol=crlf` 的 blob 也是 LF → **索引与规则天然一致**，`git add --renormalize .` 是纯 no-op（不产生提交）。改动面只在**工作区** |
+| 「不翻新现存工作区」这个决定 | 把影响面收到最小、可延后 | 负责人 2026-09-28 拍板 | 落规则后 197 个文本文件工作区仍 LF、72 个仍 CRLF——**行为与之前完全一致**（警告也照旧），规则自下次 clone / checkout 生效。若要立即统一，等价操作是「清空索引 → 从 HEAD 重检出」：`git rm --cached -r -q . && git reset --hard`（要求工作区干净；索引 blob 不变 ⇒ **不产生提交**、`git status` 保持干净） |
+| 改动前的**破坏性预检** | 「改行尾会不会弄红测试」必须在改之前答完 | 本批核查（逐项） | ①`appearance_sheet_test.dart` 对 `pubspec.yaml` 用 `RegExp(r'^\s*fonts:', multiLine: true)`——CRLF 不影响 ②`test/fixtures/baseline.json` 走 `jsonDecode`——CRLF 是合法空白 ③**`lib/` 与 `tool/` 内没有任何「读自身源码做文本断言」的地方**（全仓唯一 `readAsString` 是 `json_store.dart` 读运行时数据）⇒ 判定「行尾翻新不会打破任何测试」 |
+
+> **未做（如实登记）**：①**未翻新现存工作区**（负责人拍板，理由见上）；②未处理 `w/crlf` 中属于「属性为 CRLF 且本来就是 CRLF」的 70 个文件（它们与规则一致，无需动作）。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
