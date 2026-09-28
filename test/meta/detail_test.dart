@@ -28,6 +28,7 @@ import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/meta/meta_editor.dart';
 import 'package:mreader/platform/app_paths.dart';
 import 'package:mreader/reader/progress_store.dart';
+import 'package:mreader/settings/shelf_prefs_store.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
@@ -451,6 +452,7 @@ void main() {
             repository: repo,
             coverStore: coverStore,
             progressStore: progressStore,
+            shelfPrefs: ShelfPrefsStore(tempDir),
           ),
         );
 

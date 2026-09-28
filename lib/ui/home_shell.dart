@@ -34,6 +34,7 @@ import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
 import '../reader/progress_store.dart';
 import '../settings/perf_prefs_store.dart';
+import '../settings/shelf_prefs_store.dart';
 import 'ai_page.dart';
 import 'glass_kit.dart';
 import 'notes_page.dart';
@@ -61,6 +62,7 @@ class HomeShell extends StatefulWidget {
     required this.coverStore,
     required this.progressStore,
     required this.perfPrefs,
+    required this.shelfPrefs,
   });
 
   /// 书库仓库（书架页）。
@@ -74,6 +76,9 @@ class HomeShell extends StatefulWidget {
 
   /// 性能偏好（设置页的玻璃档位）。
   final PerfPrefsStore perfPrefs;
+
+  /// 书架视图偏好（筛选 / 排序）。
+  final ShelfPrefsStore shelfPrefs;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -121,6 +126,7 @@ class _HomeShellState extends State<HomeShell> {
           repository: widget.repository,
           coverStore: widget.coverStore,
           progressStore: widget.progressStore,
+          shelfPrefs: widget.shelfPrefs,
         ),
         const StatsPage(),
         const AiPage(),

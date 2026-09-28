@@ -19,6 +19,7 @@ import 'package:mreader/platform/app_paths.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_progress.dart';
+import 'package:mreader/settings/shelf_prefs_store.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
@@ -88,6 +89,7 @@ void main() {
     late LibraryRepository repo;
     late FileCoverStore coverStore;
     late ProgressStore progressStore;
+    late ShelfPrefsStore shelfPrefs;
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp('mreader_shelf_');
@@ -95,6 +97,7 @@ void main() {
       coverStore = FileCoverStore(paths);
       repo = LibraryRepository(paths: paths, coverStore: coverStore);
       progressStore = ProgressStore(paths);
+      shelfPrefs = ShelfPrefsStore(tempDir);
     });
 
     tearDown(() async {
@@ -109,6 +112,7 @@ void main() {
           repository: repo,
           coverStore: coverStore,
           progressStore: progressStore,
+          shelfPrefs: shelfPrefs,
         ),
       );
     }
@@ -154,7 +158,8 @@ void main() {
       expect(find.byType(BookCard), findsNWidgets(3));
     });
 
-    testWidgets('LIB-06 长按弹出删除确认对话框', (WidgetTester tester) async {
+    testWidgets('LIB-06 长按弹操作单，选「移出书架」后再弹删除确认',
+        (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _txtBytes('要删的书'), fileName: '删我.txt'),
       );
@@ -162,8 +167,18 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 长按书卡
+      // 长按书卡 → **底部操作单**（2026-09-28 改版，照搬 anx-reader）：
+      // 长按不再直接弹删除确认，破坏性动作收进操作单，缩短误触路径。
       await tester.longPress(find.byType(BookCard));
+      await tester.pumpAndSettle();
+
+      expect(find.text('继续阅读'), findsOneWidget);
+      expect(find.text('书籍详情'), findsOneWidget);
+      expect(find.text('移出书架'), findsOneWidget);
+      expect(find.text('删除确认'), findsNothing);
+
+      // 选「移出书架」→ 才弹二次确认（`LIB-06`）。
+      await tester.tap(find.text('移出书架'));
       await tester.pumpAndSettle();
 
       // 确认对话框出现
@@ -216,8 +231,10 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 长按触发删除对话框
+      // 长按 → 操作单 → 「移出书架」→ 删除确认
       await tester.longPress(find.byType(BookCard));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('移出书架'));
       await tester.pumpAndSettle();
 
       // 点击「删除」（`_deleteBook` 内含真 IO，需 _settle）
@@ -257,6 +274,8 @@ void main() {
 
       await tester.longPress(find.byType(BookCard));
       await tester.pumpAndSettle();
+      await tester.tap(find.text('移出书架'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('删除'));
       await _settle(tester);
 
@@ -272,6 +291,8 @@ void main() {
       await _settle(tester);
 
       await tester.longPress(find.byType(BookCard));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('移出书架'));
       await tester.pumpAndSettle();
 
       // 点击「取消」（仅关闭对话框，无 IO）
@@ -403,7 +424,7 @@ void main() {
       );
     });
 
-    testWidgets('回归③：长按触发删除确认，不误触发 onTap', (WidgetTester tester) async {
+    testWidgets('回归③：长按弹操作单，不误触发 onTap', (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _utf8TxtBytes('要删的书'), fileName: '删我2.txt'),
       );
@@ -414,8 +435,17 @@ void main() {
       await tester.longPress(find.byType(BookCard));
       await tester.pumpAndSettle();
 
-      expect(find.text('删除确认'), findsOneWidget);
+      // 长按弹的是操作单（2026-09-28 改版），确认框要再点「移出书架」才出。
+      expect(find.text('移出书架'), findsOneWidget);
+      expect(find.text('删除确认'), findsNothing);
       // onTap 未被误触发：没有导航发生（既不进详情页也不进阅读页）。
+      expect(_detailPages(), findsNothing);
+      expect(_readerPages(), findsNothing);
+
+      // 再走一步到确认框，仍然不该有导航。
+      await tester.tap(find.text('移出书架'));
+      await tester.pumpAndSettle();
+      expect(find.text('删除确认'), findsOneWidget);
       expect(_detailPages(), findsNothing);
       expect(_readerPages(), findsNothing);
     });

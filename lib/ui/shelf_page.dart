@@ -25,6 +25,7 @@ import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
 import '../reader/progress_store.dart';
 import '../reader/reader_page.dart';
+import '../settings/shelf_prefs_store.dart';
 import 'book_card.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
@@ -38,6 +39,7 @@ class ShelfPage extends StatefulWidget {
     required this.repository,
     required this.coverStore,
     required this.progressStore,
+    required this.shelfPrefs,
   });
 
   /// 书库仓库。
@@ -48,6 +50,9 @@ class ShelfPage extends StatefulWidget {
 
   /// 阅读进度存储（`RD-04`）：传给阅读页；删书时连带清理。
   final ProgressStore progressStore;
+
+  /// 书架视图偏好（筛选 + 排序），进程内共享实例。
+  final ShelfPrefsStore shelfPrefs;
 
   @override
   State<ShelfPage> createState() => _ShelfPageState();
@@ -74,8 +79,85 @@ class _ShelfPageState extends State<ShelfPage> {
   @override
   void initState() {
     super.initState();
+    // 筛选 / 排序偏好一变即重绘（偏好是进程内共享实例，见 [ShelfPrefsStore]）。
+    widget.shelfPrefs.addListener(_onPrefsChanged);
     _loadBooks();
   }
+
+  @override
+  void dispose() {
+    widget.shelfPrefs.removeListener(_onPrefsChanged);
+    super.dispose();
+  }
+
+  /// 偏好变更 → 重绘。
+  void _onPrefsChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  /// 应用「筛选 + 排序」后的可见书目。
+  ///
+  /// 在渲染期计算（而非加载时缓存）：偏好一变立刻生效；书架是本地量级
+  /// （几百本），每次 build 重排的成本可忽略。
+  List<BookRecord> get _visibleBooks {
+    final ShelfPrefs prefs = widget.shelfPrefs.prefs;
+    Iterable<BookRecord> list = _books;
+
+    if (prefs.filters.isNotEmpty) {
+      list = list.where((BookRecord b) {
+        final double? p = b.readProgress;
+        // 三个维度是「或」关系：命中任一已选维度即保留（与 anx-reader 的多选语义一致）。
+        if (prefs.filters.contains(ShelfReadingFilter.unread) &&
+            (p == null || p <= 0)) {
+          return true;
+        }
+        if (prefs.filters.contains(ShelfReadingFilter.reading) &&
+            p != null &&
+            p > 0 &&
+            p < 1) {
+          return true;
+        }
+        if (prefs.filters.contains(ShelfReadingFilter.finished) &&
+            p != null &&
+            p >= 1) {
+          return true;
+        }
+        return false;
+      });
+    }
+
+    final List<BookRecord> sorted = list.toList();
+    sorted.sort((BookRecord a, BookRecord b) {
+      final int cmp = switch (prefs.sortField) {
+        ShelfSortField.importedAt => a.importedAt.compareTo(b.importedAt),
+        ShelfSortField.lastReadAt =>
+          _nullableIntCompare(a.lastReadAt, b.lastReadAt),
+        ShelfSortField.title => a.title.compareTo(b.title),
+        ShelfSortField.author => a.author.compareTo(b.author),
+      };
+      // 缺省降序 = 「新的 / 靠后的在前」。
+      return prefs.sortAscending ? cmp : -cmp;
+    });
+    return sorted;
+  }
+
+  /// `null` 视为最小值——降序（默认）时自然落到末尾（「从未读过」排最后）。
+  static int _nullableIntCompare(int? a, int? b) {
+    if (a == null && b == null) return 0;
+    if (a == null) return -1;
+    if (b == null) return 1;
+    return a.compareTo(b);
+  }
+
+  /// 排序字段的中文名。
+  static String _sortLabel(ShelfSortField field) => switch (field) {
+        ShelfSortField.importedAt => '导入时间',
+        ShelfSortField.lastReadAt => '最近阅读',
+        ShelfSortField.title => '书名',
+        ShelfSortField.author => '作者',
+      };
 
   Future<void> _loadBooks() async {
     final List<BookRecord> books = await widget.repository.loadBooks();
@@ -174,6 +256,27 @@ class _ShelfPageState extends State<ShelfPage> {
       // `LIB-06` 连带清理：删除该书阅读进度文件（缺失时静默成功）。
       await widget.progressStore.remove(record.bookId);
       await _loadBooks();
+    }
+  }
+
+  /// 长按书卡 → 底部操作单（照搬 anx-reader 的 `BookBottomSheet`）。
+  ///
+  /// 长按**不再**直接弹删除确认：删除是破坏性动作，收进操作单并要求二次确认
+  /// （`LIB-06`），缩短「误触即删」的路径。
+  Future<void> _openBookActions(BookRecord record) async {
+    final _BookAction? action = await GlassOverlays.showSheet<_BookAction>(
+      context: context,
+      builder: (BuildContext sheetContext) => _BookActionSheet(record: record),
+    );
+    if (!mounted || action == null) return;
+
+    switch (action) {
+      case _BookAction.continueReading:
+        await _openBook(record);
+      case _BookAction.detail:
+        await _openDetail(record);
+      case _BookAction.delete:
+        await _deleteBook(record);
     }
   }
 
@@ -329,12 +432,149 @@ class _ShelfPageState extends State<ShelfPage> {
               tooltip: '导入书籍',
               onPressed: _pickAndImport,
             ),
+          IconButton(
+            icon: const Icon(Icons.sort),
+            tooltip: '排序方式',
+            onPressed: _showSortMenu,
+          ),
         ],
       ),
       body: OpaqueContentSurface(
         child: DecoratedBox(
           decoration: _shelfBackground(theme),
-          child: _books.isEmpty ? _buildEmptyState(theme) : _buildBookGrid(theme),
+          child: _books.isEmpty
+              ? _buildEmptyState(theme)
+              : Column(
+                  children: <Widget>[
+                    _buildFilterBar(theme),
+                    Expanded(
+                      child: _visibleBooks.isEmpty
+                          ? _buildNoMatchState(theme)
+                          : _buildBookGrid(theme),
+                    ),
+                    if (_importErrors.isNotEmpty) _buildErrorList(theme),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+
+  /// 筛选栏（状态多选 chips + 清除入口）。
+  ///
+  /// 高 40、横向可滚：小屏下三个 chip 与「清除」并排放得下，超长则滑动。
+  Widget _buildFilterBar(ThemeData theme) {
+    final ShelfPrefs prefs = widget.shelfPrefs.prefs;
+    return SizedBox(
+      height: 40,
+      child: Row(
+        children: <Widget>[
+          const SizedBox(width: 12),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: <Widget>[
+                  _buildFilterChip(ShelfReadingFilter.unread, '未读'),
+                  _buildFilterChip(ShelfReadingFilter.reading, '在读'),
+                  _buildFilterChip(ShelfReadingFilter.finished, '已读完'),
+                ],
+              ),
+            ),
+          ),
+          if (prefs.hasFilter)
+            TextButton(
+              onPressed: () => unawaited(widget.shelfPrefs.clearFilters()),
+              child: const Text('清除筛选'),
+            ),
+          const SizedBox(width: 4),
+        ],
+      ),
+    );
+  }
+
+  /// 单个状态筛选 chip（多选）。
+  Widget _buildFilterChip(ShelfReadingFilter filter, String label) {
+    final bool selected = widget.shelfPrefs.prefs.filters.contains(filter);
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: FilterChip(
+        label: Text(label),
+        selected: selected,
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        onSelected: (_) => unawaited(widget.shelfPrefs.toggleFilter(filter)),
+      ),
+    );
+  }
+
+  /// 排序菜单（右上角弹出；当前字段右侧显示方向箭头，再点同项即翻转方向）。
+  Future<void> _showSortMenu() async {
+    final ThemeData theme = Theme.of(context);
+    final ShelfPrefs prefs = widget.shelfPrefs.prefs;
+    final Size screen = MediaQuery.of(context).size;
+    final double top = MediaQuery.of(context).padding.top + kToolbarHeight;
+
+    final ShelfSortField? picked = await showMenu<ShelfSortField>(
+      context: context,
+      // 锚在右上角下方——与顶栏的排序按钮相邻（照搬 anx-reader 的定位方式）。
+      position: RelativeRect.fromLTRB(screen.width, top, 0, 0),
+      items: <PopupMenuEntry<ShelfSortField>>[
+        for (final ShelfSortField field in ShelfSortField.values)
+          PopupMenuItem<ShelfSortField>(
+            value: field,
+            child: Row(
+              children: <Widget>[
+                if (prefs.sortField == field)
+                  Icon(Icons.check, size: 16, color: theme.colorScheme.primary)
+                else
+                  const SizedBox(width: 16),
+                const SizedBox(width: 8),
+                Expanded(child: Text(_sortLabel(field))),
+                if (prefs.sortField == field)
+                  Icon(
+                    prefs.sortAscending
+                        ? Icons.arrow_upward
+                        : Icons.arrow_downward,
+                    size: 16,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+    if (picked == null) return;
+    // 同字段再次选中 → `setSortField` 内部翻转方向。
+    await widget.shelfPrefs.setSortField(picked);
+  }
+
+  /// 筛选后无命中的空态（区别于「书架里一本书都没有」）。
+  Widget _buildNoMatchState(ThemeData theme) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(
+              Icons.filter_alt_off_outlined,
+              size: 56,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '没有符合当前筛选的书',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton(
+              onPressed: () => unawaited(widget.shelfPrefs.clearFilters()),
+              child: const Text('清除筛选'),
+            ),
+          ],
         ),
       ),
     );
@@ -381,36 +621,30 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 有书：网格展示。
+  /// 有书：网格展示（筛选 / 排序已在外层应用，这里直接用 [_visibleBooks]）。
   Widget _buildBookGrid(ThemeData theme) {
-    return Column(
-      children: <Widget>[
-        Expanded(
-          child: GridView.builder(
-            // 底部留给壳层的浮动胶囊（[kShellBottomInset]）——胶囊是浮层、
-            // 不占布局高度，不预留的话最后一行会被压住。
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, kShellBottomInset),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 180,
-              childAspectRatio: 0.5,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-            ),
-            itemCount: _books.length,
-            itemBuilder: (BuildContext context, int index) {
-              final BookRecord record = _books[index];
-              return BookCard(
-                record: record,
-                coverStore: widget.coverStore,
-                loading: _openingBookId == record.bookId,
-                onTap: () => unawaited(_openDetail(record)),
-                onLongPress: () => _deleteBook(record),
-              );
-            },
-          ),
-        ),
-        if (_importErrors.isNotEmpty) _buildErrorList(theme),
-      ],
+    final List<BookRecord> books = _visibleBooks;
+    return GridView.builder(
+      // 底部留给壳层的浮动胶囊（[kShellBottomInset]）——胶囊是浮层、
+      // 不占布局高度，不预留的话最后一行会被压住。
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, kShellBottomInset),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 180,
+        childAspectRatio: 0.5,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+      ),
+      itemCount: books.length,
+      itemBuilder: (BuildContext context, int index) {
+        final BookRecord record = books[index];
+        return BookCard(
+          record: record,
+          coverStore: widget.coverStore,
+          loading: _openingBookId == record.bookId,
+          onTap: () => unawaited(_openDetail(record)),
+          onLongPress: () => unawaited(_openBookActions(record)),
+        );
+      },
     );
   }
 
@@ -496,6 +730,103 @@ class _BookSearchEntry extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 书卡长按后可选的动作。
+enum _BookAction {
+  /// 继续阅读（复用书架页的开书管道，不另建）。
+  continueReading,
+
+  /// 进书籍详情页。
+  detail,
+
+  /// 移出书架并删除文件（仍需二次确认，`LIB-06`）。
+  delete,
+}
+
+/// 长按书卡弹出的底部操作单。
+///
+/// 由 [GlassOverlays.showSheet] 承载（`UI-03` 浮层玻璃；「关」档自动退化为
+/// Material 底部弹窗）。本组件内**不得**再出现玻璃控件（玻璃不可嵌套），
+/// 故清一色由不透明内容构成。
+class _BookActionSheet extends StatelessWidget {
+  const _BookActionSheet({required this.record});
+
+  /// 目标书目。
+  final BookRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final double? progress = record.readProgress;
+    final String subtitle = <String>[
+      if (record.author.isNotEmpty) record.author,
+      record.format.toUpperCase(),
+      if (progress != null) '已读 ${(progress * 100).round()}%',
+    ].join(' · ');
+
+    return Material(
+      // 玻璃浮层（`GlassSheet`）**没有 Material 祖先**（PRD §11.4），而 `ListTile`
+      // 强制要求最近处存在 Material（涟漪与文字样式）——缺了就抛
+      // 「No Material widget found」。透明 Material 不绘制底色，不破坏玻璃观感。
+      type: MaterialType.transparency,
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    record.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.play_arrow),
+              title: const Text('继续阅读'),
+              onTap: () =>
+                  Navigator.of(context).pop(_BookAction.continueReading),
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('书籍详情'),
+              onTap: () => Navigator.of(context).pop(_BookAction.detail),
+            ),
+            ListTile(
+              leading:
+                  Icon(Icons.delete_outline, color: theme.colorScheme.error),
+              title: Text(
+                '移出书架',
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+              subtitle: const Text('删除后封面文件一并清理'),
+              onTap: () => Navigator.of(context).pop(_BookAction.delete),
+            ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );

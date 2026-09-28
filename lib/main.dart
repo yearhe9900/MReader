@@ -20,6 +20,7 @@ import 'reader/progress_store.dart';
 import 'settings/perf_frame_monitor.dart';
 import 'settings/perf_prefs_store.dart';
 import 'settings/settings_store.dart';
+import 'settings/shelf_prefs_store.dart';
 import 'ui/glass_runtime.dart';
 import 'ui/home_shell.dart';
 
@@ -50,10 +51,14 @@ Future<void> main() async {
   final Directory dataDir = await appPaths.dataDir();
   final SettingsStore settings = SettingsStore(dataDir);
   final PerfPrefsStore perfPrefs = PerfPrefsStore(dataDir);
+  // 书架视图偏好（筛选 / 排序）：与设置同一形制（`JsonStore` → `AtomicFile`），
+  // 但独立文件——改字号不该把书架筛选状态一起重写（见 `ShelfPrefsStore` 头注）。
+  final ShelfPrefsStore shelfPrefs = ShelfPrefsStore(dataDir);
   await Future.wait(<Future<void>>[
     _warmUpGlassShaders(),
     settings.load(),
     perfPrefs.load(),
+    shelfPrefs.load(),
     highPerf.warmUp(),
   ]);
 
@@ -98,6 +103,7 @@ Future<void> main() async {
           coverStore: coverStore,
           progressStore: progressStore,
           perfPrefs: perfPrefs,
+          shelfPrefs: shelfPrefs,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,

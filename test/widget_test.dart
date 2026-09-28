@@ -18,6 +18,7 @@ import 'package:mreader/model/epub_book.dart';
 import 'package:mreader/platform/app_paths.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/settings/settings_store.dart';
+import 'package:mreader/settings/shelf_prefs_store.dart';
 import 'package:mreader/ui/shelf_page.dart';
 
 import 'test_config.dart';
@@ -171,6 +172,7 @@ void main() {
           repository: repository,
           coverStore: coverStore,
           progressStore: ProgressStore(paths),
+          shelfPrefs: ShelfPrefsStore(dir),
         ),
       ),
     );
