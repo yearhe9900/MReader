@@ -235,6 +235,8 @@ flutter test
 
 ## 七、静态自检结论
 
+> ⚠️ **时点声明（2026-09-28 补注）**：本节是 **M1 时点**的静态自检快照，逐条结论**按其时的依赖版本**成立，**保留原文不改**（保可追溯性）。已知漂移：**`archive 3.6.1` → `4.3.0`**（2026-09-24 迁移，`64ae658`）——下方 `archive` 那条的 API 描述（`dynamic get content` 等）**对当前版本已不适用**，4.x 的形态见 `CHANGELOG` 2026-09-24；`html 0.15.6 → 0.15.7` 属 patch 级；`xml 6.6.1` / `charset 2.0.1` / `file_picker 8.3.7` 与当时一致。
+
 - 全部源码文件已逐行通读，跨文件 import、符号、方法签名、数据流已核对一致。
 - 所有第三方 API 均已**对照本机 pub cache 中的真实源码**逐一核实（不是凭记忆）：
   - `archive 3.6.1`：`ZipDecoder().decodeBytes(List<int>)`、`Archive.files`、`ArchiveFile(name, size, content)` 位置参数、`bool isFile`、`dynamic get content`、`ZipEncoder().encode(Archive) → List<int>?`
