@@ -211,6 +211,26 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 占位块高度估计：已加载章渲染高度的中位数（随加载推进收敛）。
   double _estimatedChapterHeight = _kDefaultChapterHeight;
 
+  /// **章高模型**（`RD-04` 恢复定位的坐标底座）：已实测过的**真实章**高度（像素）。
+  ///
+  /// 为什么需要它：`ListView` 懒构建下 `maxScrollExtent` 是「**已构建子项均值 ×
+  /// 剩余项数**」的**外推估计**——本工程的布局是「少数真实章（数千 px）+ 大量等高
+  /// 占位块（`_estimatedChapterHeight`，初始 480）」的混合体，一旦构建窗口里混进
+  /// 真实章，该外推就会在数倍量级间摆动。真机实证（2026-09-28，绍宋 447 章 EPUB）：
+  /// 恢复期间 `maxScrollExtent` 在 214009 / 602772 / 1133858 / 706186 之间振荡，
+  /// 按比例 (`maxExtent × (index+pos)/total`) 算出的落点来回乱跳，**8 帧全是
+  /// `kind=estimate`、`converged=false`**，遮罩白等 1.2s 且最终没落到目标章。
+  ///
+  /// 模型口径（与真实布局**逐项一致**）：
+  ///   · 未构建 / 未加载的章 → 渲染的就是占位块，高度恒为 `_estimatedChapterHeight`；
+  ///   · 已加载且已构建的章 → 实测 `RenderBox.size.height`（写回本表）；
+  ///   · **只有**「已加载但从未构建过」的章是未知量——首帧只载「目标章 ±1」
+  ///     （`kFirstBatchRadius`）时未知量 ≤ 1 章，故模型误差 ≤ 一章高度。
+  ///
+  /// 维护规则见 [_captureBuiltHeights]：构建中的章被**回落成占位块**（LRU 淘汰后
+  /// 重新渲染）时删除旧记忆，避免用「过期的真实高度」当占位高。
+  final Map<int, double> _chapterHeights = <int, double>{};
+
   /// 正在程序化恢复 / 跳转：期间忽略滚动停止的保存，避免把中间值写回磁盘。
   bool _restoring = false;
 
@@ -383,7 +403,11 @@ class _ReaderPageState extends State<ReaderPage> {
       PerfLog.step('reader.ready', openClock.elapsedMilliseconds,
           'target=$index pos=${pos.toStringAsFixed(3)} chapters=${chapters.length}');
       _scheduleEstimateRefresh();
-      _ensureAutoFill();
+      // **不在此处启动后台补齐**（`PERF-02` 时序修正 2026-09-28）：补齐会逐批
+      // 「占位→真实」合入、改动总高，而此刻控制器还没建、首次恢复校正也还没跑
+      // （真机日志：本行让 9 批合入抢在 `restore.begin` 之前，全部
+      // `layout.reanchor anchored=false` 空重锚，恢复期总高被改）。
+      // 补齐统一由 [_finishRestore] 触发——先落定、后补齐。
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error);
@@ -515,6 +539,8 @@ class _ReaderPageState extends State<ReaderPage> {
       return;
     }
     final double maxExtent = controller.position.maxScrollExtent;
+    // 章高模型保鲜：把本帧已构建真实章的实测高度写回（seek 与重锚共用底座）。
+    _captureBuiltHeights();
     // 段落级目标优先（CNT-04c）：段落 box 精确对齐视口顶；
     // 未构建（章 item 不在树上）时回落「章内相对位置」估算，后续帧再校正。
     double? target;
@@ -524,13 +550,23 @@ class _ReaderPageState extends State<ReaderPage> {
     }
     target ??= _chapterPointOffset(_restoreIndex, _restorePos);
     if (target == null) {
-      // 目标章尚未布局：按章序比例估算，先把它带进视野，再于后续帧校正。
-      final int total = math.max(1, _chapters?.length ?? 1);
-      final double estimate =
-          maxExtent * ((_restoreIndex + _restorePos) / total);
+      // 目标章尚未布局：用**章高模型**把它的章首带进布局窗口。
+      //
+      // 这里**刻意不用** `maxScrollExtent × (index + pos) / total` 的比例外推：
+      // 懒构建下 `maxScrollExtent` 是 sliver 按「已构建子项均值 × 剩余项数」的
+      // 外推值，在「少数真实章 + 大量等高占位块」的混合布局里会在数倍量级间摆动
+      // → 估算落点来回乱跳（真机 8 帧全 estimate、`converged=false`，见
+      // [_chapterHeights] 注释）。模型只依赖「占位高已知 + 实测高已记忆」两件事，
+      // 误差上界 ≈ 目标章附近**未知高度**的章数（首帧批次下 ≤1 章），因此每次
+      // seek 都是**朝目标单向逼近**，通常 1~3 帧即测到 box 转入精确校正。
+      //
+      // 只 seek **章首**（不含 `_restorePos`）：落到章内即可测到 box，`pos` 部分
+      // 留给下一帧的实测校正 `_chapterPointOffset(index, pos)`（否则把章首顶到
+      // 视口上方过远、超出构建缓存区时 box 反而建不出来）。
+      final double seek = _chapterTopModel(_restoreIndex);
       PerfLog.mark('restore.step',
-          'frame=${_restoreFrames + 1} kind=estimate jumpTo=${estimate.clamp(0.0, maxExtent).toStringAsFixed(0)} maxExtent=${maxExtent.toStringAsFixed(0)}');
-      controller.jumpTo(estimate.clamp(0.0, maxExtent));
+          'frame=${_restoreFrames + 1} kind=model jumpTo=${seek.clamp(0.0, maxExtent).toStringAsFixed(0)} maxExtent=${maxExtent.toStringAsFixed(0)}');
+      controller.jumpTo(seek.clamp(0.0, maxExtent));
       _restoreFrames++;
     } else {
       final double delta = target - controller.offset;
@@ -768,6 +804,42 @@ class _ReaderPageState extends State<ReaderPage> {
     return object is RenderBox && object.hasSize ? object : null;
   }
 
+  /// 章高模型的单章高度：**实测值优先，未测到按占位高**（占位块的真实高度就是它）。
+  double _chapterHeightAt(int index) =>
+      _chapterHeights[index] ?? _estimatedChapterHeight;
+
+  /// 章高模型算出的「第 [index] 章块顶的内容绝对偏移」= 上方各章高度之和。
+  ///
+  /// 不再用 `maxScrollExtent` 做比例外推（理由见 [_chapterHeights] 字段注释与
+  /// [_restoreStep] 的 seek 分支）。O(章数) 纯算术，恢复期每帧一次，可忽略。
+  double _chapterTopModel(int index) {
+    double sum = 0;
+    for (int i = 0; i < index; i++) {
+      sum += _chapterHeightAt(i);
+    }
+    return sum;
+  }
+
+  /// 把当前**已构建真实章块**的实测高度写回章高模型（恢复/重锚前调用）。
+  ///
+  /// · 未构建的章：**保持既有记忆**（它仍是「最近一次实测的真实高」的唯一来源）；
+  /// · 构建中且已回落成**占位块**（LRU 淘汰）的章：删除记忆——此后它的真实高度
+  ///   就是 `_estimatedChapterHeight`，留着旧值会让模型与实际布局不一致；
+  /// · 构建中的真实章：写入实测高度（模型因此逐帧收敛到真实布局）。
+  void _captureBuiltHeights() {
+    final int count = _chapters?.length ?? 0;
+    for (int i = 0; i < count; i++) {
+      final RenderBox? box = _chapterBoxAt(i);
+      if (box == null) continue; // 未构建：保持既有记忆
+      if (_cache.peek(i) == null) {
+        _chapterHeights.remove(i); // 已回落占位块 → 旧记忆作废
+        continue;
+      }
+      final double height = box.size.height;
+      if (height > 1) _chapterHeights[i] = height;
+    }
+  }
+
   /// 滚动停止：更新当前章 / 章内位置 + 触发补齐 + 保存。返回 false 表示不拦截通知。
   bool _onScrollEnd(ScrollEndNotification notification) {
     if (_restoring || _controller == null || !_controller!.hasClients) {
@@ -876,6 +948,8 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 故这里用「已加载章实测高度的中位数」作为其高度代理，而非「字符数 × 系数」。
   void _refreshEstimatedHeight() {
     if (!mounted) return;
+    // 章高模型保鲜（与占位高估计同源：都建立在「已构建真实章」之上）。
+    _captureBuiltHeights();
     final List<double> heights = <double>[];
     for (final int i in _cache.loadedIndices) {
       final RenderBox? box = _chapterBoxAt(i);
@@ -923,7 +997,7 @@ class _ReaderPageState extends State<ReaderPage> {
     watch.done('target=$target');
     if (!mounted) return;
     _beginScrollTo(target, 0.0);
-    _ensureAutoFill();
+    // 补齐留给 [_finishRestore]（先落定、后补齐；理由见 `_open` 注释）。
   }
 
   /// 正文链接点击入口（`CNT-04c`）。
@@ -1010,7 +1084,7 @@ class _ReaderPageState extends State<ReaderPage> {
     if (!mounted) return;
     _beginScrollTo(chapterIndex, roughPos,
         paraIndex: paraIndex >= 0 ? paraIndex : -1);
-    _ensureAutoFill();
+    // 补齐留给 [_finishRestore]（先落定、后补齐；理由见 `_open` 注释）。
   }
 
   /// 「返回」按钮（`CNT-04c` 验收②）：弹栈恢复到跳转前的位置。

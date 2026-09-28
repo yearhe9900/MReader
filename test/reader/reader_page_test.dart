@@ -63,7 +63,7 @@ class _FakeSource implements BookSource {
 
   /// 永不返回内容的章下标（`content` 挂起）——用来稳定构造「某些章始终未加载」：
   /// 首帧批次之外的章永不驻留 → 布局不再变化、占位高不被实测值替换，
-  /// `RC1` 的「未收敛」态可复现（见回归②）。
+  /// 恢复期布局可冻结（见回归②：章高模型 seek 的收敛前提；回归②b：未落定即关书）。
   final Set<int> hangIndices;
 
   /// 可释放的加载闸门：`content(i)` 先 `await gates[i].future` 再返回——
@@ -441,7 +441,88 @@ void main() {
       }
     });
 
-    testWidgets('回归②：恢复未收敛期间 _saveProgress 零落盘，存档原封不动',
+    testWidgets('回归②：深章节恢复必须收敛（章高模型 seek，替代 maxScrollExtent 比例外推）',
+        (WidgetTester tester) async {
+      final _CountingProgressStore counting = _CountingProgressStore(paths);
+      // 播种存档：目标第 6 章（下标 5）章中 0.5。
+      await tester.runAsync(
+        () => counting.save(
+          ReadingProgress(
+            bookId: 'testbook01',
+            chapterHref: 'h6',
+            chapterIndex: 5,
+            chapterPos: 0.5,
+            updatedAt: 1,
+          ),
+        ),
+      );
+      expect(counting.saveCount, 1); // 播种本身
+
+      // 构造「深章节 + 上方有真实长章」：20 章里**只有首帧批次 `[4, 5, 6]` 能返回
+      // 内容**，其余章（含目标章上方的 0~3）一律**永远挂起** → 后台补齐第一批就卡住，
+      // 布局冻结在「0~3 用占位高 + 第 5 章(下标 4) 真实长章 + 目标章(下标 5)」上。
+      //
+      // **旧实现**（2026-09-23 探针实测）：恢复期 `maxScrollExtent` 在 26157 ↔ 290816
+      // 之间振荡——懒构建下它是「已布局子项均值 × 剩余项数」的**外推估计值**，站在
+      // 第 5 章里就被外推成「全书皆长章」。于是估算落点（`maxExtent × 5.5/20`）在
+      // 7193 ↔ 79974 之间来回跳，8 帧耗尽仍不收敛、停在书尾占位区；目标章 box 始终
+      // 未构建（`_chapterPointOffset(5, ·)` 恒 `null`）→ `RC1` 闸门关闭、零落盘。
+      // 真机同型故障：2026-09-28 绍宋（447 章 EPUB）`[perf]` 日志 —— 8 帧全
+      // `kind=estimate`、`restore.end converged=false sampled=false`、遮罩 1248ms。
+      //
+      // **新实现**（章高模型）：seek 只用「占位高已知 + 已测真实高记忆」累加算目标章首，
+      // 朝目标**单向逼近**；进入布局窗口后转实测精确校正。本用例锁死「必须收敛且写盘」——
+      // 这也正是修复前后的行为差异（旧断言是 `find.text('第六章') findsNothing` +
+      // 零落盘，前提已被本次修复消除，故整条改写）。
+      final List<int> counts = List<int>.generate(20, (int i) {
+        if (i == 4) return 400; // 目标章上方唯一的真实长章：旧实现的估算落点被它拽偏
+        if (i == 5 || i == 6) return 2; // 首帧批次里目标章与下一章极矮
+        return 150;
+      });
+      final Set<int> hung = <int>{
+        for (int i = 0; i < counts.length; i++)
+          if (i < 4 || i > 6) i,
+      };
+      await tester.pumpWidget(
+        buildApp(
+          source: _FakeSource(paragraphCounts: counts, hangIndices: hung),
+          store: counting,
+        ),
+      );
+      await _settle(tester);
+
+      // 非空验证：书确实开了（列表就位）且内容确实渲染（排除空壳假绿）。
+      expect(find.byType(ListView), findsOneWidget);
+      expect(find.byType(RichText, skipOffstage: false), findsWidgets,
+          reason: '应有内容渲染（占位章也算），排除空壳假绿');
+
+      // 收敛断言：目标章标题与正文都进了树（旧实现两者皆无）。
+      expect(find.text('第六章'), findsOneWidget,
+          reason: '章高模型 seek 必须把目标章带进布局窗口并落定');
+      // 注：正文段落由 `InlineParagraph` 渲染为 `Text.rich`（RichText），
+      // `find.textContaining` 默认**不匹配富文本**，必须显式 `findRichText: true`。
+      expect(find.textContaining('第6章正文', findRichText: true), findsWidgets,
+          reason: '目标章正文应可见（收敛的直接证据）');
+
+      // 收敛 → 语义坐标必须写回（与旧「零落盘」相反）。
+      expect(counting.saveCount, greaterThanOrEqualTo(2),
+          reason: '恢复收敛后必须写回（播种 1 + 本次 ≥1）');
+      final ReadingProgress? saved =
+          await tester.runAsync<ReadingProgress?>(() => counting.load('testbook01'));
+      expect(saved, isNotNull);
+      expect(saved!.chapterIndex, 5);
+      expect(saved.chapterPos, inInclusiveRange(0.4, 0.6),
+          reason: '落点语义坐标必须回到播种目标 0.5 附近');
+
+      // 关书（位置已收敛，dispose 保存照常过闸门）。
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      // 排空假区保存（AtomicFile._tails 跨区死锁防线，同回归①注释）。
+      await _settle(tester, rounds: 20);
+    });
+
+    testWidgets('回归②b：恢复校正未落定即关书 → 一次都不写盘（RC1 闸门）',
         (WidgetTester tester) async {
       final _CountingProgressStore counting = _CountingProgressStore(paths);
       // 播种存档（带 updatedAt 哨兵：被重写过就能看出来）。
@@ -458,59 +539,38 @@ void main() {
       );
       expect(counting.saveCount, 1); // 播种本身
 
-      // 稳定构造「未收敛」：20 章里**只有首帧批次 `[4, 5, 6]` 能返回内容**，
-      // 其余章（含目标章上方的 0~3）一律**永远挂起** → 后台补齐第一批就卡住，
-      // 布局冻结在「0~3 用估算占位高 + 第 5 章(下标 4) 真实长章」上。
-      //
-      // 实测（2026-09-23 探针）：恢复期间 `maxScrollExtent` 在 **26157 ↔ 290816**
-      // 之间来回振荡——ListView 懒构建时它是「已布局子项均值 × 剩余项数」的**外推
-      // 估计值**，站在第 5 章里就会被外推成「全书皆长章」。于是估算落点
-      // （`maxExtent × 5.5/20`）在 7193 ↔ 79974 之间来回跳，8 帧耗尽仍不收敛、
-      // 最终停在书尾占位区；第 6 章(下标 5) 的 box 始终未构建
-      // （`_chapterPointOffset(5, ·)` 恒为 `null`）→ `RC1` 写盘闸门保持关闭。
-      //
-      // 注：一旦让上方章也能加载，占位高会被实测中位数替换、总高逐批收敛到真值，
-      // 估算落点就会漂到目标章附近**意外收敛**（原 fixture 因 `_settle` 推进真 IO
-      // 而失稳，故改为「挂起」以冻结布局）。
-      final List<int> counts = List<int>.generate(20, (int i) {
-        if (i == 4) return 400; // 目标章上方唯一的真实长章：把估算落点拽偏
-        if (i == 5 || i == 6) return 2; // 首帧批次里目标章与下一章极矮
-        return 150;
-      });
-      final Set<int> hung = <int>{
-        for (int i = 0; i < counts.length; i++)
-          if (i < 4 || i > 6) i,
-      };
       await tester.pumpWidget(
         buildApp(
-          source: _FakeSource(paragraphCounts: counts, hangIndices: hung),
+          source: _FakeSource(
+            paragraphCounts: List<int>.generate(20, (int i) => i == 4 ? 400 : 20),
+            hangIndices: <int>{
+              for (int i = 0; i < 20; i++)
+                if (i < 4 || i > 6) i,
+            },
+          ),
           store: counting,
         ),
       );
-      await _settle(tester);
 
-      // 非空验证：书确实开了（列表就位）、**内容确实渲染了**，且落点**不在**目标章——
-      // 否则「未收敛」前提不成立，本用例会变成假绿（什么都没发生时闸门断言恒真）。
-      expect(find.byType(ListView), findsOneWidget);
-      expect(find.byType(RichText, skipOffstage: false), findsWidgets,
-          reason: '应有内容渲染（占位章也算），排除空壳假绿');
-      expect(find.text('第六章'), findsNothing,
-          reason: '目标章标题不该出现：出现就说明已收敛，闸门断言失去意义');
-      // 注：正文段落由 `InlineParagraph` 渲染为 `Text.rich`（RichText），
-      // `find.textContaining` 默认**不匹配富文本**，必须显式 `findRichText: true`。
-      expect(find.textContaining('第6章正文', findRichText: true), findsNothing,
-          reason: '目标章正文不该出现（同标题）');
+      // 轮询到「遮罩在位」= 恢复校正**进行中**（与「方案B」同一手法；收敛需多帧，
+      // 抓到遮罩即证明尚未落定 —— 这同时是非空验证，排除「什么都没发生」的假绿）。
+      final Finder mask = find.byKey(const Key('reader-restore-mask'));
+      bool sawMask = false;
+      for (int i = 0; i < 60 && !sawMask; i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 8)));
+        await tester.pump(const Duration(milliseconds: 8));
+        sawMask = mask.evaluate().isNotEmpty;
+      }
+      expect(sawMask, isTrue, reason: '须抓在恢复校正中途（否则本用例失去意义）');
 
-      // 恢复未收敛 → 一次都不许写（RC1：误差不得当真值写回）。
-      expect(counting.saveCount, 1, reason: '未收敛期间不得有任何写盘');
-
-      // 关书：dispose() 的保存同样被闸门拦下。
+      // 校正未落定即关书：dispose 的保存必须被闸门拦下（`_positionConverged`
+      // 与 `_positionSampled` 都还没置位）。
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 20)));
-      // 排空假区保存（AtomicFile._tails 跨区死锁防线，同回归①注释）。
       await _settle(tester, rounds: 20);
-      expect(counting.saveCount, 1, reason: 'dispose 保存也必须过写盘闸门');
+      expect(counting.saveCount, 1, reason: '未落定的恢复位置不得写盘');
 
       final ReadingProgress? saved =
           await tester.runAsync<ReadingProgress?>(() => counting.load('testbook01'));
