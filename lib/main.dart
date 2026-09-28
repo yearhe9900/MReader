@@ -4,10 +4,12 @@
 // 目标平台：Android / iOS / Windows / macOS / Linux（平台能力差异按 PRD §15.3 降级表处理）。
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'app.dart';
+import 'highperf/high_perf_registry.dart';
 import 'library/library_repository.dart';
 import 'meta/cover_store.dart';
 import 'platform/app_paths.dart';
@@ -31,9 +33,18 @@ Future<void> main() async {
   // 是惰性的，首次开 PDF 才发生，不拖慢冷启动。
   PdfEngineProvider.current = PdfrxPdfEngine();
 
+  // `RUST-01 ③`：加速能力**探测只做一次**（启动时），结论缓存进注册表；
+  // 打开书时不再探测、无 IO 成本。探测失败**不抛、不阻塞**——整体回落纯 Dart。
+  //
+  // T01（M35-T01）阶段这里**不传 engine**：`lib/highperf/ffi/**`（T04）尚未落地，
+  // 如实取纯 Dart 回落实例，而不是给一个空引擎让它探出「版本不匹配」这种假原因。
+  // T04/T05 接入时，本行改为传入 FFI 引擎工厂（唯一 import FRB 的文件仍在
+  // `lib/highperf/ffi/high_perf_ffi_engine.dart`，本文件只做组合，不碰 FRB 细节）。
+  final HighPerfRegistry highPerf = HighPerfRegistry.fromEnvironment();
+
   // `UI-01` ① + 平台能力经抽象注入（PRD §15.1）：
-  // 玻璃着色器预热与数据目录解析/设置加载**并行**——两者完全独立，
-  // 串行会把冷启动叠加一段着色器预编译时间（`v2.3` 冷启动是硬指标）。
+  // 玻璃着色器预热、数据目录解析/设置加载、加速层探测**三者并行**——互不依赖，
+  // 串行会把冷启动叠加两段等待（`v2.3` 冷启动是硬指标）。
   // 预热失败不阻塞启动——降级为「无玻璃效果但仍可运行」（诚实降级）。
   final AppPaths appPaths = PathProviderAppPaths();
   final Directory dataDir = await appPaths.dataDir();
@@ -43,7 +54,18 @@ Future<void> main() async {
     _warmUpGlassShaders(),
     settings.load(),
     perfPrefs.load(),
+    highPerf.warmUp(),
   ]);
+
+  // `RUST-01 ④`：把探测结论写进组合根注入点，供深层纯层（`openBook()` 的调用方）
+  // 读取——业务 / UI 层不感知实现来源，也不写这个位置。
+  HighPerfRegistryProvider.current = highPerf;
+
+  // `RUST-01`「回落事实只写调试日志（release 不输出）」+ `RUST-10 ②` 可观测性：
+  // 一行快照足以判定「当前生效的是哪一份实现」。
+  if (kDebugMode) {
+    debugPrint('[MReader] 加速层：${highPerf.describe()}');
+  }
 
   // `UI-05` / `UI-06` 档位生效接线（M2b-T07）：性能偏好 × 自动降级 → 玻璃档位。
   // `bind` 订阅偏好变更（设置页切档即全局生效）；帧预算监控连续超 16ms × 60 帧

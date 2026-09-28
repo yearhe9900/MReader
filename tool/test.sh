@@ -4,6 +4,8 @@
 # 用法：bash tool/test.sh [parse|data|reader|ui|fast|all]
 #   parse  解析层（纯 Dart，最快）      test/epub、test/format
 #   data   数据层（多为纯 test+临时目录） test/library、test/meta、test/storage、test/task
+#                                       + test/highperf_registry_test.dart（加速层注册表，
+#                                         按架构 §J.1 落在 test/ 根目录的单文件）
 #   reader 阅读器（含 testWidgets）      test/reader、test/typography、test/perf、test/search
 #   ui     界面层（最慢，FakeAsync 重）   test/ui、test/widget_test.dart
 #   fast   parse + data（不含 widget 重的两组）
@@ -31,10 +33,10 @@ args=(--timeout 30s)
 
 case "$group" in
   parse)  targets=(test/epub test/format) ;;
-  data)   targets=(test/library test/meta test/storage test/task) ;;
+  data)   targets=(test/library test/meta test/storage test/task test/highperf_registry_test.dart) ;;
   reader) targets=(test/reader test/typography test/perf test/search) ;;
   ui)     targets=(test/ui test/widget_test.dart) ;;
-  fast)   targets=(test/epub test/format test/library test/meta test/storage test/task) ;;
+  fast)   targets=(test/epub test/format test/library test/meta test/storage test/task test/highperf_registry_test.dart) ;;
   all)    targets=() ;;
   *)
     echo "usage: bash tool/test.sh [parse|data|reader|ui|fast|all]" >&2

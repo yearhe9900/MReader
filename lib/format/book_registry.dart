@@ -8,6 +8,8 @@
 // 纯 Dart：不 import Flutter、不 import dart:io。
 import 'dart:typed_data';
 
+import '../highperf/high_perf_capability.dart';
+import '../highperf/high_perf_registry.dart';
 import 'book_source.dart';
 import 'cbz_source.dart';
 import 'cbr_source.dart';
@@ -29,11 +31,56 @@ enum FormatKind { epub, txt, cbz, cbr, mobi, pdf, unsupported }
 
 /// 装配 + 分发点。
 ///
-/// M3.5 接入 Rust 时会加可选构造参数 `HighPerfRegistry? highPerf`
-/// （架构 §A.2 的 `BookRegistry({HighPerfRegistry? highPerf, ...})`），
-/// 由 `main()` 注入；届时「按探测结果择实现」只改本文件的 [open]。
+/// ## 加速层注入缝（M35-T01 落地，`RUST-01`）
+///
+/// [highPerf] 由组合根（`main()`）注入；**缺省取 [HighPerfRegistryProvider.current]**
+/// ——未注入时它就是纯 Dart 回落实例，因此 `const BookRegistry()` 与 `openBook()`
+/// 的行为**与 M3.5 之前逐字一致**（这是 `RUST-07`「无 Rust 也能跑」在 Dart 侧的形态）。
+///
+/// 为什么是「缺省读 provider」而不是「缺省新建一个回落实例」：`main()` 必须在
+/// `runApp` **之前**把 `warmUp()` 的结论写进 provider，而 `openBook()` 被深层纯层
+/// 调用（`import_service` / `search_session` / `shelf_page`）——逐层穿参会把加速层
+/// 概念泄进那些调用点，违反 `RUST-01 ④`。取舍全文见 [HighPerfRegistryProvider]。
 class BookRegistry {
-  const BookRegistry();
+  const BookRegistry({HighPerfRegistry? highPerf}) : _injectedHighPerf = highPerf;
+
+  final HighPerfRegistry? _injectedHighPerf;
+
+  /// 本次分发生效的加速能力注册表（构造注入优先，否则取组合根注入点）。
+  ///
+  /// 暴露出来有两个真实用途：① 组合根 / 体检页输出 `describe()`（`RUST-10 ②`）；
+  /// ② 测试取证「谁是纯 Dart 回落」（`identical` 断言，不靠行为反推）。
+  HighPerfRegistry get highPerf =>
+      _injectedHighPerf ?? HighPerfRegistryProvider.current;
+
+  /// 该格式对应的**加速层候选能力**；`null` = 该格式没有 Rust 候选（PRD §15.6.2 的六项
+  /// 候选里没有它）。
+  ///
+  /// 这张映射表是 [open] 在 T04 择实现的**唯一依据**，也是体检 / 日志回答
+  /// 「开这本 EPUB 时加速层到底生效了没」的入口：
+  /// `highPerf.has(registry.capabilityFor(FormatKind.epub)!)`。
+  ///
+  /// 逐条理由：
+  ///   · `epub` → 候选 2a（**只覆盖 zip 解压层**；XHTML→段落是 2b，首版不纳入，
+  ///     因此这里没有对应枚举值——见 `HighPerfCapability` 的注释）；
+  ///   · `txt`  → 候选 3（**首版只做编码探测**，解码留 Dart）；
+  ///   · `mobi` → 候选 1；
+  ///   · `cbz` / `cbr` / `pdf` → **无候选**：PRD §15.6.2 的六项里没有它们。
+  ///     CBZ 与 EPUB 同为 zip，但它的解压结果直接是**图片页**，本工程的实测口径
+  ///     （`docs/perf-baseline/README.md`）显示其瓶颈在图片解码与渲染，不在解压；
+  ///     PDF 的瓶颈在原生渲染引擎（`pdfrx`），CBZ 的界面上没有「解压耗时」阈值。
+  ///     **不得**因为「顺手也能 Zip 化」而把它们挂到 2a 上——那属于
+  ///     `RUST-06` 的「未超阈值的候选能力不得实施 Rust」。
+  ///   · `unsupported` → 无候选（打不开的东西没有加速一说）。
+  HighPerfCapability? capabilityFor(FormatKind kind) => switch (kind) {
+        FormatKind.epub => HighPerfCapability.epubDecompress,
+        FormatKind.txt => HighPerfCapability.txtChapterize,
+        FormatKind.mobi => HighPerfCapability.mobiDecompress,
+        FormatKind.cbz => null,
+        FormatKind.cbr => null,
+        FormatKind.pdf => null,
+        FormatKind.unsupported => null,
+      };
 
   /// 按一级（扩展名）+ 二级（魔数）选择实现。
   ///
@@ -49,6 +96,19 @@ class BookRegistry {
   /// - `unsupported` → 抛 [MReaderFormatException]（`RD-05`）。
   ///
   /// 返回的永远是 [BookSource] 抽象——调用方无法、也无需知道来源。
+  ///
+  /// ## 加速层择实现的位置（**当前状态如实写明，别当成已接完**）
+  ///
+  /// 架构 §A.1 的目标形态是：`epub` / `txt` 两路按
+  /// `highPerf.has(HighPerfCapability.<能力>)` 在「bytes 型 Dart 源」与
+  /// 「路径型 Rust 源」之间**择一**（§A.1 的 `RUST-03` 衔接说明：两条路的能力都已在
+  /// 现有签名参数里，**无需改签名**）。
+  ///
+  /// **M35-T01 阶段该分支尚未落地**，原因是 Rust 源（`RustEpubSource` /
+  /// `RustTxtSource`）属 **M35-T04**，且 T03 的 FRB 最小通路 gate 未过时整条 Rust 线
+  /// 回退纯 Dart。T01 **不预置一个恒不被选中的 Rust 分支**——那会让「有没有第二实现」
+  /// 变成读代码看不出来的东西（本工程已两次吃到「报告全绿 ≠ 真接线」的教训）。
+  /// 因此此处**如实保留纯 Dart 回落**，T04 落地时在此处插入 `has(...)` 择一。
   Future<BookSource> open({
     required String fileName,
     required Uint8List bytes,
@@ -72,14 +132,22 @@ class BookRegistry {
   }
 }
 
-/// 便捷包装：等价于 `const BookRegistry().open(...)`（**签名与 M1-T02A 冻结时一致**）。
+/// 便捷包装：等价于 `BookRegistry(highPerf: registry).open(...)`
+/// （**签名与 M1-T02A 冻结时向后兼容**：只多了一个带默认值的可选参数）。
 ///
-/// 测试与 `main()` 用这个；M3.5 后 `main()` 改为持有注入过的 [BookRegistry] 实例。
+/// 三种取值别混用：
+///   · 不给 [registry]（或给 `const BookRegistry()`）→ **走组合根注入点**
+///     （生产路径：`main()` 已在 `runApp` 前 `warmUp()` 并写入
+///     [HighPerfRegistryProvider.current]；未写入时该处就是纯 Dart 回落）；
+///   · 给 `BookRegistry(highPerf: HighPerfRegistry.fallback())` → **显式纯 Dart**
+///     （与组合根无关；`RUST-10` 对照测试与格式层单测常用）；
+///   · 给 `BookRegistry(highPerf: 具体实例)` → 显式指定（对照 / 体检）。
 Future<BookSource> openBook({
   required String fileName,
   required Uint8List bytes,
+  BookRegistry registry = const BookRegistry(),
 }) =>
-    const BookRegistry().open(fileName: fileName, bytes: bytes);
+    registry.open(fileName: fileName, bytes: bytes);
 
 /// 一级（扩展名）+ 二级（魔数）分发（PRD §7.3 二级判定；`FMT-06` 魔数纠偏，
 /// M2b-T03 落地；M2b-T01 追加 PDF）。
