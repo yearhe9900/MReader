@@ -404,7 +404,7 @@ void main() {
     final File file = File(out);
     file.parent.createSync(recursive: true);
     file.writeAsStringSync(
-      const JsonEncoder.withIndent('  ').convert(<String, Object?>{
+      '${const JsonEncoder.withIndent('  ').convert(<String, Object?>{
         'generatedAt': DateTime.now().toIso8601String(),
         'harness': 'test/perf/baseline_harness.dart',
         'iters': kBaselineIters,
@@ -420,7 +420,7 @@ void main() {
         'records': <Map<String, Object?>>[
           for (final BaselineRecord r in _records) r.toJson(),
         ],
-      }),
+      })}\n', // 结尾换行：与仓库「UTF-8 无 BOM / LF / 结尾换行」的文档约定一致
     );
     stdout.writeln('留档已写入：${file.path}（人工复核后 commit，§H.2）');
   });
