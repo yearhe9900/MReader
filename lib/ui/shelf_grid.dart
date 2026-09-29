@@ -1,6 +1,17 @@
 // 书架网格（`LIB-01` 的展示层 + L3 拖拽交互）。
 //
 // ══════════════════════════════════════════════════════════════════════════════
+// 布局几何：复刻 anx-reader（2026-09-28 拍板「只动布局几何」）
+// ══════════════════════════════════════════════════════════════════════════════
+// 列数 = 容器宽 ~/ 120、比例 1/2.1、行距 30 / 列距 20、内边距 (20, 12, 20, ·)，
+// 出处与取值见 [kShelfCoverTargetWidth] / [kShelfGridPadding]；字号、颜色、
+// 阴影一律保持本项目现状（不照搬 anx）。
+//
+// PRD 取舍（anx 没有但必须留的两处）：
+//   · 格式标签（US-06 / LIB-01）→ 挪到封面右下角作角标（`book_card.dart`）；
+//   · 空态「导入书籍」按钮（LIB-01 ②）→ 保留，不复刻 anx 的纯颜文字空态。
+//
+// ══════════════════════════════════════════════════════════════════════════════
 // 两种拖拽动作如何区分（2026-09-28 定）
 // ══════════════════════════════════════════════════════════════════════════════
 // 长按书卡后：
@@ -45,6 +56,27 @@ import 'home_shell.dart' show kShellBottomInset;
 /// 900ms 与 anx-reader 的 `BookBottomSheet` 手感接近。
 const Duration kFolderMergeHoverDelay = Duration(milliseconds: 900);
 
+/// 单列的目标宽度 —— **列数 = 容器宽 ~/ 本值**（照搬 anx-reader：
+/// `bookshelf_page.dart:453-454` 的 `crossAxisCount: constraints.maxWidth ~/ Prefs().bookCoverWidth`，
+/// 其 `bookCoverWidth` 默认 **120**、设置页可调 80–260 步长 10）。
+///
+/// 本项目暂未开放该设置项（若要开放，改这一处即可）。用它换来的性质：
+/// **列数随窗口宽度连续自适应**，而不是「最大列宽」式的阶梯跳变——
+/// 360dp 手机 3 列、800px 桌面 6 列，与 anx 同口径。
+const double kShelfCoverTargetWidth = 120;
+
+/// 书架网格默认内边距。
+///
+/// 左右 20 / 上 12 照搬 anx（`bookshelf_page.dart:449` `EdgeInsets.fromLTRB(20, 12, 20, 80)`）；
+/// **底部 80 换成本项目的 [kShellBottomInset]**——两者目的相同（给悬浮胶囊留白），
+/// 但本项目胶囊更高，用 anx 的 80 会被压住。
+const EdgeInsets kShelfGridPadding = EdgeInsets.fromLTRB(
+  20,
+  12,
+  20,
+  kShellBottomInset,
+);
+
 /// 书架（与文件夹内页共用）的背景渐变。
 ///
 /// anx-reader 用 `colorScheme.primary.withAlpha(5)` **叠在** Scaffold 底色上做
@@ -87,7 +119,7 @@ class ShelfGrid extends StatelessWidget {
     this.onMergeBooks,
     this.onDropIntoFolder,
     this.dragEnabled = true,
-    this.padding = const EdgeInsets.fromLTRB(12, 12, 12, kShellBottomInset),
+    this.padding = kShelfGridPadding,
   });
 
   /// 文件夹（顺序即展示顺序，排在散书之前）。
@@ -134,56 +166,74 @@ class ShelfGrid extends StatelessWidget {
   /// 是否启用拖拽（文件夹内页可关掉重排）。
   final bool dragEnabled;
 
-  /// 网格内边距（默认给壳层浮动胶囊留出底部空白）。
+  /// 网格内边距（默认给壳层浮动胶囊留出底部空白，见 [kShelfGridPadding]）。
   final EdgeInsetsGeometry padding;
 
   @override
   Widget build(BuildContext context) {
     final int folderCount = folders.length;
-    return GridView.builder(
-      // 浮动胶囊不占布局高度，底部留白由 [kShellBottomInset] 提供。
-      padding: padding,
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 180,
-        childAspectRatio: 0.5,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      itemCount: folderCount + books.length,
-      itemBuilder: (BuildContext context, int index) {
-        if (index < folderCount) {
-          final BookFolder folder = folders[index];
-          return _FolderCell(
-            key: ValueKey<String>('folder-${folder.id}'),
-            folder: folder,
-            coverStore: coverStore,
-            allBooks: allBooks,
-            onOpen: onOpenFolder == null ? null : () => onOpenFolder!(folder),
-            onActions:
-                onFolderActions == null ? null : () => onFolderActions!(folder),
-            onDropIntoFolder: dragEnabled ? onDropIntoFolder : null,
-          );
-        }
-        final int bookIndex = index - folderCount;
-        final BookRecord record = books[bookIndex];
-        return _BookCell(
-          // key 不可省：重排后 element 复用会让 State 错位到别的书上。
-          key: ValueKey<String>('book-${record.bookId}'),
-          record: record,
-          index: bookIndex,
-          dragEnabled: dragEnabled,
-          onReorder: onReorder,
-          onMergeBooks: onMergeBooks,
-          onLongPressOnly: () => onBookActions(record),
-          child: BookCard(
-            record: record,
-            coverStore: coverStore,
-            loading: openingBookId == record.bookId,
-            onTap: () => onOpenBook(record),
-            // 长按交给外层拖拽容器统一处理（见文件头注）：InkWell 若也认长按，
-            // 会与 `LongPressDraggable` 在手势竞技场互抢。
-            onLongPress: null,
+    // 列数按 anx-reader 的口径算：**容器宽 ~/ 单列目标宽**（不是「最大列宽」式）。
+    // 用 LayoutBuilder 拿到 GridView 自身的可用宽——与 anx 的
+    // `Expanded > LayoutBuilder > GridView` 结构一致（其 `constraints.maxWidth`
+    // 同样是**含 padding 的整宽**）。
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final double width = constraints.maxWidth;
+        // 宽度未定（理论上不会，GridView 在 Expanded 内）时退回 anx 的手机默认 3 列。
+        int columns = width.isFinite ? width ~/ kShelfCoverTargetWidth : 3;
+        // 下限 1：`SliverGridDelegateWithFixedCrossAxisCount` 断言 crossAxisCount > 0，
+        // 极窄窗口（<120px）下 `~/` 会算出 0。上限纯属防御。
+        if (columns < 1) columns = 1;
+        if (columns > 64) columns = 64;
+        return GridView.builder(
+          // 浮动胶囊不占布局高度，底部留白由 [kShellBottomInset] 提供。
+          padding: padding,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            // anx：`childAspectRatio: 1 / 2.1`（`bookshelf_page.dart:455`）
+            // —— 比原先的 0.5 更瘦高，封面占比更大。
+            childAspectRatio: 1 / 2.1,
+            // anx：`mainAxisSpacing: 30, crossAxisSpacing: 20`（`:456-457`）。
+            mainAxisSpacing: 30,
+            crossAxisSpacing: 20,
           ),
+          itemCount: folderCount + books.length,
+          itemBuilder: (BuildContext context, int index) {
+            if (index < folderCount) {
+              final BookFolder folder = folders[index];
+              return _FolderCell(
+                key: ValueKey<String>('folder-${folder.id}'),
+                folder: folder,
+                coverStore: coverStore,
+                allBooks: allBooks,
+                onOpen: onOpenFolder == null ? null : () => onOpenFolder!(folder),
+                onActions:
+                    onFolderActions == null ? null : () => onFolderActions!(folder),
+                onDropIntoFolder: dragEnabled ? onDropIntoFolder : null,
+              );
+            }
+            final int bookIndex = index - folderCount;
+            final BookRecord record = books[bookIndex];
+            return _BookCell(
+              // key 不可省：重排后 element 复用会让 State 错位到别的书上。
+              key: ValueKey<String>('book-${record.bookId}'),
+              record: record,
+              index: bookIndex,
+              dragEnabled: dragEnabled,
+              onReorder: onReorder,
+              onMergeBooks: onMergeBooks,
+              onLongPressOnly: () => onBookActions(record),
+              child: BookCard(
+                record: record,
+                coverStore: coverStore,
+                loading: openingBookId == record.bookId,
+                onTap: () => onOpenBook(record),
+                // 长按交给外层拖拽容器统一处理（见文件头注）：InkWell 若也认长按，
+                // 会与 `LongPressDraggable` 在手势竞技场互抢。
+                onLongPress: null,
+              ),
+            );
+          },
         );
       },
     );

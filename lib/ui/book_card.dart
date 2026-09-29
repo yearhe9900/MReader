@@ -2,7 +2,9 @@
 //
 // 视觉（2026-09-28 改版，参考 anx-reader `widgets/bookshelf/book_item.dart`）：
 // **不用卡片底板**——封面直接浮在书架渐变背景上，靠 `BoxShadow` 投出层次；
-// 下方信息区为「书名（两行加粗）+ 作者 · 阅读进度百分比 + 格式标签」。
+// 封面右下角一枚**格式标签角标**（PRD US-06 / LIB-01 要求，anx 原版没有，
+// 拍板「挪到封面上做角标」）；下方信息区为「书名（两行加粗）+ 作者 · 阅读进度」，
+// **高度固定 55**（照搬 anx `book_item.dart:89-90`）。
 //
 // 手势：`Card(child: InkWell(...))` 结构**保留**——按压有 ripple 反馈，
 // 且能缓解 GridView 滚动/拖拽识别器在手势竞技场吞点（既有实证结论）。
@@ -114,7 +116,8 @@ class _BookCardState extends State<BookCard> {
                     child: _buildCoverSurface(theme),
                   ),
                 ),
-                const SizedBox(height: 6),
+                // 封面与信息区的间距：5（照搬 anx `book_item.dart:88`）。
+                const SizedBox(height: 5),
                 _buildInfo(theme),
               ],
             ),
@@ -151,7 +154,19 @@ class _BookCardState extends State<BookCard> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(_kCoverRadius),
-        child: _buildCover(theme),
+        // 格式标签角标（PRD US-06 / LIB-01；anx 原版封面无此物）：
+        // 放在 ClipRRect **内**，随封面圆角一起裁切，不会溢出圆角。
+        child: Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            _buildCover(theme),
+            Positioned(
+              right: 6,
+              bottom: 6,
+              child: _FormatTag(format: widget.record.format),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -193,59 +208,69 @@ class _BookCardState extends State<BookCard> {
     );
   }
 
-  /// 信息区：书名（两行）/ 作者 · 进度 / 格式标签。
+  /// 信息区：书名（两行）/ 作者 · 进度。
+  ///
+  /// **高度固定 55**（照搬 anx `book_item.dart:89-90` 的 `SizedBox(height: 55)`），
+  /// 于是「一行为书名」与「两行为书名」的卡片等高、网格行距不跳。
+  /// 格式标签已挪到封面上（见 [BookCard] 头注的 PRD 取舍）。
   Widget _buildInfo(ThemeData theme) {
     final double? progress = widget.record.readProgress;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(
-            widget.record.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              height: 1.25,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: Text(
-                  widget.record.author.isEmpty ? '未知作者' : widget.record.author,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontSize: 11,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
+    return SizedBox(
+      height: 55,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              widget.record.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                height: 1.25,
               ),
-              // 阅读进度（照搬 anx-reader 的右下角百分比）；未曾开书则为 null。
-              if (progress != null)
-                Text(
-                  '${(progress * 100).round()}%',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: theme.colorScheme.primary,
+            ),
+            const SizedBox(height: 2),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    widget.record.author.isEmpty
+                        ? '未知作者'
+                        : widget.record.author,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: 11,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          _FormatTag(format: widget.record.format),
-        ],
+                // 阅读进度（照搬 anx-reader 的右下角百分比）；未曾开书则为 null。
+                if (progress != null)
+                  Text(
+                    '${(progress * 100).round()}%',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// 格式标签（EPUB / TXT）。
+/// 格式标签（EPUB / TXT）——现作**封面右下角角标**。
+///
+/// PRD `US-06` / `LIB-01` 要求书架展示格式；anx-reader 原版卡片没有此物，
+/// 拍板「挪到封面上做角标」，从而信息区能与 anx 一样对齐到固定 55px。
 class _FormatTag extends StatelessWidget {
   const _FormatTag({required this.format});
   final String format;

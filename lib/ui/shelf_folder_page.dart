@@ -16,7 +16,6 @@ import '../library/book_record.dart';
 import '../meta/cover_store.dart';
 import '../settings/shelf_layout_store.dart';
 import 'glass_kit.dart';
-import 'home_shell.dart' show kShellBottomInset;
 import 'shelf_grid.dart';
 
 /// 文件夹内页。
@@ -136,7 +135,8 @@ class _ShelfFolderPageState extends State<ShelfFolderPage> {
                   onReorder: (String draggedBookId, int toIndex) =>
                       unawaited(_reorder(draggedBookId, toIndex)),
                   // 文件夹内不再嵌套文件夹：拖到另一本书上就是纯重排。
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, kShellBottomInset),
+                  // 几何与书架页同源（anx-reader 口径），防两处漂移。
+                  padding: kShelfGridPadding,
                 ),
         ),
       ),
