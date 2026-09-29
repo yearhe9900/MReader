@@ -2,6 +2,9 @@
 //
 // 本文件之所以可以早于 `flutter pub get` 先跑：`lib/theme/app_theme.dart` 不 import
 // 任何玻璃库，有效亮度解析是纯函数。三态覆盖是 PRD `UI-01` ② 的硬要求。
+// `CupertinoPageTransitionsBuilder` 不从 `material.dart` 导出（定义在 cupertino/route.dart），
+// 故转场用例需要一个定向导入。
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/settings/settings_store.dart';
@@ -68,6 +71,65 @@ void main() {
       expect(AppTheme.bodyTextStyle.height, Settings.defaultLineHeight);
       expect(AppTheme.bodyTextStyle.fontSize, 18.0);
       expect(AppTheme.bodyTextStyle.height, 1.6);
+    });
+  });
+
+  group('页面转场（2026-09-29 拍板：关掉 Android 手势返回的缩放）', () {
+    // 根因：targetSdk 36 + Android 16 → 系统预测性返回默认开启，而 Flutter 给 Android 的
+    // 默认 builder 是 PredictiveBackPageTransitionsBuilder，手势中会把当前页缩到 0.90
+    // 并加设备圆角（predictive_back_page_transitions_builder.dart:350/385/520-540）。
+    test('Android 用 FadeForwards：既不是预测返回，也不是缩放式 Zoom', () {
+      final PageTransitionsBuilder builder =
+          AppTheme.light().pageTransitionsTheme.builders[TargetPlatform.android]!;
+
+      expect(builder, isA<FadeForwardsPageTransitionsBuilder>());
+      // 两条「反向断言」是本用例的真正价值：把「又被改回缩放」直接测红。
+      expect(builder, isNot(isA<PredictiveBackPageTransitionsBuilder>()));
+      expect(builder, isNot(isA<ZoomPageTransitionsBuilder>()));
+    });
+
+    test('浅色 / 深色共用同一套转场（避免两套主题漂移）', () {
+      expect(
+        AppTheme.dark().pageTransitionsTheme.builders[TargetPlatform.android],
+        isA<FadeForwardsPageTransitionsBuilder>(),
+      );
+      expect(
+        AppTheme.light().pageTransitionsTheme.builders[TargetPlatform.android]
+            .runtimeType,
+        AppTheme.dark().pageTransitionsTheme.builders[TargetPlatform.android]
+            .runtimeType,
+      );
+    });
+
+    test('其余四平台逐字保持框架默认（未扩大改动范围）', () {
+      final Map<TargetPlatform, PageTransitionsBuilder> builders =
+          AppTheme.light().pageTransitionsTheme.builders;
+
+      expect(builders[TargetPlatform.iOS], isA<CupertinoPageTransitionsBuilder>());
+      expect(builders[TargetPlatform.macOS], isA<CupertinoPageTransitionsBuilder>());
+      expect(builders[TargetPlatform.windows], isA<ZoomPageTransitionsBuilder>());
+      expect(builders[TargetPlatform.linux], isA<ZoomPageTransitionsBuilder>());
+    });
+
+    test('五个平台均有显式声明（缺省会落到 Zoom 回退，见框架 :881-890）', () {
+      final Map<TargetPlatform, PageTransitionsBuilder> builders =
+          AppTheme.light().pageTransitionsTheme.builders;
+
+      // 必须显式声明而**不能**只写 android：框架对缺失平台的回退是
+      // 「iOS → Cupertino，其余（含 macOS）→ Zoom」，只传 android 会让 macOS 退化。
+      for (final TargetPlatform platform in const <TargetPlatform>[
+        TargetPlatform.android,
+        TargetPlatform.iOS,
+        TargetPlatform.macOS,
+        TargetPlatform.windows,
+        TargetPlatform.linux,
+      ]) {
+        expect(
+          builders[platform],
+          isNotNull,
+          reason: '$platform 缺显式声明会落到 Zoom 回退',
+        );
+      }
     });
   });
 }

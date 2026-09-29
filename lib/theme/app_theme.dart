@@ -7,6 +7,10 @@
 //     `primaryOf`），而不是只导出一个 `ThemeData`：
 //       - M1-T05 合成封面要「背景取主题色」（`META-07` ①）→ 用 [AppTheme.seed] / [AppTheme.primaryOf]；
 //       - M1-T06 排版要正文默认字号/行距 → 用 [AppTheme.bodyTextStyle]（口径与 `TYP-01` 一致）。
+// `CupertinoPageTransitionsBuilder` 定义在 `src/cupertino/route.dart`，
+// **不经 `material.dart` 导出**——这里只定向引它，避免整包 cupertino 与 material
+// 的同名符号（如 `RefreshCallback`）冲突。
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
 import '../settings/settings_store.dart';
@@ -65,6 +69,49 @@ String appThemeModeLabel(AppThemeMode mode) {
   }
 }
 
+/// 应用页面转场（2026-09-29 拍板：**关掉 Android 手势返回的缩放动画**）。
+///
+/// ══════════════════════════════════════════════════════════════════════════════
+/// 根因（读 Flutter 3.47 源码 + 清单 + 设备三方交叉）
+/// ══════════════════════════════════════════════════════════════════════════════
+/// `targetSdk = 36`（Flutter 3.47 默认，`FlutterExtension.kt:34`）且设备为 Android 16 时，
+/// **系统预测性返回默认开启**（清单未声明 `enableOnBackInvokedCallback`）；而 Flutter 给
+/// Android 的默认转场是 [PredictiveBackPageTransitionsBuilder]（`page_transitions_theme.dart:766`），
+/// 它在手势进行中（`route.popGestureInProgress`）走 shared-element 转场，内部就是
+/// **`Transform.scale` 缩到 0.90**（`_kMinScale`）外加设备圆角 `ClipRRect` 与淡出
+/// （`predictive_back_page_transitions_builder.dart:350/385/520-540`）——即
+/// 「手指还没松开，页面就先缩小成一张圆角卡片」。负责人要求关闭该效果。
+///
+/// ══════════════════════════════════════════════════════════════════════════════
+/// 处置与代价
+/// ══════════════════════════════════════════════════════════════════════════════
+/// Android 改 [FadeForwardsPageTransitionsBuilder]（Android 16 原生 M3 风格：
+/// 横向位移 + 淡出，**无缩放、无圆角**；`transitionDuration` 与预测返回同为 450ms，
+/// 故**时长不变、只有观感变**）。
+///
+/// 该 builder **不含** `_PredictiveBackGestureDetector`，故系统手势不再被 App 接管。
+/// 框架对此有明确回落：无人处理预测性返回时，提交即走普通 `handlePopRoute()`
+/// （`widgets/binding.dart:1196-1205`）——**返回功能不受影响**，
+/// 代价仅是拖动过程不再有跟手预览（无 preview，松手后播完整转场）。
+///
+/// **其余四个平台逐字保持框架默认**，这里必须写**全量**映射：
+/// `_PageTransitionsThemeTransitionsState.build:881-890` 的缺省回退是
+/// 「iOS → Cupertino，其余（**含 macOS**）→ Zoom」，只传 `{android: …}`
+/// 会让 macOS 从 Cupertino 悄悄退化成 Zoom（即把缩放又引回来）。
+///
+/// **未动（待负责人定，未擅自扩大范围）**：Windows / Linux 仍是
+/// [ZoomPageTransitionsBuilder]（框架默认）——按返回键时同样是缩小式转场，
+/// 只是发生在「按钮返回」而非「手势返回」。
+const PageTransitionsTheme kAppPageTransitions = PageTransitionsTheme(
+  builders: <TargetPlatform, PageTransitionsBuilder>{
+    TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
+    TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+    TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+    TargetPlatform.windows: ZoomPageTransitionsBuilder(),
+    TargetPlatform.linux: ZoomPageTransitionsBuilder(),
+  },
+);
+
 /// 合成封面的主题（日 / 夜）。
 ///
 /// `META-07` 的「书名 + 作者 + 主题 合成封面」需要一个**小枚举**承载主题维度；
@@ -101,5 +148,8 @@ abstract final class AppTheme {
         colorSchemeSeed: seed,
         brightness: brightness,
         useMaterial3: true,
+        // 页面转场：Android 换掉预测性返回的缩放（见 [kAppPageTransitions]）。
+        // 浅色 / 深色共用同一份映射，避免两套主题观感漂移。
+        pageTransitionsTheme: kAppPageTransitions,
       );
 }
