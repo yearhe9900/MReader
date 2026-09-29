@@ -49,7 +49,7 @@ class BookCard extends StatefulWidget {
   /// 封面存储（缩略图）。
   final CoverStore coverStore;
 
-  /// 点击（进入详情页）。
+  /// 点击（**直接进阅读页**；2026-09-29 改道，原先进详情页）。
   final VoidCallback onTap;
 
   /// 长按回调（弹底部操作单）。

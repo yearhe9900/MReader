@@ -83,6 +83,17 @@ Finder _readerPages() => find.byType(ReaderPage, skipOffstage: false);
 /// 全树范围找 [BookDetailPage]（同上：覆盖栈里的详情页也要揪出来）。
 Finder _detailPages() => find.byType(BookDetailPage, skipOffstage: false);
 
+/// 经**长按操作单**进详情页。
+///
+/// 2026-09-29 改道后：点卡 = **直接进阅读页**，详情页只剩「长按 → 书籍详情」一个入口
+/// （`META-08` 同步改文；与 anx-reader 的 `book_bottom_sheet` 同构）。
+Future<void> _openDetailViaSheet(WidgetTester tester, Finder card) async {
+  await tester.longPress(card);
+  await tester.pumpAndSettle(); // 玻璃底部操作单滑入
+  await tester.tap(find.text('书籍详情'));
+  await _settle(tester); // 弹层 pop + 详情页 push + 详情页自身 IO
+}
+
 /// 网格中书卡的显示顺序（element 顺序 = 网格顺序）。
 List<String> _titles(WidgetTester tester) => tester
     .widgetList<BookCard>(find.byType(BookCard))
@@ -365,7 +376,7 @@ void main() {
 
     // —— 首点无响应回归（_opening 守卫作用域 + 准备期反馈 + InkWell）——
 
-    testWidgets('回归①：点卡片进详情页，详情页→继续阅读→阅读页（链路各一次）',
+    testWidgets('回归①：点书卡直接进阅读页（不经详情页；`META-08` 入口改道）',
         (WidgetTester tester) async {
       final ImportResult a = (await tester.runAsync(
         () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
@@ -374,9 +385,31 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 一次点击 → 恰好一个详情页、尚无阅读页（`F9` / `META-08 ①` 入口改道）。
+      // 一次点击 → 恰好一个阅读页，且**零**详情页。
+      // （2026-09-29 拍板：原「点卡 → 详情页 → 继续阅读」两层链路压缩为一层，
+      // 对齐 anx-reader `book_item.dart:51-53` 的 `pushToReadingPage`。）
       await tester.tap(find.byType(BookCard));
       await _settle(tester);
+      expect(_readerPages(), findsOneWidget);
+      expect(_detailPages(), findsNothing);
+      expect(
+        tester.widget<ReaderPage>(_readerPages()).record.bookId,
+        a.record.bookId,
+      );
+    });
+
+    testWidgets('回归①补：详情页仍可达——长按操作单「书籍详情」（`META-08` 唯一入口）',
+        (WidgetTester tester) async {
+      await tester.runAsync(
+        () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
+      );
+
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      await _openDetailViaSheet(tester, find.byType(BookCard));
+
+      // 进详情页但**不自动开书**（详情页只是展示 + 提供「继续阅读」）。
       expect(_detailPages(), findsOneWidget);
       expect(_readerPages(), findsNothing);
 
@@ -395,13 +428,9 @@ void main() {
       await tester.tap(find.text('继续阅读'));
       await _settle(tester);
       expect(_readerPages(), findsOneWidget);
-      expect(
-        tester.widget<ReaderPage>(_readerPages()).record.bookId,
-        a.record.bookId,
-      );
     });
 
-    testWidgets('回归①b：连点卡片只进一个详情页；准备期连点「继续阅读」只 push 一次',
+    testWidgets('回归①b：连点卡片只 push 一个阅读页（准备期守卫吞第二击）',
         (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
@@ -410,24 +439,18 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
+      // 两击落在同一帧（中间无 pump）：第一击在首个 await **之前**同步置
+      // `_opening = true`，故第二击落在准备期 → 被守卫吞掉，不得叠两个阅读页。
       final Finder card = find.byType(BookCard);
       await tester.tap(card);
-      await tester.tap(card); // 第二击落在过渡期 → `_detailPushing` 吞掉
-      await _settle(tester);
-
-      expect(_detailPages(), findsOneWidget);
-      expect(_readerPages(), findsNothing);
-
-      // 开书准备期连点「继续阅读」：第二击落在准备期 → 守卫吞掉，不得双 push。
-      final Finder cont = find.text('继续阅读');
-      await tester.tap(cont);
-      await tester.tap(cont);
+      await tester.tap(card);
       await _settle(tester);
 
       expect(_readerPages(), findsOneWidget);
+      expect(_detailPages(), findsNothing);
     });
 
-    testWidgets('回归②：关书+关详情后立即点另一本 → 一次即进（主因窗口回归）',
+    testWidgets('回归②：关书后立即点另一本 → 一次即进（主因窗口回归）',
         (WidgetTester tester) async {
       final ImportResult a = (await tester.runAsync(
         () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
@@ -439,11 +462,8 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 打开甲书：卡片 → 详情页 → 继续阅读。
+      // 打开甲书：一次点击**直接**进阅读页（改道后少一层详情页）。
       await tester.tap(_cardOf('甲书'));
-      await _settle(tester);
-      expect(_detailPages(), findsOneWidget);
-      await tester.tap(find.text('继续阅读'));
       await _settle(tester);
       expect(_readerPages(), findsOneWidget);
       expect(
@@ -459,23 +479,11 @@ void main() {
       for (int i = 0; i < 12; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
-      expect(_readerPages(), findsNothing); // 阅读页已完全退出（回详情页）
-      expect(_detailPages(), findsOneWidget);
+      expect(_readerPages(), findsNothing); // 阅读页已完全退出（回书架）
 
-      // 关详情页回书架（同样只推假帧），紧接着点乙书必须一次即进。
-      Navigator.of(tester.element(_detailPages())).pop();
-      for (int i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      expect(_detailPages(), findsNothing); // 详情页已完全退出
-
+      // 紧接着点乙书必须一次即进。
       await tester.tap(_cardOf('乙书'));
       await _settle(tester);
-      expect(_detailPages(), findsOneWidget);
-
-      await tester.tap(find.text('继续阅读'));
-      await _settle(tester);
-
       expect(_readerPages(), findsOneWidget);
       expect(
         tester.widget<ReaderPage>(_readerPages()).record.bookId,
@@ -509,7 +517,7 @@ void main() {
       expect(_readerPages(), findsNothing);
     });
 
-    testWidgets('回归④：开书准备期（详情页「继续阅读」）有可见反馈，未即刻导航',
+    testWidgets('回归④：点卡开书准备期有可见反馈，未即刻导航',
         (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
@@ -518,22 +526,11 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
+      // 点卡即开书 → 只推一帧、不给 runAsync → 仍在准备期。
       await tester.tap(find.byType(BookCard));
-      await _settle(tester);
-      expect(_detailPages(), findsOneWidget);
+      await tester.pump();
 
-      await tester.tap(find.text('继续阅读'));
-      await tester.pump(); // 只推一帧、不给 runAsync → 仍在准备期
-
-      // ① 详情页按钮出现进行中反馈（用户可见）。
-      expect(
-        find.descendant(
-          of: find.byType(FilledButton),
-          matching: find.byType(CircularProgressIndicator),
-        ),
-        findsOneWidget,
-      );
-      // ② 被点卡片的 loading 覆盖层同步出现（书架侧 `_opening` 状态生效）。
+      // 被点卡片的 loading 覆盖层出现（书架侧 `_opening` 状态生效，用户可见）。
       expect(
         find.descendant(
           of: find.byType(BookCard),
@@ -654,9 +651,8 @@ void main() {
       await _settle(tester);
       expect(find.text('玄幻'), findsNothing); // 还没有任何分组
 
-      // 进详情页 → 点「分组」入口（当前显示「未分组」）。
-      await tester.tap(find.byType(BookCard));
-      await _settle(tester);
+      // 进详情页（改道后走长按操作单）→ 点「分组」入口（当前显示「未分组」）。
+      await _openDetailViaSheet(tester, find.byType(BookCard));
       expect(find.byType(BookDetailPage), findsOneWidget);
       await tester.tap(find.text('未分组'));
       await _settle(tester);

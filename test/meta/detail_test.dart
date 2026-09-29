@@ -10,6 +10,10 @@
 // · META-09 ③ 恢复自动值 → 值回自动结果、来源回原值
 // · META-09 ④ 二次 importFile 同内容不覆写 user 值
 //
+// ⚠️ 入口（2026-09-29 改道）：书架点卡 = **直接进阅读页**，本页所有用例统一经
+// [_openDetailViaSheet]（长按 → 操作单「书籍详情」）进入——这是 `META-08` 目前
+// 唯一的入口（PRD 条文已同步由「从书架点击进入」改为「从书架长按操作单进入」）。
+//
 // ⚠️ FakeAsync 铁律：仓储 IO 用纯 `test()` + 临时目录；`testWidgets` 体内
 // **不 await 真异步 IO**——导入放 `tester.runAsync`，widget 内发起的 IO 用
 // [_settle]（runAsync 与 pump 交替）排空（同 `test/ui/shelf_page_test.dart`）。
@@ -89,6 +93,17 @@ Finder _detailPages() => find.byType(BookDetailPage, skipOffstage: false);
 /// 在详情页范围内找文本（书架同名文本在栈下，范围限定避免误配）。
 Finder _inDetail(Finder matching) =>
     find.descendant(of: _detailPages(), matching: matching);
+
+/// 经**长按操作单**进详情页。
+///
+/// 2026-09-29 改道：书架点卡 = **直接进阅读页**，详情页只剩「长按 → 书籍详情」
+/// 一个入口（`META-08` 同步改文；与 anx-reader 的 `book_bottom_sheet` 同构）。
+Future<void> _openDetailViaSheet(WidgetTester tester, Finder card) async {
+  await tester.longPress(card);
+  await tester.pumpAndSettle(); // 玻璃底部操作单滑入
+  await tester.tap(find.text('书籍详情'));
+  await _settle(tester); // 弹层 pop + 详情页 push + 详情页自身 IO
+}
 
 /// fixture EPUB 的绝对路径。
 String _fixturePath(String name) =>
@@ -482,10 +497,9 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      await tester.tap(_cardOf('三体'));
-      await _settle(tester);
+      await _openDetailViaSheet(tester, _cardOf('三体'));
 
-      // ① 入口：一次点击恰好一个详情页。
+      // ① 入口：一次「长按 → 书籍详情」恰好一个详情页。
       expect(_detailPages(), findsOneWidget);
 
       // ① 字段齐全：书名 / 作者 / 格式 / 大小 / 进度 / 分组 / 统计入口。
@@ -530,8 +544,7 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      await tester.tap(find.byType(BookCard));
-      await _settle(tester);
+      await _openDetailViaSheet(tester, find.byType(BookCard));
       expect(_detailPages(), findsOneWidget);
 
       expect(_inDetail(find.text(meta.title)), findsOneWidget);
@@ -553,9 +566,8 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 进详情页 → 进编辑态。
-      await tester.tap(_cardOf('三体'));
-      await _settle(tester);
+      // 进详情页（长按操作单）→ 进编辑态。
+      await _openDetailViaSheet(tester, _cardOf('三体'));
       await tester.tap(find.byIcon(Icons.edit_outlined));
       await _settle(tester);
       // 简介输入框在 ListView 折叠区下方，首屏只见书名 / 作者两个。

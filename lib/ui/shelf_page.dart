@@ -322,7 +322,11 @@ class _ShelfPageState extends State<ShelfPage> {
     }
   }
 
-  /// 点书卡 → 书籍详情页（`F9` / `META-08 ①`）。
+  /// 书卡长按操作单 / 详情页的「书籍详情」→ 书籍详情页（`F9` / `META-08 ①`）。
+  ///
+  /// **入口只有一个**（2026-09-29 改道）：书架点卡改成直接进阅读页后，
+  /// 详情页只能从长按操作单进（与 anx-reader 同构——其 `book_bottom_sheet.dart`
+  /// 也是详情页的唯一入口）。PRD `META-08` 的「从书架点击进入」已同步改文。
   ///
   /// pop 后刷新列表——编辑 / 移出书架 / 进度变化都靠这次刷新同步回书架。
   /// 开书管道以 `onOpenBook: _openBook` 回调注入详情页（详情页禁止复制第二份）。
@@ -405,10 +409,14 @@ class _ShelfPageState extends State<ShelfPage> {
     }
   }
 
-  /// 顶栏假搜索框 → 书库搜索页；选中结果直接进详情页。
+  /// 顶栏假搜索框 → 书库搜索页；选中结果**直接进阅读页**。
   ///
   /// 搜索做成**独立页面**（而非就地输入）：查询与书架状态解耦，
   /// 也不必在当前子树里处理键盘遮挡。与 anx-reader 的做法一致。
+  ///
+  /// 结果处理与书架点卡保持同一语义（2026-09-29 拍板）：anx 的搜索页复用同一个
+  /// `BookItem`（`search_page.dart:204`），点结果即 `pushToReadingPage`，
+  /// 故本项目也直接 [_openBook]，避免「同一手势两种结果」的割裂。
   Future<void> _openSearch() async {
     final BookRecord? picked = await Navigator.of(context).push<BookRecord>(
       MaterialPageRoute<BookRecord>(
@@ -416,7 +424,7 @@ class _ShelfPageState extends State<ShelfPage> {
       ),
     );
     if (picked != null && mounted) {
-      await _openDetail(picked);
+      await _openBook(picked);
     }
   }
 
@@ -673,13 +681,16 @@ class _ShelfPageState extends State<ShelfPage> {
   /// 有书：网格展示（分组筛选 / 排序已在外层应用）。
   ///
   /// 网格**不再含任何交互**（拖拽 / 文件夹卡随 2026-09-29 拍板移除），
-  /// 本页只把「点击进详情」「长按弹操作单」两个回调接上。
+  /// 本页只把「点击直接开书」「长按弹操作单」两个回调接上。
   Widget _buildBookGrid() {
     return ShelfGrid(
       books: _visibleBooks,
       coverStore: widget.coverStore,
       openingBookId: _openingBookId,
-      onOpenBook: (BookRecord record) => unawaited(_openDetail(record)),
+      // 点书卡 = **直接进阅读页**（2026-09-29 拍板：原「点卡 → 详情页」改道；
+      // 与 anx-reader 一致——其 `book_item.dart:51-53` 的 `onTap` 即
+      // `pushToReadingPage`）。详情页入口改走长按操作单「书籍详情」。
+      onOpenBook: (BookRecord record) => unawaited(_openBook(record)),
       onBookActions: (BookRecord record) => unawaited(_openBookActions(record)),
     );
   }

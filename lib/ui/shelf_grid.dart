@@ -77,7 +77,7 @@ class ShelfGrid extends StatelessWidget {
   /// 正在准备打开的书（bookId）：对应卡显示 loading 覆盖层。
   final String? openingBookId;
 
-  /// 点书卡（进详情页）。
+  /// 点书卡（**直接进阅读页**；2026-09-29 改道，原先进详情页）。
   final void Function(BookRecord record) onOpenBook;
 
   /// 长按书卡（弹底部操作单，`LIB-06`）。
