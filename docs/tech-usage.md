@@ -1688,3 +1688,82 @@ bash tool/test.sh reader                                                        
 ```
 
 **复核边界**：`analyze` 与 `ui` / `data` / `reader` 三组为本批实跑。改动符号（`BookCard` / `ShelfGrid` / `onLongPress` / `onBookActions` / `kBookCoverRadius`）经全仓 grep 确认引用方只有 `lib/ui/shelf_page.dart` 与 `test/ui/`（**ui 组**）+ `test/meta/detail_test.dart`（**data 组**）——`reader` 为保险性复跑。`parse` 组未跑（零交集）。**真机手感未复跑**：需负责人确认① 长按抬起是否「有反馈但不突兀」（放大 1.05 / 150ms；曲线照抄包的 `linear`，嫌生硬可换 `Curves.easeOut`，一行）；② **深色主题下封面投影偏亮**是否接受（回退口径见上）。
+
+### 2.52 无封面书籍采用 anx 默认封面（2026-09-29）
+
+**触发**：负责人「采用anx 无封面书籍的默认封面」。两问两答拍板：① **只改占位控件**（新建共享默认封面组件，书架书卡与详情页封面共用；**不动** `META-07` 的画布合成渲染器与 PRD）；② **完全照抄 anx 取色**（底色 = `Colors.primaries[书名.hashCode % 18].shade200`，即每本书按书名哈希得到一张**浅色**卡片）。**PRD 无条目增减**（`META-07` 条文未改，理由见下「与 META-07 的关系」）。
+
+**取证：anx 默认封面逐条对映**（均实读 `D:\Projects\anx-reader\lib\widgets\bookshelf\book_cover.dart`，本批行号）
+
+| 本项目 | anx 出处 | 口径 |
+|---|---|---|
+| `defaultBookCoverColor(title)` | `:57-59` | `Colors.primaries[title.hashCode % Colors.primaries.length].shade200`（`%` 是欧几里得取模，负数亦非负 → **无需 `abs()`**，anx 同此写法） |
+| `defaultBookCoverInk(bg)` | `:23-26` | `estimateBrightnessForColor(bg) == dark ? white : black` |
+| 标题 `Text` | `:78-88` | `fontSize = 宽 × 0.12`、`bold`、`height: 1.2`、`maxLines: 3` + `ellipsis`、`crossAxisAlignment.start` |
+| 作者 `Text` | `:92-100` | `fontSize = 宽 × 0.08`、`w300`、`maxLines: 1` + `ellipsis`，与标题之间一个 `Spacer` |
+| 水印 `Icon` | `:106-117` | `Icons.book`、`size = 宽 × 0.8`、色 = 文字色 `withValues(alpha: 0.1)`、`Positioned(right: -padding*0.8, bottom: -padding*0.5)` + `Transform.rotate(15°)` |
+| 内边距 | `:52-55`、`:71-72` | `EdgeInsets.all(宽 × 0.08)` |
+| 尺寸基准 | `:47-49` | 全部按 `LayoutBuilder` 的 `constraints.maxWidth`（**封面宽度**）——故同一本书在书架与详情页大小一致，换列数也不跳 |
+| 底色层 | `:65-66` | anx 用 `Container(color: backgroundColor)` |
+| 外层裁剪 | `:133-146` | `SizedBox > DecoratedBox(foreground, ShapeDecoration(RoundedSuperellipseBorder)) > ClipRSuperellipse` —— **未采纳**，见下 |
+
+调色板事实（`Colors.primaries`，SDK `material/colors.dart:1883-1905`）：长度 **18**，顺序 = red / pink / purple / deepPurple / indigo / blue / lightBlue / cyan / teal / green / lightGreen / lime / yellow / amber / orange / deepOrange / brown / blueGrey，**`grey` 被刻意省略**（注释理由：会让 app 显旧）。故 `shade200` 一档全是**浅色**。
+
+**处置（本工程三处刻意处理，各有理由）**
+
+1. **10% 透明的水印不是「半透明内容层」**：它叠在**不透明**底色之上，`UI-04` 约束的是容器 / 背景而非前景笔画 → 红线不破（理由同 `shelfGradientBackground` 用 `alphaBlend` 合规）。
+2. **组件自带 `ClipRRect`**：anx 的水印靠**负偏移**故意画出封面之外（`right: -padding*0.8`、`bottom: -padding*0.5`），本组件用 `ClipRRect` 兜住裁切 → 调用方不必再包一层（也顺带把「探出的半本书」保持为 anx 的原始观感）。圆角由 `radius` 参数传入。
+3. **底色画在哪一层按环境自适应**：有 `Material` 祖先 → `Ink`（底色进该 Material 的 ink 层，`InkWell` 水波纹画在它**之上**，与 `book_card.dart` 的 `Ink.image` 同一条口径；否则不透明底色会把 ripple 盖住）；无 `Material` 祖先 → `ColoredBox`（`Ink` 在无 `Material` 时**断言失败**；玻璃库页面即无 `Material` 祖先，见 PRD §11.4）。
+
+**未采纳（如实登记）**
+
+- **`ClipRSuperellipse` 超椭圆裁剪 + `RoundedSuperellipseBorder(width: 0.3, color: Colors.grey)` 描边**（anx `:125-146`）：与 §2.51 同一项，是 Flutter 自带能力、**不需要引依赖**，但不在本次拍板范围内。
+- **两个显示开关** `Prefs().showBookTitleOnDefaultCover` / `showAuthorOnDefaultCover`（anx `:62-63`）：本项目没有这两个设置项，**恒显示**。**不采纳开关 ≠ 改变默认观感**——两者默认值均为 `true`（`config/shared_preference_provider.dart:1133` / `:1142` 的 `?? true`，已实读），故「恒显示」正是 anx 未改设置时的表现。
+- **`title.isEmpty ? '?' : title` 这处**是本项目**保留**的旧兜底（原占位实现即 `title.isNotEmpty ? first : '?'`）：anx 画空串。`META-01` 保证书名非空，故该分支实际不可达，仅作可见信号。
+
+**代价（如实登记）**
+
+- 底色取 `shade200` = **浅色**且**不随主题**（anx 原样），故**深色主题下书架会出现一片浅色小卡片**。要跟主题走只需换掉 `defaultBookCoverColor` 一行（但就偏离 anx 了）。
+- `String.hashCode` 只保证**同一 SDK 版本内**稳定（本批三进程实测一致：`书0` = 832146738、`三体` = 98577346、`活着` = 644087628），**换 SDK 版本可能让同一本书换色**（纯观感）。若哪天要求跨版本稳定，改项目已有的确定性 FNV-1a（`lib/meta/synth_cover.dart` 的 `synthCoverCacheKey`）即可。
+
+**与 `META-07` 的关系（未闭环，如实登记）**
+
+`META-07`（PRD `:353`）的降级顺序是 ① **运行时绘制合成封面**（背景取主题色/纯色，书名大字居中、作者小字居中于其下，长书名自动换行/缩放至不溢出）→ ② 退回默认占位图，按「书名+作者+主题」缓存。本项目 `lib/meta/synth_cover.dart` 的 `CanvasSynthCoverRenderer`（`dart:ui` 绘制 + 32 张 LRU）**早已实现且有单测（`test/meta/synth_cover_test.dart`）但从未接 UI**。本批按拍板**只替换占位控件**、**未接**该渲染器 → 项目里暂时并存两条路径：
+
+- **控件版默认封面**（`lib/ui/default_book_cover.dart`）——**在用**，替换的是 ② 的渲染形态；
+- **位图合成封面**（`lib/meta/synth_cover.dart`）——**已实现未接线**。
+
+`META-07` 条文**未改**（属于「是否要把渲染器接进 UI 并改写 ① / ② 的划分」这个更大的拍板，未擅自扩大范围）。**注意**：控件版与 ① 的差别是「取色来源」（书名哈希 vs 主题色）与「排版」（左上大字 + 左下小字 + 右下旋转水印 vs 居中书名 + 其下作者），谁「是 ① 谁 是 ②」需要负责人定。
+
+**测试**
+
+| 文件 | 变更 | 断言要点 |
+|---|---|---|
+| `test/ui/default_book_cover_test.dart` | **新建 9 条** | ① 取色：公式（`Colors.primaries[title.hashCode % 18].shade200`）+ `Colors.primaries.length == 18`（防 SDK 改表）+ **实测钉点**（`三体`→`indigo.shade200`、`活着`→`red.shade200`）+ `shade200` 档位锁定（`contains` 18 个 `shade200`）+ 换书换色；文字色对比四例。② 尺寸：120 宽 → 14.4 / 9.6 / 96 / 9.6，200 宽 → 24 / 16 / 160 / 16（**成比例而非固定值**）。③ 水印：**从 `Transform.rotate.transform` 矩阵反解角度**（`atan2(m.storage[1], m.storage[0])`）+ `Positioned` 负偏移 -7.68 / -4.8 + **手算真外接框**判「越过封面右/下缘」+ `ClipRRect` 圆角 8；320 字长书名仍 3 行内省略且不溢出（复用 `META-07` 验收 ②）。④ 底色层：有 `Material` → `Ink.decoration.color` 且**无** `ColoredBox`；`LookupBoundary` 截断祖先 → `ColoredBox` 且**无** `Ink`。⑤ 接入：`ShelfGrid` 渲染 `书0` → 书卡内有 `DefaultBookCover` 且 `Ink` 底色 = `lightBlue.shade200` |
+| `test/ui/shelf_geometry_contract_test.dart` | 1 条用例内断言改写 | 封面外框（`kBookCoverSurfaceKey`）下 `ClipRRect` 由 1 层变 **2 层**（外框 + `DefaultBookCover` 自带），`tester.widget<ClipRRect>` 会 `Bad state: Too many elements` → 改 `widgetList` **逐层**断言圆角 8（更强：任一层不一致即红） |
+| `test/ui/shelf_page_test.dart` | helper + 2 处断言 | `_cardOf` 加 `.first` **去重**（同一张卡的两个 `Text` 各自产出同一个 `BookCard`，`find.ancestor` 列出两次 → `tap` 报「歧义」）；LIB-01「书名和作者可见」改 `findsNWidgets(2)` ×2（各出现两次）；详情页书名断言改 `findsNWidgets(2)` |
+| `test/meta/detail_test.dart` | helper + 3 处断言 | 同上：`_cardOf` 加 `.first`（该文件用 `longPress`，同样报歧义）；META-08 TXT 与 EPUB 用例的书名/作者改 `findsNWidgets(2)`；META-09① 保存后的新书名改 `findsNWidgets(2)` |
+
+**⚠️ 本批踩到的两个坑（可复用）**
+
+1. **`tester.getRect` 对旋转过的 widget 不给轴对齐外接框**：它取的是「变换后左上角」与「变换后右下角」之间的矩形（即**对角线两端**），96 宽 / 15° 实测得 **67.88** = `96 × (cos15° − sin15°)`，而真外接框是 **117.58** —— 直接断言宽度会让人误判成「角度不对」。**做法**：只用它取**变换不变的中心**（两角点对称于中心 → 中点即中心），再按「中心 ± 半个对角线的投影」自算 `halfSide = (side/2) × (cosθ + sinθ)`；角度则从矩阵**反解**而非回头引用实现里的常量。（与 §2.51 的「量放大的坑」是同一族问题的两个面：**先确认测量对象落在变换的哪一侧 / 是否被旋转**。）
+2. **别凭印象数 `Colors.primaries` 的下标**：接入用例最初把 `书0` 的下标写成 5（`blue`），实测是 **6（`lightBlue`）**。颜色顺序请直接读 SDK `material/colors.dart:1883-1905` 或跑探针，不要靠记忆。
+
+**文档回填两轮**
+
+- **字符串轮**（`primaryContainer` / `characters.first` / `占位封面` / `默认封面` / `书名首字`）：`lib/` 内 `characters.first` **零残留**，`primaryContainer` 仅剩 `book_detail_page.dart:995` 的**来源标记 chip**（与封面无关，非本文所述占位）；两处占位实现已在同批代码里改写。
+- **语义轮**（按「被推翻的约束语义」再 grep：`占位色块` / `书名首字` / `主题色背景`）——`book_card.dart` 的类 doc 原写「`[NoCover]` / `[SyntheticCover]`：显示占位色块 + 书名首字」（**已改写**为「显示**默认封面**」）；`book_detail_page.dart` 原写「无封面 / 合成封面占位：书名首字 + 主题色底（同 `BookCard` 口径）」（**已改写**）。`CHANGELOG.md` 里「占位色块 + 书名首字」的历史条目**不追改**（留档口径，覆盖关系由本节承担）。
+- **§2.51 的范围边界**里「**字号**：仍本项目现状（书名 13 …）」指的是**信息区**字号，与本批默认封面的比例字号（宽 ×0.12 / ×0.08）不冲突，无需改文——但**详情页封面圆角 6 与书架 8 不一致**属既有状态，两节都如实登记、本批未统一。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze
+/c/src/flutter/bin/flutter test --timeout 30s test/ui/default_book_cover_test.dart        # 00:00 +9: All tests passed!
+bash tool/test.sh ui       # 00:56 +146: All tests passed!（137 → 146）
+bash tool/test.sh data     # 00:20 +205: All tests passed!
+bash tool/test.sh reader   # 00:25 +226: All tests passed!
+bash tool/test.sh parse    # 00:11 +217: All tests passed!
+```
+
+**复核边界**：`analyze` 与 `ui` / `data` / `reader` / `parse` **四组全跑**（本批改动含共享控件，`parse` 一并复跑以闭合）。改动符号（`DefaultBookCover` / `defaultBookCoverColor` / `defaultBookCoverInk`）经全仓 grep，引用方只有 `lib/ui/book_card.dart`、`lib/ui/book_detail_page.dart` 与 `test/ui/`（**ui 组**）、`test/meta/detail_test.dart`（**data 组**），**无第三方引用方**。**真机观感未复跑**：需负责人确认 ① **深色主题下书架点缀浅色卡片**是否接受（anx 原样；要跟主题走改取色函数一行）；② 水印「探出的半本书」在书架小尺寸（≈120 宽 → 水印 96px、旋转后外接框 ≈117）下会不会显得过重——anx 原样如此，若要收小改 `iconSize` 一行；③ 详情页封面圆角 6 / 书架 8 是否要统一。
