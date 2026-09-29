@@ -21,6 +21,9 @@
 //   · 长按书卡仍弹操作单（`LIB-06` 语义），改由 `BookCard.onLongPress` 直接承载
 //     ——没有外层 `LongPressDraggable` 了，不存在手势竞技场冲突（原先网格内把
 //     书卡 `onLongPress` 置 `null` 正是为了避让拖拽容器）。
+//   · 2026-09-29 追加：长按的**抬起反馈**（放大 1.05 + 浮起阴影）在 `BookCard`
+//     内部实现——照抄 anx 借 `flutter_reorderable_grid_view` 拿到的数值，但
+//     **不跟手**，故依旧不引该包（`book_card.dart` 顶部总注记了全部出处）。
 //
 // 本文件**无状态**：不涉及 `setState`（状态管理红线针对有状态组件）。
 import 'package:flutter/material.dart';
@@ -81,7 +84,12 @@ class ShelfGrid extends StatelessWidget {
   final void Function(BookRecord record) onOpenBook;
 
   /// 长按书卡（弹底部操作单，`LIB-06`）。
-  final void Function(BookRecord record) onBookActions;
+  ///
+  /// 返回的 Future **在操作单关闭时即完成**，不等操作单里选定的动作
+  /// （开书 / 详情 / 删除）走完——书卡拿它当**长按抬起反馈的复位时机**
+  /// （`book_card.dart` 的 `_handleLongPress`）。若做成「动作走完才完成」，
+  /// 用户点「继续阅读」后卡片会一直保持抬起状态。
+  final Future<void> Function(BookRecord record) onBookActions;
 
   /// 网格内边距（默认给壳层浮动胶囊留出底部空白，见 [kShelfGridPadding]）。
   final EdgeInsetsGeometry padding;
@@ -124,6 +132,8 @@ class ShelfGrid extends StatelessWidget {
               coverStore: coverStore,
               loading: openingBookId == record.bookId,
               onTap: () => onOpenBook(record),
+              // 透传即可：`BookCard` 会 `await` 这个 Future 来做长按抬起 / 复位
+              // （见 `ShelfGrid.onBookActions` 的返回值语义）。
               onLongPress: () => onBookActions(record),
             );
           },

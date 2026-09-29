@@ -19,9 +19,11 @@
 //   ② 下方标注的 anx 出处行号是否仍是当前值**
 // ══════════════════════════════════════════════════════════════════════════════
 //
-// 范围（2026-09-28 拍板「只动布局几何」）：本文件只管**几何**——列数、比例、
-// 间距、padding、卡片分区高度。**字号 / 颜色 / 阴影一律不在此列**（保持本项目
-// 自己的取舍，不照搬 anx）。
+// 范围（2026-09-28 拍板「只动布局几何」；2026-09-29 追加「封面圆角」）：本文件
+// 只管**几何**——列数、比例、间距、padding、卡片分区高度、**封面圆角**。
+// **字号 / 颜色 / 阴影一律不在此列**：封面投影的数值虽在 2026-09-29 对齐了 anx，
+// 但阴影是绘制样式、不是布局量，故定义在 `book_card.dart`（`kBookCoverShadow`），
+// 本文件只留这条边界说明，免得以后有人以为漏了。
 import 'package:flutter/widgets.dart' show EdgeInsets;
 
 import 'home_shell.dart' show kShellBottomInset;
@@ -77,6 +79,21 @@ const EdgeInsets kShelfGridPadding = EdgeInsets.fromLTRB(
 // ---------------------------------------------------------------------------
 // 单卡分区（`BookCard`）
 // ---------------------------------------------------------------------------
+
+/// 封面圆角。
+///
+/// anx 出处：`book_cover.dart:30` 的 `radius ?? 8`——其 `BookCover` 未传 `radius`
+/// 时用 **8**。2026-09-29 拍板「对齐 anx 的阴影与圆角」，本项目由 6 改为 8。
+///
+/// 书卡封面与「无封面」占位色块**共用同一个圆角**（同一处 `ClipRRect`），
+/// 故缩略图异步到位前后不会跳变。
+///
+/// ⚠️ anx 封面还叠了两样本项目**未采纳**的东西（不在本次「阴影 + 圆角」范围内）：
+/// `ClipRSuperellipse` 超椭圆裁剪与 `RoundedSuperellipseBorder(width: 0.3,
+/// color: Colors.grey)` 描边（其 `book_cover.dart:125-131`）。这两个是 Flutter
+/// 自带能力（`widgets/basic.dart:1125` / `painting/rounded_rectangle_border.dart:226`），
+/// 要跟随时不需要引依赖，换掉 `ClipRRect` + 补一层 `border` 即可。
+const double kBookCoverRadius = 8;
 
 /// 封面与信息区之间的间距。anx 出处：`book_item.dart:88` `SizedBox(height: 5)`。
 const double kBookCoverToInfoGap = 5;

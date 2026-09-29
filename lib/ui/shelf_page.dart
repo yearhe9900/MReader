@@ -305,13 +305,23 @@ class _ShelfPageState extends State<ShelfPage> {
   ///
   /// 长按**不再**直接弹删除确认：删除是破坏性动作，收进操作单并要求二次确认
   /// （`LIB-06`），缩短「误触即删」的路径。
-  Future<void> _openBookActions(BookRecord record) async {
+  ///
+  /// **返回值语义（2026-09-29）**：本 Future 在**操作单关闭时即完成**，不等
+  /// 选定的动作走完——书卡用它当长按抬起反馈的复位时机（`BookCard.onLongPress`
+  /// 是异步回调）。动作改由 [_runBookAction] 接管（`unawaited`），
+  /// 以免「点继续阅读 → 卡片一路悬着直到从阅读页返回」。
+  Future<void> _showBookActions(BookRecord record) async {
     final _BookAction? action = await GlassOverlays.showSheet<_BookAction>(
       context: context,
       builder: (BuildContext sheetContext) => _BookActionSheet(record: record),
     );
     if (!mounted || action == null) return;
+    unawaited(_runBookAction(record, action));
+  }
 
+  /// 操作单选定后的动作派发（[BookCard.onLongPress] 已随操作单关闭而复位，
+  /// 故这里不再占用「抬起」窗口）。
+  Future<void> _runBookAction(BookRecord record, _BookAction action) async {
     switch (action) {
       case _BookAction.continueReading:
         await _openBook(record);
@@ -691,7 +701,9 @@ class _ShelfPageState extends State<ShelfPage> {
       // 与 anx-reader 一致——其 `book_item.dart:51-53` 的 `onTap` 即
       // `pushToReadingPage`）。详情页入口改走长按操作单「书籍详情」。
       onOpenBook: (BookRecord record) => unawaited(_openBook(record)),
-      onBookActions: (BookRecord record) => unawaited(_openBookActions(record)),
+      // 不 `unawaited`：这个 Future 的完成时机**就是**长按抬起反馈的复位时机
+      // （见 `_showBookActions` 的返回值语义）。
+      onBookActions: _showBookActions,
     );
   }
 

@@ -18,6 +18,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+// `RenderDecoratedBox`：真·渲染对象断言用（material 不导出 rendering）。
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/library/book_record.dart';
 import 'package:mreader/meta/cover_store.dart';
@@ -95,7 +97,8 @@ Future<void> _pumpGrid(
             coverStore: _FakeCoverStore(),
             openingBookId: null,
             onOpenBook: (_) {},
-            onBookActions: (_) {},
+            // 异步回调：书卡会 `await` 它拿「长按抬起」的复位时机。
+            onBookActions: (_) async {},
           ),
         ),
       ),
@@ -128,6 +131,8 @@ void main() {
       // anx `book_item.dart:88` 封面↔信息间距 5、`:89-90` 信息区 55。
       expect(kBookCoverToInfoGap, 5);
       expect(kBookInfoHeight, 55);
+      // 封面圆角（2026-09-29 拍板对齐 anx）：anx `book_cover.dart:30` `radius ?? 8`。
+      expect(kBookCoverRadius, 8);
       // 本项目自有值（anx 该处无此物，见事实源注释）。
       expect(kBookTitleToAuthorGap, 2);
       expect(kBookInfoHorizontalPadding, 2);
@@ -231,6 +236,47 @@ void main() {
       );
       expect(cellRect.bottom - badgeRect.bottom, greaterThan(6),
           reason: '角标贴封面底，其下方还有信息区');
+    });
+
+    testWidgets('封面圆角 8、投影 = anx 四参数（读渲染对象，不是读常量）', (
+      WidgetTester tester,
+    ) async {
+      await _pumpGrid(tester, width: 392, bookCount: 1);
+
+      // 圆角与投影都在封面外框（`_buildCoverSurface` 的 `DecoratedBox`）上：
+      // `RenderDecoratedBox.decoration` 就是实际参与绘制的那份 decoration，
+      // 故这里断言的是渲染管线里的真值，不是回来引用常量。
+      final RenderDecoratedBox surface = tester.renderObject<RenderDecoratedBox>(
+        find.byKey(kBookCoverSurfaceKey),
+      );
+      final BoxDecoration decoration = surface.decoration as BoxDecoration;
+      expect(
+        decoration.borderRadius,
+        BorderRadius.circular(8),
+        reason: '封面圆角须为 8（anx `book_cover.dart:30` 的 `radius ?? 8`）',
+      );
+      expect(
+        decoration.boxShadow,
+        const <BoxShadow>[
+          // 0x649E9E9E = `Colors.grey.withAlpha(100)`（0x64 = 100）。
+          BoxShadow(
+            color: Color(0x649E9E9E),
+            spreadRadius: 5,
+            blurRadius: 10,
+            offset: Offset(0, 2),
+          ),
+        ],
+        reason: '封面投影须为 anx `book_item.dart:69-75` 的四参数',
+      );
+
+      // 裁切用的 `ClipRRect` 必须用**同一个**圆角，否则投影会从裁切角落露出来。
+      final ClipRRect clip = tester.widget<ClipRRect>(
+        find.descendant(
+          of: find.byKey(kBookCoverSurfaceKey),
+          matching: find.byType(ClipRRect),
+        ),
+      );
+      expect(clip.borderRadius, BorderRadius.circular(8));
     });
   });
 }
