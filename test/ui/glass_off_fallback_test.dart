@@ -230,10 +230,29 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // 推演：关档走 showModalBottomSheet（BottomSheet 在树）+ 拖拽指示条；
-    // 内容照常渲染，无 GlassSheet。
+    // 推演：关档走 showModalBottomSheet（BottomSheet 在树），内容照常渲染，无 GlassSheet。
+    // 2026-09-29 拍板（`glass_kit.dart` `showSheet` 形态口径）：本项目弹层一律
+    // **不可拖拽关闭、无拖拽指示条**，关档同步——原先那条自绘的 36×4 横条已删。
     expect(find.byType(GlassSheet), findsNothing);
     expect(find.byType(BottomSheet), findsOneWidget);
+    expect(
+      tester.widget<BottomSheet>(find.byType(BottomSheet)).enableDrag,
+      isFalse,
+      reason: '关档弹层也必须禁止上划拖拽关闭（与玻璃档口径一致）',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.byWidgetPredicate(
+          (Widget w) =>
+              w is Container &&
+              w.constraints?.maxHeight == 4 &&
+              w.constraints?.maxWidth == 36,
+        ),
+      ),
+      findsNothing,
+      reason: '弹层不显示拖拽指示条',
+    );
     expect(find.text('关闭'), findsOneWidget);
 
     await tester.tap(find.text('关闭'));

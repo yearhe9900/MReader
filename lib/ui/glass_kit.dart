@@ -562,18 +562,50 @@ abstract final class GlassOverlays {
   /// [isScrollable] 缺省 `true`（库默认，内容外包 `SingleChildScrollView`）；
   /// 内容自带可滚动列表时（如目录 `TocSheet` 的 `ListView`）传 `false`，
   /// 避免纵向滚动视图嵌套（外层会吃掉内层的拖拽手势）。
+  ///
+  /// ══════════════════════════════════════════════════════════════════════════
+  /// 本项目弹层形态口径（2026-09-29 拍板）—— 以下各项**硬编码，不做成参数**
+  /// ══════════════════════════════════════════════════════════════════════════
+  /// 负责人「去除弹框点击会有放大高亮特效，不需要上划的弹框，去除小横条」；
+  /// `AskUserQuestion` 两项拍板：①「上划」= **禁止拖拽关闭手势**（保留底部滑入动画）；
+  /// ② **全部弹层统一生效**（改本处即 6 处弹层同时生效）。
+  ///
+  /// 三项症状与库参数**逐一对上**（均为本薄封装原先吃掉的库默认值，同
+  /// `GlassNavScaffold.extendBody` 默认 `true` 一类坑，故这里直接写死）：
+  ///   · 「点击放大」 = `interactionScale`（库默认 **1.01**，doc 自述
+  ///     "Visual scale feedback on touch"；库 `stretch.dart:249` 按下时
+  ///     `pressed ? interactionScale : 1.0`）→ 传 **1.0** 即无放大；
+  ///   · 「点击高亮」 = `enableInteractionGlow`（默认 `true`，"Glint follows finger"）
+  ///     + `enableSaturationGlow`（默认 `true`，"Pulsation on touch"）→ 均关；
+  ///   · 「小横条」   = `showDragIndicator`（默认 `true`）→ 关（库内还带一个
+  ///     覆盖顶部 44px 的可拖拽 `handleZone`，见 `glass_modal_sheet_internal.dart:294`）；
+  ///   · 「上划」     = `enableDrag`（默认 `true`）→ 关。
+  ///
+  /// **「上划」的确切含义**：`enableDrag: false` 后库的 `_DismissibleSheetWrapper`
+  /// **完全不加 `GestureDetector`**（`glass_sheet.dart:433` 的 `if (widget.enableDrag)`
+  /// 分支跳过，直接返回 child），零副作用；**底部滑入的入场动画保留**——`GlassSheet.show`
+  /// 的 `transitionBuilder` 是独立的 `SlideTransition`（`glass_sheet.dart:319`），
+  /// 与 `enableDrag` 无关；**点遮罩关闭不变**（`isDismissible` 仍为库默认 `true`）。
+  ///
+  /// **未动（真机上若仍有按压形变再看）**：`stretch`（库默认 `0.5`，拖拽时的液态拉伸）
+  /// 与 `topBorderRadius` 等外观参数——前者是「拉伸」不属负责人描述的「放大」，
+  /// 且 `enableDrag: false` 后已无拖拽手势触发它。
+  ///
+  /// 「关」档（`UI-06` ②）同步：`showModalBottomSheet(enableDrag: false)`，
+  /// 并**删去原先自绘的 36×4 拖拽指示条**（本薄封装自己画的那条，非库的）。
   static Future<T?> showSheet<T>({
     required BuildContext context,
     required WidgetBuilder builder,
     bool isScrollable = true,
-    bool showDragIndicator = true,
   }) {
     final GlassTierConfig config = GlassScope.configOf(context);
     if (!config.glassEnabled) {
-      // 「关」档（`UI-06` ②）：Material 纯色底部弹窗（保留拖拽指示条与滚动语义）。
+      // 「关」档（`UI-06` ②）：Material 纯色底部弹窗（保留滚动语义；无横条、
+      // 不可拖拽关闭，与玻璃档口径一致）。
       return showModalBottomSheet<T>(
         context: context,
         isScrollControlled: true,
+        enableDrag: false,
         builder: (BuildContext sheetContext) => Padding(
           padding: EdgeInsets.only(
             bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
@@ -581,20 +613,10 @@ abstract final class GlassOverlays {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              if (showDragIndicator) ...<Widget>[
-                const SizedBox(height: 8),
-                Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Theme.of(sheetContext).dividerColor,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(height: 4),
-              ],
               if (isScrollable)
-                Flexible(child: SingleChildScrollView(child: builder(sheetContext)))
+                Flexible(
+                  child: SingleChildScrollView(child: builder(sheetContext)),
+                )
               else
                 builder(sheetContext),
             ],
@@ -607,7 +629,12 @@ abstract final class GlassOverlays {
       builder: builder,
       quality: config.scrollQuality,
       isScrollable: isScrollable,
-      showDragIndicator: showDragIndicator,
+      // 本项目口径：无横条、不可拖拽关闭、无触摸放大 / 光晕 / 饱和度脉冲。
+      showDragIndicator: false,
+      enableDrag: false,
+      interactionScale: 1.0,
+      enableInteractionGlow: false,
+      enableSaturationGlow: false,
     );
   }
 
