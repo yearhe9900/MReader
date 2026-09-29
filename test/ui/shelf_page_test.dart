@@ -239,6 +239,49 @@ void main() {
       expect(isGlassWidget(find.byType(BookCard).evaluate().single.widget), isFalse);
     });
 
+    testWidgets('顶栏搜索框：靠左铺满（非居中）+ 自带描边与底色（可区分于玻璃顶栏）',
+        (WidgetTester tester) async {
+      // 800 宽视口才分得清「靠左铺满」与「居中收缩」。须同时钉
+      // `devicePixelRatio = 1`（默认 3 会把逻辑宽算成 266，动作按钮一挤
+      // 可用宽就变、结论随之改变）。
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('一本'), fileName: 'a.txt'),
+      );
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      expect(find.text('搜索书名、作者'), findsOneWidget);
+
+      // 机制锁：顶栏须显式关掉居中档（默认 `true` 会走库的「等边距居中」分支）。
+      expect(
+        tester.widget<GlassTopBar>(find.byType(GlassTopBar)).centerTitle,
+        isFalse,
+      );
+
+      // 几何契约：靠左贴顶栏内边距（`GlassAppBar` 默认 horizontal padding = 8），
+      // 并铺满可用宽（此处取到 400 上限）。若退回居中，左边缘会变成
+      // `(800 - 400) / 2 ≈ 200` —— 断言立刻红。
+      final Finder box = find.byKey(const Key('shelf-search-entry'));
+      expect(box, findsOneWidget);
+      expect(tester.getTopLeft(box).dx, lessThanOrEqualTo(16));
+      expect(tester.getSize(box).width, greaterThan(300));
+      // 右侧仍留出两个动作按钮的位置（导入 / 排序）。
+      expect(tester.getTopRight(box).dx, lessThan(800 - 48));
+
+      // 样式契约：填充不透明度须高于原先的 0.6（否则会「糊」进半透明玻璃
+      // 顶栏，分不出是可点控件），且必须有一道 1px 描边。
+      final BoxDecoration deco =
+          tester.widget<Container>(box).decoration! as BoxDecoration;
+      expect(deco.color!.a, closeTo(0.9, 0.01));
+      final Border border = deco.border! as Border;
+      expect(border.top.width, 1.0);
+      expect(border.top.style, BorderStyle.solid);
+    });
+
     testWidgets('LIB-06 点击删除后书从列表移除', (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _txtBytes('要删的书'), fileName: '删我.txt'),

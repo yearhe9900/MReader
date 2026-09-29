@@ -444,6 +444,12 @@ class _ShelfPageState extends State<ShelfPage> {
       appBar: GlassTopBar(
         // 标题位放「假搜索框」——外观是搜索框，点击进搜索页（照搬 anx-reader）。
         title: _BookSearchEntry(onTap: _openSearch),
+        // **靠左不居中**：库的 `_ToolbarLayout` 在 `centerTitle: true`（默认）时
+        // 按整条宽度居中，并把可用宽压成 `size.width - 2 * max(leading, actions)`
+        // （等边距口径，`glass_app_bar.dart:559-578`）——本页右侧有两个动作按钮，
+        // 搜索框会被压到约半宽、浮在中间。传 `false` 走 `:579-611`：从 leading 侧
+        // 起排（本页无 leading → 贴顶栏内边距），可用宽 = 整宽减去两侧与 8px 间距。
+        centerTitle: false,
         actions: <Widget>[
           if (_importing)
             const Padding(
@@ -713,6 +719,10 @@ class _ShelfPageState extends State<ShelfPage> {
 /// 为什么不做成可就地输入：搜索是**独立页面**（[LibrarySearchPage]），
 /// 顶栏只做入口。就地输入会把查询状态绑进书架子树，还要在当前布局里
 /// 处理键盘遮挡与结果覆盖层，收益不抵复杂度。
+///
+/// **靠左铺满而非居中收缩**：调用方须传 `centerTitle: false`（见 `build`）。
+/// 居中档下库会把可用宽压成 `width - 2 * max(两侧)`，右侧两个动作按钮一占，
+/// 搜索框就只剩半宽且浮在中间——「看起来是个居中的小胶囊」，不是搜索框该有的样子。
 class _BookSearchEntry extends StatelessWidget {
   const _BookSearchEntry({required this.onTap});
 
@@ -722,42 +732,61 @@ class _BookSearchEntry extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    // 搜索框圆角（比高度 36 的一半 18 大也只会被裁到 18，直接写 18 免歧义）。
+    const double radius = 18;
     return ConstrainedBox(
+      // 宽屏（桌面）不让搜索框无限拉伸，上限 400。
+      // 窄屏由外层（`_ToolbarLayout` 靠左档 / `AppBar`）给的 `maxWidth` 收口。
       constraints: const BoxConstraints(maxWidth: 400),
-      // 玻璃库无 Material 祖先（PRD §11.4），而 `InkWell` 的水波纹由最近的
-      // Material 绘制，故需自带一层。`MaterialType.transparency` 不绘制底色，
-      // 不破坏玻璃观感。
-      child: Material(
-        type: MaterialType.transparency,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            height: 36,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest
-                  .withValues(alpha: 0.6),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              children: <Widget>[
-                Icon(
-                  Icons.search,
-                  size: 18,
-                  color: theme.colorScheme.onSurfaceVariant,
+      child: SizedBox(
+        // 撑满「可用宽 ∩ 400」——没有它，`InkWell` 只按内容宽收缩（又是居中即视感）。
+        width: double.infinity,
+        // 玻璃库无 Material 祖先（PRD §11.4），而 `InkWell` 的水波纹由最近的
+        // Material 绘制，故需自带一层。`MaterialType.transparency` 不绘制底色，
+        // 不破坏玻璃观感。
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(radius),
+            child: Container(
+              // 供契约测试定位（`test/ui/shelf_page_test.dart` 断言「靠左铺满 +
+              // 自带描边/底色」）。
+              key: const Key('shelf-search-entry'),
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                // 顶栏是**半透明玻璃**：沿用原先 0.6 透明度的填充会「糊」进背后的
+                // 渐变里，看不出这是一块可点的控件 → 提高填充不透明度并加一道描边，
+                // 把搜索框从玻璃条面上分离出来。
+                color: theme.colorScheme.surfaceContainerHighest
+                    .withValues(alpha: 0.9),
+                borderRadius: BorderRadius.circular(radius),
+                border: Border.all(
+                  color: theme.colorScheme.outlineVariant,
+                  width: 1,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '搜索书名、作者',
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+              ),
+              child: Row(
+                children: <Widget>[
+                  Icon(
+                    Icons.search,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '搜索书名、作者',
+                      overflow: TextOverflow.ellipsis,
+                      // 仍是**占位符**口径（比正文弱一档），不因加边框提成正文色。
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
