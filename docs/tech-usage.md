@@ -1346,7 +1346,71 @@ bash tool/test.sh data                                      # 00:17 +205: All te
 
 **复核边界**：`analyze` 与两组测试为本批实跑；**真机观感未复跑**（点卡即读的响应手感、长按操作单作为详情页唯一入口是否够可发现——**这是本次最需要真机验证的一条**：入口从「显式点击」变成「长按」，可发现性下降）。`parse` / `reader` 两组未跑（与本次改动零交集）。
 
+### 2.47 设置页视觉重做：大标题两段式收起 + 实心分组卡片（PRD v2.10，2026-09-29）
+
+**触发**：负责人「参考这种风格，修改设置布局」（附小米 HyperOS 深色设置页截图）。
+
+**拍板（四问四答）**：① 卡片材质 = **不透明卡片**；② 大标题形态 = **内容层大标题，卡片滑动到顶部时大标题变顶栏「设置」**；③ 是否顺带加「外观」组 = **加**；④ 搜索框 = **先做占位，不实际实现**。
+
+**前置核实（先读源码再下笔；两处结论直接决定改法）**
+
+1. **大标题能力是真的**（不是只看库文档）：`GlassLargeTitle`（`glass_large_title.dart:230-460`，`CustomScrollView` 的**首个 sliver**）+ `GlassLargeTitleController`（`ChangeNotifier`，`:53-173`，**自持** `ScrollController`）；两段式 = Phase 1 大标题淡出（`collapseTitleHeight`，由 sliver 自测高并回填）→ Phase 2 搜索条收起（`searchBarHeight`）；顶栏标题端由 `GlassAppBar._buildTitle` 的 `ListenableBuilder` 驱动（`glass_app_bar.dart:421-438`）。
+2. **「关」档退化路径会丢掉大标题联动（缺口）**：`GlassTopBar` 关档走 Material `AppBar(title: …)`（`glass_kit.dart:214-223` 一带），而 `AppBar` **不认** `largeTitleController` → 不补的话「内容层大标题 + 顶栏标题」**两条一模一样的「设置」会同时可见**。本批在薄封装内自实现同一条曲线：`barProgress = ((collapseProgress - 0.5) / 0.5).clamp(0, 1)` 再过 `Curves.easeOut`（逐字照抄 `glass_app_bar.dart:426-436`），**两处必须一致**，否则切档（玻璃 ⇄ 纯色）标题会明暗跳变。
+3. **「主题三态在应用级不可达」核证（③ 的前提）**：`SettingsStore.setThemeMode` 除测试外**零调用者**；另一处 `ReaderSettings.themeMode` 也**无消费点**——`reader_settings_bar.dart:147/163` 只用它画图标、`:171` 写它，`reader_page.dart:1711` 只在合并偏好时透传，`reader_page` 内无任何 `Theme(...)` / `resolveBrightness` / `MaterialApp` 覆盖，**故阅读页那个主题按钮是空操作**。因此「外观」组是**第一次让主题切换真正可用**，不是重复入口。
+
+**改动**
+
+1. `lib/ui/settings_kit.dart`（**新建**）：`SettingsAccents`（五行装饰色板） / `SettingsGroupCard`（不透明圆角卡片 + 可选组标题与组脚注；卡片用 `Material(color:)` 而非 `Container + BoxDecoration`——否则 `InkWell` 的水波纹被卡片底色盖住） / `SettingsTile`（40×40 圆角彩图标 + 标题 + 副标题 + 右侧「值 + 箭头」或自定义 `trailing`） / `SettingsPickerSheet` + `showSettingsPicker`（玻璃底部弹窗里的单选列表，首层 `Material(type: transparency)`，形态照搬既有 `_GroupPickerSheet`）。
+2. `lib/ui/settings_page.dart`（**重写**）：`GlassNavScaffold` + `CustomScrollView(controller: _titleController.scrollController)`；首个 sliver = `GlassLargeTitle(text: '设置', searchBar: <占位>)`；正文 `SliverToBoxAdapter`（**不用 `SliverList`**：条目少且静态，一次构建完也让测试的 `find` 不依赖视口）；页面级不透明底色仍走 `OpaqueContentSurface`（其断言只校验**直接子节点**，`CustomScrollView` 不是玻璃控件 → 通过），底部留 `kShellBottomInset`。
+3. `lib/ui/glass_settings_section.dart`（改版）：`SegmentedButton` + `SwitchListTile` → 卡片内两行 `SettingsTile`；「效果质量」行右侧显示当前档位、点击出**单选弹层**（候选项 = 四个档位，描述取 `glassTierConfigSummary`，与原 `tooltip` 同源）；「降低视觉特效」行右侧 `Switch` 且**整行可点**；关档下该行 `enabled: false`；档位说明与「已按『降低视觉特效』钳制」措辞**逐字保留**（搬到卡片 `footer`）。
+4. `lib/ui/glass_kit.dart`（薄封装两处）：`GlassTopBar` 补 `largeTitleController`（玻璃档透传；关档自补淡入，见前置核实 2）；`GlassLargeTitle` / `GlassLargeTitleController` 加入 re-export（保持「页面不直接 import 玻璃库」的口径——这两个类型既是页面 `State` 成员、又是 `GlassTopBar` 的公开参数类型）。
+5. `lib/theme/app_theme.dart`：新增 `appThemeModeLabel`（日间 / 夜间 / 跟随系统，措辞照 `TYP-03`），与 `resolveThemeMode` 同处一地，避免「一处主题两处口径」。
+6. 注入链路：`HomeShell` 新增必填参数 `settings`（构造点全仓仅 `main.dart:107` 一处）、`main.dart` 透传、`SettingsPage` 新增必填参数 `settings`。
+7. `docs/PRD.md`：§11.2 两行改文（设置页控件 / 分组卡片：玻璃 → **不透明**）+ 新增 §11.2 注 ② 说明依据与边界 + §1.4 新增 **v2.10** 行（**无需求条目增减**，计数仍 P0 29 / P1 56 / P2 31 = 116）。
+
+**本批新立的一条边界（免得后人误判为漏网之鱼）**：`GlassLargeTitle` 在**「关」档仍然在场**。它只画 `Text` 与 `Transform.scale`（`glass_large_title.dart:398-458`，零着色器、零玻璃质感），是布局 / 动画组件而非质感组件，故 `UI-06` ② 的「纯色退化」不受影响；又因为 `isGlassWidget` 把它归入 glass 家族（`glass_kit.dart:104`），本文件与测试都显式写明这条口径（现有关档测试断言的是**具体类型**缺席：`GlassScaffold` / `GlassAppBar` / `GlassTabBar` / `GlassDialog` / `GlassSheet`，不是全树扫描）。
+
+**测试（`test/ui/settings_page_test.dart` 新建，此前设置页零覆盖）**
+
+口径 `grep -c "^\s*test\(Widgets\)\?(" test/ui/settings_page_test.dart` → **11 条**；`tool/test.sh ui` **117 → 128 全绿**。
+
+| 用例 | 断言要点 |
+|---|---|
+| 关档壳层退化 | `Scaffold` / `AppBar` 在场，`GlassScaffold` / `GlassAppBar` 缺席，**`GlassLargeTitle` 在场**（上一条边界），`OpaqueContentSurface` 在场 |
+| 高档控制器同源 | `GlassAppBar.largeTitleController` 与 `GlassLargeTitle.controller` **`same()`**——库的硬要求，各订阅一份会导致标题重叠 / 闪跳 |
+| 首帧 | `find.text('设置')` **恒 2 个**（大标题 + 顶栏标题，同文案是库的设计）；`collapseProgress == 0` 且顶栏标题 `Opacity == 0` |
+| 滚动联动 | 视口 400×360 + `devicePixelRatio = 1`；`maxScrollExtent > 50` 先自证有余量；`jumpTo(10)` → 进度 > 0 但 < 0.5 → **顶栏标题仍为 0**；拖到底 → 进度 1.0 → 不透明度 1.0 |
+| 主题写入 | 弹层选「夜间」→ `settings.themeMode == dark` + 行回显 + **读 `settings.json` 校验 `"themeMode":"dark"`**（不只看内存） |
+| 弹层取消 | 点遮罩 → 设置不变 |
+| 档位切换 | 弹层选「中」→ `perfPrefs.prefs.glassTier == medium` + 行回显 + 读 `perf_prefs.json` 校验 `"glassTier":"medium"` |
+| 降低视觉特效 | 点**整行**即切换 + 开关 `value` 同步 + 脚注出现「已按『降低视觉特效』钳制，所选档位：高」 |
+| 关档置灰 | `SettingsTile.enabled == false` 且 `Switch.onChanged == null`，点行不改值 |
+| 搜索占位 | 文案在场、无 `TextField`；点击只出「设置搜索尚未实现」轻提示，3s 后自动消失（不留下 pending `Timer`） |
+
+**三个测试坑（可复用）**
+
+1. **`find.text('设置')` 恒为 2 个**：大标题与顶栏标题同文案是库的设计（`GlassLargeTitle.text` 应等于 `GlassAppBar.title`），要精确定位必须 `find.descendant(of: find.byType(AppBar), …)`。
+2. **取「顶栏标题的淡入不透明度」= 最近的 `Opacity` 祖先**：`find.ancestor` 按**由近及远**返回（`flutter_test` `_AncestorWidgetFinder._collectAncestors` 用 `visitAncestorElements`），而我们的 `Opacity` 的 `child` 就是标题本身 → 最近的必定是它，`AppBar` 内部若有自己的 `Opacity` 只会在更外层。故 `.first` 稳定可判（不靠猜）。
+3. **「大标题滚动联动」用例必须调小视口并同时钉 `devicePixelRatio = 1`**：本页内容天然不足一屏（默认 800 高视口下 `maxScrollExtent == 0`，拖拽与 `jumpTo` 全被钳成 0 → 断言永远假绿或永远红）。且用例内先断言 `maxScrollExtent > 50` 自证「确有滚动余量」，再断言进度，避免「测试看着在跑其实没滚」。
+
+**文档回填两轮**
+
+- **字符串轮**：`grep -rn "设置页的分组卡片\|设置页内的按钮"` → 仅剩 PRD §11.2（已改文的两行）、§11.2 注 ②、v2.10 变更行与 CHANGELOG / 代码注释内的**引用**（留档，正确）。
+- **语义轮**：`grep -rn "分组卡片\|分段控件"` 抓出 **`glass_runtime.dart:103` 的「设置页分段控件标签」**——`SegmentedButton` 已退场，属被推翻的语义，已改为「设置页『效果质量』行的当前值与单选弹层候选项文案（契约不变）」。
+- **本轮还修正了主理人自己的过度断言**：初稿在代码注释与回报里写「PRD §11.2 两行与 `UI-04` ② 互斥」，复核条文后确认 `UI-04` ② 的枚举范围限于**内容层行**（书架 / 目录 / 搜索 / 统计 / 正文），故 §11.2 与它**不是原文自相矛盾、而是取向相左**——已把四处注释与 PRD 注 ② 全部改写为经得起查证的表述（保留「已上报负责人裁量」这一真实过程）。**教训：下「矛盾」判断前先读条文范围，不能只读标题句。**
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze      # 0 error / 0 warning / 7 条既有 info
+/c/src/flutter/bin/flutter test --timeout 30s test/ui/settings_page_test.dart   # 00:01 +11: All tests passed!
+bash tool/test.sh ui                                        # 01:07 +128: All tests passed!
+```
+
+**复核边界**：`analyze` 与本文件 / 全 `ui` 组测试为本批实跑；**真机观感未复跑**——参考图是 HyperOS 深色页，本批在浅色主题 / 窄屏 / 桌面宽窗口下的实际观感、大标题两段式收起的手感、实心卡片与玻璃顶栏的接缝都需真机确认。`parse` / `reader` / `data` 三组未跑（与本次改动零交集：改动仅在 `lib/ui/` 与 `lib/theme/`，`data` 组不含设置页用例）。
+
 ## 测试分组与局部执行（2026-09-23）
+
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
 > **每个开发批次只跑与改动相关的分组；全量测试仅在负责人明确发出「全量测试」指令时执行**（2026-09-23 拍板；
