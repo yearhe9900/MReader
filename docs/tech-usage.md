@@ -1721,6 +1721,8 @@ bash tool/test.sh reader                                                        
 
 > **⚠️ 后续改道（2026-09-29，见 §2.54）**：上段处置 ③ 的**整条自适应分支已删除**——底色**一律**走子树内的 `ColoredBox`，「有 `Material` → `Ink`」那条路被像素级实证否掉（`Ink` 是**墨迹特性**、由上层 `Material` 绘制，于是 ① **逃逸本组件的 `ClipRRect`** ⇒ 封面方角；② 落在封面外框投影的**填充**之下 ⇒ 整张封面被染暗）。**未被推翻的部分**：「无 `Material` 祖先 → `ColoredBox`」这一分支的结论完全成立，只是从「退回档」升为「唯一路径」（组件因此**不再依赖 `Material` 祖先**，玻璃库页面照常可用）；处置 ① ②（水印 10% 透明合规、组件自带 `ClipRRect`）**一字未动**。本表 `default_book_cover_test.dart` 那一行的 **④ 与 ⑤** 因此改写（断言 `ColoredBox` + **反向断言组件/书卡内无 `Ink`**），group ④ 更名为「底色画在**子树内**（不用 `Ink`：会漏裁 + 被投影染色）」。**代价（如实登记）**：`InkWell` 的水波纹/高亮画在墨迹层，因而**不再压在封面之上**，只在透明的信息区可见——这正是 anx 的形态（其封面用 `Container(color:)` / `Container(decoration: image)`，同样不在墨迹层）。原正文保留作事实留证，勿删。
 
+> **⚠️ 再次改道（2026-09-29，见 §2.57）**：上句「代价」的表述已被推翻——水波纹/高亮现已**整体关闭**（`splashColor` 透明 + `NoSplash` + `highlightColor` 透明），「只在透明的信息区可见」不再成立（什么都不露了），新代价 = **按下/长按完全无墨迹**。机制结论（墨迹画在子树之下、压不到封面）不变。
+
 **未采纳（如实登记）**
 
 - **`ClipRSuperellipse` 超椭圆裁剪 + `RoundedSuperellipseBorder(width: 0.3, color: Colors.grey)` 描边**（anx `:125-146`）：与 §2.51 同一项，是 Flutter 自带能力、**不需要引依赖**，但不在本次拍板范围内。
@@ -1860,6 +1862,8 @@ bash tool/test.sh data    # 00:19 +205: All tests passed!
 
 **如实登记的代价（本批唯一）**：水波纹 / 高亮画在墨迹层，**不再压在封面之上**，只在透明的信息区可见——**这正是 anx 的形态**：其实读 `anx-reader/lib/widgets/bookshelf/book_cover.dart`，其封面用 `Container(color:)` / `Container(decoration: image)`，同样不在墨迹层，即 **anx 的 ripple 本来也压不到封面上**。故这不是「偏离 anx」，而是「回到 anx」。
 
+> **⚠️ 后续改道（2026-09-29，见 §2.57）**：上两段（含表格行「保留水波纹：它自行淡出」）中**「水波纹保留且自行淡出 / 只在透明的信息区可见」的表述已被推翻**——负责人反馈「长按某个书籍弹起弹框前，该书籍**文字和圆角**会有灰色背景」，像素探针实测长按期间信息区 `#000000 → #333333`（= `0x40CCCCCC` 默认 splash 叠黑底）、圆角缺口同步变灰、封面内部纹丝不动，即水波纹**恰好只从这两处透明区露出**（§2.57 有四条源码实证链）。现在 `InkWell` 的**墨迹整体关闭**（`splashColor` 透明 + `NoSplash`，连同本批的 `highlightColor` 透明），代价改记为「**按下/长按完全无墨迹**」。**未被推翻的部分**：表格 ①② 两条处置、以及「水波纹画在墨迹层（子树之下）故压不到封面」这一机制结论——正因为压不到封面、只能从透明处露出，才必须关掉。原正文保留作事实留证，勿删。
+
 **像素级取证（本批的取证手法，可复用）**
 
 结论不靠推理、靠**真实像素**：`RepaintBoundary` → `tester.runAsync(() => boundary.toImage())` → `toByteData(rawRgba)` 直接读字节。**两个必守前提**：① `toImage()` 必须在 `tester.runAsync` 里 `await`（FakeAsync 不排空真异步）；② **必须钉 `tester.view.devicePixelRatio = 1`**（默认 3 会把采样坐标算错）+ `addTearDown(tester.view.reset)`。坐标换算用 `boundary.globalToLocal(cover.topLeft) & cover.size`。
@@ -1966,3 +1970,90 @@ bash tool/test.sh data     # 00:22 +205: All tests passed!
 ```
 
 **复核边界**：`analyze` 与 `ui` / `data` 两组为本批实跑。改动符号 `BookCard.loading` 与 `book-opening-overlay` key 经全仓 grep，引用方只有 `lib/ui/book_card.dart` 自身、`lib/ui/shelf_grid.dart`（`openingBookId` 透传）、`test/ui/`（**ui 组**）+ `test/meta/detail_test.dart`（**data 组**），**无第三方引用方**。`parse` / `reader` 组零交集，未跑。**真机观感未复跑**：需负责人确认 ① 点击书卡后**封面区域**出现蒙层 + 转圈、**书名/作者/进度保持清晰可读**、蒙层**四角是圆的**；② 蒙层**只覆盖封面**这件事本身是否够作为「正在响应」的提示（若觉得提示太弱，可把「整卡蒙层」的旧观感换个更轻的透明度或改用描边高亮来表达——**那是观感取舍，本批按拍板只做范围收窄**）。
+
+### 2.56 弹层遮罩压淡：修「弹框前出现灰色背景」（2026-09-29）
+
+**触发**：负责人「**长按书籍，在出现弹框前，会出现灰色背景**」。注意时间窗是「**出现弹框前**」——不是弹层形态问题（§2.49 已统一），而是**弹窗到位之前**屏幕上已经蒙了一层灰。
+
+**根因：`GlassSheet.show` 的 `barrierColor` 未透传，吃库默认；而遮罩与弹窗的到位时间错位**
+
+实读 `liquid_glass_widgets-1.7.0/lib/widgets/overlays/glass_sheet.dart:314-332`：`GlassSheet.show` 走 `showGeneralDialog`，其 `barrierColor: barrierColor ?? GlassDefaults.barrierColor`，而 `glass_defaults.dart:154` 的 `GlassDefaults.barrierColor = Color(0x8A000000)`（α = 138/255 ≈ **0.541**）——`GlassOverlays.showSheet` 又是薄封装（§2.48 的同族坑，**第三次**）没透传该参数，于是吃下这个偏重的默认灰。
+
+逐帧实测（`RepaintBoundary` 采遮罩像素 α + 弹窗 top；`transitionDuration: 350ms`、弹窗 `SlideTransition` begin `Offset(0,1)`）：
+
+| t | 遮罩 α | 弹窗 top（屏内 1248→548） |
+|---|---|---|
+| 0ms | 0.000 | 1248（屏外） |
+| 50ms | 0.093 | 979（屏外） |
+| **100ms** | **0.262** | **788（屏外）** |
+| 175ms | 0.434 | 635（刚探头） |
+| **350ms** | **0.541** | 548（到位） |
+
+即**头 ~150ms 是「灰幕已到、弹窗未到」**——正是负责人说的「出现弹框前」。
+
+**处置：只换色源，不动时序**（与 §2.53 `bookCoverShadowOf` 同一口径）
+
+`lib/ui/glass_kit.dart` 新增 `kSheetBarrierColor = Color(0x3D000000)`（α = 61/255 ≈ **0.24**，约库默认的 45%），`showSheet` 两条路径（玻璃档 `GlassSheet.show` / 关档 `showModalBottomSheet`）**共用同一色源**：
+
+- 既保留「背后内容退到次要层」的模态语义；
+- 又不会在弹窗到位前形成一条突兀的灰幕（逐帧复测 50/100/175/350ms 分别 0.041/0.116/0.192/0.239）；
+- **淡入时序、滑入动画、点遮罩关闭全部一字未动**。
+
+**测试（含反向验证）**
+
+`test/ui/glass_sheet_form_test.dart` +1 条：读 **`AnimatedModalBarrier` widget 自身的 `color` 字段**断言 `(a*255).round() == 0x3D` 且 `< 0x8A`。两个坑：① **`AnimatedModalBarrier` 不是 `ModalBarrier` 的子类**（两个独立类，cast 直接炸）；② 其 `color` 是 **`Animation<Color?>`** 不是 `Color?`，取值要 `.value`。弹层在独立 Overlay/Route，`RepaintBoundary` 采不到遮罩，只能读 widget 字段。`glass_off_fallback_test.dart` 关档用例补同一断言（两档同色源）。**反向验证**：临时删掉传参 → 断言红，实测 `138.0`（= `0x8A`）与源码预测**逐字吻合**。
+
+### 2.57 书卡墨迹（高亮+水波纹）整体关闭：修「长按弹框前文字与圆角出现灰底」（2026-09-29）
+
+**触发**：负责人「**好好书架页的代码，不要猜，长按某个书籍弹起弹框前，该书籍文字和圆角会有灰色背景**」。症状精确到两处：**文字**（信息区）与**圆角**（封面圆角缺口）——这是决定性线索：**只有这两处在卡片上是透明的**（封面不透明、Card 透明、信息区无底色）。
+
+**四条源码实证链（全部实读 SDK，非猜测）**
+
+| # | 事实 | 出处 |
+|---|---|---|
+| ① | 默认 `splashColor` 是**灰** `Color(0x40CCCCCC)`（深色） | `theme_data.dart:501-502` |
+| ② | `InkSparkle` 是 `canvas.drawRect(_clipCallback(), paint)` **整块矩形**（不是圆形涟漪） | `ink_sparkle.dart:269` |
+| ③ | `handleLongPress` 只 `_currentSplash?.confirm()` **不 cancel** ⇒ 水波纹贯穿长按与弹框入场 | `ink_well.dart:1242-1251` |
+| ④ | ink 特性画在**子树之下**（先画 ink、再画子树）⇒ 只从子树的透明处露出 | `material.dart:621-634` |
+
+且 `ink_well.dart:1005/1038` 证明 pressed 高亮取 `widget.highlightColor ?? Theme.highlightColor`——§2.54 已把 `highlightColor` 置透明 ⇒ **高亮已死，只剩水波纹**。
+
+**像素探针实测**（默认封面 `#f48fb1` 的「绍宋」卡）：静止 `缺口(2,2)=#af677f、书名行=#000000、作者行=#000000、封面内=#f48fb1` → 按住 t=300ms `缺口=#b76e87、书名行=#333333、作者行=#333333`（**`#333333` 逐位 = `0x40CCCCCC` α 叠 `#000000`**）→ 420/520/600ms 渐淡 → 800ms 消失。**封面内部恒定不变**——与「文字和圆角有灰色背景」逐字吻合（④ 的直接推论）。
+
+**处置：墨迹整体关闭**
+
+`book_card.dart` 的 `InkWell` 在既有 `highlightColor: Colors.transparent` 之上补：
+
+```dart
+splashColor: Colors.transparent,
+splashFactory: NoSplash.splashFactory,
+```
+
+`NoSplash` 连 splash 对象都不创建（比只透明化更彻底，也杜绝 `confirm()` 后残留）。**反馈仍在**：点卡=转场进阅读页、长按=放大 1.05+浮起阴影（§2.51）。**代价如实登记**：按下/长按**完全没有墨迹**（水波纹/高亮都没有），anx 同此形态（其封面 `Container(color:)`、ripple 本来也压不到封面，现在连信息区也没有了）——**是否可接受待负责人真机复跑**；若要恢复「轻量按压反馈」，加回 `splashColor` 但配 `NoSplash` 仍无涟漪，真正要涟漪就得接受它从文字与圆角露出。
+
+**测试（`test/ui/book_card_paint_test.dart` 4 → 7 条，反向验证两轮）**
+
+「书卡墨迹」用例 = **3 条确定性属性断言**（`highlightColor`/`splashColor` 的 `toARGB32() == 0x00000000`、`splashFactory == NoSplash.splashFactory`，工厂断言防「有人只把色改回非透明」）+ **像素断言**（`startGesture` 按住，在 t=250/300/350/400ms 断言信息区书名行 `at(12, cover.height+20)` 与圆角缺口 `at(2,2)` 与静止态**逐位相同**）。另补「真图封面被裁进圆角」用例（`Brightness` 各一条）：`DefaultBookCover` **自带 `ClipRRect`** 会掩盖外层裁切失效，而 `Image.memory` 真图路径完全依赖 `_buildCoverSurface` 的外层裁切——纯色 PNG（`PictureRecorder`+`toImage`+`toByteData(png)`）走 `StoredCover` 真图路径断言圆角内外。
+
+**两轮反向验证各自独立有效**：① 去掉 splash 两参 → 属性断言红（`Expected: <0> Actual: <null>`）；② `if (false)` 停用属性断言只留像素断言（保留默认 splash）→ 像素断言红（`t=400ms 信息区实测 #2d2d2d`，= 默认灰叠黑底的又一实测值）。两条断言**互不依赖、各自能抓住回归**。
+
+**两个测量坑（可复用）**：① 采样点必须**每次快照重算 rect**——`AnimatedScale` 放大 1.05 后封面物理变大，静止态记下的「圆角外」坐标落回封面内部 ⇒ 误判「圆角失效」（本会话先前一次「还是存在」的真相就是这个测量假象）；② 放大后封面会溢出 `RepaintBoundary` ⇒ boundary 须包住变换后尺寸（160×320 包 120×252 卡），否则采样越界 `IndexError`。另：`StoredCover` 是**位置参数**构造（`const StoredCover('c.png')`）；手写 PNG 字节常无效，用 `PictureRecorder` 生成或 PIL 落盘。
+
+**`dart format` 陷阱（本批实证，记入工程约定）**：本 SDK 的 formatter 会重排**既有**代码（对 `glass_off_fallback_test.dart` 一次产生 197 行无关 churn）⇒ **测试/源码文件一律不跑 `dart format`**；误跑后 `git checkout --` 恢复再手工重放自己的编辑。
+
+**文档回填两轮（字符串轮 + 语义轮）**
+
+- **字符串轮**（key = `水波纹` / `InkSparkle` / `splashColor` / `highlightColor` / `barrierColor` / `0x8A000000` / `0x40CCCCCC`；程序化点数，范围 `docs` + `CHANGELOG.md`）：`水波纹` 命中 tech-usage **6 行** + CHANGELOG **1 行**、`InkSparkle` **2**、`highlightColor` **4**、`splashColor`/`barrierColor`/`0x8A000000`/`0x40CCCCCC` 均 **0**（本批首次引入这些字面量）。
+- **语义轮**（key = `自行淡出` / `保留水波纹` / `只在透明的信息区可见` / `不构成常驻底色` / `不再压在封面之上`）：tech-usage **4 行** + CHANGELOG **1 行**，即 §2.52 的改道注、§2.54 的「对比：水波纹不常驻…自行淡出」、表格行「保留水波纹：它自行淡出」、「如实登记的代价」段、CHANGELOG `0a1f5b1` 条目内的同族表述。**全部是记录当时实现的事实层/history 条目，按口径不追改**；被推翻的语义是「**水波纹保留且自行淡出**」→「**墨迹整体关闭**」，覆盖由本节 + §2.54/§2.52 尾部各一条「后续改道」指针承担（与 §2.53→§2.54、§2.52→§2.54 的改道注同款）。
+- **锚点**：`grep -n "^### "` 实测确认本节为 **§2.57**（前节 §2.56 同批新增）。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze                # 0 error / 0 warning / 7 info
+/c/src/flutter/bin/flutter test --timeout 30s test/ui/book_card_paint_test.dart   # +7: All tests passed!
+bash tool/test.sh ui       # 全绿
+bash tool/test.sh data     # +205: All tests passed!
+```
+
+**复核边界**：`analyze` 与 `ui` / `data` 为本批实跑（`ui` 因既有 flake 用 `-j 1` 串行口径）。改动符号 `InkWell` 三参、`kSheetBarrierColor` 经全仓 grep，`kSheetBarrierColor` 引用方仅 `glass_kit.dart` 两处传参 + 两个测试文件；`parse` / `reader` 零交集，未跑。**真机观感未复跑**，需负责人确认：① 长按书卡到弹框出现的全程，书名/作者/进度与封面圆角缺口**无灰底**；② 弹层出现前遮罩明显更淡（α0.239）后，**模态语义是否仍够**；③ 按下/长按**完全无墨迹**是否可接受。
