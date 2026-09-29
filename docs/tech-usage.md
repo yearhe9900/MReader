@@ -1025,6 +1025,8 @@ bash tool/test.sh data                                      # 00:16 +205: All te
 - **拍板 ① 范围 = 只动布局几何**：列数算法 / 宽高比 / 间距 / padding / 卡片分区改；**字号、颜色、阴影一律保持本项目现状**；PRD 与测试不动。
 - **拍板 ② 格式标签 = 挪到封面上做角标**：信息区对齐 anx 的**固定 55px**（只剩书名 + 作者·进度），格式标签（PRD `US-06` / `LIB-01` 要求、anx 原版没有）改放封面右下角。
 
+> **后续改道（2026-09-29，见 §2.51）**：上面「拍板 ①」的**范围**已被部分改写——**阴影**（封面投影）与**封面圆角**在 2026-09-29 经负责人拍板**改为对齐 anx**（圆角 6 → 8、静止投影换成 anx 的四参数字面量）。**未被推翻的部分**：**字号**（书名 13/w600、作者·进度 11）与**颜色**仍是本项目现状（不照搬 anx）；「只动布局几何」对**其余几何量**（列数算法 / 宽高比 / 间距 / padding / 卡片分区高度）依然成立。原拍板正文保留作事实留证，勿删。
+
 **anx 取证（Explore 代理实读，均带 `路径:行号`）**
 
 | 项 | anx-reader 原文出处 | 原文值 |
@@ -1615,5 +1617,74 @@ bash tool/test.sh reader                                                        
 - **「稍后到货」用 `gates` 夹具，「永不到货」用 `hangIndices`**：`_FakeSource.gates[i]` 让 `content(i)` `await` 一个 `Completer.future`、测试择机 `complete()` 放行——稳定构造「某章占位、稍后补齐」的中间态（回归④）；`hangIndices` 是永不完成（回归② 冻结布局用）。二者别混用。
 - **预期会红的几何断言放最前**：如回归④ 的 d1/d2 距离主句放在非空验证**之前**——修前红时直接报出实测漂移量（`d1=16.0 d2=-794.0`，810px），而非被非空验证的失败信息带偏排查方向。
 
+### 2.51 书卡对齐 anx：封面投影/圆角 + 长按「抬起反馈」（2026-09-29）
 
+**触发**：负责人「采用 anx 书架图书宫格样式和长按动画和效果」（中途澄清为「**图书宫格样式**和长按动画和效果」）。三项拍板：① 长按效果**只要「抬起视觉反馈」**（不跟手）；② **对齐阴影 + 圆角**；③ 操作单**保持现有玻璃模态**（不改 anx 的非模态形态）。**PRD 无条目增减、无契约变更**（`US-06` / `LIB-01` 只要求「展示格式」与「书架展示」，视觉数值不在条文内）。
 
+**取证：anx 的「长按动画」其实不在 anx 里**
+
+| 表象 | 真相（均实读，带 `路径:行号`） |
+|---|---|
+| `book_item.dart` 的 `onLongPress` | `:54-56` 只有一句裸的 `showModalBottomSheet`——**零动画、无 `HapticFeedback`** |
+| anx 的「长按效果」真身 | `bookshelf_page.dart:388-395` 的 `ReorderableBuilder`（pub 包 `flutter_reorderable_grid_view`）：`enableDraggable: true`、`longPressDelay: 300ms`、**`onReorder: (reorderedListFunction) {}` 空实现**、`onDragStarted` 里开操作单 → **借长按拖拽拿抬起反馈，不为重排** |
+
+包内抬起反馈的数值（全部实读）：
+
+| 项 | 出处 | 值 |
+|---|---|---|
+| 放大倍数 | `reorderable_builder.dart:41` | `_defaultFeedbackScaleFactor = 1.05` |
+| 放大动画 | `draggable_feedback.dart:59-64`、`reorderable_animation_config.dart:76/107-108/120-121` | `AnimatedContainer`：`dragFeedbackDuration` 默认 **150ms**、曲线兜底 **`Curves.linear`** |
+| 阴影渐入 | `reorderable_draggable.dart:77-89/161-165` | `AnimationController(duration: 250ms)` + `DecorationTween`（`forward()` 不传曲线 → 同为 linear） |
+| 阴影四参数 | `reorderable_draggable.dart:61-71` | `black.withOpacity(0.2)` / spread 5 / blur 6 / offset (0,3)（anx 未传 `dragChildBoxDecoration` → 吃该默认值） |
+| 跟手与原件 | `draggable_feedback.dart:79-90`、`reorderable_draggable.dart:151-157` | 反馈层 `_offset` 重新居中后**跟手**；原件 `Visibility(visible: false, maintainSize: true)` 留在原处 |
+
+**处置（三项）**
+
+1. **封面投影对齐 anx** → `book_card.dart` 的 `const BoxShadow kBookCoverShadow`：`Colors.grey.withAlpha(100)` / spread 5 / blur 10 / offset (0, 2)（anx `book_item.dart:69-75`）。写 `0x649E9E9E` 字面量：`withAlpha` **不是 const 构造**，而 `0x64` = 100、`0x9E9E9E` = `Colors.grey` 的 RGB，两者等价。
+2. **封面圆角 6 → 8**（anx `book_cover.dart:30` `radius ?? 8`）→ 提为 **`kBookCoverRadius`**，放进 `shelf_geometry.dart`（**圆角是几何量**；`shelf_geometry.dart` 的范围声明同步改写为「追加封面圆角、阴影仍不在此列」）。
+3. **长按抬起反馈**（自实现，不引包）：`AnimatedScale(1.05, 150ms, Curves.linear)` → `AnimatedContainer(250ms, 阴影)` → 原 `Card`。`_lifted` 由 `_handleLongPress` 置位、`await` 回调后复位；阴影画在卡片**背景**（`DecorationPosition.background`）与静止投影**叠加**——anx 同为两层。
+
+**⚠️ 如实登记的代价（拍板 ① 的必然后果）**：anx 的投影是**固定灰、不随主题**，故深色主题下这颗投影比背景**亮**、观感接近一道浅色描边。本批照抄（负责人拍板「对齐阴影」）；要改回跟主题走只换 `kBookCoverShadow.color` 一行。
+
+**范围边界（不在「阴影 + 圆角」内 → 未动，如实登记）**
+
+- **`ClipRSuperellipse` 超椭圆裁剪** + **`RoundedSuperellipseBorder(width: 0.3, color: Colors.grey)` 描边**（anx `book_cover.dart:125-131`）：二者都是 **Flutter 自带**能力（`widgets/basic.dart:1125` / `painting/rounded_rectangle_border.dart:226`，**不需要引依赖**），但本次未做——想跟随只需换掉 `ClipRRect` 并补一层 `border`。
+- **字号**：仍本项目现状（书名 13 / w600、作者·进度 11）。anx 是 13 / bold 与 **9**——9 在手机屏偏小，拍板保持 11。
+- **操作单**：仍玻璃模态（带遮罩），未复刻 anx 的非模态 `Container`。
+
+**为什么把「何时复位」做成一条 API 契约**
+
+抬起反馈必须知道「什么时候落回」。故 `BookCard.onLongPress` 与 `ShelfGrid.onBookActions` 由 `VoidCallback` 改为 **`Future<void> Function()`**，`shelf_page` 随之拆成两段：
+
+- `_showBookActions(record)`：await `GlassOverlays.showSheet`，**Future 在操作单关闭时即完成**；
+- `_runBookAction(record, action)`：`unawaited` 派发（继续阅读 / 详情 / 移出书架）。
+
+反例说明必要性：若沿用「动作走完才算完成」的写法，用户点「继续阅读」后卡片会**一路悬着**（`_openBook` 的 await 覆盖整个阅读会话）。`BookCard._handleLongPress` 用 `try/finally` 保证回调抛错时也落回。
+
+**测试**
+
+| 文件 | 变更 | 断言要点 |
+|---|---|---|
+| `test/ui/shelf_geometry_contract_test.dart` | 常量组 +1 断言；**+1 条用例** | `kBookCoverRadius == 8`（硬编码）；新用例读**渲染对象** `RenderDecoratedBox.decoration`，断言圆角 8 与投影四参数（`0x649E9E9E` / 5 / 10 / (0,2)），并断言裁切 `ClipRRect` 用**同一**圆角（否则投影从裁切角露出） |
+| `test/ui/book_card_lift_test.dart` | **新建 2 条** | 长按后**真实渲染尺寸** ×1.05（宽高各 `closeTo` 且中心不变）；`AnimatedScale.scale/duration/curve` = 1.05 / 150ms / linear、`AnimatedContainer.duration/decoration.boxShadow` = 250ms / `0x33000000`+5+6+(0,3)；回调 Future 完成后尺寸与两条目标值全复位（阴影列 `isEmpty`）；`onLongPress == null` 时长按**不抬起** |
+
+**⚠️ 量放大的坑（本批实测踩到，可复用）**：放大走 `Transform`，而 `tester.getRect` 的 `localToGlobal` 计入的是**祖先**变换——直接量 `find.byType(BookCard)` 量到的是「变换的宿主」`RenderTransform` **自己**，其尺寸**不含**自身变换（实测恒为 120 = 缩放前的值，看着像「效果没生效」）。必须量变换**子树内**的 widget（本测试量 `AnimatedScale` 里的 `Card`）。**结论：先确认测量对象落在变换的哪一侧，再怀疑实现。**
+
+**文档回填两轮**
+
+- **字符串轮**（`圆角` / `阴影` / `投影` / `_kCoverRadius`）：命中 `docs/tech-usage.md` §2.40 拍板 ① 「…**阴影**一律保持本项目现状」——与本批拍板**直接冲突**，已在该拍板列表后插入**改道引用块**（指向本节，写明「哪些被改写、哪些未被推翻」），原正文保留留证。`CHANGELOG.md` 中 UI 重做批次③那条同句**不追改**（历史条目按「留档不追改」口径，覆盖关系由引用块承担）。
+- **语义轮**（按「被推翻的约束语义」再 grep：`保持本项目现状` / `只动布局几何` / `一律不在此列` / `不照搬 anx`）——**字符串轮漏掉的三处**：① `shelf_geometry.dart` 范围声明（已改写）；② `shelf_grid.dart` 头注「字号、颜色、阴影一律保持本项目现状（不照搬 anx）」（**已改写**为「字号、颜色保持现状；封面投影与圆角已于 2026-09-29 对齐 anx」）；③ §2.40 同上。**未改**：§2.38 一带的「去卡片底板 + `BoxShadow`」——本批只换投影**数值**，不改「不用卡片底板」这条结论。
+- **行号口径**：本节第三方行号均为本批**实读**（anx / pub 包 / Flutter SDK 三处，未沿用旧 grep 值）；文档内互引用**以章节号为准**（本节与 §2.49 的引用块插入后，§2.40 及以后行号整体下移，勿凭旧行号定位）。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze
+/c/src/flutter/bin/flutter test --timeout 30s test/ui/book_card_lift_test.dart           # 00:00 +2: All tests passed!
+/c/src/flutter/bin/flutter test --timeout 30s test/ui/shelf_geometry_contract_test.dart  # 00:00 +6: All tests passed!
+bash tool/test.sh ui                                                                     # 00:57 +137: All tests passed!（134 → 137）
+bash tool/test.sh data                                                                   # 00:23 +205: All tests passed!
+bash tool/test.sh reader                                                                 # 00:22 +226: All tests passed!
+```
+
+**复核边界**：`analyze` 与 `ui` / `data` / `reader` 三组为本批实跑。改动符号（`BookCard` / `ShelfGrid` / `onLongPress` / `onBookActions` / `kBookCoverRadius`）经全仓 grep 确认引用方只有 `lib/ui/shelf_page.dart` 与 `test/ui/`（**ui 组**）+ `test/meta/detail_test.dart`（**data 组**）——`reader` 为保险性复跑。`parse` 组未跑（零交集）。**真机手感未复跑**：需负责人确认① 长按抬起是否「有反馈但不突兀」（放大 1.05 / 150ms；曲线照抄包的 `linear`，嫌生硬可换 `Curves.easeOut`，一行）；② **深色主题下封面投影偏亮**是否接受（回退口径见上）。
