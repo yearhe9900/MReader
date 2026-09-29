@@ -1262,6 +1262,46 @@ bash tool/test.sh data                                      # 00:10 +205: All te
 
 **复核边界**：全部改动与测试数字为本批实读实跑；**真机观感未复跑**（分组 chips 的选中手感、详情页弹层在窄屏的可用性、旧 `folders` 文件升级后的实际表现）；`parse` / `reader` 两组未跑（与本次改动零交集）。
 
+### 2.45 书架顶栏搜索框靠左铺满 + 描边/底色区分（2026-09-29）
+
+**触发**：负责人反馈「书架搜索框需靠左非居中，且加边框颜色和背景色区分」。
+
+**根因（读了库源码才敢下笔）**：搜索框是 `GlassTopBar` 的 `title`，而 `GlassTopBar.centerTitle` **默认 `true`**，书架页从未显式传参。库的布局委托 `_ToolbarLayout`（`liquid_glass_widgets-1.7.0/lib/widgets/surfaces/glass_app_bar.dart:501-615`）分两支：
+
+| 分支 | 可用宽 | 定位 | 出处 |
+|---|---|---|---|
+| `centerTitle: true`（默认） | `size.width - 2 * max(leadingWidth, actionsWidth)`（**等边距口径**，两侧取较宽者） | `Offset((size.width - ts.width) / 2, ·)`——**按整条宽度居中** | `:559-578` |
+| `centerTitle: false` | `size.width - startOccupied - startGap - endOccupied - endGap`（相邻才留 8px 间距） | 从 leading 侧起排 | `:579-611` |
+
+书架顶栏右侧有**两个动作按钮**（导入 / 排序，各 48 宽）→ 居中档下可用宽还要再被砍掉 `2 × 104`，搜索框只剩约半宽并浮在中间，观感即「一个居中的小胶囊」。
+
+**改动**（`lib/ui/shelf_page.dart`）
+
+1. `GlassTopBar` 显式传 **`centerTitle: false`**（本页无 `leading` → 标题贴顶栏内边距起排，`GlassAppBar` 默认 `padding = EdgeInsets.symmetric(horizontal: 8)`）。
+2. `_BookSearchEntry` 外包 **`SizedBox(width: double.infinity)`**：`InkWell`/`Container` 无固有宽时只按内容收缩，光改 `centerTitle` 会得到「靠左的小胶囊」。宽度取「可用宽 ∩ **400**」——400 上限保留，避免桌面窗口下搜索框拉满整条。
+3. 样式区分：填充 `surfaceContainerHighest` **0.6 → 0.9**，加 **1px `outlineVariant` 描边**。理由：顶栏本身是**半透明玻璃**，0.6 的填充会「糊」进背后渐变，看不出这是一块可点控件。
+4. 圆角 `20 → 18`（20 超过高度 36 的一半、渲染时本就会被裁到 18，写 18 免歧义）；容器的 `Key('shelf-search-entry')` 供契约测试定位。
+5. 文字/图标仍用 `onSurfaceVariant`（**占位符口径**），不因加边框提成正文色。
+
+**测试**（`test/ui/shelf_page_test.dart` 新增 1 条 → **116** 条，口径 `grep -c "^\s*test\(Widgets\)\?(" test/ui/shelf_page_test.dart`）
+
+- 机制锁：`tester.widget<GlassTopBar>(...).centerTitle == false`。
+- 几何锁：`getTopLeft(box).dx ≤ 16`（贴内边距 8）、`getSize(box).width > 300`（取到 400 上限）、右边缘 `< 800 - 48`（给动作按钮留位）。**退回居中则左边缘约 `(800-400)/2 = 200`，断言立刻红**。
+- 样式锁：填充 `alpha ≈ 0.9`、`Border.top.width == 1.0` 且 `style == solid`。
+- 视口 `800×1000` 且**同时钉 `devicePixelRatio = 1`**（默认 3 会把逻辑宽算成 266，动作按钮一挤可用宽就变、结论随之改变）。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze      # 0 error / 0 warning / 7 条既有 info
+bash tool/test.sh ui                                        # 00:52 +116: All tests passed!
+bash tool/test.sh data                                      # 00:13 +205: All tests passed!
+```
+
+**既有噪音（非本批引入，已实测排除）**：`shelf_page_test.dart:578`（分组 chips 用例的**第二次** `tap(find.text('玄幻'))`）会打一条 `derived an Offset … would not hit test` 警告——命中结果是 chip 自身的 `RenderPhysicalShape`/Material，**chip 的 `onSelected` 确实触发**（其后的 `_titles` 与 `groupId` 两条断言若 tap 落空必红，故非假绿）。用 `git stash` 回退本批改动后单跑同一条用例，警告**依然为 1 次** → 与本批无关。想消音可改点为 chip 本体或传 `warnIfMissed: false`。
+
+**复核边界**：`analyze` 与两组测试为本批实跑；**真机观感未复跑**（靠左/铺满在窄屏上的实际比例、深色主题下 `outlineVariant` 描边的可见度）。`parse` / `reader` 两组未跑（与本次改动零交集）。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；

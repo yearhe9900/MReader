@@ -7,6 +7,7 @@
 
 ### 修复
 
+- **书架顶栏搜索框「居中收缩」且与玻璃顶栏糊在一起**（负责人反馈「需靠左非居中，且加边框颜色和背景色区分」）：根因是 `GlassTopBar.centerTitle` **默认 `true`** 而书架页从未传参，库 `_ToolbarLayout` 居中档（`glass_app_bar.dart:559-578`）按整条宽度居中并把可用宽压成 `size.width - 2 * max(leading, actions)`（等边距口径）——右侧两个动作按钮一占，搜索框只剩约半宽、浮在中间；改显式 **`centerTitle: false`** 走 `:579-611` 靠左分支（本页无 `leading` → 贴顶栏内边距 8），并外包 `SizedBox(width: double.infinity)` 铺满「可用宽 ∩ 400」（400 上限保留防桌面窗口下无限拉伸，`InkWell` 无固有宽时不加它仍会按内容收缩）；样式上填充 `surfaceContainerHighest` **0.6 → 0.9**（顶栏是半透明玻璃，0.6 会糊进背后渐变）并加一道 **1px `outlineVariant` 描边**，圆角 20 → 18（超高度一半本就会被裁到 18，写明免歧义），文字保持 `onSurfaceVariant` 占位符口径 `5c4938e`
 - **玻璃壳层正文不避让顶栏（真机截图实证：书架筛选栏被顶进状态栏、网格首行封面被顶栏盖住）**：根因是 `GlassNavScaffold` 未传 `extendBody`、吃了玻璃库默认值 `true` → 库 `glass_scaffold.dart:487-489` 走 `Positioned.fill` 让正文铺满整屏从 y=0 起，只有 `extendBody: false` 才走 `:491-494` 的 `top: topPad + effectiveAppBarHeight`，显式传之；**一处改、7 个页面同时修**（书架 / 详情 / 搜索 / 设置 / 文件夹 / 占位 ×2），已核对 7 处调用点无一手工补过顶部故无双重留白，底部不受影响（本项目底栏不走 `GlassScaffold.bottomBar`，`bottomBar == null` → `bottom: 0`，留白仍由各页 `kShellBottomInset` 承担）。连带：`detail_test` 的 META-08 TXT「单书统计」断言因正文下移 44px 被挤出 600px 测试视口（`ListView` 懒构建）——产品行为正确、失效的是「首屏即可见」的隐含前提，只把该测试视口调到 800×1000、断言一字未改。已知代价（拍板取舍）：`:458` 条件不再成立 → 顶栏下方滚动渐隐一并关闭 `ad37f96`
 
 ### 变更
