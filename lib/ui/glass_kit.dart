@@ -408,6 +408,22 @@ class GlassNavScaffold extends StatelessWidget {
       appBar: appBar,
       bottomBar: bottomBar,
       background: background,
+      // 顶栏避让（批次① `06063c8` 漏传的参数，2026-09-29 修）。
+      //
+      // 库默认 `extendBody: true` → `glass_scaffold.dart:487-489` 走
+      // `Positioned.fill`，**正文铺满整屏、从 y=0 起、完全不避让顶栏**：
+      // 书架的筛选栏被顶进状态栏、网格首行封面被顶栏盖住（真机截图实证）。
+      // `extendBody: false` 才走 `:491-494` 的 `top: topPad + appBarHeight`。
+      // 库文档 `:153` / `:83` 声称会「automatically add a top spacer」，
+      // 但 1.7.0 全文 grep 只有这三处文字、**零处实现**——以代码为准。
+      //
+      // 底部不受影响：本项目底栏是 `home_shell` 自己 `Positioned` 的
+      // 浮动胶囊，**不走** `GlassScaffold.bottomBar`，故 `bottomBar == null`
+      // → `bottom: 0`，底部留白仍由各页的 `kShellBottomInset` 独立承担。
+      //
+      // 已知代价：`:458` 的 `if (extendBody && …)` 不再成立，正文不再包
+      // `GlassScrollEdgeEffect` → **顶栏下方的滚动渐隐一并关闭**（拍板取舍）。
+      extendBody: false,
     );
   }
 }

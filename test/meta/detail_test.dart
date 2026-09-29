@@ -460,6 +460,19 @@ void main() {
 
     testWidgets('META-08 ①②④ TXT：字段齐全、来源标「文件名推断」、无简介占位',
         (WidgetTester tester) async {
+      // 详情页正文（封面区 + 身份区 + 元信息 + 简介 + 统计入口，`_buildSections`
+      // 的末项）加上固定占位的底部操作栏，在 flutter_test 默认 600px 高视口下
+      // 「刚好一屏」。2026-09-29 修 `GlassNavScaffold` 的 `extendBody: false`
+      // （顶栏避让）后正文整体下移 44px → 末项被挤出视口，`ListView` 懒构建
+      // 根本不建它 → `find.text('单书统计')` 0 个。
+      //
+      // 产品行为是**正确**的（详情页本就该在顶栏下方、超一屏滚动可见），
+      // 失效的是这条断言「首屏即可见」的隐含前提。故只把视口调到接近真机
+      // （显式钉 `devicePixelRatio = 1`，使逻辑高度就是 1000，不依赖
+      // flutter_test 的默认 dpr=3），断言本身一字不改。
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
       await tester.runAsync(
         () => repo.importFile(
           bytes: _utf8TxtBytes('三体正文。'),
