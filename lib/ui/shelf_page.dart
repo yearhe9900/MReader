@@ -130,8 +130,9 @@ class _ShelfPageState extends State<ShelfPage> {
 
     final List<BookRecord> sorted = list.toList();
 
-    // 手动顺序（拖拽重排的结果）单独一条路径：顺序**就是** `order` 本身，
-    // 不受升降序开关影响（否则「再点同项翻转方向」会把用户拖出来的顺序打乱）。
+    // 手动顺序单独一条路径：顺序**就是** `order` 本身，不受升降序开关影响
+    // （否则「再点同项翻转方向」会把顺序打乱）。`order` 由过去的拖拽重排写入；
+    // 2026-09-29 拖拽重排已删（对齐 anx），此分支仅消费旧数据 + 排序菜单入口。
     if (prefs.sortField == ShelfSortField.manual) {
       final List<String> order = widget.shelfLayout.layout.order;
       final Map<String, int> rank = <String, int>{
@@ -429,32 +430,10 @@ class _ShelfPageState extends State<ShelfPage> {
     }
   }
 
-  // ── L3：拖拽重排 / 文件夹 ────────────────────────────────────────────────
+  // ── L3：拖拽 → 建文件夹 / 移入文件夹 ──────────────────────────────────────
 
-  /// 散书区拖拽重排。
-  ///
-  /// [toIndex] 采用 `ReorderableListView` 的通行约定——下标以**移除前**的
-  /// 列表计，向后移动时内部减一（于是「拖到某本上」= 插到那本之前）。
-  Future<void> _reorder(String draggedBookId, int toIndex) async {
-    final List<String> ids = <String>[
-      for (final BookRecord record in _looseBooks) record.bookId,
-    ];
-    final int from = ids.indexOf(draggedBookId);
-    if (from < 0 || from == toIndex) return;
-
-    final String moved = ids.removeAt(from);
-    final int insertAt = from < toIndex ? toIndex - 1 : toIndex;
-    ids.insert(insertAt.clamp(0, ids.length), moved);
-
-    // 顺序先落盘、再切「手动排序」——反过来的话，`_visibleBooks` 会在切换瞬间
-    // 用**旧的** `order` 重排一次，用户刚拖出来的位置会跳变。
-    await widget.shelfLayout.setOrder(ids);
-    if (widget.shelfPrefs.prefs.sortField != ShelfSortField.manual) {
-      await widget.shelfPrefs.setSortField(ShelfSortField.manual);
-    }
-  }
-
-  /// 拖到另一本书上并悬停够时长 → 并入目标书所在（或新建）文件夹。
+  /// 落到另一本书卡上（落点即建，2026-09-29 对齐 anx）→ 并入目标书所在
+  /// （或新建）文件夹。
   ///
   /// 目标书已在某文件夹里 → 直接并入该文件夹；否则**新建**一个以目标书书名
   /// 命名的文件夹（省掉一次命名弹窗，用户可在文件夹内重命名）。
@@ -775,7 +754,7 @@ class _ShelfPageState extends State<ShelfPage> {
 
   /// 有书：网格展示（筛选 / 排序已在外层应用；文件夹排在散书之前）。
   ///
-  /// 拖拽交互（重排 / 建文件夹 / 移入文件夹）全在 [ShelfGrid] 内部，
+  /// 拖拽交互（建文件夹 / 移入文件夹）全在 [ShelfGrid] 内部，
   /// 本页只提供「落到哪个语义动作」的回调。
   Widget _buildBookGrid() {
     return ShelfGrid(
@@ -787,8 +766,6 @@ class _ShelfPageState extends State<ShelfPage> {
       openingBookId: _openingBookId,
       onOpenBook: (BookRecord record) => unawaited(_openDetail(record)),
       onBookActions: (BookRecord record) => unawaited(_openBookActions(record)),
-      onReorder: (String draggedBookId, int toIndex) =>
-          unawaited(_reorder(draggedBookId, toIndex)),
       onOpenFolder: (BookFolder folder) => unawaited(_openFolder(folder)),
       onFolderActions: (BookFolder folder) =>
           unawaited(_folderActions(folder)),

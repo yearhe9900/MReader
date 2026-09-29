@@ -99,7 +99,6 @@ Future<void> _pumpGrid(
             openingBookId: null,
             onOpenBook: (_) {},
             onBookActions: (_) {},
-            onReorder: (_, _) {},
           ),
         ),
       ),

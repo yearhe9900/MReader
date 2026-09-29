@@ -26,7 +26,6 @@ import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
 import 'package:mreader/ui/shelf_folder_page.dart';
-import 'package:mreader/ui/shelf_grid.dart';
 import 'package:mreader/ui/shelf_page.dart';
 
 import '../test_config.dart';
@@ -512,51 +511,10 @@ void main() {
       expect(_readerPages(), findsOneWidget);
     });
 
-    // ── L3：拖拽重排 / 文件夹 ────────────────────────────────────────────
+    // ── L3：拖拽建文件夹 / 移入文件夹（2026-09-29 对齐 anx：落点即建、
+    //    拖拽重排已删） ──────────────────────────────────────────────────
 
-    testWidgets('L3 拖拽重排：顺序落盘并自动切到「手动排序」',
-        (WidgetTester tester) async {
-      // 分三次导入并留出时间差，让 importedAt 严格递增（默认按它降序）。
-      // 同时记下各自 bookId——`layout.order` 存的是 **bookId**，不是书名。
-      late String aId;
-      late String bId;
-      late String cId;
-      await tester.runAsync(() async {
-        aId = (await repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt'))
-            .record
-            .bookId;
-        await Future<void>.delayed(const Duration(milliseconds: 5));
-        bId = (await repo.importFile(bytes: _txtBytes('B'), fileName: 'b.txt'))
-            .record
-            .bookId;
-        await Future<void>.delayed(const Duration(milliseconds: 5));
-        cId = (await repo.importFile(bytes: _txtBytes('C'), fileName: 'c.txt'))
-            .record
-            .bookId;
-      });
-
-      await tester.pumpWidget(buildApp());
-      await _settle(tester);
-
-      expect(_titles(tester), <String>['c', 'b', 'a']);
-
-      // 把第一张（c）拖到第三张（a）上 → 按 `ReorderableListView` 约定
-      // 「插到目标之前」→ 期望 b, c, a。
-      final TestGesture gesture =
-          await _startDrag(tester, find.byType(BookCard).at(0));
-      await gesture.moveTo(tester.getCenter(find.byType(BookCard).at(2)));
-      await tester.pump(); // 仅一帧：远未到 900ms 的合并阈值 → 判为纯重排
-      await gesture.up();
-      await _settle(tester);
-
-      expect(_titles(tester), <String>['b', 'c', 'a']);
-      // 拖拽后自动切「手动排序」，否则当前排序字段会立刻把顺序排回去。
-      expect(shelfPrefs.prefs.sortField, ShelfSortField.manual);
-      // 顺序已落盘（`order` 只含散书，元素是 bookId 而非书名）。
-      expect(shelfLayout.layout.order, <String>[bId, cId, aId]);
-    });
-
-    testWidgets('L3 拖到另一本书上悬停 → 新建文件夹，两本都移出散书区',
+    testWidgets('L3 拖到另一本书上松手 → 立即新建文件夹（无悬停计时）',
         (WidgetTester tester) async {
       await tester.runAsync(() async {
         await repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt');
@@ -568,13 +526,12 @@ void main() {
       await _settle(tester);
       expect(find.byType(BookCard), findsNWidgets(2));
 
-      // 拖 b（默认降序下是第 0 张）到 a 上，并**悬停够时长**。
+      // 拖 b（默认降序下是第 0 张）到 a 上——**落点即建**，不需要悬停计时。
       final TestGesture gesture =
           await _startDrag(tester, find.byType(BookCard).at(0));
       await gesture.moveTo(tester.getCenter(find.byType(BookCard).at(1)));
-      await tester.pump(); // `onMove` 起计时器
-      await tester.pump(kFolderMergeHoverDelay); // 计时到点 → 合并就绪
-      await tester.pump(); // 画「新建文件夹」提示
+      await tester.pump(); // 悬停一帧 → 已显示「新建文件夹」提示
+      expect(find.text('新建文件夹'), findsOneWidget);
       await gesture.up();
       await _settle(tester);
 

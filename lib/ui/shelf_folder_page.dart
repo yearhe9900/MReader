@@ -1,8 +1,10 @@
 // 文件夹内页（L3）：展示某个文件夹里的书，支持移出 / 重命名 / 解散。
 //
-// 与书架页共用 [ShelfGrid]（同一套拖拽重排与书卡视觉），差别在于：
+// 与书架页共用 [ShelfGrid]（同一套书卡视觉），差别在于：
 //   · 网格内**只有散书**（`folders: []`）——不支持嵌套文件夹；
-//   · 重排结果写进 `BookFolder.bookIds`（而不是全局 `order`）；
+//   · **禁拖**（`dragEnabled: false`，2026-09-29 对齐 anx——其文件夹内页
+//     `book_opened_folder.dart` 无任何 Draggable/重排），长按书卡直接弹
+//     操作单；`BookFolder.bookIds` 顺序不再由拖拽改写；
 //   · 书卡操作单多一项「移出文件夹」。
 //
 // 文件夹被解散 / 内部书被删空时，本页**自动 pop** 回书架（不留死页面）。
@@ -132,9 +134,9 @@ class _ShelfFolderPageState extends State<ShelfFolderPage> {
                   onOpenBook: widget.onOpenDetail,
                   onBookActions: (BookRecord record) =>
                       unawaited(_openBookActions(record)),
-                  onReorder: (String draggedBookId, int toIndex) =>
-                      unawaited(_reorder(draggedBookId, toIndex)),
-                  // 文件夹内不再嵌套文件夹：拖到另一本书上就是纯重排。
+                  // 禁拖：拖拽重排已删（对齐 anx 内页无拖拽），长按走
+                  // `BookCard.onLongPress` 弹操作单（见 ShelfGrid 头注）。
+                  dragEnabled: false,
                   // 几何与书架页同源（anx-reader 口径），防两处漂移。
                   padding: kShelfGridPadding,
                 ),
@@ -167,24 +169,6 @@ class _ShelfFolderPageState extends State<ShelfFolderPage> {
         ),
       ),
     );
-  }
-
-  /// 文件夹内重排。
-  ///
-  /// [toIndex] 采用 `ReorderableListView` 的通行约定——下标以**移除前**的
-  /// 列表计，向后移动时内部减一（于是「拖到某本上」= 插到那本之前）。
-  Future<void> _reorder(String draggedBookId, int toIndex) async {
-    final BookFolder? folder = _folder;
-    if (folder == null) return;
-    final List<String> ids = <String>[
-      for (final BookRecord record in _books) record.bookId,
-    ];
-    final int from = ids.indexOf(draggedBookId);
-    if (from < 0 || from == toIndex) return;
-    final String moved = ids.removeAt(from);
-    final int insertAt = from < toIndex ? toIndex - 1 : toIndex;
-    ids.insert(insertAt.clamp(0, ids.length), moved);
-    await widget.shelfLayout.setFolderOrder(folder.id, ids);
   }
 
   /// 长按书卡 → 操作单（多一项「移出文件夹」）。

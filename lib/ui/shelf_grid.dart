@@ -12,22 +12,29 @@
 //   · 空态「导入书籍」按钮（LIB-01 ②）→ 保留，不复刻 anx 的纯颜文字空态。
 //
 // ══════════════════════════════════════════════════════════════════════════════
-// 两种拖拽动作如何区分（2026-09-28 定）
+// 拖拽动作语义（2026-09-29 拍板「对齐 anx」：落点即建、删拖拽重排）
 // ══════════════════════════════════════════════════════════════════════════════
 // 长按书卡后：
 //   · **没有移动就抬手** → 底部操作单（沿用 `LIB-06` 语义：长按 = 操作单）；
-//   · 拖到另一本书上**快速放下** → 在散书区重排（插入到目标位置）；
-//   · 拖到另一本书上**悬停 [kFolderMergeHoverDelay]** → 把被拖的书并入目标书
-//     所在文件夹；目标书不在任何文件夹时，新建一个以目标书书名命名的文件夹。
-//   · 拖到**文件夹卡**上 → 直接移入该文件夹。
+//   · 落到**另一本书卡上** → 立即把被拖的书并入目标书所在文件夹；目标书不在
+//     任何文件夹时，新建一个以目标书书名命名的文件夹。**落点即建、无悬停
+//     计时**（对齐 anx `book_folder.dart:34-44` `onAcceptBook`：松手落在散书
+//     上直接建组，悬停只有放大反馈）；
+//   · 落到**文件夹卡**上 → 直接移入该文件夹。
 //
-// 判定用 `onDragUpdate` 是否被调用过（而不是 `DraggableDetails.offset` 的距离）：
-// 「长按未动」时 `onDragUpdate` 根本不会触发，这比比较浮点偏移量稳健。
-// 悬停计时用「`onMove` 首次进入即启动、`onLeave` 取消」——`onMove` 会持续触发，
-// 故用 `??=` 保证只启动一次。
+// **拖拽重排已删除**（2026-09-29 拍板「删重排，完全对齐 anx」）：anx 的
+// `onReorder` 是空实现、文件夹内页无任何拖拽，即 anx 不存在重排概念。散书
+// 顺序由排序菜单管理；`ShelfSortField.manual` 旧顺序数据继续生效，只是不再
+// 有拖拽写入口。
+//
+// 悬停反馈：进入可投放的书卡立即显示「新建文件夹」提示（anx 用 1.05 放大
+// 表达同一语义），不再等 900ms 计时。
+//
+// 「长按未动」判定用 `onDragUpdate` 是否被调用过（而不是 `DraggableDetails.offset`
+// 的距离）：「长按未动」时 `onDragUpdate` 根本不会触发，这比比较浮点偏移量稳健。
 //
 // ⚠️ 每一项都必须带 `ValueKey`：重排后 `GridView.builder` 的 element 复用会让
-// 无 key 的 `StatefulWidget` 状态（悬停计时器 / 合并已就绪标志）错位到别的书上。
+// 无 key 的 `StatefulWidget` 状态（拖拽中的 `_movedDuringDrag` 等）错位到别的书上。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 为什么自己实现（不引第三方网格重排包）
@@ -38,7 +45,6 @@
 // `DragTarget` 一次打通两者，且**零新依赖**（2026-09-28 拍板）。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
-import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -54,12 +60,6 @@ import 'book_card.dart';
 import 'shelf_geometry.dart';
 
 export 'shelf_geometry.dart';
-
-/// 拖到另一本书上、停留多久算「并入文件夹」。
-///
-/// 取值权衡：太短会在正常重排时误判成合并；太长用户会以为没反应。
-/// 900ms 与 anx-reader 的 `BookBottomSheet` 手感接近。
-const Duration kFolderMergeHoverDelay = Duration(milliseconds: 900);
 
 /// 书架（与文件夹内页共用）的背景渐变。
 ///
@@ -97,7 +97,6 @@ class ShelfGrid extends StatelessWidget {
     required this.openingBookId,
     required this.onOpenBook,
     required this.onBookActions,
-    required this.onReorder,
     this.onOpenFolder,
     this.onFolderActions,
     this.onMergeBooks,
@@ -130,18 +129,13 @@ class ShelfGrid extends StatelessWidget {
   /// 长按不动抬手（弹底部操作单）。
   final void Function(BookRecord record) onBookActions;
 
-  /// 散书区重排：`(被拖书 id, 目标下标)`。
-  ///
-  /// 目标下标是**散书列表**内的下标（不含文件夹偏移），由调用方换算回全量顺序。
-  final void Function(String draggedBookId, int toIndex) onReorder;
-
   /// 点文件夹卡（进文件夹内页）；`null` = 不响应点击（文件夹内页自身用不到）。
   final void Function(BookFolder folder)? onOpenFolder;
 
   /// 长按文件夹卡（操作单：重命名 / 解散）；`null` = 不响应长按。
   final void Function(BookFolder folder)? onFolderActions;
 
-  /// 悬停后将 `dragged` 并入 `target` 所在（或新建）文件夹；`null` = 不建文件夹。
+  /// 落到散书卡上（落点即建）：把 `dragged` 并入 `target` 所在（或新建）文件夹；`null` = 不建文件夹。
   final void Function(BookRecord dragged, BookRecord target)? onMergeBooks;
 
   /// 把书拖进指定文件夹；`null` = 不收。
@@ -200,12 +194,10 @@ class ShelfGrid extends StatelessWidget {
             final int bookIndex = index - folderCount;
             final BookRecord record = books[bookIndex];
             return _BookCell(
-              // key 不可省：重排后 element 复用会让 State 错位到别的书上。
+              // key 不可省：element 复用会让 State 错位到别的书上。
               key: ValueKey<String>('book-${record.bookId}'),
               record: record,
-              index: bookIndex,
               dragEnabled: dragEnabled,
-              onReorder: onReorder,
               onMergeBooks: onMergeBooks,
               onLongPressOnly: () => onBookActions(record),
               child: BookCard(
@@ -213,9 +205,11 @@ class ShelfGrid extends StatelessWidget {
                 coverStore: coverStore,
                 loading: openingBookId == record.bookId,
                 onTap: () => onOpenBook(record),
-                // 长按交给外层拖拽容器统一处理（见文件头注）：InkWell 若也认长按，
-                // 会与 `LongPressDraggable` 在手势竞技场互抢。
-                onLongPress: null,
+                // 拖拽开启时长按交给外层 `LongPressDraggable` 统一处理（见文件
+                // 头注）：InkWell 若也认长按，会与它在手势竞技场互抢。禁拖时
+                // （文件夹内页）没有外层拖拽容器，长按由这里弹操作单。
+                onLongPress:
+                    dragEnabled ? null : () => onBookActions(record),
               ),
             );
           },
@@ -230,10 +224,8 @@ class _BookCell extends StatefulWidget {
   const _BookCell({
     super.key,
     required this.record,
-    required this.index,
     required this.child,
     required this.dragEnabled,
-    required this.onReorder,
     required this.onLongPressOnly,
     this.onMergeBooks,
   });
@@ -241,22 +233,16 @@ class _BookCell extends StatefulWidget {
   /// 本书记录。
   final BookRecord record;
 
-  /// 在散书列表中的下标。
-  final int index;
-
   /// 书卡本体。
   final Widget child;
 
   /// 是否允许拖动。
   final bool dragEnabled;
 
-  /// 落到本格（未悬停够时长）→ 重排到本下标。
-  final void Function(String draggedBookId, int toIndex) onReorder;
-
   /// 长按未动就抬手 → 弹操作单。
   final VoidCallback onLongPressOnly;
 
-  /// 悬停够时长 → 并入本格所在（或新建）文件夹。
+  /// 落到本格书卡上 → 并入本格所在（或新建）文件夹。
   final void Function(BookRecord dragged, BookRecord target)? onMergeBooks;
 
   @override
@@ -264,41 +250,11 @@ class _BookCell extends StatefulWidget {
 }
 
 class _BookCellState extends State<_BookCell> {
-  Timer? _hoverTimer;
-  bool _mergeArmed = false;
   bool _movedDuringDrag = false;
-
-  @override
-  void dispose() {
-    _hoverTimer?.cancel();
-    super.dispose();
-  }
 
   /// 是否接受这支拖拽（不能拖到自己身上）。
   bool _accepts(BookRecord dragged) =>
       widget.dragEnabled && dragged.bookId != widget.record.bookId;
-
-  /// 进入悬停：只在首次启动计时器。
-  ///
-  /// `DragTarget.onMove` 会被**持续**调用，故用 `??=` 守住只启动一次。
-  void _armHover() {
-    if (widget.onMergeBooks == null || _hoverTimer != null) return;
-    _hoverTimer = Timer(kFolderMergeHoverDelay, () {
-      if (!mounted) return;
-      setState(() => _mergeArmed = true);
-    });
-  }
-
-  /// 离开 / 结束悬停：取消计时器并清掉「已就绪」标志。
-  void _cancelHover() {
-    _hoverTimer?.cancel();
-    _hoverTimer = null;
-    if (_mergeArmed && mounted) {
-      setState(() => _mergeArmed = false);
-    } else {
-      _mergeArmed = false;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -307,33 +263,25 @@ class _BookCellState extends State<_BookCell> {
         final Widget target = DragTarget<BookRecord>(
           onWillAcceptWithDetails: (DragTargetDetails<BookRecord> details) =>
               _accepts(details.data),
-          onMove: (DragTargetDetails<BookRecord> details) => _armHover(),
-          onLeave: (BookRecord? _) => _cancelHover(),
-          onAcceptWithDetails: (DragTargetDetails<BookRecord> details) {
-            final bool armed = _mergeArmed;
-            _cancelHover();
-            if (armed && widget.onMergeBooks != null) {
-              widget.onMergeBooks!(details.data, widget.record);
-            } else {
-              widget.onReorder(details.data.bookId, widget.index);
-            }
-          },
+          // 落点即建（对齐 anx `onAcceptBook`）：不做任何悬停计时，松手在
+          // 书卡上就直接并入 / 新建文件夹。
+          onAcceptWithDetails: (DragTargetDetails<BookRecord> details) =>
+              widget.onMergeBooks?.call(details.data, widget.record),
           builder: (
             BuildContext context,
             List<BookRecord?> candidates,
             List<Object?> rejected,
           ) {
-            Widget content = widget.child;
-            if (_mergeArmed) {
-              content = _HoverOverlay(
+            // 悬停即时反馈：落到书卡 = 将建文件夹，立即给出提示（anx 用
+            // 1.05 放大表达同一语义）。
+            if (candidates.isNotEmpty && widget.onMergeBooks != null) {
+              return _HoverOverlay(
                 icon: Icons.create_new_folder_outlined,
                 label: '新建文件夹',
-                child: content,
+                child: widget.child,
               );
-            } else if (candidates.isNotEmpty) {
-              content = _HoverOverlay(child: content);
             }
-            return content;
+            return widget.child;
           },
         );
 
@@ -348,7 +296,6 @@ class _BookCellState extends State<_BookCell> {
           // 只要动过就会走到这里——比比较 `DraggableDetails.offset` 稳健。
           onDragUpdate: (DragUpdateDetails _) => _movedDuringDrag = true,
           onDragEnd: (DraggableDetails details) {
-            _cancelHover();
             // 未落到任何投放区 **且** 全程没动 → 判为「长按」→ 操作单。
             if (!details.wasAccepted && !_movedDuringDrag) {
               widget.onLongPressOnly();
