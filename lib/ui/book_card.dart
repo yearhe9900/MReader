@@ -24,7 +24,11 @@
 // 代价：`InkWell` 的水波纹/高亮不再压在封面之上，只在透明的信息区可见（anx 同此形态，
 // 其封面用 `Container(color:)` / `Container(decoration: image)`）。
 //
-// 打开准备中（[BookCard.loading]）：整卡蒙层 + 转圈，让用户看得见「在响应」。
+// 打开准备中（[BookCard.loading]）：**封面区**蒙层 + 转圈，让用户看得见「在响应」。
+// 蒙层只盖封面、随封面的 8 圆角裁切，**不盖信息区**（书名/作者/进度保持清晰可读）——
+// 2026-09-29 负责人反馈「点击后会有灰色背景」后改：原先是铺满**整张卡**的
+// `surface` α0.6 蒙层，深色主题下把封面压成暗灰（实测粉色封面 `#f48fb1` → `#6c4555`）、
+// 浅色下发白（→ `#f8cee0`），且因在 `ClipRRect` 之外而是**方角**。见 §2.55。
 //
 // 长按抬起反馈（2026-09-29 拍板「采用 anx 的书卡长按动画和效果」）：
 // 长按成立即**放大 1.05 + 浮起阴影**（数值出处见 [kBookLiftScale] 等常量的注释），
@@ -182,7 +186,9 @@ class BookCard extends StatefulWidget {
   /// 为 `null` 时**既不响应长按也不抬起**（书卡只在有回调时才挂长按处理）。
   final Future<void> Function()? onLongPress;
 
-  /// 是否处于「打开准备中」：显示 loading 覆盖层（转圈），提示卡片正在响应。
+  /// 是否处于「打开准备中」：在**封面区**显示蒙层 + 转圈，提示卡片正在响应。
+  ///
+  /// 蒙层只盖封面、随封面圆角裁切，**不盖信息区**（书名/作者/进度照常可读）。
   final bool loading;
 
   @override
@@ -274,6 +280,8 @@ class _BookCardState extends State<BookCard> {
                   Expanded(
                     child: Hero(
                       tag: 'book-cover-${widget.record.bookId}',
+                      // 打开准备中的蒙层画在**封面外框内**（`_buildCoverSurface`），
+                      // 随封面圆角一起裁、且不盖信息区——见该方法与类头注。
                       child: _buildCoverSurface(theme),
                     ),
                   ),
@@ -282,15 +290,6 @@ class _BookCardState extends State<BookCard> {
                   _buildInfo(theme),
                 ],
               ),
-              // 打开准备中：整卡蒙层 + 转圈（per-card 可见反馈）。
-              if (widget.loading)
-                ColoredBox(
-                  key: const ValueKey<String>('book-opening-overlay'),
-                  color: theme.colorScheme.surface.withValues(alpha: 0.6),
-                  child: const Center(
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
             ],
           ),
         ),
@@ -310,7 +309,7 @@ class _BookCardState extends State<BookCard> {
   ///    它画在封面内容**之下**，所以封面内容必须是**子树内**不透明绘制（见 `_buildCover`），
   ///    否则这颗填充阴影会盖在封面上把它染暗。
   /// ③ `ClipRRect`——裁掉封面内容（含本组件自带裁切的 `DefaultBookCover`），
-  ///    保证圆角生效；角标放在它**内**，随圆角一起裁。
+  ///    保证圆角生效；角标与加载蒙层都放在它**内**，随圆角一起裁。
   Widget _buildCoverSurface(ThemeData theme) {
     return AnimatedContainer(
       key: kBookLiftShadowKey,
@@ -333,8 +332,8 @@ class _BookCardState extends State<BookCard> {
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(kBookCoverRadius),
-          // 格式标签角标（PRD US-06 / LIB-01；anx 原版封面无此物）：
-          // 放在 ClipRRect **内**，随封面圆角一起裁切，不会溢出圆角。
+          // 格式标签角标（PRD US-06 / LIB-01；anx 原版封面无此物）与加载蒙层
+          // 都放在 ClipRRect **内**，随封面圆角一起裁切，不会溢出圆角。
           child: Stack(
             fit: StackFit.expand,
             children: <Widget>[
@@ -344,6 +343,15 @@ class _BookCardState extends State<BookCard> {
                 bottom: kBookFormatBadgeInset,
                 child: _FormatTag(format: widget.record.format),
               ),
+              // 打开准备中：**只蒙封面**（见类头注「打开准备中」与 [BookCard.loading]）。
+              if (widget.loading)
+                ColoredBox(
+                  key: const ValueKey<String>('book-opening-overlay'),
+                  color: theme.colorScheme.surface.withValues(alpha: 0.6),
+                  child: const Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
             ],
           ),
         ),
