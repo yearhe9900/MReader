@@ -1372,7 +1372,7 @@ bash tool/test.sh data                                      # 00:17 +205: All te
 
 **测试（`test/ui/settings_page_test.dart` 新建，此前设置页零覆盖）**
 
-口径 `grep -c "^\s*test\(Widgets\)\?(" test/ui/settings_page_test.dart` → **11 条**；`tool/test.sh ui` **117 → 128 全绿**。
+口径 `grep -c "^\s*test\(Widgets\)\?(" test/ui/settings_page_test.dart` → **11 条**；`tool/test.sh ui` **117 → 128 全绿**、`data` **+205 全绿**。
 
 | 用例 | 断言要点 |
 |---|---|
@@ -1405,9 +1405,10 @@ bash tool/test.sh data                                      # 00:17 +205: All te
 /c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze      # 0 error / 0 warning / 7 条既有 info
 /c/src/flutter/bin/flutter test --timeout 30s test/ui/settings_page_test.dart   # 00:01 +11: All tests passed!
 bash tool/test.sh ui                                        # 01:07 +128: All tests passed!
+bash tool/test.sh data                                      # 00:16 +205: All tests passed!（补跑，见「复核边界」）
 ```
 
-**复核边界**：`analyze` 与本文件 / 全 `ui` 组测试为本批实跑；**真机观感未复跑**——参考图是 HyperOS 深色页，本批在浅色主题 / 窄屏 / 桌面宽窗口下的实际观感、大标题两段式收起的手感、实心卡片与玻璃顶栏的接缝都需真机确认。`parse` / `reader` / `data` 三组未跑（与本次改动零交集：改动仅在 `lib/ui/` 与 `lib/theme/`，`data` 组不含设置页用例）。
+**复核边界**：`analyze`、本文件与 `ui` / `data` 两组测试为本批实跑；**真机观感未复跑**——参考图是 HyperOS 深色页，本批在浅色主题 / 窄屏 / 桌面宽窗口下的实际观感、大标题两段式收起的手感、实心卡片与玻璃顶栏的接缝都需真机确认。`data` 组**是补跑**：`test/meta/detail_test.dart` 也引用 `GlassTopBar`，虽 `largeTitleController` 是可选新参数、退化路径在传 `null` 时与改前**逐字等价**（`_fadeInBarTitle` 直接返回原 `title`），仍按「影响面闭合」补跑并留档。`parse` / `reader` 两组未跑（与本次改动零交集：改动仅在 `lib/ui/` 与 `lib/theme/`）。
 
 ## 测试分组与局部执行（2026-09-23）
 
