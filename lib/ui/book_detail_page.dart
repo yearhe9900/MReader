@@ -37,6 +37,7 @@ import '../meta/meta_editor.dart';
 import '../reader/progress_store.dart';
 import '../settings/shelf_layout_store.dart';
 import 'cover_picker.dart';
+import 'default_book_cover.dart';
 import 'glass_kit.dart';
 
 /// 书籍详情页（`META-08`）。
@@ -693,7 +694,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
           child: SizedBox(
             width: 120,
             height: 180,
-            child: _buildCover(theme),
+            child: _buildCover(),
           ),
         ),
         const SizedBox(height: 6),
@@ -721,14 +722,18 @@ class _BookDetailPageState extends State<BookDetailPage> {
     );
   }
 
-  Widget _buildCover(ThemeData theme) {
+  /// 封面（真封面 / 加载中 / 默认封面三态）。
+  ///
+  /// **不收 `theme`**：三条分支都不吃主题色了——真封面是图片，默认封面（[DefaultBookCover]）
+  /// 的底色按书名哈希取自 `Colors.primaries`，与主题无关（anx 口径）。
+  Widget _buildCover() {
     if (_coverThumb != null) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(6),
         child: Image.memory(
           _coverThumb!,
           fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => _buildCoverPlaceholder(theme),
+          errorBuilder: (_, _, _) => _buildCoverPlaceholder(),
         ),
       );
     }
@@ -737,26 +742,19 @@ class _BookDetailPageState extends State<BookDetailPage> {
         child: CircularProgressIndicator(strokeWidth: 2),
       );
     }
-    return _buildCoverPlaceholder(theme);
+    return _buildCoverPlaceholder();
   }
 
-  /// 无封面 / 合成封面占位：书名首字 + 主题色底（同 `BookCard` 口径）。
-  Widget _buildCoverPlaceholder(ThemeData theme) {
-    final String initial =
-        _record.title.isNotEmpty ? _record.title.characters.first : '?';
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(6),
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        initial,
-        style: theme.textTheme.headlineLarge?.copyWith(
-          color: theme.colorScheme.onPrimaryContainer,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
+  /// 无封面 / 合成封面 → **默认封面**（2026-09-29 拍板「采用 anx 无封面书籍的
+  /// 默认封面」，与书架书卡同源：[DefaultBookCover]，视觉照抄 anx）。
+  ///
+  /// 圆角沿用本页自有的 6（`_buildCover` 的真封面分支也是 6）——书架那份是
+  /// `kBookCoverRadius` = 8，两处不一致是**既有状态**，本批未擅自统一。
+  Widget _buildCoverPlaceholder() {
+    return DefaultBookCover(
+      title: _record.title,
+      author: _record.author,
+      radius: 6,
     );
   }
 

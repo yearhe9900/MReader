@@ -84,8 +84,13 @@ Future<void> _settle(WidgetTester tester, {int rounds = 40}) async {
 }
 
 /// 按书名找到书卡。
+///
+/// ⚠️ 末尾的 `.first` 是为**去重**：2026-09-29 起无封面书卡的占位封面
+/// （`DefaultBookCover`）顶部也画一遍书名，于是同一张卡里 `find.text(title)` 命中
+/// 2 个 `Text`，`find.ancestor` 便把**同一张** `BookCard` 列出两次，
+/// `tap()` / `longPress()` 会报「歧义」。
 Finder _cardOf(String title) =>
-    find.ancestor(of: find.text(title), matching: find.byType(BookCard));
+    find.ancestor(of: find.text(title), matching: find.byType(BookCard)).first;
 
 /// 全树范围找详情页（覆盖栈里的路由也要揪出来）。
 Finder _detailPages() => find.byType(BookDetailPage, skipOffstage: false);
@@ -503,8 +508,10 @@ void main() {
       expect(_detailPages(), findsOneWidget);
 
       // ① 字段齐全：书名 / 作者 / 格式 / 大小 / 进度 / 分组 / 统计入口。
-      expect(_inDetail(find.text('三体')), findsOneWidget);
-      expect(_inDetail(find.text('刘慈欣')), findsOneWidget);
+      // ⚠️ 书名与作者**各 2 次**：一次在封面（`DefaultBookCover`，2026-09-29 采用
+      // anx 默认封面后如此），一次在下面的字段区。其余字段不存在这个重名问题。
+      expect(_inDetail(find.text('三体')), findsNWidgets(2));
+      expect(_inDetail(find.text('刘慈欣')), findsNWidgets(2));
       expect(_inDetail(find.text('TXT')), findsOneWidget);
       expect(_inDetail(find.text('文件大小')), findsOneWidget);
       expect(_inDetail(find.text('未开始')), findsOneWidget);
@@ -547,8 +554,9 @@ void main() {
       await _openDetailViaSheet(tester, find.byType(BookCard));
       expect(_detailPages(), findsOneWidget);
 
-      expect(_inDetail(find.text(meta.title)), findsOneWidget);
-      expect(_inDetail(find.text(meta.author)), findsOneWidget);
+      // 同上：书名与作者在详情页内各 2 次（封面 + 字段区）。
+      expect(_inDetail(find.text(meta.title)), findsNWidgets(2));
+      expect(_inDetail(find.text(meta.author)), findsNWidgets(2));
       expect(_inDetail(find.text('EPUB')), findsOneWidget);
       // 来源标记与解析结果同文案。
       expect(_inDetail(find.text(originLabel(meta.titleOrigin))), findsWidgets);
@@ -587,7 +595,8 @@ void main() {
       await _settle(tester);
 
       // 详情页立即同步：新书名 + 「用户自定义」标记；作者仍标「文件名推断」。
-      expect(_inDetail(find.text('三体（修订版）')), findsOneWidget);
+      // 新书名同样 2 次：封面（跟着 `_record` 一起更新）+ 字段区。
+      expect(_inDetail(find.text('三体（修订版）')), findsNWidgets(2));
       expect(_inDetail(find.text('用户自定义')), findsWidgets);
       expect(_inDetail(find.text('文件名推断')), findsWidgets);
 

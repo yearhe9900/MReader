@@ -270,13 +270,20 @@ void main() {
       );
 
       // 裁切用的 `ClipRRect` 必须用**同一个**圆角，否则投影会从裁切角落露出来。
-      final ClipRRect clip = tester.widget<ClipRRect>(
+      //
+      // ⚠️ 断言的是**全部**下层 `ClipRRect`，不是「那一个」：2026-09-29 起无封面
+      // 书卡的占位换成 `DefaultBookCover`，它自带一层同圆角裁切（水印要探出被裁），
+      // 于是封面外框下会有两层裁切框。逐层验收反而更强——任一层圆角不一致即红。
+      final Iterable<ClipRRect> clips = tester.widgetList<ClipRRect>(
         find.descendant(
           of: find.byKey(kBookCoverSurfaceKey),
           matching: find.byType(ClipRRect),
         ),
       );
-      expect(clip.borderRadius, BorderRadius.circular(8));
+      expect(clips, isNotEmpty, reason: '封面外框内至少要有一层裁切框');
+      for (final ClipRRect clip in clips) {
+        expect(clip.borderRadius, BorderRadius.circular(8));
+      }
     });
   });
 }

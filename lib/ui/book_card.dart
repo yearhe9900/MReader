@@ -6,6 +6,10 @@
 // 拍板「挪到封面上做角标」）；下方信息区为「书名（两行加粗）+ 作者 · 阅读进度」，
 // **高度固定 55**（照搬 anx `book_item.dart:89-90`）。
 //
+// 无封面书 → **默认封面**（`lib/ui/default_book_cover.dart`；2026-09-29 拍板
+// 「采用 anx 无封面书籍的默认封面」= 书名哈希取色的浅色底 + 顶部书名 + 底部作者
+// + 右下角旋转 15° 书本水印，尺寸按封面宽度成比例）。
+//
 // 手势：`Card(child: InkWell(...))` 结构**保留**——按压有 ripple 反馈，
 // 且能缓解 GridView 滚动/拖拽识别器在手势竞技场吞点（既有实证结论）。
 // 只是把 `Card` 本身做成「无色、无 elevation、不裁剪、零外边距」，
@@ -28,6 +32,7 @@ import 'package:flutter/material.dart';
 import '../library/book_record.dart';
 import '../meta/cover_store.dart';
 import '../model/book_meta.dart';
+import 'default_book_cover.dart';
 import 'shelf_geometry.dart';
 
 /// 封面投影（**2026-09-29 对齐 anx**）。
@@ -106,7 +111,8 @@ const ValueKey<String> kBookLiftShadowKey = ValueKey<String>(
 ///
 /// 封面来源：
 /// - [StoredCover]：从 [CoverStore.readThumb] 异步加载（`Ink.image` 保 ripple 可见）；
-/// - [NoCover] / [SyntheticCover]：显示占位色块 + 书名首字。
+/// - [NoCover] / [SyntheticCover]：显示**默认封面**（[DefaultBookCover]，视觉照抄
+///   anx —— 见该文件的头注）。
 class BookCard extends StatefulWidget {
   /// 创建书卡。
   const BookCard({
@@ -272,7 +278,7 @@ class _BookCardState extends State<BookCard> {
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            _buildCover(theme),
+            _buildCover(),
             Positioned(
               right: kBookFormatBadgeInset,
               bottom: kBookFormatBadgeInset,
@@ -284,7 +290,7 @@ class _BookCardState extends State<BookCard> {
     );
   }
 
-  Widget _buildCover(ThemeData theme) {
+  Widget _buildCover() {
     if (_thumbBytes != null) {
       // `Ink.image`（而非 `Image.memory`）：封面画在 Card 的 Material 上，
       // InkWell 的 ripple 才能压在封面之上显示。
@@ -299,27 +305,23 @@ class _BookCardState extends State<BookCard> {
     if (_loadingThumb) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
-    return _buildPlaceholder(theme);
+    return _buildPlaceholder();
   }
 
-  /// 占位封面：书名首字居中 + 主题色背景（`Ink` 保 ripple 可见）。
-  Widget _buildPlaceholder(ThemeData theme) {
-    final String initial = widget.record.title.isNotEmpty
-        ? widget.record.title.characters.first
-        : '?';
-    return Ink(
-      color: theme.colorScheme.primaryContainer,
-      child: Center(
-        child: Text(
-          initial,
-          style: theme.textTheme.headlineLarge?.copyWith(
-            color: theme.colorScheme.onPrimaryContainer,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-    );
-  }
+  /// 占位封面 = **默认封面**（2026-09-29 拍板「采用 anx 无封面书籍的默认封面」）。
+  ///
+  /// 视觉全部照抄 anx：底色 = `Colors.primaries[书名.hashCode % 18].shade200`
+  /// （每本书一张浅色）、顶部书名（3 行）+ 底部作者、右下角旋转 15° 的书本水印、
+  /// 尺寸按封面宽度成比例——逐条出处见 `default_book_cover.dart` 的头注。
+  /// 原先的「主题色底 + 书名首字」已废弃。
+  ///
+  /// 底色由 [DefaultBookCover] 自己画：它检测到本卡片 `Card` 的 `Material` 后用
+  /// `Ink` 上色，ripple 仍压在底色之上（与上面 `Ink.image` 同一条口径）。
+  Widget _buildPlaceholder() => DefaultBookCover(
+    title: widget.record.title,
+    author: widget.record.author,
+    radius: kBookCoverRadius,
+  );
 
   /// 信息区：书名（两行）/ 作者 · 进度。
   ///

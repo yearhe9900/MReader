@@ -73,8 +73,13 @@ Future<void> _settle(WidgetTester tester, {int rounds = 40}) async {
 }
 
 /// 按书名找到书卡（书名文本的最近 [BookCard] 祖先）。
+///
+/// ⚠️ 末尾的 `.first` 是为**去重**，不是「随便挑一个」：2026-09-29 起无封面书卡的
+/// 占位封面（`DefaultBookCover`）顶部也画一遍书名，于是同一张卡里 `find.text(title)`
+/// 会命中 2 个 `Text`（封面一个、信息区一个），`find.ancestor` 便把**同一张**
+/// `BookCard`（同一个 Element、同一个 State）列出两次，`tap()` 会报「歧义」。
 Finder _cardOf(String title) =>
-    find.ancestor(of: find.text(title), matching: find.byType(BookCard));
+    find.ancestor(of: find.text(title), matching: find.byType(BookCard)).first;
 
 /// 全树范围找 [ReaderPage]（`skipOffstage: false`：被覆盖路由若仍挂着也要揪出来，
 /// 否则「恰好 push 一次」的断言会被 offstage 藏掉漏检）。
@@ -168,8 +173,14 @@ void main() {
       expect(find.text('书架空空如也'), findsNothing);
       // 书卡出现
       expect(find.byType(BookCard), findsOneWidget);
-      // 书名和作者可见
-      expect(find.text('三体'), findsOneWidget);
+      // 书名和作者可见。
+      //
+      // ⚠️ 书名与作者**各出现两次**是预期：一次在封面（`DefaultBookCover` 顶部大字
+      // / 底部小字，2026-09-29 采用 anx 默认封面后如此），一次在下方信息区。作者不是
+      // 空串——`META-01` 保证缺失时兜底成「未知作者」（`lib/meta/meta_source.dart:14`），
+      // 故封面画的也是「未知作者」。
+      expect(find.text('三体'), findsNWidgets(2));
+      expect(find.text('未知作者'), findsNWidgets(2));
     });
 
     testWidgets('LIB-05 多本书：网格显示多个书卡', (WidgetTester tester) async {
@@ -415,9 +426,11 @@ void main() {
 
       // 详情页字段可见：书名 + 来源标记（TXT 书名来自文件名，`META-08 ②`）。
       // 注意：被覆盖的书架卡片同名文本也在树上，故范围限定在详情页内断言。
+      // 书名在详情页内也是**两处**（`DefaultBookCover` 封面 + 标题栏大标题），
+      // 故是 `findsNWidgets(2)` 而非 1。
       expect(
         find.descendant(of: _detailPages(), matching: find.text('甲书')),
-        findsOneWidget,
+        findsNWidgets(2),
       );
       expect(
         find.descendant(of: _detailPages(), matching: find.text('文件名推断')),
