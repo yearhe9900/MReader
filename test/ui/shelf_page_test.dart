@@ -700,5 +700,61 @@ void main() {
       expect(find.text('手动排序'), findsOneWidget);
       expect(find.text('导入时间'), findsOneWidget);
     });
+
+    // ── 阅读状态筛选：单选（2026-09-29 改版，对齐 anx-reader） ──────────
+
+    testWidgets('筛选 chips：已读完/正在读/未开始，单选且立即过滤书目',
+        (WidgetTester tester) async {
+      final ImportResult finished = (await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('读完的'), fileName: '完.txt'),
+      ))!;
+      final ImportResult reading = (await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('读一半的'), fileName: '半.txt'),
+      ))!;
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('没读的'), fileName: '新.txt'),
+      );
+      // 预置阅读进度：完=1.0（已读完）、半=0.4（正在读）、新=null（未开始）。
+      await tester.runAsync(() async {
+        await repo.markRead(
+          finished.record.bookId,
+          lastReadAt: 2,
+          readProgress: 1.0,
+        );
+        await repo.markRead(
+          reading.record.bookId,
+          lastReadAt: 1,
+          readProgress: 0.4,
+        );
+      });
+
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+      expect(_titles(tester), hasLength(3));
+
+      // chips 文案与顺序（照搬 anx `bookshelf_page.dart:111-141`）。
+      final List<String> chipLabels = tester
+          .widgetList<FilterChip>(find.byType(FilterChip))
+          .map((FilterChip chip) => (chip.label as Text).data!)
+          .toList();
+      expect(chipLabels, <String>['已读完', '正在读', '未开始']);
+
+      // 选「已读完」→ 只剩读完的那本。
+      await tester.tap(find.text('已读完'));
+      await _settle(tester);
+      expect(_titles(tester), <String>['完']);
+
+      // 再选「正在读」→ **顶掉**上一个（单选，不是叠加）。
+      await tester.tap(find.text('正在读'));
+      await _settle(tester);
+      expect(_titles(tester), <String>['半']);
+      expect(shelfPrefs.prefs.filter, ShelfReadingFilter.reading);
+
+      // 再点已选中的「正在读」→ 取消 → 全部三本回来。
+      await tester.tap(find.text('正在读'));
+      await _settle(tester);
+      expect(_titles(tester), hasLength(3));
+      expect(shelfPrefs.prefs.filter, isNull);
+    });
   });
 }

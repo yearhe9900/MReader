@@ -114,26 +114,17 @@ class _ShelfPageState extends State<ShelfPage> {
     final ShelfPrefs prefs = widget.shelfPrefs.prefs;
     Iterable<BookRecord> list = _books;
 
-    if (prefs.filters.isNotEmpty) {
+    final ShelfReadingFilter? filter = prefs.filter;
+    if (filter != null) {
       list = list.where((BookRecord b) {
         final double? p = b.readProgress;
-        // 三个维度是「或」关系：命中任一已选维度即保留（与 anx-reader 的多选语义一致）。
-        if (prefs.filters.contains(ShelfReadingFilter.unread) &&
-            (p == null || p <= 0)) {
-          return true;
-        }
-        if (prefs.filters.contains(ShelfReadingFilter.reading) &&
-            p != null &&
-            p > 0 &&
-            p < 1) {
-          return true;
-        }
-        if (prefs.filters.contains(ShelfReadingFilter.finished) &&
-            p != null &&
-            p >= 1) {
-          return true;
-        }
-        return false;
+        // 单选：只按当前这一个维度判定（2026-09-29 由多选「或」关系改来，
+        // 对齐 anx-reader 的单选语义）。
+        return switch (filter) {
+          ShelfReadingFilter.unread => p == null || p <= 0,
+          ShelfReadingFilter.reading => p != null && p > 0 && p < 1,
+          ShelfReadingFilter.finished => p != null && p >= 1,
+        };
       });
     }
 
@@ -619,9 +610,11 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 筛选栏（状态多选 chips + 清除入口）。
+  /// 筛选栏（状态**单选** chips + 清除入口）。
   ///
   /// 高 40、横向可滚：小屏下三个 chip 与「清除」并排放得下，超长则滑动。
+  /// 顺序与文案照搬 anx-reader（`bookshelf_page.dart:111-141`）：
+  /// **已读完 / 正在读 / 未开始**。
   Widget _buildFilterBar(ThemeData theme) {
     final ShelfPrefs prefs = widget.shelfPrefs.prefs;
     return SizedBox(
@@ -634,9 +627,9 @@ class _ShelfPageState extends State<ShelfPage> {
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: <Widget>[
-                  _buildFilterChip(ShelfReadingFilter.unread, '未读'),
-                  _buildFilterChip(ShelfReadingFilter.reading, '在读'),
                   _buildFilterChip(ShelfReadingFilter.finished, '已读完'),
+                  _buildFilterChip(ShelfReadingFilter.reading, '正在读'),
+                  _buildFilterChip(ShelfReadingFilter.unread, '未开始'),
                 ],
               ),
             ),
@@ -652,9 +645,9 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 单个状态筛选 chip（多选）。
+  /// 单个状态筛选 chip（**单选**）：选中即生效，再点同一个取消。
   Widget _buildFilterChip(ShelfReadingFilter filter, String label) {
-    final bool selected = widget.shelfPrefs.prefs.filters.contains(filter);
+    final bool selected = widget.shelfPrefs.prefs.filter == filter;
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: FilterChip(

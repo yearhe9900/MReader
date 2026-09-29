@@ -14,7 +14,11 @@ import 'dart:io';
 import '../storage/atomic_file.dart';
 import '../storage/json_store.dart';
 
-/// 阅读状态筛选维度（**可多选**；空集 = 不筛选）。
+/// 阅读状态筛选维度（**单选**：至多一个生效；`null` = 不筛选）。
+///
+/// 2026-09-29 由多选 `Set` 改为单值——对齐 anx-reader 的单选语义
+/// （`providers/book_filters.dart:5` 的 `ReadingStatusFilter { none, finished,
+/// reading, notStarted }`，其 `none` 在本项目即 `null`）。
 enum ShelfReadingFilter {
   /// 未开始（`readProgress` 为空或 `0`）。
   unread,
@@ -71,13 +75,13 @@ enum ShelfSortField {
 class ShelfPrefs {
   /// 创建书架偏好。
   const ShelfPrefs({
-    this.filters = const <ShelfReadingFilter>{},
+    this.filter,
     this.sortField = ShelfSortField.importedAt,
     this.sortAscending = false,
   });
 
-  /// 生效的筛选维度集合。
-  final Set<ShelfReadingFilter> filters;
+  /// 生效的阅读状态筛选（**单选**；`null` = 不筛选）。
+  final ShelfReadingFilter? filter;
 
   /// 排序字段。
   final ShelfSortField sortField;
@@ -86,47 +90,58 @@ class ShelfPrefs {
   final bool sortAscending;
 
   /// 是否处于筛选态（用于「清除筛选」入口的显隐）。
-  bool get hasFilter => filters.isNotEmpty;
+  bool get hasFilter => filter != null;
 
   /// 复制并覆盖部分字段。
+  ///
+  /// 注意 [filter] 为可空：**无法用它显式置空**（`null` = 不修改）。
+  /// 清除筛选走 [ShelfPrefsStore.clearFilters]，它直接构造新对象。
   ShelfPrefs copyWith({
-    Set<ShelfReadingFilter>? filters,
+    ShelfReadingFilter? filter,
     ShelfSortField? sortField,
     bool? sortAscending,
   }) {
     return ShelfPrefs(
-      filters: filters ?? this.filters,
+      filter: filter ?? this.filter,
       sortField: sortField ?? this.sortField,
       sortAscending: sortAscending ?? this.sortAscending,
     );
   }
 
   /// 序列化。
+  ///
+  /// 键名沿用 `filters`（list 形态、**恒 0 或 1 个元素**）：与多选时代的
+  /// 落盘格式完全兼容，旧文件无需迁移——解析时只取首个合法值（见 [fromJson]）。
   Map<String, Object?> toJson() => <String, Object?>{
-        'filters': filters.map((ShelfReadingFilter f) => f.name).toList(),
+        'filters': <String>[
+          if (filter != null) filter!.name,
+        ],
         'sortField': sortField.name,
         'sortAscending': sortAscending,
       };
 
   /// 由持久化 JSON 还原；字段缺失 / 类型异常时逐项回退默认值。
+  ///
+  /// 旧版多选文件（多个维度）按**首个合法值**收敛为单选，其余丢弃。
   static ShelfPrefs fromJson(Object? json) {
     if (json is! Map) {
       return const ShelfPrefs();
     }
     final Object? rawFilters = json['filters'];
-    final Set<ShelfReadingFilter> filters = <ShelfReadingFilter>{};
+    ShelfReadingFilter? filter;
     if (rawFilters is List) {
       for (final Object? item in rawFilters) {
         final ShelfReadingFilter? parsed =
             ShelfReadingFilter.fromName(item is String ? item : null);
         if (parsed != null) {
-          filters.add(parsed);
+          filter = parsed; // 单选：多选旧文件取**首个**合法值，其余丢弃。
+          break;
         }
       }
     }
     final Object? rawAscending = json['sortAscending'];
     return ShelfPrefs(
-      filters: filters,
+      filter: filter,
       sortField: ShelfSortField.fromName(json['sortField'] as String?),
       sortAscending: rawAscending is bool ? rawAscending : false,
     );
@@ -163,21 +178,30 @@ class ShelfPrefsStore {
     _notify();
   }
 
-  /// 切换一个筛选维度（多选：已在集合中则移除）。
+  /// 切换筛选（**单选**，与 anx `ReadingStatusFilterNotifier.toggle` 同语义）：
+  /// 点**未选中**的维度 → 选中它（顶掉原值）；点**已选中**的 → 取消（回 `null`）。
   Future<void> toggleFilter(ShelfReadingFilter filter) {
-    final Set<ShelfReadingFilter> next = <ShelfReadingFilter>{..._prefs.filters};
-    if (!next.remove(filter)) {
-      next.add(filter);
+    final ShelfReadingFilter? next =
+        _prefs.filter == filter ? null : filter;
+    if (next == null) {
+      return clearFilters();
     }
-    return _update(_prefs.copyWith(filters: next));
+    return _update(_prefs.copyWith(filter: next));
   }
 
-  /// 清空全部筛选。
+  /// 清除筛选（回「全部」）。
   Future<void> clearFilters() {
-    if (_prefs.filters.isEmpty) {
+    if (_prefs.filter == null) {
       return Future<void>.value();
     }
-    return _update(_prefs.copyWith(filters: const <ShelfReadingFilter>{}));
+    // `copyWith` 的可空参数无法显式置空 → 直接构造新值对象。
+    return _update(
+      ShelfPrefs(
+        filter: null,
+        sortField: _prefs.sortField,
+        sortAscending: _prefs.sortAscending,
+      ),
+    );
   }
 
   /// 设置排序字段；点同一字段则**翻转方向**（列表类界面的通行手感）。
