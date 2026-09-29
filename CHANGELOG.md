@@ -3,6 +3,16 @@
 > 格式：Keep a Changelog 简化式。日期用 `YYYY-MM-DD`，**按日期倒序**排列。
 > 书写约定：每条一句话、**不复述过程**（分析、根因链、教训留在 PRD 与 `.workbuddy/memory/`），条目末尾附 commit hash 便于追溯。
 
+## 2026-09-29
+
+### 修复
+
+- **玻璃壳层正文不避让顶栏（真机截图实证：书架筛选栏被顶进状态栏、网格首行封面被顶栏盖住）**：根因是 `GlassNavScaffold` 未传 `extendBody`、吃了玻璃库默认值 `true` → 库 `glass_scaffold.dart:487-489` 走 `Positioned.fill` 让正文铺满整屏从 y=0 起，只有 `extendBody: false` 才走 `:491-494` 的 `top: topPad + effectiveAppBarHeight`，显式传之；**一处改、7 个页面同时修**（书架 / 详情 / 搜索 / 设置 / 文件夹 / 占位 ×2），已核对 7 处调用点无一手工补过顶部故无双重留白，底部不受影响（本项目底栏不走 `GlassScaffold.bottomBar`，`bottomBar == null` → `bottom: 0`，留白仍由各页 `kShellBottomInset` 承担）。连带：`detail_test` 的 META-08 TXT「单书统计」断言因正文下移 44px 被挤出 600px 测试视口（`ListView` 懒构建）——产品行为正确、失效的是「首屏即可见」的隐含前提，只把该测试视口调到 800×1000、断言一字未改。已知代价（拍板取舍）：`:458` 条件不再成立 → 顶栏下方滚动渐隐一并关闭 `ad37f96`
+
+### 变更
+
+- **书架几何抽成事实源 + 契约测试**（「直接复用 anx 代码」的落地形态，两项拍板之一）：新增 `lib/ui/shelf_geometry.dart`——所有几何数值只在此定义一次、每条附 anx 出处行号与差异声明（`shelf_grid.dart` 改为引用并 `export`，调用点 import 零改动；`book_card.dart` 三处字面量改常量）；新增 `test/ui/shelf_geometry_contract_test.dart` 5 个用例（常量 golden + 真实渲染契约：392 宽 3 列 / 119 宽 1 列下限兜底 / 卡片高宽比 2.1 / 封面下方合计 60 / 角标在封面右下），**期望值一律硬编码字面量而非常量引用**（引用即同义反复、永远红不了），测真实渲染尺寸故能同时抓「数值抄错」与「参数接错线」两类错。附带核对：当初抄的 5/55 与 anx 源码一致，但书名↔作者间距 2 与信息区水平内边距 2 **是本项目自有值、anx 该处为 0**，已在事实源照实标注 `a6cc900`
+
 ## 2026-09-28
 
 ### 新增

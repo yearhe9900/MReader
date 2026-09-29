@@ -1071,6 +1071,70 @@ bash tool/test.sh data                                      # 00:11 +205: All te
 
 **未做（如实登记，交负责人）**：① 新几何未做真机/桌面目视验收；② 本批仍只跑 `ui` + `data` 两组，`parse` / `reader` **未实跑**（与本批改动无交集）；③ `kShelfCoverTargetWidth` 目前**未开放为设置项**（anx 设置页可调 80–260，若要开放只改这一处常量的读取来源）。
 
+### 2.41 顶栏避让修复 + 书架几何事实源与契约测试（2026-09-29）
+
+**触发**：负责人发真机截图「布局乱了」（筛选栏被顶进状态栏、网格首行封面被顶栏盖住），并同时提出方向建议「**直接复用 anx 的代码，在它基础上修改**」。两问两答拍板：**修法 = 传 `extendBody: false`**；**复用范围 = 几何抽成事实源 + 契约测试**（不换骨架）。
+
+**根因（读库源码定案，非猜测）**
+
+| 证据 | 位置 |
+|---|---|
+| `this.extendBody = true` —— **库默认值** | `glass_scaffold.dart:135` |
+| `extendBody` 为真 → `Positioned.fill(child: bodyContent)`，**正文铺满、y=0 起、不避让顶栏** | `:487-489` |
+| `extendBody` 为假 → `top: topPad + effectiveAppBarHeight`（正确避让） | `:491-494` |
+| 我们的薄封装**没传这个参数** | `glass_kit.dart:406-411`（改前） |
+
+⚠️ **库文档与实现不符（本批最值得记的一条）**：`:153` 写 *"A top spacer is automatically added to push initial content below the app bar"*、`:83` 写 *"No manual spacer needed — GlassScaffold handles it"*，但 **`grep spacer` 全文件只有这三处文字、零处实现**——`extendBody: true` 分支就是裸 `Positioned.fill`。**引用第三方 API 一律以代码为准，文档只能当线索**（本项目工程约定已有此条，本次再添实证）。
+
+**归属（如实）**：批次① `06063c8` 引入的既存 bug（建 `GlassNavScaffold` 时漏传），批次② `0991c43` 加筛选栏后显形；**不是 §2.40 几何批次引入**——那批只改横向 padding / 列数 / 卡片内部几何，纵向起点一行未碰。
+
+**核查与代价（改前必做的两件）**
+
+1. **7 处调用点无一手工补过顶部**（`book_detail_page:411` / `library_search_page:61` / `placeholder_page:47` / `settings_page:50` / `shelf_folder_page:109` / `shelf_page:565,573`）→ 一处改不会造成双重留白；`settings_page` 的 `ListView(padding: all 12)` 改前首项同样被盖，属顺带修好。
+2. **底部不会被二次避让**：本项目底栏是 `home_shell.dart:166-180` 自己 `Positioned` 的浮动胶囊，**不走** `GlassScaffold.bottomBar` → `bottomBar == null` → `bottom: 0`，底部留白仍由各页 `kShellBottomInset` 独立承担。
+3. **已知代价（拍板接受）**：`:458` 的 `if (extendBody && (doFadeTop || doFadeBottom))` 不再成立 → 正文不再包 `GlassScrollEdgeEffect`，**顶栏下方滚动渐隐关闭**（`edgeFade` 默认 `true`、有 appBar 即 `doFadeTop = true`，故这项确实存在、不是白关）。备选修法（给 body 补 top spacer 保渐隐）被否：要复制库 `:428/:434` 的算法，又落回「手工转述」老路。
+
+**「直接复用 anx 代码」的评估（实读，非凭 pubspec 概括）**
+
+- 整包红线冲突：anx 用 `flutter_riverpod` + `riverpod_annotation` + `freezed` + `build_runner`(`flutter_gen_runner`) + `sqflite`/`shared_preferences` + `flex_color_scheme` + `flutter_reorderable_grid_view`，`archive ^3.6.1`；MReader 已拍板**禁 Riverpod/Provider、禁 build_runner/Freezed、自研 JSON+AtomicFile、玻璃态、不引网格重排包**，且 `archive` 被 `pdfrx_engine` 逼到 `4.3.0` 不可退。
+- **落到文件**：`book_item.dart:1-10` 即 import `flutter_riverpod`、`models/book.dart`、`service/book.dart`（开书链路）、`shared_preference_provider`（`Prefs().eInkMode` / `webdavStatus`），`build` 里 `ref.watch(syncStatusProvider)` + `showModalBottomSheet` —— **剥掉依赖后恰好只剩纯 `Column` 几何**，行为与数据层必须全部重写。故"复用"的真实收益边界 = **几何与结构**，不是 widget 本身。
+- 结论对应拍板：几何抽事实源 + 契约测试；**不换骨架**。
+
+**几何事实源 `lib/ui/shelf_geometry.dart`（新增）**
+
+- 所有几何数值**只在此定义一次**，每条附 anx 出处行号：`kShelfCoverTargetWidth` 120（`bookshelf_page.dart:453-454`）、`kShelfChildAspectRatio` 1/2.1（`:455`）、`kShelfMainAxisSpacing` 30 / `kShelfCrossAxisSpacing` 20（`:456-457`）、`kShelfGridPadding` (20,12,20,·)（`:449`，底部换 `kShellBottomInset`）、`kBookCoverToInfoGap` 5（`book_item.dart:88`）、`kBookInfoHeight` 55（`:89-90`）、`kBookFormatBadgeInset` 6。
+- **与 anx 不同的自有值照实标注**（防止后人逐行对照时误判成抄错）：`kBookTitleToAuthorGap` 2 与 `kBookInfoHorizontalPadding` 2 —— anx `book_item.dart` 信息区内两个 `Row` 之间**无 `SizedBox`**、也**无水平 Padding**（均为 0）。
+- `shelf_grid.dart` 改为 `import` + `export 'shelf_geometry.dart'`，使 `shelf_folder_page` 等既有调用点 **import 零改动**；`book_card.dart` 三处字面量改常量。
+- ⚠️ **`export` 必须放在 import 区**：首次把它写在 `const kFolderMergeHoverDelay` 之后（declaration 中间）是**语法错误**，Dart 的 directive 只能出现在所有 declaration 之前。
+
+**契约测试 `test/ui/shelf_geometry_contract_test.dart`（新增 5 用例）**
+
+- 两层：① 常量 golden；② **真实渲染契约**（392 宽 → 3 列且第 4 张换行 / 119 宽 → 1 列（`~/` 下限兜底）/ 卡片高宽比 2.1 / 卡片高 − `Hero` 高 = **60**（= 信息区 55 + 间距 5）/ 角标落在封面右下象限）。
+- **期望值一律硬编码字面量，禁止引用事实源常量** —— 引用常量 = 同义反复，常量改了测试也跟着改就永远红不了；测真实渲染尺寸才能同时抓「数值抄错」与「参数接错线」（如 `childAspectRatio` 写成 `2.1 / 1`）。
+- **自纠记录（不粉饰）**：角标断言首跑红，实测 `cellRect.right - badgeRect.right = 12` 而期望 6 —— 我量的是角标**文案 `Text`**，漏算 `_FormatTag` 自带的 `horizontal: 6` 内边距（6 + 6 = 12）；按实测修正期望并写明构成。
+
+**顶栏避让回归 `test/ui/glass_nav_inset_test.dart`（新增 3 条）**：玻璃档正文 top ≥ 44（= `toolbarHeight`）、关档 Material `Scaffold` 同样避让、`appBar == null` 时 top 恰为 0（不凭空多留白）。断言用 `>= 44` 而非 `== 44`，容忍宿主注入状态栏内边距。
+
+**可复用的坑：正文下移会挤掉测试里「首屏即可见」的断言**
+
+`detail_test` 的 META-08 TXT 断言「单书统计」（`_buildSections` 的**末项**）首跑红：详情页 = `Column[Expanded(ListView), Divider, SafeArea(底部操作栏)]`，在 flutter_test 默认 **600px** 视口下「刚好一屏」，正文下移 44px 后末项被挤出视口 → `ListView` **懒构建根本不建它** → `find.text` 得 0 个。**产品行为是正确的**（详情页本就在顶栏下、超一屏滚动可见），失效的是断言的隐含前提。处置 = 只把该测试视口调到 `800×1000`（**必须同时钉 `devicePixelRatio = 1`**，否则默认 dpr=3 会把逻辑高度算成 333 反而更糟），**断言一字未改**。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze      # 全仓：0 error / 7 条既有 info
+bash tool/test.sh ui                                        # 01:11 +93: All tests passed!
+bash tool/test.sh data                                      # 00:16 +205: All tests passed!
+bash tool/test.sh reader                                    # 00:28 +226: All tests passed!
+```
+
+**复核边界（不伪造复核记录）**
+
+- **可复核 → 已复核**：库源码行号（`:135`/`:487-494`/`:458`/`:153`/`:83`）、`book_item.dart` 的依赖与几何、7 处调用点、`_buildSections` 末项位置，均为本批实读；三组测试数字与 `analyze` 输出为实跑。
+- **不可复核 → 未声称**：**真机上的新观感**（正文下移 44px 后各页排布、顶栏渐隐关闭后滚动到顶栏下的内容是否生硬）须负责人重跑确认，**未写「真机已验收」**。
+
+**未做（如实登记，交负责人）**：① **本批未真机复跑**——`extendBody` 是全局布局改动，请重新安装后重点看书架 / 详情 / 设置三页顶部；② 顶栏渐隐已按拍板关闭，若真机上觉得生硬，备选修法（body 补 top spacer，代价是复制库算法）记录在上文；③ `parse` 组**未实跑**（与本批改动无交集）；④ `kShelfCoverTargetWidth` 仍未开放为设置项。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
