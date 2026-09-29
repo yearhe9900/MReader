@@ -484,6 +484,8 @@
 | 大图玻璃弹窗 | 封面查看器换玻璃（`UI-03`），无确认语义 | `cover_picker.dart` `showCoverFullScreen` | **库断言 1–3 个 actions，空列表 debug 下 AssertionError**（初版 `const []` 踩坑）→ 必须给 1 个「关闭」动作 + `barrierDismissible: true`（点外关，同原 `showDialog` 默认）+ `maxWidth: size.width`，内容 SizedBox 自收 `width-72`（卡片 padding 20×2 + 页边 16×2） |
 | 玻璃弹窗关闭的测试推进 | 确认框点「取消」后 `_settle`(400ms) 推不完关闭转场，弹窗仍在树上误报 | `test/ui/shelf_page_test.dart` LIB-06 | 关闭断言前换 `await tester.pumpAndSettle()`（对照实验实证：onPressed 已触发、400ms 不够、pumpAndSettle 正常关） |
 
+> **后续改道（2026-09-29，见 §2.49）**：上表「`GlassOverlays` 扩展」一格描述的是 **M2b-T07 当时**的形态，保留作事实留证。其中 `showSheet` 的 **`showDragIndicator` 参数已删除**——本项目弹层口径改为「**无横条、禁上划拖拽关闭、关掉点击放大 / 光晕 / 饱和度脉冲**」，五项参数**硬编码在薄封装内**（改一处即 6 处弹层同时生效），调用点不再逐个传参。
+
 
 ### 2.18 M2a-T06 — PERF-01 解析移出主 isolate（IsolateRunner 接线）
 
@@ -1467,6 +1469,72 @@ bash tool/test.sh reader                                                    # +2
 ```
 
 **复核边界**：`analyze` 与 `ui` / `data` / `reader` 三组为本批实跑（覆盖 `AppTheme` 的全部引用方：`lib/app.dart` / `lib/meta/synth_cover.dart` / `lib/reader/reading_prefs.dart` / `lib/typography/reader_settings.dart` / `lib/ui/reader_settings_bar.dart` / `lib/ui/settings_page.dart`，经全仓 grep 逐一对照 `data`·`reader`·`ui` 三组分布而确定）；`parse` 组未跑（`test/epub/`、`test/format/` 与 `AppTheme` 零交集）。**真机观感未复跑**——本批核心是「手指未松时不再缩放」，其验收必须由负责人在 Android 16 实机上滑动手势确认：① 拖动过程中**不再出现圆角缩小**；② 松手后页面正常返回（无跟手预览、播完整转场）；③ 系统返回键 / 导航栏返回仍工作。**Windows / Linux 的 Zoom 按钮返回转场是否也换掉，待负责人定**（本批未动）。
+
+### 2.49 弹层形态统一：去横条 + 禁上划拖拽关闭 + 关掉点击放大与光晕（2026-09-29）
+
+**触发**：负责人「去除弹框点击会有放大高亮特效，不需要上划的弹框，去除小横条」。
+
+**拍板（两问两答）**：①「上划」= **禁止拖拽关闭手势**（底部滑入的入场动画保留），**非**改成居中弹框；② 范围 = **全部弹层统一生效**（设置页选择 ×2、书架长按操作单、详情页分组、阅读页目录 / 书签 / 搜索 / 外观，共 6 处）。
+
+**根因（与 `GlassNavScaffold.extendBody` 默认 `true` 完全同类的一类坑）**
+
+`GlassOverlays.showSheet`（`lib/ui/glass_kit.dart`）**只透传了 `isScrollable` 与 `showDragIndicator` 两个参数**，其余全部吃玻璃库默认值——而负责人的四个症状**与库参数逐一对上**：
+
+| 负责人症状 | 玻璃库参数 | 库默认 | 库 doc 原文 / 机理 | 处置 |
+|---|---|---|---|---|
+| 「点击放大」 | `interactionScale` | **1.01** | "Visual scale feedback on touch"；`stretch.dart:249` 按下时 `pressed ? interactionScale : 1.0` | 传 `1.0` |
+| 「点击高亮」 | `enableInteractionGlow` | `true` | "Glint follows finger"（光点跟手） | `false` |
+| 「点击高亮」（第二条独立通路） | `enableSaturationGlow` | `true` | "Pulsation on touch"（触摸脉冲） | `false` |
+| 「小横条」 | `showDragIndicator` | `true` | `glass_modal_sheet_internal.dart:294` `if (showDragIndicator) Positioned(top: 0, height: 44, child: handleZone)`——**横条与那 44px 拖拽区是同一个东西** | `false` |
+| 「上划」 | `enableDrag` | `true` | `glass_sheet.dart:433` `if (widget.enableDrag)` 加 `GestureDetector` 支持下拖关闭 | `false` |
+
+> 这类坑的通用识别法：**薄封装只暴露少量参数时，未暴露的参数会以「库默认值」静默生效**。本项目已第二次踩（前一次是 `extendBody`，那次让 7 个页面同时漏避让顶栏）。排查「行为不对但代码没写」时，先列出所调 API 的**全部参数默认值**逐条对照。
+
+**处置（`lib/ui/glass_kit.dart` 一处改、6 处弹层同时生效）**
+
+1. 玻璃档 `GlassSheet.show` 追加五项：`showDragIndicator: false` / `enableDrag: false` / `interactionScale: 1.0` / `enableInteractionGlow: false` / `enableSaturationGlow: false`。
+2. 「关」档同步：`showModalBottomSheet(enableDrag: false)`，并**删去原先自绘的 36×4 拖拽指示条**（那是**本薄封装自己画的**，非库的——两处横条来源不同，别混为一谈）。
+3. **删掉 `showDragIndicator` 参数本身**：改后全仓**零调用者**（同一提交内 grep 确认），按「删无调用者」先例（同 `setFolderOrder`）删净；库侧仍支持该参数，将来真需要再显式加回。
+
+**为什么硬编码而不做成参数**：这四项是**项目统一口径**（负责人要求「全部弹层」），不是个别页面的诉求。做成参数就必须在 6 个调用点各传一次，任一处漏传即回潮；硬编码后连「库改默认值」也不影响本项目。
+
+**边界（写清免得后人误判为漏做）**
+
+- `enableDrag: false` 后库的 `_DismissibleSheetWrapper` **完全不加 `GestureDetector`**（`glass_sheet.dart:433` 的 `if` 分支跳过、直接返回 child）——**零副作用**，不是「加了个不响应的手势层」。
+- **底部滑入的入场动画保留**：`GlassSheet.show` 的 `transitionBuilder` 是独立的 `SlideTransition`（`glass_sheet.dart:319`，`Offset(0,1) → zero`，350ms），与 `enableDrag` **无关**。负责人要的是「禁止上划拖拽关闭」，故这条不动。
+- **点遮罩关闭不变**：`isDismissible` 仍是库默认 `true`。
+- **未采纳的替代方案**：库另有 `suppressInteractionOnChildren`（"Smart Silence"，机制见 `glass_sheet.dart:449-493 / 617-620`：子组件被交互时抑制 sheet 自身特效）——它能做到「点选项行时弹框不发光」，但直接关掉三个特效**更彻底**（连点弹框空白处也不放大），且少一层「只在子组件交互时生效」的隐式语义，故未采用。**记录在此免得后人重复调研。**
+- **未动**：`stretch`（库默认 `0.5`，拖拽时的液态拉伸）——「拉伸」不属负责人描述的「放大」，且 `enableDrag: false` 后已无拖拽手势触发它；`topBorderRadius` / `margin` 等外观参数同样未动（未扩大范围）。
+
+**测试**
+
+| 文件 | 变更 | 断言要点 |
+|---|---|---|
+| `test/ui/glass_sheet_form_test.dart` | **新建 1 条** | 玻璃档：`GlassSheet` 四个字段硬编码断言（`showDragIndicator == false`、`interactionScale == 1.0`、`enableInteractionGlow == false`、`enableSaturationGlow == false`）+ **下滑 300px 后弹层必须仍在**（`enableDrag` 落在库私有 `_DismissibleSheetWrapper` 上、**无公开字段可读**，只能行为验证）+ 收尾验证正常关闭路径未被破坏 |
+| `test/ui/glass_off_fallback_test.dart` | 条数不变（8），断言语义加强 | 关档补 `BottomSheet.enableDrag == false`（`BottomSheet.enableDrag` 是**公开字段**，可直接断言）+ 「36×4 横条缺席」（`byWidgetPredicate` 查 `Container.constraints` 的 `maxHeight == 4 && maxWidth == 36`）+ 订正原注释「+ 拖拽指示条」（已删） |
+
+**两条测试口径（可复用）**
+
+1. **期望值硬编码字面量，且断言读「库 widget 自身的字段」**：本文件断言的是 `GlassSheet.interactionScale` 等**库的**公开字段，**不是**薄封装暴露的常量——引用自己的常量就是同义反复、永远红不了（同 `shelf_geometry_contract_test` 的既定口径）。这样能同时抓「参数没透传」与「透传了错值」两类错。
+2. **渲染玻璃档弹层是可行的、且不慢——但必须 `pump(Duration)` 而非 `pumpAndSettle`**：项目既有口径是「玻璃档弹层一律不渲染」（`glass_off_fallback_test.dart` 头注释：软件光栅下每帧数百 ms）。本批实测：只推 2 帧（`pump()` + `pump(400ms)`，覆盖 350ms 入场动画）**整个文件 1 秒跑完**——因为慢的是**逐帧**渲染累积，`pumpAndSettle` 会一直推到所有动画与玻璃动效静止才停，才是数百 ms × N 帧。故「玻璃档不能测」应精确表述为「**玻璃档不能用 `pumpAndSettle` 测**」。
+
+**文档回填两轮**
+
+- **字符串轮**（`showDragIndicator` / 拖拽指示条 / 横条 / 上划）：命中 4 处——`lib/ui/glass_kit.dart`（本次改动本体）、`test/ui/glass_off_fallback_test.dart:233`（**过时注释**，已订正）、`docs/tech-usage.md:481`（M2b-T07 的**历史事实层**记录「`showSheet` 补 `isScrollable`/`showDragIndicator`」，按「事实层原文留证 + 补后续改道指针」处理，见下）、`test/reader/fullscreen_progress_test.dart:28`（阅读页**进度指示条**，同名不同物，不动）。
+- **语义轮**（`splash` / 水波纹）：命中 5 处**全是卡片与搜索框的 `InkWell`**（`settings_kit.dart:25-26`、`settings_page.dart:212`、`shelf_page.dart:755`、`settings_kit.dart:250`）——与弹层无关，保留。
+- **`docs/tech-usage.md:481` 的改道指针已补**（见该行下方引用块）。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze
+/c/src/flutter/bin/flutter test --timeout 30s test/ui/glass_sheet_form_test.dart test/ui/glass_off_fallback_test.dart  # 00:01 +9: All tests passed!
+bash tool/test.sh ui                                                        # 01:25 +133: All tests passed!（132 → 133）
+bash tool/test.sh data                                                      # 00:27 +205: All tests passed!
+bash tool/test.sh reader                                                    # 00:31 +226: All tests passed!
+```
+
+**复核边界**：`analyze` 与 `ui` / `data` / `reader` 三组为本批实跑——三组是 `lib/ui/glass_kit.dart` 引用方的完整分布（6 处弹层调用点分属 `test/ui/`、`test/meta/detail_test.dart`（data 组）、`test/reader/`）；`parse` 组未跑（`test/epub/`、`test/format/` 与弹层零交集）。**真机观感未复跑**——本批四条均为**观感/手感**类改动，必须由负责人在真机逐项确认：① 6 处弹层**都没有横条**；② 上下滑动弹层内容**不再触发关闭**（点遮罩仍可关）；③ 点击选项时**弹框不再整体放大、不再发光**；④ 底部滑入的入场动画仍在（这是保留项，非遗漏）。**未动项待拍板**：`stretch`（拖拽液态拉伸）与弹层圆角 / 外边距等外观参数；若真机上仍看到按压形变，再来关 `stretch`。
 
 ## 测试分组与局部执行（2026-09-23）
 
