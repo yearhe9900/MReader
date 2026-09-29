@@ -1410,6 +1410,64 @@ bash tool/test.sh data                                      # 00:16 +205: All te
 
 **复核边界**：`analyze`、本文件与 `ui` / `data` 两组测试为本批实跑；**真机观感未复跑**——参考图是 HyperOS 深色页，本批在浅色主题 / 窄屏 / 桌面宽窗口下的实际观感、大标题两段式收起的手感、实心卡片与玻璃顶栏的接缝都需真机确认。`data` 组**是补跑**：`test/meta/detail_test.dart` 也引用 `GlassTopBar`，虽 `largeTitleController` 是可选新参数、退化路径在传 `null` 时与改前**逐字等价**（`_fadeInBarTitle` 直接返回原 `title`），仍按「影响面闭合」补跑并留档。`parse` / `reader` 两组未跑（与本次改动零交集：改动仅在 `lib/ui/` 与 `lib/theme/`）。
 
+### 2.48 Android 页面转场：关掉预测性返回的缩放动画（2026-09-29）
+
+**触发**：负责人「手势返回不释放，会有缩放动画，关闭这个效果」。
+
+**拍板（四选一，`AskUserQuestion`）**：① 换 `FadeForwards`（**采纳**）② 自实现「跟手不缩放」跟踪器 ③ 换 `Cupertino` 式滑动 ④ Manifest 关 `enableOnBackInvokedCallback`。选 ① 的理由：改动最小（一个 `ThemeData` 字段）、**零维护风险**（不触碰框架内部机理）、且 ②③④ 各有硬伤——② 需复刻框架内部 `handleStartBackGesture` 六件套、升级必复查；③ 换观感但同样无预览、且与「本项目 Android 走 M3」的基调不符；④ 副作用最大（全局关预测返回）且 **Android 17 起失效**。
+
+**根因（读 Flutter 3.47 源码 + 清单 + 设备三方交叉，非猜）**
+
+1. **系统侧开关是开着的**：`targetSdk = 36`（Flutter 3.47 默认，`packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt:34`）+ 设备 Android 16 → 预测性返回**默认启用**；`android/app/src/main/AndroidManifest.xml` **未声明** `enableOnBackInvokedCallback`，`flutter_tools` 全文 grep 该字符串**零命中**（即 Flutter 不代注入）。故「系统会把返回手势交给 App」这一前提成立。
+2. **Flutter 默认就把它接住了**：`PageTransitionsTheme._defaultBuilders`（`page_transitions_theme.dart:764-771`）给 Android 的默认 builder 是 **`PredictiveBackPageTransitionsBuilder`**（iOS/macOS → Cupertino；windows/linux → Zoom）。
+3. **缩放来自哪一行**：手势进行中（`route.popGestureInProgress == true`）该 builder 走 `_PredictiveBackSharedElementPageTransition`，用 **`Transform.scale` 把当前页缩到 `_kMinScale = 0.90`**（`predictive_back_page_transitions_builder.dart:350 / 385 / 520-540`）+ `MediaQuery.displayCornerRadiiOf` 的 `ClipRRect`（无设备圆角信息时回退 `_kDeviceBorderRadius = 32.0`）+ `Opacity` 淡出 + `Transform.translate` 位移。**这就是「手指未松、页面先缩成圆角卡片」的全部来源**。
+4. **排除法（免得误伤）**：全仓 grep `Transform.scale` / `ScaleTransition` / `AnimatedScale` **零命中**；`lib/ui/book_card.dart:115` 的 `Hero(tag: 'book-cover-…')` **无对端**（详情页/阅读页无同名 tag，是死 Hero）→ 不产动画。两处都排除后，唯一来源就是 3。
+
+**「换掉 builder 会不会把返回功能弄坏」——不会，有明确回落**
+
+`FadeForwardsPageTransitionsBuilder` **不含** `_PredictiveBackGestureDetector`，系统手势不再被 App 接管；此时 `WidgetsBinding._handleCommitBackGesture`（`widgets/binding.dart:1196-1205`）在 `_backGestureObservers.isEmpty` 分支**退回普通 `handlePopRoute()`**。故功能等价，代价仅是「拖动过程无跟手预览」——松手后播完整转场。
+
+**为什么必须写全五个平台（本批最容易踩的一脚）**
+
+`_PageTransitionsThemeTransitionsState.build:868-898` 对 `builders[platform] == null` 的**回退是 switch**（不是「用 default 继承」）：`iOS => Cupertino`，**`android` / `fuchsia` / `windows` / `macOS` / `linux` → `Zoom`**。所以只传 `{android: FadeForwards}` 会把 **macOS 从 Cupertino 悄悄退化成 Zoom**——即把本批要关的缩放效果**从另一个平台引回来**。故 `kAppPageTransitions` 逐平台写全五个，测试用 `isNotNull` 逐平台锁住。
+
+> 顺带记一条**文档与代码不一致**的坑：`page_transitions_theme.dart:757-759` 的 doc 注释仍写「默认 android/windows/linux = Zoom」，但代码 `_defaultBuilders` 早已把 android 改为 PredictiveBack、linux 仍是 Zoom。**一律以代码为准**（与「玻璃库文档承诺未实现行为」同类）。
+
+**改动**
+
+1. `lib/theme/app_theme.dart`：新增定向导入 `import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;`（该类型定义在 `src/cupertino/route.dart`，**不经 `material.dart` 导出**，定向引可避免整包 cupertino 与 material 的同名符号冲突）；新增 `kAppPageTransitions`（含根因 / 处置 / 代价 / 「Windows·Linux 未动待定」四段 doc）；`AppTheme._build` 增 `pageTransitionsTheme: kAppPageTransitions`（浅深共用同一份映射，避免两套主题观感漂移）。
+2. `test/ui/app_theme_test.dart`：新增 group「页面转场」**4 条**（同款定向 cupertino 导入）。文件 **6 → 10 条**。
+3. **PRD 未改**（有意）：全仓 grep `docs/PRD.md` 的 `转场|动画|过渡|transition` **零命中**——PRD **没有**任何转场/动画类需求条目，本批是纯实现层调整，强行补一条 v2.10 反而是把实现细节写进需求文档。
+
+**测试（`test/ui/app_theme_test.dart` 新增 group）**
+
+| 用例 | 断言要点 |
+|---|---|
+| Android 用 FadeForwards | `isA<FadeForwardsPageTransitionsBuilder>()` + **两条反向断言** `isNot(isA<PredictiveBackPageTransitionsBuilder>())` / `isNot(isA<ZoomPageTransitionsBuilder>())`——反向断言才是本用例的价值：把「又被改回缩放」直接测红 |
+| 浅 / 深共用同一套 | 两套主题的 android builder `runtimeType` 相等 |
+| 其余四平台逐字保留默认 | iOS / macOS = Cupertino，Windows / Linux = Zoom（证明未扩大范围） |
+| 五平台均有显式声明 | 逐平台 `isNotNull`，`reason` 写明「缺显式声明会落到 Zoom 回退」（见上文「为什么必须写全」） |
+
+**一条「不冲突」的核证（免得后人重复排查）**：`kAppPageTransitions` 属**路由（`Navigator`）层**、由 `MaterialApp.theme` 注入；设置页大标题的收起是 `GlassLargeTitleController` **自持 `ScrollController`** 的滚动进度驱动（§2.47），两者**无共享状态**。且 `settings_page_test` 的宿主是 `MaterialApp(home: …)`、**不经任何路由转场**，故该文件对本批**不构成覆盖**也**无需改动**——本批未为其加断言，理由是结构自明而非漏测（已在「复核边界」留档）。
+
+**文档回填两轮**
+
+- **字符串轮**（`转场|pageTransitions|PageTransitions|PredictiveBack|FadeForwards|ZoomPage|预测性返回|enableOnBackInvoked`）：`docs/` 与 `CHANGELOG.md` 命中 3 处（`tech-usage.md:485` / `:1262`、`CHANGELOG.md:126`）——**全部是「玻璃弹窗关闭转场」**语义（`GlassDialog` 关闭动画），与页面路由转场零交集，**不需要改写**。
+- **语义轮**（`缩放|手势返回|返回手势|路由动画|页面动画|transitionDuration`）：命中全部是**内容层缩放**（`US-12` 漫画缩放、`FMT-02` 缩放、`META-05` 缩略图、`META-07` 缩放至不溢出），同样零交集。
+- **结论**：本批 **无旧表述需要推翻**，只需新增条目（与 §2.47 不同——那次抓出了一处被推翻的语义）。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze                      # 0 error / 0 warning / 7 条既有 info
+/c/src/flutter/bin/flutter test --timeout 30s test/ui/app_theme_test.dart   # +10: All tests passed!
+bash tool/test.sh ui                                                        # +132: All tests passed!（128 → 132）
+bash tool/test.sh data                                                      # +205: All tests passed!
+bash tool/test.sh reader                                                    # +226: All tests passed!
+```
+
+**复核边界**：`analyze` 与 `ui` / `data` / `reader` 三组为本批实跑（覆盖 `AppTheme` 的全部引用方：`lib/app.dart` / `lib/meta/synth_cover.dart` / `lib/reader/reading_prefs.dart` / `lib/typography/reader_settings.dart` / `lib/ui/reader_settings_bar.dart` / `lib/ui/settings_page.dart`，经全仓 grep 逐一对照 `data`·`reader`·`ui` 三组分布而确定）；`parse` 组未跑（`test/epub/`、`test/format/` 与 `AppTheme` 零交集）。**真机观感未复跑**——本批核心是「手指未松时不再缩放」，其验收必须由负责人在 Android 16 实机上滑动手势确认：① 拖动过程中**不再出现圆角缩小**；② 松手后页面正常返回（无跟手预览、播完整转场）；③ 系统返回键 / 导航栏返回仍工作。**Windows / Linux 的 Zoom 按钮返回转场是否也换掉，待负责人定**（本批未动）。
+
 ## 测试分组与局部执行（2026-09-23）
 
 
