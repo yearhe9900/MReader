@@ -100,7 +100,10 @@ GlassTierConfig glassTierConfigFor(GlassQualityTier tier) {
   }
 }
 
-/// 档位的人类可读名（设置页分段控件标签）。
+/// 档位的人类可读名（设置页「效果质量」行的**当前值**与单选弹层候选项文案）。
+///
+/// 2026-09-29：原消费点是 `SegmentedButton` 的分段标签，该控件已随设置页改版
+/// 换成「行 + 弹层单选」；本函数的契约（返回「高 / 中 / 低 / 关」）不变。
 String glassQualityTierLabel(GlassQualityTier tier) {
   switch (tier) {
     case GlassQualityTier.high:

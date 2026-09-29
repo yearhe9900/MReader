@@ -46,9 +46,20 @@ import 'glass_scope.dart';
 /// 同 `GlassTab` / `GlassTabBarExtraButton`：导航壳层（`home_shell.dart`）需要它们
 /// 构造底栏标签，re-export 后全仓页面**不必直接 import 玻璃库**。
 ///
+/// `GlassLargeTitle` / `GlassLargeTitleController` 同理（2026-09-29 设置页大标题）：
+/// 前者要作为 `CustomScrollView` 的首个 sliver，后者既是
+/// [GlassTopBar.largeTitleController] 的参数类型、又是页面 `State` 的成员
+/// ——不 re-export 的话，用到大标题的页面就必须直接 import 玻璃库。
+///
 /// `GlassToastType` 同理（[GlassOverlays.showToast] 的语义参数）。
 export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
-    show GlassDialogAction, GlassTab, GlassTabBarExtraButton, GlassToastType;
+    show
+        GlassDialogAction,
+        GlassLargeTitle,
+        GlassLargeTitleController,
+        GlassTab,
+        GlassTabBarExtraButton,
+        GlassToastType;
 
 /// 应用默认玻璃质量档位（PRD §11.3，= 高档的滚动区档位）。
 ///
@@ -169,6 +180,34 @@ Widget _withFixedSurfaceQuality(GlassQuality? quality, Widget bar) {
   );
 }
 
+/// 把顶栏标题包成「随手滚动淡入」（[GlassTopBar.largeTitleController] 的
+/// **关档等价实现**）。
+///
+/// 公式照抄库 `glass_app_bar.dart:426-436`：先取 `collapseProgress` 的**后半段**
+/// （`(p - 0.5) / 0.5`），再过 `Curves.easeOut`——即大标题走完一半才开始出现、
+/// 走完才完全可见。两处**必须逐字一致**，否则切档（玻璃 ⇄ 纯色）会出现
+/// 标题明暗跳变。
+///
+/// 为什么必须自己写：玻璃档走 [GlassAppBar]，它内建 `ListenableBuilder`
+/// （`glass_app_bar.dart:421-438`）；**关档**退化成 Material [AppBar]，
+/// `AppBar` 不认 `GlassLargeTitleController`。不补这段，「内容层大标题 + 顶栏标题」
+/// 会同时可见（两条一模一样的「设置」上下叠着）。
+Widget? _fadeInBarTitle(Widget? title, GlassLargeTitleController? controller) {
+  if (title == null || controller == null) return title;
+  return ListenableBuilder(
+    listenable: controller,
+    builder: (BuildContext context, Widget? child) {
+      final double progress = controller.collapseProgress;
+      final double barProgress = ((progress - 0.5) / 0.5).clamp(0.0, 1.0);
+      return Opacity(
+        opacity: Curves.easeOut.transform(barProgress),
+        child: child,
+      );
+    },
+    child: title,
+  );
+}
+
 /// 导航层顶栏（薄封装 [GlassAppBar]）。
 ///
 /// 注意：`GlassAppBar` 的**条面本身是布局容器**，玻璃质感来自条内的按钮
@@ -184,6 +223,7 @@ class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
     this.centerTitle = true,
     this.backgroundColor = const Color(0x00000000),
     this.toolbarHeight = 44.0,
+    this.largeTitleController,
   });
 
   /// 标题区。
@@ -204,6 +244,18 @@ class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
   /// 工具条高度。
   final double toolbarHeight;
 
+  /// 大标题 ⇄ 顶栏标题的收起联动控制器（可选；2026-09-29 设置页大标题用）。
+  ///
+  /// 传入后顶栏标题**随滚动淡入**：内容层大标题滚走一半才开始出现、滚完完全可见。
+  /// **必须**与内容层 `GlassLargeTitle` 共用同一个 `GlassLargeTitleController`
+  /// 实例（库要求，见 `glass_large_title.dart:53-173`）——两处都订阅它，
+  /// 不存在第二份进度真值。
+  ///
+  /// 玻璃档直接透传给库（`GlassAppBar.largeTitleController`）；
+  /// 「关」档（`UI-06` ②）的 Material [AppBar] 不认该控制器，故由
+  /// [_fadeInBarTitle] 复刻同一条淡入曲线。
+  final GlassLargeTitleController? largeTitleController;
+
   /// [Scaffold] 退化路径需要的首选尺寸（= [toolbarHeight]）。
   @override
   Size get preferredSize => Size.fromHeight(toolbarHeight);
@@ -213,8 +265,9 @@ class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
     final GlassTierConfig config = GlassScope.configOf(context);
     if (!config.glassEnabled) {
       // 「关」档（`UI-06` ②）：Material 纯色顶栏，功能完整可用。
+      // 标题淡入需自己补（`AppBar` 不认大标题控制器，见 [_fadeInBarTitle]）。
       return AppBar(
-        title: title,
+        title: _fadeInBarTitle(title, largeTitleController),
         leading: leading,
         actions: actions,
         centerTitle: centerTitle,
@@ -230,6 +283,7 @@ class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
         centerTitle: centerTitle,
         backgroundColor: backgroundColor,
         toolbarHeight: toolbarHeight,
+        largeTitleController: largeTitleController,
       ),
     );
   }

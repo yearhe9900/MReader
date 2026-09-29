@@ -34,6 +34,7 @@ import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
 import '../reader/progress_store.dart';
 import '../settings/perf_prefs_store.dart';
+import '../settings/settings_store.dart';
 import '../settings/shelf_layout_store.dart';
 import '../settings/shelf_prefs_store.dart';
 import 'ai_page.dart';
@@ -65,6 +66,7 @@ class HomeShell extends StatefulWidget {
     required this.perfPrefs,
     required this.shelfPrefs,
     required this.shelfLayout,
+    required this.settings,
   });
 
   /// 书库仓库（书架页）。
@@ -82,8 +84,12 @@ class HomeShell extends StatefulWidget {
   /// 书架视图偏好（筛选 / 排序）。
   final ShelfPrefsStore shelfPrefs;
 
-  /// 书架布局（手动排序顺序 / 文件夹归属）。
+  /// 书架布局（分组归属 / 手动顺序）。
   final ShelfLayoutStore shelfLayout;
+
+  /// 设置服务（设置页「外观」组的主题三态；同一实例已注入 `MReaderApp`，
+  /// 在此**透传**给设置页——写入即由 `app.dart` 重建 `MaterialApp` 换色）。
+  final SettingsStore settings;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -137,7 +143,7 @@ class _HomeShellState extends State<HomeShell> {
         const StatsPage(),
         const AiPage(),
         const NotesPage(),
-        SettingsPage(perfPrefs: widget.perfPrefs),
+        SettingsPage(perfPrefs: widget.perfPrefs, settings: widget.settings),
       ];
 
   void _select(int index) {

@@ -111,6 +111,7 @@ Future<void> main() async {
           perfPrefs: perfPrefs,
           shelfPrefs: shelfPrefs,
           shelfLayout: shelfLayout,
+          settings: settings,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,

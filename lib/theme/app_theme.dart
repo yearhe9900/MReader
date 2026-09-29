@@ -49,6 +49,22 @@ ThemeMode resolveThemeMode(AppThemeMode mode) {
   }
 }
 
+/// 主题三态的中文名（设置页「外观」组用；措辞照 `TYP-03`「日间 / 夜间 / 跟随系统」）。
+///
+/// 与 [resolveThemeMode] 同处一地——避免「一处主题、两处口径」（同
+/// `app.dart` 对映射函数集中放置的说明）。设置页把它同时用作行的当前值与
+/// 弹层候选项文案，故**只此一份**。
+String appThemeModeLabel(AppThemeMode mode) {
+  switch (mode) {
+    case AppThemeMode.light:
+      return '日间';
+    case AppThemeMode.dark:
+      return '夜间';
+    case AppThemeMode.system:
+      return '跟随系统';
+  }
+}
+
 /// 合成封面的主题（日 / 夜）。
 ///
 /// `META-07` 的「书名 + 作者 + 主题 合成封面」需要一个**小枚举**承载主题维度；
