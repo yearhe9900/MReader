@@ -111,7 +111,8 @@ const Duration kBookLiftShadowDuration = Duration(milliseconds: 250);
 /// 抬起时浮现的阴影（出处见上方总注：包内 `_defaultBoxDecoration`）。
 ///
 /// 与静止态投影（[bookCoverShadowOf]）**叠加**——anx 也是两层同时在场：其书卡自带
-/// 灰投影，拖拽期间再把这一层黑投影画在卡片背景上（`DecorationPosition.background`）。
+/// 灰投影，拖拽期间再把这一层黑投影画在卡片背景上（包内 `DecorationPosition.background`；
+/// **本项目画在封面外框这一层**，落点见下 ⚠️）。
 /// `0x33000000` = `Colors.black.withOpacity(0.2)`（`0x33` = 51 = 0.2 × 255）。
 ///
 /// ⚠️ **画在封面外框上、形状取封面圆角**（`_buildCoverSurface` 的 `AnimatedContainer`）：

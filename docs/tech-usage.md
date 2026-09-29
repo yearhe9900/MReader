@@ -1644,6 +1644,8 @@ bash tool/test.sh reader                                                        
 2. **封面圆角 6 → 8**（anx `book_cover.dart:30` `radius ?? 8`）→ 提为 **`kBookCoverRadius`**，放进 `shelf_geometry.dart`（**圆角是几何量**；`shelf_geometry.dart` 的范围声明同步改写为「追加封面圆角、阴影仍不在此列」）。
 3. **长按抬起反馈**（自实现，不引包）：`AnimatedScale(1.05, 150ms, Curves.linear)` → `AnimatedContainer(250ms, 阴影)` → 原 `Card`。`_lifted` 由 `_handleLongPress` 置位、`await` 回调后复位；阴影画在卡片**背景**（`DecorationPosition.background`）与静止投影**叠加**——anx 同为两层。
 
+> **⚠️ 后续改道（2026-09-29，见 §2.54）**：上段处置 ③ 里**阴影的落点**已改写——负责人反馈「图书长按会有灰色背景，且书籍封面没有圆角，太暗了」，根因是**卡片没有底板**（`Card` 透明、信息区透明）时把 `BoxShadow` 画在**整张卡**这一层，而 `BoxShadow` 是**填充形状** ⇒ 长按看到一张**方角灰板**（盖住封面圆角 + 整卡变暗）。现在这颗 `AnimatedContainer` 挂在**封面外框**上（`kBookCoverSurfaceKey` 的祖先）并带 `kBookCoverRadius` 圆角；同时 `InkWell.highlightColor` 置透明（长按的 pressed 高亮是墨迹特性、会常驻）。**未被推翻的部分**：放大 **1.05 / 150ms / `Curves.linear`**、阴影 **250ms** 与四参数（`black α0.2` / 5 / 6 / (0,3)）、以及**与静止投影叠加**的两层关系——全部一字未动。本表 `book_card_lift_test.dart` 那一行也因此**追加了 2 条断言**（阴影容器 `borderRadius == 8`、阴影须画在封面外框这一层）。原正文保留作事实留证，勿删。
+
 **⚠️ 如实登记的代价（拍板 ① 的必然后果）**：anx 的投影是**固定灰、不随主题**，故深色主题下这颗投影比背景**亮**、观感接近一道浅色描边。本批照抄（负责人拍板「对齐阴影」）；要改回跟主题走只换 `kBookCoverShadow.color` 一行。
 
 > **⚠️ 后续改道（2026-09-29，见 §2.53）**：上段「如实登记的代价」中的**深色主题投影**已被改写——负责人真机截图反馈「**阴影太强烈，影响观感**」（与上段预测的现象逐字吻合：一圈浅色描边 + 相邻卡片光晕叠成亮带），拍板**跟主题走**：深色主题改用 `colorScheme.shadow`（近黑），**浅色主题仍照抄 anx 的固定灰**。**未被推翻的部分**：浅色分支的四个数值、以及**抬起阴影与静止投影叠加**的两层关系。原正文保留作事实留证，勿删。
@@ -1716,6 +1718,8 @@ bash tool/test.sh reader                                                        
 1. **10% 透明的水印不是「半透明内容层」**：它叠在**不透明**底色之上，`UI-04` 约束的是容器 / 背景而非前景笔画 → 红线不破（理由同 `shelfGradientBackground` 用 `alphaBlend` 合规）。
 2. **组件自带 `ClipRRect`**：anx 的水印靠**负偏移**故意画出封面之外（`right: -padding*0.8`、`bottom: -padding*0.5`），本组件用 `ClipRRect` 兜住裁切 → 调用方不必再包一层（也顺带把「探出的半本书」保持为 anx 的原始观感）。圆角由 `radius` 参数传入。
 3. **底色画在哪一层按环境自适应**：有 `Material` 祖先 → `Ink`（底色进该 Material 的 ink 层，`InkWell` 水波纹画在它**之上**，与 `book_card.dart` 的 `Ink.image` 同一条口径；否则不透明底色会把 ripple 盖住）；无 `Material` 祖先 → `ColoredBox`（`Ink` 在无 `Material` 时**断言失败**；玻璃库页面即无 `Material` 祖先，见 PRD §11.4）。
+
+> **⚠️ 后续改道（2026-09-29，见 §2.54）**：上段处置 ③ 的**整条自适应分支已删除**——底色**一律**走子树内的 `ColoredBox`，「有 `Material` → `Ink`」那条路被像素级实证否掉（`Ink` 是**墨迹特性**、由上层 `Material` 绘制，于是 ① **逃逸本组件的 `ClipRRect`** ⇒ 封面方角；② 落在封面外框投影的**填充**之下 ⇒ 整张封面被染暗）。**未被推翻的部分**：「无 `Material` 祖先 → `ColoredBox`」这一分支的结论完全成立，只是从「退回档」升为「唯一路径」（组件因此**不再依赖 `Material` 祖先**，玻璃库页面照常可用）；处置 ① ②（水印 10% 透明合规、组件自带 `ClipRRect`）**一字未动**。本表 `default_book_cover_test.dart` 那一行的 **④ 与 ⑤** 因此改写（断言 `ColoredBox` + **反向断言组件/书卡内无 `Ink`**），group ④ 更名为「底色画在**子树内**（不用 `Ink`：会漏裁 + 被投影染色）」。**代价（如实登记）**：`InkWell` 的水波纹/高亮画在墨迹层，因而**不再压在封面之上**，只在透明的信息区可见——这正是 anx 的形态（其封面用 `Container(color:)` / `Container(decoration: image)`，同样不在墨迹层）。原正文保留作事实留证，勿删。
 
 **未采纳（如实登记）**
 
@@ -1819,3 +1823,81 @@ bash tool/test.sh data    # 00:19 +205: All tests passed!
 ```
 
 **复核边界**：`analyze` 与 `ui` / `data` 两组为本批实跑。改动符号 `bookCoverShadowOf`（新增）与 `kBookCoverShadow`（语义收窄）经全仓 grep，引用方只有 `lib/ui/book_card.dart`（自身）与 `test/ui/shelf_geometry_contract_test.dart`（**ui 组**），无第三方；`BookCard` 的其它消费者（`shelf_grid.dart` → ui 组、`test/meta/detail_test.dart` → **data 组**）按影响面补跑。**真机观感未复跑**：需负责人确认深色下是否还有「发亮描边」（应无）、以及卡片与背景的**层次是否够**（黑投影在近黑背景上本就弱；若觉得「太平了」，可把 `bookCoverShadowOf` 里深色分支的 `100 / 255` 往上调——**但那是「整体调弱/调强」的另一档拍板**，本条不擅自定）。
+
+### 2.54 书卡封面改画在子树内：修「长按灰板 / 封面方角 / 封面太暗」（2026-09-29）
+
+**触发**：负责人一句「**图书长按会有灰色背景，且书籍封面没有圆角，太暗了**」。**三个症状经像素级取证后归一为同一根因族**：封面的绘制所用机制与「卡片没有底板」这一前提冲突。**未新增拍板**（是修 bug，不是改设计）；但**两处此前写进文档的设计决策被推翻**，故 §2.51 处置 ③ 与 §2.52 处置 ③ 均已补改道引用块。
+
+**根因一：`Ink` / `Ink.image` 是「墨迹特性」，不是普通子组件**
+
+`Ink` / `Ink.image` 不参与普通子树布局绘制，而是把内容注册成上层 `Material` 的 **ink 特性**，由该 `Material` 的渲染对象绘制。实读 `material.dart:621-634` 的 `_RenderInkFeatures.paint`：**先画 ink 特性、再 `super.paint`（子树）**。两个后果正好对上前两个症状：
+
+| 后果 | 机理 | 表现 |
+|---|---|---|
+| ① **逃逸 `ClipRRect`** | 裁切是「父裁子」，只作用于该 `Material` 的子**树**；墨迹层画在子树**之外 / 之下**，不在裁切范围内 | **封面方角**（实测修复前封面左上角 (2,2) 仍是底色） |
+| ② **被投影填充染色** | 墨迹层落在封面外框 `DecoratedBox` 投影的**下方**（见根因二） | **封面太暗**（浅色主题 `#9FA8DA` → `#9FA4C2`、深色 → `#616685`） |
+
+**根因二：`BoxShadow` 是「填充形状」，不清除中心**
+
+实读 `box_decoration.dart:448-470` 的 `_paintShadows` → `_paintBox`（`:429-442`）：对每个 shadow 在矩形 / 圆角矩形上 `canvas.drawRect` / `drawRRect` **填充**（`boxShadow.toPaint()` 的 shader 是 `MaskFilter.blur`，故画的是**被高斯模糊的实心形状**）。**与 CSS `box-shadow` 不同，它不做中心镂空**。于是：
+
+- 画在**封面外框**（有 `ClipRRect` 兜住，形状也是封面的圆角）时，只是正常的投影；
+- 画在**整张卡**这一层（卡片 `Card` 透明、信息区透明、无底板）时，就是给整卡铺一张**方角灰板**——**长按灰板**即此（原抬起阴影的 `AnimatedContainer` 包在整张卡外，形状是方角）；
+- 同时它**盖在封面内容之上还是之下**取决于层级：外框这颗（静止投影）在封面内容**之下**，于是若封面内容本身半透明或画在更下层（墨迹层），就会被**染色**。
+
+**根因三（第三个症状的另一半）：`InkWell` 的 pressed / 长按高亮会常驻**
+
+实读 `ink_well.dart:1192-1212` 的 `_startNewSplash`：它调 `updateHighlight(_HighlightType.pressed, true)`；而 **`handleLongPress`（`:1242-1251`）不清 pressed 高亮** ⇒ **长按期间高亮一直挂着**。高亮色取 `highlightColor ?? Theme.of(context).highlightColor`（`:1038` / `:1364`）。它与封面是**同一层墨迹特性**，会填满整卡（方角、含透明的信息区与封面圆角缺口）⇒ 观感即「长按出现一块灰色背景」。
+（对比：**水波纹不常驻**——M3 下默认 `splashFactory` 是 `InkSparkle`（`theme_data.dart:416-420`），其 `_animationDuration = 617ms`（`ink_sparkle.dart:182`）且 `_alpha` 第二段 `1.0 → 0.0`（`:152-155`），自行淡出。）
+
+**处置（三项，全在 `lib/ui/book_card.dart` + `lib/ui/default_book_cover.dart`）**
+
+| # | 改动 | 针对症状 |
+|---|---|---|
+| ① | **封面三态一律改「子树内不透明绘制」**：真封面 `Ink.image` → **`Image.memory`**（`errorBuilder` 退回占位）；加载态由「透明 + 转圈」改 **`ColoredBox(surfaceContainerHighest)`**（原先没底板，两颗投影会直接透出来）；占位底色 `Ink` → **`ColoredBox`** | 方角 + 太暗 |
+| ② | **抬起阴影的 `AnimatedContainer` 从「整张卡外」挪到「封面外框内」**（即 `kBookCoverSurfaceKey` 的**祖先**）并带 `kBookCoverRadius` 圆角 | 长按灰板 |
+| ③ | **`InkWell.highlightColor: Colors.transparent`**（保留水波纹：它自行淡出） | 长按灰板 |
+
+**如实登记的代价（本批唯一）**：水波纹 / 高亮画在墨迹层，**不再压在封面之上**，只在透明的信息区可见——**这正是 anx 的形态**：其实读 `anx-reader/lib/widgets/bookshelf/book_cover.dart`，其封面用 `Container(color:)` / `Container(decoration: image)`，同样不在墨迹层，即 **anx 的 ripple 本来也压不到封面上**。故这不是「偏离 anx」，而是「回到 anx」。
+
+**像素级取证（本批的取证手法，可复用）**
+
+结论不靠推理、靠**真实像素**：`RepaintBoundary` → `tester.runAsync(() => boundary.toImage())` → `toByteData(rawRgba)` 直接读字节。**两个必守前提**：① `toImage()` 必须在 `tester.runAsync` 里 `await`（FakeAsync 不排空真异步）；② **必须钉 `tester.view.devicePixelRatio = 1`**（默认 3 会把采样坐标算错）+ `addTearDown(tester.view.reset)`。坐标换算用 `boundary.globalToLocal(cover.topLeft) & cover.size`。
+
+| 采样点 | 修复前 | 修复后 | 期望 |
+|---|---|---|---|
+| 封面内部（浅色） | `#9FA4C2` | **`#9FA8DA`** | = `defaultBookCoverColor('书0')` |
+| 封面内部（深色） | `#616685` | **`#9FA8DA`** | 同（底色不随主题） |
+| 左上角 (2,2) 浅色 | `#9FA8DA`（仍是封面色 ⇒ 方角） | `#848AAE` | ≠ 封面色 |
+| 左上角 (2,2) 深色 | 同上方角 | `#72799C` | ≠ 封面色 |
+
+（`(2,2)` 到弧心 `(8,8)` 的距离 ≈ `8.49 > 8`，确定性落在 8 圆角的**弧外**。）
+
+**测试**
+
+| 文件 | 变更 | 断言要点 |
+|---|---|---|
+| `test/ui/book_card_paint_test.dart` | **新建 2 条** | `for (Brightness …)` 各一条：① 封面内部像素**精确等于** `defaultBookCoverColor('书0')`（`#9FA8DA`，`==` 不是 `closeTo`）② 左上角 (2,2) `isNot(coverColor)`。文件头注写明**为什么属性断言抓不到**：本批三个缺陷全出在**绘制顺序**上，而当时属性断言（颜色值 / 圆角值 / 阴影参数）**全是绿的** |
+| `test/ui/default_book_cover_test.dart` | group ④ 改写（2 条）；接入用例 +1 | group ④ 更名「底色画在**子树内**（不用 `Ink`：会漏裁 + 被投影染色）」：有 `Material` 祖先也断言 `ColoredBox` + **反向断言无 `Ink`**；`LookupBoundary` 下照常渲染。接入用例底色改读 `ColoredBox`，并**新增「整张书卡内无 `Ink`」**（`find.byType(Ink)` → `findsNothing`） |
+| `test/ui/book_card_lift_test.dart` | 同一用例 **+2 断言** | 抬起阴影容器 `(decoration as BoxDecoration).borderRadius == BorderRadius.circular(8)`（否则长按出方角灰板）+ `find.ancestor(of: kBookCoverSurfaceKey, matching: kBookLiftShadowKey) == findsOneWidget`（阴影须画在封面外框这一层）。**既有 5 组数值断言一字未动** |
+
+**⚠️ 本批最值得记的一条（可复用）**：**属性断言测不出绘制顺序。** `Ink` vs `ColoredBox`、`BoxShadow` 画在哪一层——这些在 widget 树里看起来都「只是换了个 widget / 换了个父节点」，颜色值、圆角值、阴影参数**全部照旧**，故当时所有属性测试**全绿**，而真机上封面是方角、发暗、长按出灰板。**结论：凡涉及「谁画在谁之上 / 谁被谁裁切」的改动，必须用真实像素（`RepaintBoundary` + `toImage`）或 `RenderObject` 层面的断言来钉，光看 widget 属性不行。**
+
+**文档回填两轮**
+
+- **字符串轮**（key = `Ink.image` / `Ink(` / `AnimatedContainer` / `kBookLiftShadowKey` / `方角` / `太暗` / `ripple` / `墨迹` / `DecorationPosition.background`；**程序化点数**，范围 `docs` + `CHANGELOG.md`）：`Ink.image` **3**、`Ink(` **1**、`AnimatedContainer` **5**、`DecorationPosition.background` **1**、`ripple` **3**、`kBookLiftShadowKey` **0**、`方角` **0**、`太暗` **0**、`墨迹` **0**。逐条落点见下「命中处理」。
+- **语义轮**（按「被推翻的约束语义」再 grep：`墨迹层` / `投影填充` / `按环境自适应` / `不透明内容盖住` / `不透明底色会把 ripple 盖住` / `画在卡片` / `自适应`）——**本轮捞出 1 处字符串轮必漏的**：§2.51 处置 ③ 的「阴影画在**卡片**背景」（不含 `Ink` 也不含 `AnimatedContainer`，字符串轮四个 key 全不命中）——**已补改道引用块**。
+- **命中处理（逐条，含「不改，为什么」）**：① **`docs/tech-usage.md` §2.52 处置 ③**（「底色画在哪一层按环境自适应」）——**已补改道引用块**（语义轮命中）；② **§2.51 处置 ③**（阴影画在卡片背景）——**已补改道引用块**（语义轮命中）；③ **§2.15 的历史事实层表行**（`tech-usage.md:440`，「封面/占位走 `Ink.image` / `Ink` 画在 Card 的 Material 上，ripple 不被不透明内容盖住」+ hash `3e750b8`）——**不追改**：该行记录的是**当时那一版的实现**（事实层留证），覆盖关系由本节承担；④ **`CHANGELOG.md` 2026-09-29 的两条历史条目**（默认封面那条的处置 ③、书卡那条）——同口径**不追改**；⑤ `docs/进度表.md:77`（带 hash 的历史行）——不追改；⑥ `lib/ui/book_card.dart` 与 `lib/ui/default_book_cover.dart` 的注释——**同批已改写**（属代码侧，非回填）。
+- **锚点**：`grep -n "^### "` 实测确认本节为 **§2.54**（§2.52 / §2.53 为本会话同批的前两节）；引用它的两处改道块写的是**章节号**而非行号。
+- **⚠️ 一个 grep key 的坑（本批再次实证，与 §2.53 同族）**：语义轮若用 `水波纹压在封面之上` 当 key 命中 **0**——因为原文写的是「`InkWell` 水波纹画在它**之上**」，**措辞与语序都不同**。**结论重申：grep key 要从原文的**字面字符**里取；语义轮也要先 `grep -n` 探一次再决定 key，不能凭「我大概是这么写的」直接下结论。**
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze
+/c/src/flutter/bin/flutter test --timeout 30s test/ui/book_card_paint_test.dart           # 00:00 +2: All tests passed!
+bash tool/test.sh ui       # 01:00 +149: All tests passed!（147 → 149）
+bash tool/test.sh data     # 00:24 +205: All tests passed!
+```
+
+**复核边界**：`analyze` 与 `ui` / `data` 两组为本批实跑。改动符号（`BookCard` / `kBookCoverSurfaceKey` / `kBookLiftShadowKey` / `DefaultBookCover`）经全仓 grep，引用方只有 `lib/ui/` 内（`book_card.dart` / `book_detail_page.dart` / `shelf_grid.dart`）与 `test/ui/`（**ui 组**）+ `test/meta/detail_test.dart`（**data 组**），**无第三方引用方**（`ui` 组已覆盖全部引用方，`data` 组为 `BookCard` 的另一个消费者补跑）。`parse` / `reader` 组零交集，未跑。**真机观感未复跑**：需负责人确认 ① 长按**不再出现灰色背景**、封面**圆角正常**、封面**不再发暗**（三项症状）；② 新生的**代价**「水波纹只在信息区可见（封面区域摸不到 ripple）」是否接受——这是 anx 的形态，如要压在封面之上只能回到墨迹层（就把方角与染色带回来），**二者不可兼得**；③ 深色主题下书架层次是否仍够（承 §2.53 的同一问题）。
