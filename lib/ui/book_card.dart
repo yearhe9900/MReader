@@ -22,6 +22,7 @@ import 'package:flutter/material.dart';
 import '../library/book_record.dart';
 import '../meta/cover_store.dart';
 import '../model/book_meta.dart';
+import 'shelf_geometry.dart';
 
 /// 封面圆角（书卡与占位块共用，保证切换时不跳变）。
 const double _kCoverRadius = 6;
@@ -116,8 +117,8 @@ class _BookCardState extends State<BookCard> {
                     child: _buildCoverSurface(theme),
                   ),
                 ),
-                // 封面与信息区的间距：5（照搬 anx `book_item.dart:88`）。
-                const SizedBox(height: 5),
+                // 封面与信息区的间距（几何事实源，anx `book_item.dart:88`）。
+                const SizedBox(height: kBookCoverToInfoGap),
                 _buildInfo(theme),
               ],
             ),
@@ -161,8 +162,8 @@ class _BookCardState extends State<BookCard> {
           children: <Widget>[
             _buildCover(theme),
             Positioned(
-              right: 6,
-              bottom: 6,
+              right: kBookFormatBadgeInset,
+              bottom: kBookFormatBadgeInset,
               child: _FormatTag(format: widget.record.format),
             ),
           ],
@@ -210,15 +211,17 @@ class _BookCardState extends State<BookCard> {
 
   /// 信息区：书名（两行）/ 作者 · 进度。
   ///
-  /// **高度固定 55**（照搬 anx `book_item.dart:89-90` 的 `SizedBox(height: 55)`），
+  /// 高度固定 [kBookInfoHeight]（= 55，照搬 anx `book_item.dart:89-90`），
   /// 于是「一行为书名」与「两行为书名」的卡片等高、网格行距不跳。
   /// 格式标签已挪到封面上（见 [BookCard] 头注的 PRD 取舍）。
+  ///
+  /// 所有几何数值取自 `shelf_geometry.dart`（事实源，每条附 anx 出处行号）。
   Widget _buildInfo(ThemeData theme) {
     final double? progress = widget.record.readProgress;
     return SizedBox(
-      height: 55,
+      height: kBookInfoHeight,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 2),
+        padding: const EdgeInsets.symmetric(horizontal: kBookInfoHorizontalPadding),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
@@ -232,7 +235,7 @@ class _BookCardState extends State<BookCard> {
                 height: 1.25,
               ),
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: kBookTitleToAuthorGap),
             Row(
               children: <Widget>[
                 Expanded(

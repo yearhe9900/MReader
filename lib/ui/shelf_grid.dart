@@ -48,34 +48,18 @@ import '../meta/cover_store.dart';
 import '../model/book_meta.dart';
 import '../settings/shelf_layout_store.dart';
 import 'book_card.dart';
-import 'home_shell.dart' show kShellBottomInset;
+// 几何数值**只在 `shelf_geometry.dart` 定义一次**（2026-09-29 拍板）：
+// import 供本文件使用，export 使既有调用点（如 `shelf_folder_page` 的
+// `kShelfGridPadding`）无需改动 import。
+import 'shelf_geometry.dart';
+
+export 'shelf_geometry.dart';
 
 /// 拖到另一本书上、停留多久算「并入文件夹」。
 ///
 /// 取值权衡：太短会在正常重排时误判成合并；太长用户会以为没反应。
 /// 900ms 与 anx-reader 的 `BookBottomSheet` 手感接近。
 const Duration kFolderMergeHoverDelay = Duration(milliseconds: 900);
-
-/// 单列的目标宽度 —— **列数 = 容器宽 ~/ 本值**（照搬 anx-reader：
-/// `bookshelf_page.dart:453-454` 的 `crossAxisCount: constraints.maxWidth ~/ Prefs().bookCoverWidth`，
-/// 其 `bookCoverWidth` 默认 **120**、设置页可调 80–260 步长 10）。
-///
-/// 本项目暂未开放该设置项（若要开放，改这一处即可）。用它换来的性质：
-/// **列数随窗口宽度连续自适应**，而不是「最大列宽」式的阶梯跳变——
-/// 360dp 手机 3 列、800px 桌面 6 列，与 anx 同口径。
-const double kShelfCoverTargetWidth = 120;
-
-/// 书架网格默认内边距。
-///
-/// 左右 20 / 上 12 照搬 anx（`bookshelf_page.dart:449` `EdgeInsets.fromLTRB(20, 12, 20, 80)`）；
-/// **底部 80 换成本项目的 [kShellBottomInset]**——两者目的相同（给悬浮胶囊留白），
-/// 但本项目胶囊更高，用 anx 的 80 会被压住。
-const EdgeInsets kShelfGridPadding = EdgeInsets.fromLTRB(
-  20,
-  12,
-  20,
-  kShellBottomInset,
-);
 
 /// 书架（与文件夹内页共用）的背景渐变。
 ///
@@ -179,23 +163,24 @@ class ShelfGrid extends StatelessWidget {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final double width = constraints.maxWidth;
-        // 宽度未定（理论上不会，GridView 在 Expanded 内）时退回 anx 的手机默认 3 列。
-        int columns = width.isFinite ? width ~/ kShelfCoverTargetWidth : 3;
-        // 下限 1：`SliverGridDelegateWithFixedCrossAxisCount` 断言 crossAxisCount > 0，
+        // 宽度未定（理论上不会，GridView 在 Expanded 内）时退回 anx 的手机默认列数。
+        int columns = width.isFinite
+            ? width ~/ kShelfCoverTargetWidth
+            : kShelfFallbackColumns;
+        // 下限：`SliverGridDelegateWithFixedCrossAxisCount` 断言 crossAxisCount > 0，
         // 极窄窗口（<120px）下 `~/` 会算出 0。上限纯属防御。
-        if (columns < 1) columns = 1;
-        if (columns > 64) columns = 64;
+        if (columns < kShelfMinColumns) columns = kShelfMinColumns;
+        if (columns > kShelfMaxColumns) columns = kShelfMaxColumns;
         return GridView.builder(
-          // 浮动胶囊不占布局高度，底部留白由 [kShellBottomInset] 提供。
+          // 浮动胶囊不占布局高度，底部留白由 kShellBottomInset 提供
+          // （已随 `kShelfGridPadding` 进入本文件的 padding 默认值）。
           padding: padding,
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,
-            // anx：`childAspectRatio: 1 / 2.1`（`bookshelf_page.dart:455`）
-            // —— 比原先的 0.5 更瘦高，封面占比更大。
-            childAspectRatio: 1 / 2.1,
-            // anx：`mainAxisSpacing: 30, crossAxisSpacing: 20`（`:456-457`）。
-            mainAxisSpacing: 30,
-            crossAxisSpacing: 20,
+            // 几何数值全部取自 `shelf_geometry.dart`（每条附 anx 出处行号）。
+            childAspectRatio: kShelfChildAspectRatio,
+            mainAxisSpacing: kShelfMainAxisSpacing,
+            crossAxisSpacing: kShelfCrossAxisSpacing,
           ),
           itemCount: folderCount + books.length,
           itemBuilder: (BuildContext context, int index) {
