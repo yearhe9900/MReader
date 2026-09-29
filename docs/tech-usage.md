@@ -938,6 +938,82 @@ bash tool/test.sh data                                      # 00:12 +205: All te
 
 **未做（如实登记，交负责人）**：**L3**（长按拖拽重排 / 拖到书上建文件夹 / 桌面拖文件入窗导入）**一行未写**——它会改动 `BookRecord` 的持久化结构（或另建布局文件），涉及 `index.json` 向后兼容设计与可能的两个新依赖（`flutter_reorderable_grid_view`、`desktop_drop`），**须先拍板方案再动工**。
 
+> **后续（§2.39 已闭环本条）**：拍板结论是**另建 `shelf_layout.json`、`BookRecord` 一行不改**（§2.38 里「改动 `BookRecord`」的担忧由该方案化解）、网格重排**自实现不引包**、新依赖只留 `desktop_drop`（且放到第二批）。故本段「须先拍板」已拍、L3 第一批已交付，详见 §2.39。
+
+### 2.39 UI 重做批次③ · L3 第一批：拖拽重排 + 文件夹（2026-09-28）
+
+| 项 | 值 |
+|---|---|
+| 事项 | L3 三件套的**第一批**：书架长按拖拽重排、拖到另一本书上合并成文件夹、拖到文件夹卡上并入、文件夹重命名 / 解散 / 内页重排 |
+| 拍板（三项全选推荐档） | 持久化 = **独立 `shelf_layout.json`**（`BookRecord` 零改动）／依赖 = **自实现拖拽 + 只引 `desktop_drop`**／节奏 = **拆两批**（桌面拖入留下批） |
+| 提交 | `d98b80b`（轻提示改 Overlay，连带修**既有** SnackBar 潜伏崩溃）、`3869f52`（L3 第一批） |
+
+**一、为什么是独立 `shelf_layout.json` 而不是改 `BookRecord`**
+
+1. `index.json` 一行不动 → **零旧索引兼容风险**（负责人点名要规避的正是这条）；
+2. 拖拽是高频动作，只重写一个**小文件**（`order` + `folders`），不必整份书库索引跟着落盘；
+3. 与既有的 `shelf_prefs.json` **同形制**（`JsonStore` → `AtomicFile`，`DATA-01` 原子写入），代码是熟路。
+
+孤儿引用（书被删了、布局里还留着 id）走**两道互不假设**的兜底：渲染期按 `bookId` 过滤 + 载入后 `prune()` 落盘清孤儿、清因此变空的文件夹（**无变化不写盘**，逐字节比对已入测试）。
+
+**二、拖拽三态怎么区分（`lib/ui/shelf_grid.dart` 头注是本批的设计文档）**
+
+| 手势 | 判据 | 动作 |
+|---|---|---|
+| 长按**不动**抬手 | `onDragEnd` 里 `!details.wasAccepted && !_movedDuringDrag` | 弹长按操作单（`LIB-06` 语义保持） |
+| 长按后**快速**放下 | `wasAccepted` 且未满 900ms | 重排（`onReorder`） |
+| 拖到目标上**悬停 900ms** | `kFolderMergeHoverDelay` 计时到点、`_mergeArmed = true` | 并入 / 新建文件夹 |
+
+- **判「移动过」用 `onDragUpdate` 是否被调过（标志位 `_movedDuringDrag`），不用 `DraggableDetails.offset` 的距离**——后者在 feedback 跟手偏移下不稳。
+- 悬停计时器用 `_hoverTimer ??=` 守住只启动一次，拖离 / 抬手即取消。
+- **每项必须带 `ValueKey(bookId)`**：`GridView.builder` 会复用 element，没有 key 时 State（计时器、`_mergeArmed`）会错位到别的卡片上。
+- **不引第三方网格重排包**：「拖到书上建文件夹」需要**项级 `DragTarget` + 悬停语义**，`flutter_reorderable_grid_view` 这类只管重排的包不覆盖。
+- `BookCard.onLongPress` 改为可空、网格内**传 `null`**：否则 `InkWell.onLongPress` 会和外层 `LongPressDraggable` 在手势竞技场里互抢。
+
+**三、两个顺序 / 语义坑**
+
+- **`ShelfSortField.manual` 忽略升降序开关**——否则再点一下方向键会把用户刚拖出来的顺序整体翻转。
+- **`_reorder` 必须「先落盘 `order`、再切 `manual`」**：反过来的话 `_visibleBooks` 会在切换那一帧用**旧的** `order` 重排一次，用户刚拖的位置肉眼可见地跳一下。
+- 重排下标沿用 `ReorderableListView` 通行约定：`toIndex` 以**移除前**的列表计，`insertAt = from < toIndex ? toIndex - 1 : toIndex`（「拖到某本上」= 插到那本**之前**）。
+
+**四、连带修掉的真 bug：轻提示必须走 Overlay（`d98b80b`）**
+
+| 事实 | 出处 |
+|---|---|
+| 玻璃壳层**不含 Material `Scaffold`** | `liquid_glass_widgets` `glass_scaffold.dart:646` → `child: CupertinoPageScaffold(` |
+| 窄屏（手机默认）布局也没有 `Scaffold` | `home_shell.dart:165` `_buildBottomBarLayout` = `Stack` + `Positioned` |
+| **只有宽屏侧轨布局有** `Scaffold` | `home_shell.dart:187` `_buildRailLayout` |
+| `showSnackBar` 的断言 | `_scaffolds.isNotEmpty`（`scaffold.dart:319`）→ 空则 debug 断言失败、release `_scaffolds.last` 抛 `StateError` |
+
+也就是说 `ScaffoldMessenger.showSnackBar` 在**手机上必崩、桌面上碰巧能用**——这正是它一直没被发现的原因（且 widget 测试里 `FilePicker` 不可用，`_pickAndImport` 那条路径从未被覆盖）。修法 = 新增 `GlassOverlays.showToast`：玻璃档走库的 `GlassToast.show`（`OverlayEntry` + 自管定时移除），「关」档（`UI-06 ②`）退化为本文件自写的纯色 `_PlainToast`。**全仓 6 处 SnackBar**（书架 `_toast` / `_pickAndImport` + 详情页 3 处）全部换掉。
+
+> **FakeAsync 悬案就此了结**：此前担心「`OverlayEntry + Timer` 会在 `testWidgets` 结束时报 `A Timer is still pending`」。读 `flutter_test/lib/src/binding.dart` `_runTestBody` 确认——`testBody` 跑完后**先** `runApp(Container(key: UniqueKey()))` + `pump()` 卸载整棵 widget 树、**再** `_verifyInvariants()` 查 pending Timer（`:1960-1974`）；树卸载时 `State.dispose` 会 `_timer.cancel()`（`fake_async` 里 cancel 即从 pending 计数移除）→ **不留 pending Timer**。实测 `ui` 组 85 条全绿无该报错。
+
+**五、测试断言写错（不是功能 bug）**
+
+`L3 拖拽重排` 首跑失败：`Expected ['b','c','a']` vs 实际三个 16 位 hex。根因 = **`layout.order` 存的是 `bookId`（`book_record.dart:31`：SHA-256 hex 前 16 位），不是书名**；而 `_titles` 与 `sortField == manual` 两条断言**当时已通过** → 重排与自动切 manual 功能本身正确。修正为捕获 `importFile` 返回的 `record.bookId` 再比对。反证 `BookRecord.fromJson`（`book_record.dart:105-113`）对 `title` 严格校验，不存在回退成 id 的可能。
+
+**改动面（含测试）**
+
+- 新增：`lib/settings/shelf_layout_store.dart`（约 380 行）、`lib/ui/shelf_grid.dart`（约 570 行，头注即设计文档）、`lib/ui/shelf_folder_page.dart`（约 470 行，**不支持嵌套**；`FolderActionSheet` / `askFolderName` / `confirmDissolveFolder` 提为公开与书架页共用）、`test/ui/shelf_layout_store_test.dart`（21 条）。
+- 修改：`lib/ui/glass_kit.dart`（`showToast` + `_PlainToast` + re-export `GlassToastType`）、`lib/ui/shelf_page.dart`（L3 五个方法 + 手动排序分支 + `_liveFolders` 参与筛选）、`lib/settings/shelf_prefs_store.dart`（`ShelfSortField.manual` 加在**枚举末尾**，菜单顺序即 `values` 顺序）、`lib/ui/book_card.dart`（`onLongPress` 改可空）、`lib/ui/book_detail_page.dart`（3 处 SnackBar → `showToast`）、`lib/ui/home_shell.dart` / `lib/main.dart`（注入 `ShelfLayoutStore`）。
+- 测试：`shelf_page_test` +6 条 L3 用例（重排 / 悬停建夹 / 拖入文件夹 / 进文件夹页 / 长按文件夹卡+解散 / 排序菜单含「手动排序」）；`ShelfPage` 新增必填 `shelfLayout` → `test/widget_test.dart`、`test/meta/detail_test.dart` 同步补注入。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze      # 全仓：0 error / 7 条既有 info
+bash tool/test.sh ui                                        # 01:25 +85: All tests passed!
+bash tool/test.sh data                                      # 00:16 +205: All tests passed!
+```
+
+**复核边界（不伪造复核记录）**
+
+- **可复核 → 已复核**：上表关于 `CupertinoPageScaffold` / `_buildBottomBarLayout` / `_buildRailLayout` / `binding.dart` 卸载时序 / `bookId` 摘要口径的**行号与字面量均为实读**；测试数字为本批实跑输出。
+- **不可复核 → 未声称**：拖拽的**手感**（900ms 阈值是否合适、feedback 跟手是否顺）与文件夹卡的**观感**须在真机 / 桌面上试，本批只对代码结构与测试负责，**未写「交互已验收」**。
+
+**未做（如实登记，交负责人）**：**L3 第二批 = 桌面拖文件入窗导入**（唯一新依赖 `desktop_drop`，已拍板待排期）；以及本批**未跑全量回归**（只跑了 `ui` + `data` 两组，`parse` / `reader` 与本批改动无交集但**未实跑**）。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
