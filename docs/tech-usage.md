@@ -464,6 +464,8 @@
 | 文件大小只 stat 不读 | 详情页「文件大小」展示（`META-08 ①`） | `LibraryRepository.bookFileSize` | `File.exists` + `File.length()`，**不 `readAsBytes`**——大书展示大小不把整本书读进内存；文件缺失回 `null`（`LIB-03` 口径同 `readBookBytes`） |
 | 验收测试三层结构 | META-08/09 逐条验收（`f978266`） | `test/meta/detail_test.dart` | ① `meta_editor` 纯函数（originLabel/validate/apply/restore/backfill 判据）；② 仓储集成**纯 `test()` + 临时目录**（导入→编辑→重载/换封面旧文件已删/二次导入不覆写）；③ widget 层 `_settle` 助手排空真 IO（FakeAsync 铁律），玻璃红线断言 `GlassTopBar 有 / OpaqueContentSurface 有 / GlassCard 等内容层玻璃全无`；详情页内文本断言一律 `_inDetail` 范围限定（书架同名文本在栈下防误配） |
 
+> **⚠️ 后续改道（2026-09-29，PRD v2.9）**：上表「书架入口改道 + 开书回调注入」一行**已不是现役口径**——书架**点书卡**改为**直接进阅读页**（`BookCard.onTap` → `_openBook`），详情页入口改走**长按操作单「书籍详情」**（`_openDetail` 与 `_detailPushing` 仍保留，只是调用点从「点卡」换成「操作单」）。原文按「事实层留证」不改写，现役口径见 §2.46。
+
 ### 2.17 M2a-T04 — 导航层玻璃化（UI-02 / UI-03，执行中）
 
 | 项 | 值 |
@@ -1283,7 +1285,7 @@ bash tool/test.sh data                                      # 00:10 +205: All te
 4. 圆角 `20 → 18`（20 超过高度 36 的一半、渲染时本就会被裁到 18，写 18 免歧义）；容器的 `Key('shelf-search-entry')` 供契约测试定位。
 5. 文字/图标仍用 `onSurfaceVariant`（**占位符口径**），不因加边框提成正文色。
 
-**测试**（`test/ui/shelf_page_test.dart` 新增 1 条 → **116** 条，口径 `grep -c "^\s*test\(Widgets\)\?(" test/ui/shelf_page_test.dart`）
+**测试**（`test/ui/shelf_page_test.dart` 新增 1 条，**19 → 20 条**；`ui` 组总数 **115 → 116**；口径 `grep -c "^\s*test\(Widgets\)\?(" test/ui/shelf_page_test.dart`）
 
 - 机制锁：`tester.widget<GlassTopBar>(...).centerTitle == false`。
 - 几何锁：`getTopLeft(box).dx ≤ 16`（贴内边距 8）、`getSize(box).width > 300`（取到 400 上限）、右边缘 `< 800 - 48`（给动作按钮留位）。**退回居中则左边缘约 `(800-400)/2 = 200`，断言立刻红**。
@@ -1301,6 +1303,48 @@ bash tool/test.sh data                                      # 00:13 +205: All te
 **既有噪音（非本批引入，已实测排除）**：`shelf_page_test.dart:578`（分组 chips 用例的**第二次** `tap(find.text('玄幻'))`）会打一条 `derived an Offset … would not hit test` 警告——命中结果是 chip 自身的 `RenderPhysicalShape`/Material，**chip 的 `onSelected` 确实触发**（其后的 `_titles` 与 `groupId` 两条断言若 tap 落空必红，故非假绿）。用 `git stash` 回退本批改动后单跑同一条用例，警告**依然为 1 次** → 与本批无关。想消音可改点为 chip 本体或传 `warnIfMissed: false`。
 
 **复核边界**：`analyze` 与两组测试为本批实跑；**真机观感未复跑**（靠左/铺满在窄屏上的实际比例、深色主题下 `outlineVariant` 描边的可见度）。`parse` / `reader` 两组未跑（与本次改动零交集）。
+
+### 2.46 书架点书卡直接进阅读页、详情页入口改走长按操作单（PRD v2.9，2026-09-29）
+
+**触发**：负责人「点击图书直接进入阅读页」。
+
+**拍板（两问两答）**：① 书籍详情页 = **保留**（入口改走长按操作单「书籍详情」，并**同步改 PRD**）；② 搜索页选中结果 = **同改**，也直接进阅读页。
+
+**参考实现取证**：anx-reader 的 `lib/widgets/bookshelf/book_item.dart:51-53` 里 `onTap` 即 `pushToReadingPage(ref, context, book)`——**点卡即读**；它的详情页入口在长按菜单（`lib/widgets/bookshelf/book_bottom_sheet.dart:9` import `lib/page/book_detail.dart`）。搜索页复用同一个 `BookItem`（`lib/page/search/search_page.dart:204`），故 anx 的搜索结果同样是「点即读」。结论：本项目改后的结构与 anx 同构，且不再存在「同一个 `BookItem` 两种手势结果」的割裂。
+
+**顺带消除一处 PRD 长期矛盾**：`META-08 ①` 原写「从书架**点**一本书进入详情页」，而 §12.2 `F2`（打开书与恢复进度）原文就是「**点书架项** → 读索引取进度」——同一手势两个定义，一直共存。本次以 `F2` 为准收敛，故这是**消除矛盾**而非引入矛盾；PRD 记 **v2.9**。
+
+**改动**
+
+1. `lib/ui/shelf_page.dart`（行为）：`_buildBookGrid()` 的 `onOpenBook` 由 `_openDetail` 改 **`_openBook`**（一处改即完成「点卡即读」）；`_openSearch()` 的 `picked` 由 `_openDetail(picked)` 改 **`_openBook(picked)`**。**`_openDetail` 与 `_detailPushing` 均保留**——长按操作单的「书籍详情」仍在用，只是唯一调用点由「点卡」变为「操作单」。
+2. 注释同步（行为改了而注释不改就是文档负债）：`shelf_grid.dart` 的 `onOpenBook` 字段、`book_card.dart` 的 `onTap`、`book_detail_page.dart` 顶部 F9 流程图注释。
+3. PRD（`docs/PRD.md`）：`META-08` 条目正文 + 验收 ① 改文（「从书架点击进入」→「从书架长按书卡 → 操作单「书籍详情」进入」）；§12.2 `F9` 流程图首行改为「点书卡 = 直接进阅读页；长按书卡 → 操作单「书籍详情」→ 进入书籍详情页」；§1.4 新增 **v2.9** 行（**无需求条目增减**，计数仍 P0 29 / P1 56 / P2 31 = 116）。
+
+**测试**：`shelf_page_test` **20 → 21 条**（新增 1 条「回归①补」，口径 `grep -c "^\s*test\(Widgets\)\?(" test/ui/shelf_page_test.dart`），`tool/test.sh ui` **+117 全绿**（116 → 117）；`data` **+205 全绿**（`detail_test` 14 条条数不变，仅 3 处入口改法）。
+
+| 用例 | 改法 |
+|---|---|
+| 回归① | 标题改为「点书卡直接进阅读页」：原「点卡 → 详情页 → 继续阅读」**三层压成一层**，断言 `_readerPages() findsOneWidget` + **`_detailPages() findsNothing`** + `record.bookId` 正确 |
+| **新增**回归①补 | 详情页仍可达：新增帮手 `_openDetailViaSheet`（`longPress` → `pumpAndSettle` → 点「书籍详情」→ `_settle`），断言进详情页但**不自动开书**，再点「继续阅读」才进阅读页（`META-08 ②` 来源标记断言一并保留） |
+| 回归①b | 原「连点只进一个详情页」改为「连点只 push 一个**阅读页**」——两击同帧时第一击已在首个 `await` 之前同步置 `_opening = true`，第二击被守卫吞掉 |
+| 回归② | 删掉中间那层详情页（原「关书 + 关详情」两次 pop 变一次），「关书后立即点另一本 → 一次即进」的**主因窗口**语义不变 |
+| 回归④ | 原「详情页按钮 spinner + 卡上覆盖层」两条可见反馈，改为只断言**卡上 loading 覆盖层**（点卡本身即准备期），导航前不出现阅读页的断言保留 |
+| `test/meta/detail_test.dart` | 3 处入口（`META-08 ①②④` TXT / `META-08 ①` EPUB / `META-09 ①` 编辑链路）统一改走 `_openDetailViaSheet`，文件头补入口说明 |
+
+**文档回填两轮（本轮两轮都命中）**
+
+- **字符串轮**：`grep -rn "从书架点击进入\|点一本书进入详情页"` → 仅剩 v2.9 变更记录行内的**引用**（留档，正确）。
+- **语义轮**：`grep -rn "进入详情\|点书卡\|书架项"` 抓出 **§2.16（M2a-T03）表格里「书架入口改道 + 开书回调注入」一行**——该行写的是「`BookCard.onTap` → `_openDetail`」，属于**当时的事实留证**，不改写，已在表后补**后续改道指针**指向本节。这正是「按版本号 grep 会漏、必须按被推翻的语义再 grep」的又一例。（本轮该跨引用初稿凭记忆写成「§2.19」，`grep -n "^### "` 核出实为 **§2.16** 并已改正——锚点先 grep 再写的纪律再次生效。）
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze      # 0 error / 0 warning / 7 条既有 info
+bash tool/test.sh ui                                        # 00:54 +117: All tests passed!
+bash tool/test.sh data                                      # 00:17 +205: All tests passed!
+```
+
+**复核边界**：`analyze` 与两组测试为本批实跑；**真机观感未复跑**（点卡即读的响应手感、长按操作单作为详情页唯一入口是否够可发现——**这是本次最需要真机验证的一条**：入口从「显式点击」变成「长按」，可发现性下降）。`parse` / `reader` 两组未跑（与本次改动零交集）。
 
 ## 测试分组与局部执行（2026-09-23）
 
