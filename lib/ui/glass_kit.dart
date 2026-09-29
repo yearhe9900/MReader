@@ -154,10 +154,7 @@ class OpaqueContentSurface extends StatelessWidget {
     );
     // 用 Material 提供不透明底色——它同时给出 Material 祖先（玻璃库无 Material 祖先，
     // 见 PRD §11.4），避免其下文本渲染成黄色双下划线。
-    return Material(
-      color: surfaceColorOf(context),
-      child: child,
-    );
+    return Material(color: surfaceColorOf(context), child: child);
   }
 }
 
@@ -430,7 +427,8 @@ class GlassNavBar extends StatelessWidget {
       // 高档为 `null` —— 在 [GlassScaffold] 祖先内（默认用法）库会自动提升 `premium`
       // （§11.3 / `UI-05 ①`）；若是独立浮层（[standalone]），该祖先不存在、
       // `resolveQuality` 会落到 `fallback = standard`，故显式补上 `premium`。
-      quality: config.fixedSurfaceQualityOverride ??
+      quality:
+          config.fixedSurfaceQualityOverride ??
           (standalone ? GlassQuality.premium : null),
       // 触摸反馈：移除「放大」（不做形变、保留手指位置的柔和高光）
       // —— 见 [GlassNavBar] doc 的「触摸反馈口径」。库默认是 `full`（光晕 + 弹簧缩放）。
@@ -472,7 +470,9 @@ class GlassNavScaffold extends StatelessWidget {
     if (!config.glassEnabled) {
       // 「关」档（`UI-06` ②）：Material 纯色壳层，功能完整可用。
       return Scaffold(
-        appBar: appBar is PreferredSizeWidget ? appBar! as PreferredSizeWidget : null,
+        appBar: appBar is PreferredSizeWidget
+            ? appBar! as PreferredSizeWidget
+            : null,
         body: body,
         bottomNavigationBar: bottomBar,
       );
@@ -505,6 +505,32 @@ class GlassNavScaffold extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // 浮层（薄封装，最小集；档位生效 + 「关」档纯色退化）
 // ---------------------------------------------------------------------------
+
+/// 底部弹窗的遮罩色（玻璃档与「关」档共用同一色源）。
+///
+/// 2026-09-29 修「长按书卡，**在操作单出现之前**整屏先蒙一层灰」时引入。
+///
+/// **库 / Material 默认都太重**：
+/// - 玻璃档 —— `GlassDefaults.barrierColor = 0x8A000000`
+///   （`glass_defaults.dart:154`，**α = 0.541**）；
+/// - 「关」档 —— `showModalBottomSheet` 的 `barrierColor` 默认 `Colors.black54`
+///   （**也是 `0x8A000000`**，同一个值）。
+///
+/// 两个默认值**数值相同**，所以这里给一颗常量、两档共用，避免日后只改一边。
+///
+/// **为什么必须压淡**（不只是审美）：`GlassSheet.show` 的遮罩与弹窗共用 350ms
+/// `transitionDuration`，而弹窗是从 `Offset(0, 1)`（屏幕外）往上滑的
+/// （`glass_sheet.dart:320-332`）⇒ 头 ~150ms 是「灰幕已到场、弹窗还没进屏」。
+/// 逐帧实测：50ms 时遮罩 α 已 0.093、100ms 已 **0.262**，而弹窗 top 仍 **788**
+/// （屏高 700，即完全在屏外）。0.54 的深灰在那一瞬就是一条**纯灰幕**，
+/// 这正是负责人反馈的「出现弹框前会有灰色背景」。详见 `GlassOverlays.showSheet`。
+///
+/// **取值**：`0x3D000000`（α = 61/255 ≈ **0.24**）。约等于库默认的 45%——
+/// 既保留「背后内容退到次要层」的模态语义（`UI-03` 浮层玻璃要求遮罩在场，
+/// 「点遮罩关闭」也要有可点的遮罩面），又不会在弹窗到位前形成一条突兀的灰幕。
+/// **只换色源、不动时序**（同 `bookCoverShadowOf` 的口径）：时序归库，
+/// 要改就得抄一份 `showGeneralDialog` 并放弃库的液态玻璃渲染，代价不成比例。
+const Color kSheetBarrierColor = Color(0x3D000000);
 
 /// 浮层玻璃入口（对话框 / 底部弹窗）。
 ///
@@ -613,6 +639,39 @@ abstract final class GlassOverlays {
   ///
   /// 「关」档（`UI-06` ②）同步：`showModalBottomSheet(enableDrag: false)`，
   /// 并**删去原先自绘的 36×4 拖拽指示条**（本薄封装自己画的那条，非库的）。
+  ///
+  /// ══════════════════════════════════════════════════════════════════════════
+  /// 弹层遮罩（2026-09-29 修「出现弹框前会出现灰色背景」）—— 显式传 [kSheetBarrierColor]
+  /// ══════════════════════════════════════════════════════════════════════════
+  /// 症状：长按书卡，**在操作单露头之前**，整屏先蒙上一层灰。
+  ///
+  /// 根因（读库源码 + 逐帧探针实测，见 §2.56）：
+  /// `GlassSheet.show` 走 `showGeneralDialog`，`barrierColor` **没传** → 吃库默认
+  /// `GlassDefaults.barrierColor` = `0x8A000000`（`glass_defaults.dart:154`，**α=0.541**，
+  /// ≈54% 黑）。遮罩用 `transitionDuration: 350ms`（`glass_sheet.dart:320`）淡入，
+  /// 而**弹窗自己还在 `SlideTransition` 里从 `Offset(0, 1)` 往上滑**
+  /// （`glass_sheet.dart:322-332`）——两者共用这 350ms，但**弹窗起点在屏幕外**。
+  /// 逐帧实测（屏高 700、弹窗高 120）：
+  ///
+  ///   | 时刻 | 遮罩 α | 弹窗 top |
+  ///   |---|---|---|
+  ///   | 0ms   | 0.000 | 1248（屏外） |
+  ///   | 50ms  | 0.093 | 979（屏外） |
+  ///   | 100ms | **0.262** | **788（屏外）** |
+  ///   | 175ms | 0.434 | 635（刚入屏） |
+  ///   | 350ms | **0.541** | 548（到位） |
+  ///
+  /// ⇒ 头 ~150ms 是「灰幕已铺到 26%、弹窗一个字都还没进屏」= 负责人看到的
+  /// 「出现弹框前会有灰色背景」。
+  ///
+  /// 处置：**只换遮罩色源、不动时序**（与 `bookCoverShadowOf`「只换色源」同口径）。
+  /// 两档**都**显式传同一个 [kSheetBarrierColor]：
+  ///   · 玻璃档 → `GlassSheet.show(barrierColor: …)`（库参数，`glass_sheet.dart:309`）；
+  ///   · 「关」档 → `showModalBottomSheet(barrierColor: …)`（Material 同名参数，默认
+  ///     也是 `Colors.black54` = `0x8A000000`，同一副「太重的灰」）。
+  /// **为什么不改时序**：`transitionDuration` 是库常量、`SlideTransition` 也是库内部
+  /// 构造，要改就得抄一份 `showGeneralDialog`（放弃库的液态玻璃渲染）——代价远大于
+  /// 收益；把遮罩压淡后，「弹窗迟到」在观感上就不再是一条灰幕了。
   static Future<T?> showSheet<T>({
     required BuildContext context,
     required WidgetBuilder builder,
@@ -626,6 +685,7 @@ abstract final class GlassOverlays {
         context: context,
         isScrollControlled: true,
         enableDrag: false,
+        barrierColor: kSheetBarrierColor,
         builder: (BuildContext sheetContext) => Padding(
           padding: EdgeInsets.only(
             bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
@@ -655,6 +715,8 @@ abstract final class GlassOverlays {
       interactionScale: 1.0,
       enableInteractionGlow: false,
       enableSaturationGlow: false,
+      // 遮罩色源（库默认 0x8A000000 太重、且先于弹窗可见）——见上方本方法注释。
+      barrierColor: kSheetBarrierColor,
     );
   }
 
@@ -704,7 +766,8 @@ VoidCallback _showPlainToast(
   late final OverlayEntry entry;
   void dismiss() => entry.remove();
   entry = OverlayEntry(
-    builder: (_) => _PlainToast(message: message, duration: duration, onDismissed: dismiss),
+    builder: (_) =>
+        _PlainToast(message: message, duration: duration, onDismissed: dismiss),
   );
   overlayState.insert(entry);
   return dismiss;

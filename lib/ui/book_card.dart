@@ -21,8 +21,12 @@
 // `Ink.image`：它们由上层 `Material` 绘制（`material.dart:621-634` 的 ink 特性先于
 // 子树绘制），于是会 ① 逃逸封面外框的 `ClipRRect`（方角）② 被外框投影的**填充**
 // 盖住而染色（变暗）。两条均为 2026-09-29 的像素级实证，见 §2.54。
-// 代价：`InkWell` 的水波纹/高亮不再压在封面之上，只在透明的信息区可见（anx 同此形态，
-// 其封面用 `Container(color:)` / `Container(decoration: image)`）。
+//
+// **墨迹（高亮 + 水波纹）整体关闭**（`highlightColor` / `splashColor` 全透明 +
+// `NoSplash`）：ink 特性画在子树**之下**，而卡片上只有「信息区」与「封面圆角缺口」
+// 是透明的 ⇒ 任何墨迹都只会以「文字与圆角被糊一层灰」的形态露出来（2026-09-29
+// 负责人反馈「长按弹起弹框前，该书籍文字和圆角会有灰色背景」，像素实测
+// 信息区 `#000000` → `#333333` = `0x40CCCCCC` 叠底）。详见 build 内 InkWell 的注。
 //
 // 打开准备中（[BookCard.loading]）：**封面区**蒙层 + 转圈，让用户看得见「在响应」。
 // 蒙层只盖封面、随封面的 8 圆角裁切，**不盖信息区**（书名/作者/进度保持清晰可读）——
@@ -261,12 +265,31 @@ class _BookCardState extends State<BookCard> {
         margin: EdgeInsets.zero,
         child: InkWell(
           onTap: widget.onTap,
-          // 按压/长按的**整块高亮**一律关掉：它是 Material 的墨迹特性，自己会填满
-          // 整个卡片（方角、含透明的信息区与封面圆角缺口），长按时会一直挂着
-          // （`ink_well.dart:1242-1251` 的 `handleLongPress` 不清 pressed 高亮），
-          // 观感就是「长按出现一块灰色背景」。**保留**水波纹（`splashColor` 用默认）
-          // ——它自行淡出（M3 的 `InkSparkle` 617ms 走完归零），不构成常驻底色。
+          // 按压/长按的**一切墨迹**一律关掉（2026-09-29 二次修正，见 §2.56）：
+          //
+          // ① 按下/长按**整块高亮** → `highlightColor: Colors.transparent`。
+          //    它是 Material 的墨迹特性、填满整个卡片（方角、含透明信息区与封面
+          //    圆角缺口），且长按时**一直挂着**（`ink_well.dart:1242-1251` 的
+          //    `handleLongPress` 不清 pressed 高亮）。
+          //
+          // ② **水波纹** → `splashColor: Colors.transparent` +
+          //    `splashFactory: NoSplash.splashFactory`（本条 2026-09-29 补）。
+          //    起因是负责人反馈「长按弹起弹框前，**该书籍文字和圆角会有灰色背景**」
+          //    ——像素探针实测：长按过程中信息区 `#000000` → `#333333`、
+          //    圆角缺口 `#af677f` → `#b76e87`，封面内部纹丝不动。
+          //    `#333333` 逐位 = `0x40CCCCCC` 叠在 `#000000` 上，正是
+          //    `theme_data.dart:502` 的 `splashColor ??= isDark ? Color(0x40CCCCCC)`
+          //    ——**灰色**；而 `ink_sparkle.dart:269` 是 `canvas.drawRect(...)` 整块
+          //    矩形（不是圆形涟漪），于是墨迹层（画在**子树之下**，见
+          //    `material.dart:621-634`）只从封面透明处露出来 = **文字区 + 圆角缺口**。
+          //    这两处正是卡片上仅有的透明区，所以「灰」永远只会以这种形态出现。
+          //
+          // **反馈仍在**：点书卡 → 阅读页转场；长按 → 放大 1.05 + 浮起阴影
+          // （`_lifted`，见 [kBookLiftScale]）。anx 同此形态（其封面用
+          // `Container(color:)`，墨迹同样压不上去）。
           highlightColor: Colors.transparent,
+          splashColor: Colors.transparent,
+          splashFactory: NoSplash.splashFactory,
           // 异步回调（见 [BookCard.onLongPress]）：这里只点火，Future 由
           // `_handleLongPress` 内部 `await`。
           onLongPress: widget.onLongPress == null ? null : _handleLongPress,
@@ -367,7 +390,6 @@ class _BookCardState extends State<BookCard> {
   ///   `ClipRRect`**（裁切只作用于 Material 的子**树**）⇒ 封面是方角；② 落在封面外框
   ///   投影填充**之下** ⇒ 整张封面被染上一层 α0.39 的色（浅色=灰、深色=黑）⇒「太暗」。
   /// - 若某一态是**透明**的（如只有转圈的加载态），这两层投影会直接透出来变成一块底色。
-  /// 代价：`InkWell` 的水波纹不再压在封面之上，只在透明的信息区可见（anx 同此形态）。
   Widget _buildCover(ThemeData theme) {
     final Uint8List? bytes = _thumbBytes;
     if (bytes != null) {

@@ -23,6 +23,7 @@
 // ⚠️ `toImage()` 必须在 `tester.runAsync` 里 await（FakeAsync 不排空真异步）。
 // ⚠️ 必须钉 `devicePixelRatio = 1`：默认 3 会把采样坐标算错。
 // ══════════════════════════════════════════════════════════════════════════════
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -77,11 +78,72 @@ class _FakeCoverStore implements CoverStore {
       0;
 }
 
+/// 返回**真图封面**字节的假存储（用于 [StoredCover] 路径）。
+///
+/// 为什么必须单独覆盖这条路径（2026-09-29 补）：[DefaultBookCover] **自带**
+/// 一个 `ClipRRect`，所以「外层裁切失效」在它身上**看不出来**（内层还会兜住）；
+/// 而真图封面走 [Image.memory]，**完全依赖** `_buildCoverSurface` 里那一层
+/// `ClipRRect`。这正是负责人截图里 `绍宋`（真图）与其它书同时方角的那条路径。
+class _ImageCoverStore implements CoverStore {
+  _ImageCoverStore(this.bytes);
+
+  final Uint8List bytes;
+
+  @override
+  Future<StoredCover> materialize({
+    required String bookId,
+    required PendingCover pending,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<StoredCover> replaceWithUserPick({
+    required String bookId,
+    required Uint8List bytes,
+    required CoverRef? previous,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<Uint8List?> readFull(CoverRef ref) async => bytes;
+
+  @override
+  Future<Uint8List?> readThumb(CoverRef ref) async => bytes;
+
+  @override
+  Future<void> delete(CoverRef ref) async {}
+
+  @override
+  Future<int> purgeOrphans({required Set<String> referencedFileNames}) async =>
+      0;
+}
+
+/// 一张**纯色** PNG（128×128）。用 `ui` 的真实编码器生成，避免手写 PNG 字节出错。
+///
+/// 纯色是关键：任何「封面底色漏到圆角外」都会在像素上表现为该纯色，好断言。
+Future<Uint8List> _solidPng(Color color) async {
+  const int side = 128;
+  final ui.PictureRecorder recorder = ui.PictureRecorder();
+  final Canvas canvas = Canvas(recorder);
+  canvas.drawRect(
+    Rect.fromLTWH(0, 0, side.toDouble(), side.toDouble()),
+    Paint()..color = color,
+  );
+  final ui.Image image = await recorder.endRecording().toImage(side, side);
+  final ByteData data = (await image.toByteData(
+    format: ui.ImageByteFormat.png,
+  ))!;
+  return data.buffer.asUint8List();
+}
+
 /// 渲染一张无封面书卡并返回「封面区域内的像素读取器」。
+/// 渲染一张书卡并返回「封面区域内的像素读取器」。
+///
+/// [imageBytes] 非空时走**真图封面**路径（[StoredCover] → `Image.memory`）；
+/// 为空则走**默认封面**路径（[NoCover] → [DefaultBookCover]）。
 Future<int Function(double, double)> _pumpAndSample(
   WidgetTester tester,
   Brightness brightness, {
   bool loading = false,
+  Uint8List? imageBytes,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(400, 700);
@@ -94,7 +156,9 @@ Future<int Function(double, double)> _pumpAndSample(
     title: '书0',
     author: '作者0',
     format: 'epub',
-    cover: const NoCover(),
+    cover: imageBytes == null
+        ? const NoCover()
+        : const StoredCover('probe.png'),
     importedAt: 0,
   );
 
@@ -110,7 +174,9 @@ Future<int Function(double, double)> _pumpAndSample(
               height: _kCardHeight,
               child: BookCard(
                 record: book,
-                coverStore: _FakeCoverStore(),
+                coverStore: imageBytes == null
+                    ? _FakeCoverStore()
+                    : _ImageCoverStore(imageBytes),
                 onTap: () {},
                 loading: loading,
               ),
@@ -121,6 +187,16 @@ Future<int Function(double, double)> _pumpAndSample(
     ),
   );
   await tester.pump();
+  if (imageBytes != null) {
+    // 真图路径有两段真异步：① `_loadThumb` 的 `await readThumb`；
+    // ② `Image.memory` 的解码。都必须在 `runAsync` 里推进，`pump` 推不动。
+    for (int i = 0; i < 3; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 30)),
+      );
+      await tester.pump();
+    }
+  }
 
   final RenderRepaintBoundary boundary = tester.renderObject(
     find.byKey(_kBoundaryKey),
@@ -235,4 +311,181 @@ void main() {
       );
     });
   }
+
+  // 2026-09-29 追加：**真图封面**（`StoredCover` → `Image.memory`）的圆角契约。
+  //
+  // 为什么单列：默认封面 [DefaultBookCover] **自带** `ClipRRect`，外层裁切即使失效
+  // 它也会圆；真图封面**完全依赖** `_buildCoverSurface` 那一层裁切。负责人截图里
+  // `绍宋`（真图）与默认封面的书**同时**方角，这条路径必须自己钉住。
+  for (final Brightness brightness in Brightness.values) {
+    testWidgets('$brightness：真图封面被裁进圆角（不逃逸 ClipRRect）', (WidgetTester tester) async {
+      // 纯色封面：内部像素必须**精确等于**该色，圆角外必须**不是**它。
+      const Color coverColor = Color(0xFF1E88E5); // blue 600，深浅主题下都好分辨
+      final Uint8List png = (await tester.runAsync(
+        () => _solidPng(coverColor),
+      ))!;
+
+      final int Function(double, double) pixel = await _pumpAndSample(
+        tester,
+        brightness,
+        imageBytes: png,
+      );
+      const int coverRgb = 0x1E88E5;
+
+      // ① 自检：确实渲染的是这张真图（否则后面的圆角断言毫无意义）。
+      final int inner = pixel(12, _kCoverHeight * 0.55);
+      expect(
+        inner,
+        coverRgb,
+        reason: '真图封面内部须精确等于纯色 ${_hex(coverRgb)}（实测 ${_hex(inner)}）',
+      );
+
+      // ② 圆角外（半径 8 的弧外，到弧心 (8,8) 距离 ≈ 8.49 > 8）不得出现封面色。
+      //    若 `Image.memory` 逃逸了 `ClipRRect`，这里会读到封面色 ⇒ 方角。
+      final int corner = pixel(2, 2);
+      expect(
+        corner,
+        isNot(coverRgb),
+        reason:
+            '圆角外不该出现真图封面色（实测 ${_hex(corner)}）'
+            '——`Image.memory` 逃逸了外层 `ClipRRect`，封面成了方角',
+      );
+    });
+  }
+
+  // 2026-09-29 二次修正：**墨迹（高亮 + 水波纹）整体关闭**。
+  //
+  // 负责人原话：「长按某个书籍弹起弹框前，该书籍**文字和圆角**会有灰色背景」。
+  //
+  // 机制（全部源码实证，逐条见 `book_card.dart` 的 InkWell 注）：
+  //   · `theme_data.dart:502`  `splashColor ??= isDark ? Color(0x40CCCCCC)` —— **灰**；
+  //   · `ink_sparkle.dart:269` `canvas.drawRect(_clipCallback(), paint)` —— 整块矩形；
+  //   · `ink_well.dart:1242-1251` `handleLongPress` 只 `confirm()` 水波纹、**不撤**；
+  //   · `material.dart:621-634` ink 特性画在**子树之下** ⇒ 只从卡片仅有的两个透明处
+  //     露出来：**信息区（文字）** 与 **封面圆角缺口**。封面内部不透明，看不到。
+  //
+  // 两条断言（互为兜底）：
+  //   ① **确定性属性**——`InkWell` 的墨迹取色与工厂必须是「透明 / `NoSplash`」。
+  //      不受 shader 异步就绪影响，是「关掉墨迹」的直接契约（读 widget 自己的公开
+  //      字段，不用本仓常量，避免同义反复）。
+  //   ② **像素**——按住不放、在长按阈值之前（水波纹已起、放大 1.05 未起），
+  //      信息区与圆角缺口必须与静止态**逐位相同**。反向验证：把 splash 改回默认，
+  //      信息区实测 `#000000` → `#333333`（= `0x40CCCCCC` 叠在黑底上）。
+  testWidgets('书卡墨迹：按下/长按不得在文字区与圆角缺口留下灰底', (
+    WidgetTester tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(400, 700);
+    addTearDown(tester.view.reset);
+
+    final Completer<void> sheet = Completer<void>();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark(),
+        home: Scaffold(
+          body: Center(
+            child: RepaintBoundary(
+              key: _kBoundaryKey,
+              child: SizedBox(
+                width: _kCoverWidth,
+                height: _kCardHeight,
+                child: BookCard(
+                  record: BookRecord(
+                    bookId: 'book0',
+                    fileName: '0.epub',
+                    filePath: '0.epub',
+                    title: '书0',
+                    author: '作者0',
+                    format: 'epub',
+                    cover: const NoCover(),
+                    importedAt: 0,
+                  ),
+                  coverStore: _FakeCoverStore(),
+                  onTap: () {},
+                  onLongPress: () => sheet.future,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // ① 确定性属性契约：墨迹三条通路全部关死。
+    final InkWell ink = tester.widget<InkWell>(find.byType(InkWell));
+    expect(
+      ink.highlightColor?.toARGB32(),
+      0x00000000,
+      reason: '按下高亮必须透明（0x00000000）——否则长按会在整卡糊一块灰',
+    );
+    expect(
+      ink.splashColor?.toARGB32(),
+      0x00000000,
+      reason: '水波纹色必须透明（0x00000000）',
+    );
+    expect(
+      ink.splashFactory,
+      NoSplash.splashFactory,
+      reason: '水波纹工厂必须是 NoSplash——InkSparkle 是整块矩形填充，会糊住文字与圆角',
+    );
+
+    // ② 像素契约：按住不放，看文字区 / 圆角缺口是否被水波纹染灰。
+    final RenderRepaintBoundary boundary = tester.renderObject(
+      find.byKey(_kBoundaryKey),
+    );
+    final Rect cover = tester.getRect(find.byKey(kBookCoverSurfaceKey));
+
+    Future<(int, int)> sample() async {
+      late ui.Image image;
+      late ByteData data;
+      await tester.runAsync(() async {
+        image = await boundary.toImage();
+        data = (await image.toByteData(format: ui.ImageByteFormat.rawRgba))!;
+      });
+      final Rect local = boundary.globalToLocal(cover.topLeft) & cover.size;
+      int at(double dx, double dy) {
+        final int i =
+            ((local.top + dy).round() * image.width +
+                (local.left + dx).round()) *
+            4;
+        return (data.getUint8(i) << 16) |
+            (data.getUint8(i + 1) << 8) |
+            data.getUint8(i + 2);
+      }
+
+      // (信息区书名行, 圆角缺口)：卡片上仅有的两处透明区。
+      return (at(12, cover.height + 20), at(2, 2));
+    }
+
+    final (int idleText, int idleCorner) = await sample();
+
+    // 按住不放（长按阈值 500ms 之前采样：水波纹已起、放大未起，坐标稳定）。
+    final TestGesture gesture = await tester.startGesture(
+      tester.getCenter(find.byType(BookCard)),
+    );
+    int last = 0;
+    for (final int ms in <int>[250, 300, 350, 400]) {
+      await tester.pump(Duration(milliseconds: ms - last));
+      last = ms;
+      final (int text, int corner) = await sample();
+      expect(
+        text,
+        idleText,
+        reason:
+            't=${ms}ms 信息区（文字）不该被墨迹染色：静止 ${_hex(idleText)} → 实测 '
+            '${_hex(text)}（`0x40CCCCCC` 叠黑底 = `#333333`）',
+      );
+      expect(
+        corner,
+        idleCorner,
+        reason:
+            't=${ms}ms 封面圆角缺口不该被墨迹染色：静止 ${_hex(idleCorner)} → 实测 '
+            '${_hex(corner)}',
+      );
+    }
+    await gesture.up();
+    sheet.complete();
+    await tester.pump();
+  });
 }

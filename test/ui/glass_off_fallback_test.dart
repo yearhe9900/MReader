@@ -255,6 +255,19 @@ void main() {
     );
     expect(find.text('关闭'), findsOneWidget);
 
+    // 遮罩色源（2026-09-29 修「长按书卡，在操作单出现之前先蒙一层灰」）：
+    // `showModalBottomSheet` 的 `barrierColor` 默认 `Colors.black54`（= `0x8A000000`），
+    // 与玻璃库默认**同一个值**——两档共用 `kSheetBarrierColor`（`0x3D000000`）。
+    // 断言读遮罩自己渲染出的色，不引用薄封装常量（与玻璃档用例同口径）。
+    final Animation<Color?> barrierAnim = tester
+        .widget<AnimatedModalBarrier>(find.byType(AnimatedModalBarrier))
+        .color;
+    expect(
+      (barrierAnim.value!.a * 255).round(),
+      0x3D,
+      reason: '关档弹层遮罩也须用压淡后的色源（0x3D000000），不得吃 Material 默认的 0x8A000000',
+    );
+
     await tester.tap(find.text('关闭'));
     await tester.pumpAndSettle();
     expect(await future, 'closed');

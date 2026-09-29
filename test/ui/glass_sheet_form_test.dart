@@ -110,4 +110,68 @@ void main() {
     await tester.pump();
     expect(await future, 'closed');
   });
+
+  // 2026-09-29 追加：遮罩色源契约（修「长按书卡，在操作单出现之前先蒙一层灰」）。
+  //
+  // 病灶：`GlassSheet.show` 的 `barrierColor` 没透传 → 吃库默认
+  // `GlassDefaults.barrierColor = 0x8A000000`（`glass_defaults.dart:154`，α≈0.541）。
+  // 遮罩与弹窗共用 350ms 淡入 / 滑入（`glass_sheet.dart:320-332`），而弹窗从
+  // `Offset(0, 1)`（屏幕外）滑上来 ⇒ 头 ~150ms 是「灰幕到场、弹窗未到」。
+  //
+  // 断言读的是**遮罩自己渲染出来的色**（`AnimatedModalBarrier` 的当前 `Color`），
+  // 不是薄封装常量 —— 与文件头口径 1 一致（引用自己的常量 = 同义反复）。
+  testWidgets('弹层遮罩：色源已压淡（库默认 0x8A000000 太重，且先于弹窗可见）',
+      (WidgetTester tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(host(
+      GlassQualityTier.high,
+      Scaffold(
+        body: Builder(
+          builder: (BuildContext context) {
+            ctx = context;
+            return const SizedBox.expand();
+          },
+        ),
+      ),
+    ));
+
+    GlassOverlays.showSheet<String>(
+      context: ctx,
+      isScrollable: false,
+      builder: (BuildContext sheetContext) => const Text('弹层内容'),
+    ).ignore();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400)); // 走完 350ms 入场
+
+    // 终态遮罩色 = 库默认 `0x8A000000`（见 `glass_defaults.dart:154`，α≈0.541）。
+    final Color barrier = _finalBarrierColor(tester);
+    const int kLibDefaultAlpha = 0x8A; // 138 / 255 ≈ 0.541
+    expect(
+      barrier.a * 255,
+      lessThan(kLibDefaultAlpha),
+      reason:
+          '弹层遮罩必须比库默认（α $kLibDefaultAlpha ≈ 0.541）更淡——'
+          '库默认会在弹窗滑入前先铺一条深灰幕（实测终态 ${barrier.a * 255}）',
+    );
+    // 硬编码期望值：`0x3D` = 61 / 255 ≈ 0.239。
+    expect(
+      (barrier.a * 255).round(),
+      0x3D,
+      reason: '遮罩色应为 `kSheetBarrierColor` 的 `0x3D000000`（α 61/255 ≈ 0.239）',
+    );
+  });
+}
+
+/// 读当前在场遮罩的**终态**颜色（`showGeneralDialog` 插入的是
+/// [AnimatedModalBarrier]，其 `color` 是驱动动画 [Animation]`<Color?>`）。
+///
+/// ⚠️ `AnimatedModalBarrier` **不是** `ModalBarrier` 的子类（框架里是两个独立类，
+/// `AnimatedModalBarrier extends StatefulWidget`），故不能按 `ModalBarrier` 取。
+Color _finalBarrierColor(WidgetTester tester) {
+  final Animation<Color?> anim = tester
+      .widget<AnimatedModalBarrier>(find.byType(AnimatedModalBarrier))
+      .color;
+  final Color? c = anim.value;
+  expect(c, isNotNull, reason: '遮罩必须在场（点外关闭依赖它）');
+  return c!;
 }
