@@ -298,6 +298,23 @@ class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
 /// 各尺寸参数的默认值与库一致——传出去等价于不传，**只作显式化**，
 /// 便于将来按平台/档位微调（`UI-05`）。**不暴露 `barBorderRadius`**：
 /// 库的默认圆角是私有常量，硬编码会与库升级脱钩。
+///
+/// ══════════════════════════════════════════════════════════════════════════
+/// 触摸反馈口径（2026-09-29 拍板：移除「放大」）
+/// ══════════════════════════════════════════════════════════════════════════
+/// 负责人「移除导航栏放大特效」。库 `GlassTabBar` 的 `interactionBehavior` 缺省是
+/// **`GlassInteractionBehavior.full`**（= 方向光晕 **+** 物理弹簧缩放；doc 自述
+/// "the glass **inflates** subtly (bottom-anchored spring) on touch"），本项目原先
+/// **未透传** → 点击底栏时整个胶囊会膨胀（同 `showSheet` 未透传 `interactionScale`
+/// 一类坑：薄封装没暴露的参数会以库默认值静默生效）。
+///
+/// 现显式传 [GlassInteractionBehavior.glowOnly]（= 只手指出现柔和高光、**不做形变**，
+/// 库 doc 正是推荐给「flat navigation bars that should remain spatially stable
+/// while still feeling reactive to touch」；消费点 `tab_bar_bottom_layout.dart:390`
+/// 据此把 `interactionScale` 钉成 `1.0`）。
+///
+/// **若连高光也要去掉**：改传 `GlassInteractionBehavior.none` 即可（一行，
+/// 该档 doc："fully rigid glass, no directional glow"）。
 class GlassNavBar extends StatelessWidget {
   /// 创建玻璃底栏（默认即浮动胶囊形态）。
   const GlassNavBar({
@@ -415,6 +432,9 @@ class GlassNavBar extends StatelessWidget {
       // `resolveQuality` 会落到 `fallback = standard`，故显式补上 `premium`。
       quality: config.fixedSurfaceQualityOverride ??
           (standalone ? GlassQuality.premium : null),
+      // 触摸反馈：移除「放大」（不做形变、保留手指位置的柔和高光）
+      // —— 见 [GlassNavBar] doc 的「触摸反馈口径」。库默认是 `full`（光晕 + 弹簧缩放）。
+      interactionBehavior: GlassInteractionBehavior.glowOnly,
     );
   }
 }
