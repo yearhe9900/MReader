@@ -32,6 +32,8 @@
 //   · 浮层（对话框 / 底部弹窗）与滚动区内的玻璃 → `standard`（高档）；
 //   · P0 **不使用** `adaptiveQuality` / `GlassAdaptiveScope`（`@experimental`，首启要跑
 //     约 3 秒基准，PRD §11.3）。自动降级走项目自己的 `PerfDegradePolicy` + `PerfFrameMonitor`。
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
@@ -43,8 +45,10 @@ import 'glass_scope.dart';
 ///
 /// 同 `GlassTab` / `GlassTabBarExtraButton`：导航壳层（`home_shell.dart`）需要它们
 /// 构造底栏标签，re-export 后全仓页面**不必直接 import 玻璃库**。
+///
+/// `GlassToastType` 同理（[GlassOverlays.showToast] 的语义参数）。
 export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
-    show GlassDialogAction, GlassTab, GlassTabBarExtraButton;
+    show GlassDialogAction, GlassTab, GlassTabBarExtraButton, GlassToastType;
 
 /// 应用默认玻璃质量档位（PRD §11.3，= 高档的滚动区档位）。
 ///
@@ -534,6 +538,133 @@ abstract final class GlassOverlays {
       quality: config.scrollQuality,
       isScrollable: isScrollable,
       showDragIndicator: showDragIndicator,
+    );
+  }
+
+  /// 轻提示（操作结果反馈；薄封装 `GlassToast.show`）。
+  ///
+  /// **为什么不用 `ScaffoldMessenger.showSnackBar`**：玻璃壳层（`GlassScaffold`
+  /// 内层是 `CupertinoPageScaffold`）与窄屏浮动底栏布局**都没有 Material
+  /// `Scaffold`**，`_scaffolds` 为空 → `showSnackBar` 断言失败（debug 崩、release
+  /// `_scaffolds.last` 抛 `StateError`）。故轻提示一律走 **Overlay 浮层**，
+  /// 不依赖任何 `Scaffold` 祖先。
+  ///
+  /// 「关」档（`UI-06` ②）退化为纯色浮层（[_PlainToast]），零玻璃效果。
+  ///
+  /// 返回**手动关闭**回调（同 `GlassToast.show`）；不调用则按时长自动消失。
+  static VoidCallback showToast({
+    required BuildContext context,
+    required String message,
+    GlassToastType type = GlassToastType.neutral,
+    Duration duration = const Duration(seconds: 2),
+  }) {
+    final GlassTierConfig config = GlassScope.configOf(context);
+    if (!config.glassEnabled) {
+      return _showPlainToast(context, message: message, duration: duration);
+    }
+    return GlassToast.show(
+      context,
+      message: message,
+      type: type,
+      duration: duration,
+      quality: config.scrollQuality,
+    );
+  }
+}
+
+/// 「关」档纯色轻提示（[GlassOverlays.showToast] 的退化实现，零玻璃）。
+///
+/// 同样**不依赖 `Scaffold`**（壳层没有）：`OverlayEntry` + 自管定时移除。
+/// 计时器在 [State.dispose] 里取消 —— 测试结束时绑定会先卸载整棵 widget 树
+/// （`binding.dart` `_runTestBody`：`runApp(Container())` → `pump()` →
+/// `_verifyInvariants()`），于是不会留下 pending `Timer`。
+VoidCallback _showPlainToast(
+  BuildContext context, {
+  required String message,
+  required Duration duration,
+}) {
+  final OverlayState overlayState = Overlay.of(context);
+  late final OverlayEntry entry;
+  void dismiss() => entry.remove();
+  entry = OverlayEntry(
+    builder: (_) => _PlainToast(message: message, duration: duration, onDismissed: dismiss),
+  );
+  overlayState.insert(entry);
+  return dismiss;
+}
+
+class _PlainToast extends StatefulWidget {
+  const _PlainToast({
+    required this.message,
+    required this.duration,
+    required this.onDismissed,
+  });
+
+  final String message;
+  final Duration duration;
+  final VoidCallback onDismissed;
+
+  @override
+  State<_PlainToast> createState() => _PlainToastState();
+}
+
+class _PlainToastState extends State<_PlainToast> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.duration > Duration.zero) {
+      _timer = Timer(widget.duration, () {
+        if (mounted) widget.onDismissed();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Positioned(
+      left: 16,
+      right: 16,
+      bottom: MediaQuery.of(context).padding.bottom + 16,
+      // 轻提示不拦截手势：浮在内容上但不抢焦点（`IgnorePointer`）。
+      child: IgnorePointer(
+        child: Semantics(
+          liveRegion: true,
+          label: widget.message,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surface,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: theme.shadowColor.withValues(alpha: 0.15),
+                    blurRadius: 12,
+                  ),
+                ],
+              ),
+              child: Text(
+                widget.message,
+                style: TextStyle(
+                  color: theme.colorScheme.onSurface,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

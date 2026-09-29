@@ -240,4 +240,34 @@ void main() {
     await tester.pumpAndSettle();
     expect(await future, 'closed');
   });
+
+  testWidgets('关档：showToast 退化为纯色浮层（不依赖 Material Scaffold）',
+      (WidgetTester tester) async {
+    late BuildContext ctx;
+    // 故意**不放 `Scaffold`**：玻璃壳层（`GlassScaffold` → `CupertinoPageScaffold`）
+    // 与窄屏浮动底栏布局本就没有 Material `Scaffold`，`showSnackBar` 会因
+    // `_scaffolds` 为空断言失败 —— 轻提示必须走 Overlay。
+    await tester.pumpWidget(host(
+      GlassQualityTier.off,
+      Builder(
+        builder: (BuildContext context) {
+          ctx = context;
+          return const SizedBox.expand();
+        },
+      ),
+    ));
+
+    GlassOverlays.showToast(context: ctx, message: '已保存设置');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // 推演：关档无玻璃 → 无 GlassToast；纯色浮层照常渲染文案。
+    expect(find.byType(GlassToast), findsNothing);
+    expect(find.text('已保存设置'), findsOneWidget);
+
+    // 到时自动移除（计时器到点 → 移除 entry → 重建一帧）。
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
+    expect(find.text('已保存设置'), findsNothing);
+  });
 }

@@ -300,8 +300,10 @@ class _BookDetailPageState extends State<BookDetailPage> {
       final BookMeta? meta = await _reparse();
       if (!mounted) return;
       if (meta == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('文件已丢失，无法恢复自动值')),
+        GlassOverlays.showToast(
+          context: context,
+          message: '文件已丢失，无法恢复自动值',
+          type: GlassToastType.error,
         );
         return;
       }
@@ -338,8 +340,10 @@ class _BookDetailPageState extends State<BookDetailPage> {
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('恢复自动值失败，请重试')),
+        GlassOverlays.showToast(
+          context: context,
+          message: '恢复自动值失败，请重试',
+          type: GlassToastType.error,
         );
       }
     } finally {
@@ -390,8 +394,10 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 
   void _showStatsPlaceholder() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('单书统计在后续里程碑开放')),
+    GlassOverlays.showToast(
+      context: context,
+      message: '单书统计在后续里程碑开放',
+      type: GlassToastType.info,
     );
   }
 
