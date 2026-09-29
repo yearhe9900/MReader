@@ -8,7 +8,9 @@
 //   ③ 四个尺寸与**封面宽度**成比例（0.12 / 0.08 / 0.8 / 0.08）；
 //   ④ 右下角旋转 15° 的书本水印（文字色 10% 透明），故意探出封面后被裁；
 //   ⑤ 长书名 3 行内省略、不溢出（`META-07` 验收 ②）；
-//   ⑥ 有 `Material` → `Ink` 上底色（保住水波纹）；无 → `ColoredBox`（不崩）。
+//   ⑥ 底色画在**子树内**（`ColoredBox`），**不用 `Ink`**——`Ink` 是墨迹特性、
+//      由上层 Material 绘制 ⇒ 会被外框 `ClipRRect` 漏裁（方角）并被投影填充染色
+//      （变暗）；也不依赖 `Material` 祖先。
 //
 // ⚠️ 期望值一律硬编码字面量。其中「书名 → 具体颜色」两条是**按当前 SDK 的
 // `String.hashCode` 实测**钉的（`三体` → 下标 4、`活着` → 下标 0）；SDK 升版若换了
@@ -63,8 +65,8 @@ class _FakeCoverStore implements CoverStore {
       0;
 }
 
-/// 宿主：固定宽高的封面盒，放在 `Scaffold` 里 → **有 `Material` 祖先**
-/// （组件走 `Ink` 上底色，与书架书卡同一条路径）。高度按书架封面区的实际比例
+/// 宿主：固定宽高的封面盒，放在 `Scaffold` 里（**不必再有 `Material` 祖先**——
+/// 底色走 `ColoredBox`，见 group ④）。高度按书架封面区的实际比例
 /// （1.6 × 宽）给，保证「不溢出」的判定是真实场景而非凑数。
 Future<void> _pumpCover(
   WidgetTester tester, {
@@ -102,10 +104,14 @@ EdgeInsets _coverPadding(WidgetTester tester) =>
     tester
             .widget<Padding>(
               find
-                  .ancestor(of: find.text(_kTitle), matching: find.byType(Padding))
+                  .ancestor(
+                    of: find.text(_kTitle),
+                    matching: find.byType(Padding),
+                  )
                   .first,
             )
-            .padding as EdgeInsets;
+            .padding
+        as EdgeInsets;
 
 void main() {
   capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
@@ -128,12 +134,9 @@ void main() {
       expect(defaultBookCoverColor('活着'), Colors.red.shade200);
       // 「浅色 / shade200」这一档被钉死：结果必须落在这 18 个 `shade200` 里
       // （改去 shade500 之类会红；而 SDK 换 hashCode 只会让上面两条钉点红）。
-      expect(
-        <Color>[
-          for (final MaterialColor c in Colors.primaries) c.shade200,
-        ],
-        contains(defaultBookCoverColor('红楼梦')),
-      );
+      expect(<Color>[
+        for (final MaterialColor c in Colors.primaries) c.shade200,
+      ], contains(defaultBookCoverColor('红楼梦')));
       // 换本书换色（不是固定取 0 号色）。
       expect(ofSanTi, isNot(defaultBookCoverColor('活着')));
     });
@@ -178,9 +181,7 @@ void main() {
   });
 
   group('③ 水印与裁切（真渲染）', () {
-    testWidgets('右下角、旋转 15°、文字色 10% 透明，且探出封面被裁', (
-      WidgetTester tester,
-    ) async {
+    testWidgets('右下角、旋转 15°、文字色 10% 透明，且探出封面被裁', (WidgetTester tester) async {
       await _pumpCover(tester, width: 120, radius: 8);
 
       // 颜色 = 文字色 10% 透明（底色是浅色 → 文字色为黑）。
@@ -251,9 +252,7 @@ void main() {
       );
     });
 
-    testWidgets('长书名：3 行内省略、不溢出（META-07 验收 ②）', (
-      WidgetTester tester,
-    ) async {
+    testWidgets('长书名：3 行内省略、不溢出（META-07 验收 ②）', (WidgetTester tester) async {
       // 320 字标题塞进 120×192 的封面：溢出会被框架报成 FlutterError → 用例红。
       final String longTitle = '长书名' * 80;
       await _pumpCover(tester, width: 120, title: longTitle);
@@ -273,36 +272,42 @@ void main() {
     });
   });
 
-  group('④ 底色画在哪一层（保水波纹 / 不依赖 Material）', () {
-    testWidgets('有 Material 祖先 → `Ink` 上底色（水波纹压在底色之上）', (
+  group('④ 底色画在**子树内**（不用 `Ink`：会漏裁 + 被投影染色）', () {
+    testWidgets('有 Material 祖先 → 仍用 `ColoredBox`，组件内**没有** `Ink`', (
       WidgetTester tester,
     ) async {
       await _pumpCover(tester, width: 120);
 
-      final Ink ink = tester.widget<Ink>(
+      expect(
+        tester
+            .widget<ColoredBox>(
+              find.descendant(
+                of: find.byType(DefaultBookCover),
+                matching: find.byType(ColoredBox),
+              ),
+            )
+            .color,
+        defaultBookCoverColor(_kTitle),
+      );
+      // **反向断言**：`Ink` 是**墨迹特性**、由上层 `Material` 绘制（`material.dart:621-634`
+      // 先画 ink 特性再画子树），于是 ① **逃逸本组件的 `ClipRRect`** ⇒ 封面方角；
+      // ② 落在封面外框投影的**填充**之下 ⇒ 整张封面被染上一层 α0.39 的色（「太暗」）。
+      // 两条都是 2026-09-29 的像素级实证（见 §2.54），回潮即红。
+      expect(
         find.descendant(
           of: find.byType(DefaultBookCover),
           matching: find.byType(Ink),
         ),
-      );
-      expect(
-        (ink.decoration! as BoxDecoration).color,
-        defaultBookCoverColor(_kTitle),
-      );
-      expect(
-        find.descendant(
-          of: find.byType(DefaultBookCover),
-          matching: find.byType(ColoredBox),
-        ),
         findsNothing,
+        reason: '底色必须画在子树内；用 `Ink` 会漏裁并被投影染色',
       );
     });
 
-    testWidgets('无 Material 祖先（`LookupBoundary` 截断）→ 退回 `ColoredBox`，不崩', (
+    testWidgets('无 Material 祖先也照常渲染（不再依赖 Material）', (
       WidgetTester tester,
     ) async {
-      // 玻璃库页面无 `Material` 祖先（PRD §11.4）；`LookupBoundary` 可确定性地
-      // 复现该环境（`Material.maybeOf` 用它截断祖先查找）。
+      // 玻璃库页面没有 `Material` 祖先（PRD §11.4）。此前靠 `Material.maybeOf` 分支
+      // 退化成 `ColoredBox`，现在**只剩这一条路**，故这里证明它不需要 Material。
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -328,20 +333,10 @@ void main() {
             .color,
         defaultBookCoverColor(_kTitle),
       );
-      expect(
-        find.descendant(
-          of: find.byType(DefaultBookCover),
-          matching: find.byType(Ink),
-        ),
-        findsNothing,
-        reason: '`Ink` 在无 Material 时会断言失败，故该分支必须退化成 ColoredBox',
-      );
     });
   });
 
-  testWidgets('接入：书架无封面书卡的封面 = 默认封面（调色板底色）', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('接入：书架无封面书卡的封面 = 默认封面（调色板底色）', (WidgetTester tester) async {
     final BookRecord book = BookRecord(
       bookId: 'book0',
       fileName: '0.epub',
@@ -382,17 +377,22 @@ void main() {
     // ⚠️ 下标 5 才是 blue——`Colors.primaries` 的顺序是 red/pink/purple/
     // deepPurple/indigo/blue/lightBlue/…，别凭印象数）。
     expect(
-      (tester
-                  .widget<Ink>(
-                    find.descendant(
-                      of: find.byType(BookCard),
-                      matching: find.byType(Ink),
-                    ),
-                  )
-                  .decoration!
-              as BoxDecoration)
+      tester
+          .widget<ColoredBox>(
+            find.descendant(
+              of: find.byType(DefaultBookCover),
+              matching: find.byType(ColoredBox),
+            ),
+          )
           .color,
       Colors.lightBlue.shade200,
+    );
+    // **整张书卡里一个 `Ink` 都不该有**——书卡曾有 `Ink.image`（真封面）与
+    // `Ink`（占位底色）两处墨迹层绘制，它们会漏裁 + 被投影染色（§2.54）。
+    expect(
+      find.descendant(of: find.byType(BookCard), matching: find.byType(Ink)),
+      findsNothing,
+      reason: '书卡不得再用负责面绘制的 Ink（InkWell 的水波纹不是 Ink widget）',
     );
   });
 }

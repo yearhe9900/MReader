@@ -158,18 +158,31 @@ void main() {
       find.byKey(kBookLiftShadowKey),
     );
     expect(shadow.duration, const Duration(milliseconds: 250));
+    expect((shadow.decoration! as BoxDecoration).boxShadow, const <BoxShadow>[
+      // 0x33000000 = `Colors.black.withOpacity(0.2)`（0x33 = 51 = 0.2 × 255）。
+      BoxShadow(
+        color: Color(0x33000000),
+        spreadRadius: 5,
+        blurRadius: 6,
+        offset: Offset(0, 3),
+      ),
+    ], reason: '抬起阴影须为包内 `_defaultBoxDecoration` 的四参数');
+    // ⚠️ 形状必须是**封面的圆角**，不是卡片外框的方角：`BoxShadow` 是填充形状，
+    // 画在整张卡外面（卡片无底板、信息区透明）会变成一张**方角灰板**——盖住封面圆角、
+    // 长按时整卡变暗（负责人 2026-09-29 反馈的原话）。故这颗 `AnimatedContainer`
+    // 现在挂在**封面外框**上（`kBookCoverSurfaceKey` 的祖先），并带 8 圆角。
     expect(
-      (shadow.decoration! as BoxDecoration).boxShadow,
-      const <BoxShadow>[
-        // 0x33000000 = `Colors.black.withOpacity(0.2)`（0x33 = 51 = 0.2 × 255）。
-        BoxShadow(
-          color: Color(0x33000000),
-          spreadRadius: 5,
-          blurRadius: 6,
-          offset: Offset(0, 3),
-        ),
-      ],
-      reason: '抬起阴影须为包内 `_defaultBoxDecoration` 的四参数',
+      (shadow.decoration! as BoxDecoration).borderRadius,
+      BorderRadius.circular(8),
+      reason: '抬起阴影的形状须跟封面圆角一致（8），否则长按时出现方角灰板',
+    );
+    expect(
+      find.ancestor(
+        of: find.byKey(kBookCoverSurfaceKey),
+        matching: find.byKey(kBookLiftShadowKey),
+      ),
+      findsOneWidget,
+      reason: '抬起阴影须画在封面外框这一层，不能像原先那样包整张卡',
     );
 
     // ③ 操作单关闭 → 卡片落回原位。

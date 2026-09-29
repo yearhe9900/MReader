@@ -28,10 +28,15 @@
 //   · **自带裁切**：anx 的水印故意画出封面之外（`right: -padding*0.8`、
 //     `bottom: -padding*0.5`），本组件用 `ClipRRect` 兜住，调用方不必再管；
 //     圆角由 [radius] 传入（书架 = `kBookCoverRadius`，详情页沿用其自有值）。
-//   · **底色画在哪一层按环境自适应**（见 [build] 内注释）：有 `Material` 祖先时
-//     用 `Ink`（底色进 Material 的 ink 层 → `InkWell` 的水波纹仍压在底色之上、
-//     不被不透明子组件盖住，与 `book_card.dart` 里 `Ink.image` 同一条口径）；
-//     否则退回 `ColoredBox`（不依赖 `Material`，详情页等场合可直接用）。
+//   · **底色画在子树内（`ColoredBox`），不用 `Ink`**：`Ink` 是**墨迹特性**，
+//     由更上层的 `Material` 绘制，于是有两条像素级实证的坑（2026-09-29 修）：
+//     ① 它**逃逸本组件的 `ClipRRect`**（裁切只作用于该 Material 的子**树**）⇒ 封面
+//        是**方角**；② 它位于外层 `DecoratedBox` 的**投影填充之下**（`BoxShadow` 是
+//        填充整个盒子的形状，`box_decoration.dart:448-470`）⇒ 整张封面被投影染上
+//        一层 α0.39 的色（浅色 = 灰、深色 = 黑）⇒「太暗了」。
+//     代价（如实登记）：`InkWell` 的水波纹/高亮画在墨迹层，因而**不再压在封面之上**，
+//     只在透明的信息区可见——这正是 anx 的形态（其封面用 `Container(color:)` /
+//     `Container(decoration: image)`，同样不在墨迹层）。
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -138,18 +143,12 @@ class DefaultBookCover extends StatelessWidget {
       },
     );
 
-    // 底色画哪一层按环境自适应（不改变观感，只影响水波纹是否可见）：
-    // 有 `Material` 祖先 → `Ink`：底色进该 Material 的 ink 层，`InkWell` 的水波纹
-    //   画在它**之上**（`book_card.dart` 的 `Ink.image` / `Ink` 就是这条口径，
-    //   否则不透明底色会把 ripple 盖住）；
-    // 无 `Material` 祖先 → `ColoredBox`：`Ink` 在无 Material 时会断言失败
-    //   （玻璃库页面即无 Material 祖先，见 PRD §11.4）。
-    final bool onMaterial = Material.maybeOf(context) != null;
+    // 底色画在**子树内**（`ColoredBox`，不用 `Ink`）：理由见文件头注第 ③ 条
+    // ——`Ink` 会被外层 `ClipRRect` 漏裁（方角）且被外框投影填充染色（变暗）。
+    // 不依赖 `Material` 祖先，故书架书卡与详情页都可直接用。
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
-      child: onMaterial
-          ? Ink(color: background, child: content)
-          : ColoredBox(color: background, child: content),
+      child: ColoredBox(color: background, child: content),
     );
   }
 }

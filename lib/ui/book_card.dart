@@ -17,8 +17,12 @@
 // 只是把 `Card` 本身做成「无色、无 elevation、不裁剪、零外边距」，
 // 于是观感上没有卡片，但手势链路不变。
 //
-// 封面等不透明内容仍用 `Ink.image` / `Ink` 画在 `Card` 的 Material 上——
-// ripple 才不会被不透明子组件盖住（信息区透明，封面区被盖属预期）。
+// 封面（真封面 / 占位）与角标一律画在**子树内**、且不透明——**不要**用 `Ink` /
+// `Ink.image`：它们由上层 `Material` 绘制（`material.dart:621-634` 的 ink 特性先于
+// 子树绘制），于是会 ① 逃逸封面外框的 `ClipRRect`（方角）② 被外框投影的**填充**
+// 盖住而染色（变暗）。两条均为 2026-09-29 的像素级实证，见 §2.54。
+// 代价：`InkWell` 的水波纹/高亮不再压在封面之上，只在透明的信息区可见（anx 同此形态，
+// 其封面用 `Container(color:)` / `Container(decoration: image)`）。
 //
 // 打开准备中（[BookCard.loading]）：整卡蒙层 + 转圈，让用户看得见「在响应」。
 //
@@ -65,7 +69,8 @@ const BoxShadow kBookCoverShadow = BoxShadow(
 /// （spread 5 / blur 10 / offset (0,2)）**一字不动**——深浅两主题只差一个色源，
 /// 既保住浅色下照抄 anx 得到的浮起层次，又让深色回到「靠暗投影分层」。
 /// 要再调强度，深浅两档都只动这一个函数。
-BoxShadow bookCoverShadowOf(ThemeData theme) => theme.brightness == Brightness.dark
+BoxShadow bookCoverShadowOf(ThemeData theme) =>
+    theme.brightness == Brightness.dark
     ? BoxShadow(
         color: theme.colorScheme.shadow.withValues(alpha: 100 / 255),
         spreadRadius: 5,
@@ -109,6 +114,12 @@ const Duration kBookLiftShadowDuration = Duration(milliseconds: 250);
 /// 灰投影，拖拽期间再把这一层黑投影画在卡片背景上（`DecorationPosition.background`）。
 /// `0x33000000` = `Colors.black.withOpacity(0.2)`（`0x33` = 51 = 0.2 × 255）。
 ///
+/// ⚠️ **画在封面外框上、形状取封面圆角**（`_buildCoverSurface` 的 `AnimatedContainer`）：
+/// `BoxShadow` 是**填充形状**，若像原先那样画在整张卡外面，而卡片又没有底板
+/// （`Card` 透明、信息区透明），看到的会是一张**方角灰板**——既盖住封面圆角、
+/// 又让长按时整卡变暗（负责人 2026-09-29 反馈「长按会有灰色背景，且书籍封面没有圆角，
+/// 太暗了」）。
+///
 /// **不随主题**（anx 原样，即包内默认值）：深色主题下这颗黑投影与深色背景几乎同值，
 /// 抬起时主要靠**放大 1.05** 传达反馈、阴影那半贡献很小——如实登记，不去补
 /// 「深色下也看得见的亮边」：亮边正是 2026-09-29 从常驻投影上**去掉**的东西。
@@ -135,9 +146,11 @@ const ValueKey<String> kBookLiftShadowKey = ValueKey<String>(
 /// 书架上的单本书卡片。
 ///
 /// 封面来源：
-/// - [StoredCover]：从 [CoverStore.readThumb] 异步加载（`Ink.image` 保 ripple 可见）；
+/// - [StoredCover]：从 [CoverStore.readThumb] 异步加载（`Image.memory`）；
 /// - [NoCover] / [SyntheticCover]：显示**默认封面**（[DefaultBookCover]，视觉照抄
 ///   anx —— 见该文件的头注）。
+///
+/// 三条封面路径**都画在子树内且不透明**（理由见 `_buildCover` 头注）。
 class BookCard extends StatefulWidget {
   /// 创建书卡。
   const BookCard({
@@ -206,8 +219,9 @@ class _BookCardState extends State<BookCard> {
   Future<void> _loadThumb() async {
     if (widget.record.cover is StoredCover) {
       _loadingThumb = true;
-      final Uint8List? bytes =
-          await widget.coverStore.readThumb(widget.record.cover);
+      final Uint8List? bytes = await widget.coverStore.readThumb(
+        widget.record.cover,
+      );
       if (mounted && bytes != null) {
         setState(() {
           _thumbBytes = bytes;
@@ -228,107 +242,140 @@ class _BookCardState extends State<BookCard> {
       scale: _lifted ? kBookLiftScale : 1.0,
       duration: kBookLiftScaleDuration,
       curve: Curves.linear,
-      child: AnimatedContainer(
-        key: kBookLiftShadowKey,
-        duration: kBookLiftShadowDuration,
-        curve: Curves.linear,
-        // 这层装饰是**抬起时新增**的阴影，默认画在卡片背景
-        // （`DecorationPosition.background`），与封面自带的静止投影叠加
-        // ——anx 同为两层（书卡自带灰投影 + 拖拽反馈的黑投影）。
-        decoration: BoxDecoration(
-          boxShadow: _lifted
-              ? const <BoxShadow>[kBookLiftShadow]
-              : const <BoxShadow>[],
-        ),
-        child: Card(
-          // 无卡片观感：透明底 + 零 elevation + 不裁剪（阴影要画到卡片外）+ 零外边距。
-          color: Colors.transparent,
-          elevation: 0,
-          clipBehavior: Clip.none,
-          margin: EdgeInsets.zero,
-          child: InkWell(
-            onTap: widget.onTap,
-            // 异步回调（见 [BookCard.onLongPress]）：这里只点火，Future 由
-            // `_handleLongPress` 内部 `await`。
-            onLongPress: widget.onLongPress == null ? null : _handleLongPress,
-            child: Stack(
-              fit: StackFit.expand,
-              children: <Widget>[
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    // 封面区：Hero 共享元素过渡（与详情页封面同 tag）。
-                    Expanded(
-                      child: Hero(
-                        tag: 'book-cover-${widget.record.bookId}',
-                        child: _buildCoverSurface(theme),
-                      ),
-                    ),
-                    // 封面与信息区的间距（几何事实源，anx `book_item.dart:88`）。
-                    const SizedBox(height: kBookCoverToInfoGap),
-                    _buildInfo(theme),
-                  ],
-                ),
-                // 打开准备中：整卡蒙层 + 转圈（per-card 可见反馈）。
-                if (widget.loading)
-                  ColoredBox(
-                    key: const ValueKey<String>('book-opening-overlay'),
-                    color: theme.colorScheme.surface.withValues(alpha: 0.6),
-                    child: const Center(
-                      child: CircularProgressIndicator(strokeWidth: 2),
+      // 抬起阴影**不在这里**——它已挪到封面外框内（`_buildCoverSurface`）：
+      // 卡片本身没有底板（`Card` 透明、信息区透明），把箱式阴影画在卡片这一层
+      // 等于给整卡铺一张**方角灰板**（阴影是填充形状），既盖住封面的圆角、
+      // 又让长按时整块变暗。详见 [kBookLiftShadow] 与 `_buildCoverSurface`。
+      child: Card(
+        // 无卡片观感：透明底 + 零 elevation + 不裁剪（阴影要画到卡片外）+ 零外边距。
+        color: Colors.transparent,
+        elevation: 0,
+        clipBehavior: Clip.none,
+        margin: EdgeInsets.zero,
+        child: InkWell(
+          onTap: widget.onTap,
+          // 按压/长按的**整块高亮**一律关掉：它是 Material 的墨迹特性，自己会填满
+          // 整个卡片（方角、含透明的信息区与封面圆角缺口），长按时会一直挂着
+          // （`ink_well.dart:1242-1251` 的 `handleLongPress` 不清 pressed 高亮），
+          // 观感就是「长按出现一块灰色背景」。**保留**水波纹（`splashColor` 用默认）
+          // ——它自行淡出（M3 的 `InkSparkle` 617ms 走完归零），不构成常驻底色。
+          highlightColor: Colors.transparent,
+          // 异步回调（见 [BookCard.onLongPress]）：这里只点火，Future 由
+          // `_handleLongPress` 内部 `await`。
+          onLongPress: widget.onLongPress == null ? null : _handleLongPress,
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  // 封面区：Hero 共享元素过渡（与详情页封面同 tag）。
+                  Expanded(
+                    child: Hero(
+                      tag: 'book-cover-${widget.record.bookId}',
+                      child: _buildCoverSurface(theme),
                     ),
                   ),
-              ],
-            ),
+                  // 封面与信息区的间距（几何事实源，anx `book_item.dart:88`）。
+                  const SizedBox(height: kBookCoverToInfoGap),
+                  _buildInfo(theme),
+                ],
+              ),
+              // 打开准备中：整卡蒙层 + 转圈（per-card 可见反馈）。
+              if (widget.loading)
+                ColoredBox(
+                  key: const ValueKey<String>('book-opening-overlay'),
+                  color: theme.colorScheme.surface.withValues(alpha: 0.6),
+                  child: const Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  /// 封面外框：投影 + 圆角裁剪（投影画在封面之外，故与封面本体分层）。
+  /// 封面外框：**两层投影 + 圆角裁剪**。
+  ///
+  /// 层次（自外向内）与理由：
+  /// ① [kBookLiftShadowKey] 的 `AnimatedContainer`——长按抬起时浮现的暗影，
+  ///    形状**取封面的圆角**（不是卡片外框的方角）。原先它包在整张卡外面，
+  ///    而卡片没有底板（`Card` 透明、信息区透明），`BoxShadow` 又是**填充形状**
+  ///    （`box_decoration.dart:448-470` 的 `_paintBox` 直接 `drawRRect` 填充），
+  ///    于是长按时看到的是一张**方角灰板**：既盖住封面圆角、又让整卡变暗。
+  /// ② [kBookCoverSurfaceKey] 的 `DecoratedBox`——静止态投影（见 [bookCoverShadowOf]）。
+  ///    它画在封面内容**之下**，所以封面内容必须是**子树内**不透明绘制（见 `_buildCover`），
+  ///    否则这颗填充阴影会盖在封面上把它染暗。
+  /// ③ `ClipRRect`——裁掉封面内容（含本组件自带裁切的 `DefaultBookCover`），
+  ///    保证圆角生效；角标放在它**内**，随圆角一起裁。
   Widget _buildCoverSurface(ThemeData theme) {
-    return DecoratedBox(
-      key: kBookCoverSurfaceKey,
+    return AnimatedContainer(
+      key: kBookLiftShadowKey,
+      duration: kBookLiftShadowDuration,
+      curve: Curves.linear,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(kBookCoverRadius),
-        // 投影让封面「浮」在渐变背景上——这是本版视觉的主要层次来源。
-        // 色源**随主题**（浅色 = anx 原样，深色 = 主题阴影色，见 [bookCoverShadowOf]）。
-        boxShadow: <BoxShadow>[bookCoverShadowOf(theme)],
+        // 抬起时新增、与静止投影**叠加**（anx 同为两层：书卡自带灰投影 + 拖拽反馈黑投影）。
+        boxShadow: _lifted
+            ? const <BoxShadow>[kBookLiftShadow]
+            : const <BoxShadow>[],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(kBookCoverRadius),
-        // 格式标签角标（PRD US-06 / LIB-01；anx 原版封面无此物）：
-        // 放在 ClipRRect **内**，随封面圆角一起裁切，不会溢出圆角。
-        child: Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            _buildCover(),
-            Positioned(
-              right: kBookFormatBadgeInset,
-              bottom: kBookFormatBadgeInset,
-              child: _FormatTag(format: widget.record.format),
-            ),
-          ],
+      child: DecoratedBox(
+        key: kBookCoverSurfaceKey,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(kBookCoverRadius),
+          // 投影让封面「浮」在渐变背景上——这是本版视觉的主要层次来源。
+          // 色源**随主题**（浅色 = anx 原样，深色 = 主题阴影色，见 [bookCoverShadowOf]）。
+          boxShadow: <BoxShadow>[bookCoverShadowOf(theme)],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(kBookCoverRadius),
+          // 格式标签角标（PRD US-06 / LIB-01；anx 原版封面无此物）：
+          // 放在 ClipRRect **内**，随封面圆角一起裁切，不会溢出圆角。
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              _buildCover(theme),
+              Positioned(
+                right: kBookFormatBadgeInset,
+                bottom: kBookFormatBadgeInset,
+                child: _FormatTag(format: widget.record.format),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildCover() {
-    if (_thumbBytes != null) {
-      // `Ink.image`（而非 `Image.memory`）：封面画在 Card 的 Material 上，
-      // InkWell 的 ripple 才能压在封面之上显示。
-      return Ink.image(
-        image: MemoryImage(_thumbBytes!),
+  /// 封面三态：真封面 / 加载中 / 默认封面。
+  ///
+  /// ⚠️ **一律画在子树内、且必须是不透明的**——这是 2026-09-29 用像素探针查出来的
+  /// 两条铁律（见 §2.54，附实测数值）：
+  /// - 用 `Ink` / `Ink.image`（**墨迹特性**，由上层 `Material` 绘制）会 ① **逃逸外层
+  ///   `ClipRRect`**（裁切只作用于 Material 的子**树**）⇒ 封面是方角；② 落在封面外框
+  ///   投影填充**之下** ⇒ 整张封面被染上一层 α0.39 的色（浅色=灰、深色=黑）⇒「太暗」。
+  /// - 若某一态是**透明**的（如只有转圈的加载态），这两层投影会直接透出来变成一块底色。
+  /// 代价：`InkWell` 的水波纹不再压在封面之上，只在透明的信息区可见（anx 同此形态）。
+  Widget _buildCover(ThemeData theme) {
+    final Uint8List? bytes = _thumbBytes;
+    if (bytes != null) {
+      return Image.memory(
+        bytes,
         fit: BoxFit.cover,
-        onImageError: (_, _) {
-          if (mounted) setState(() => _thumbBytes = null);
-        },
+        // 解码失败退回默认封面（`Image` 会缓存失败态，不会每帧重试）。
+        errorBuilder: (BuildContext _, Object _, StackTrace? _) =>
+            _buildPlaceholder(),
       );
     }
     if (_loadingThumb) {
-      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+      // 不透明底板：见方法头注最后一条。
+      return ColoredBox(
+        color: theme.colorScheme.surfaceContainerHighest,
+        child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
     }
     return _buildPlaceholder();
   }
@@ -338,10 +385,7 @@ class _BookCardState extends State<BookCard> {
   /// 视觉全部照抄 anx：底色 = `Colors.primaries[书名.hashCode % 18].shade200`
   /// （每本书一张浅色）、顶部书名（3 行）+ 底部作者、右下角旋转 15° 的书本水印、
   /// 尺寸按封面宽度成比例——逐条出处见 `default_book_cover.dart` 的头注。
-  /// 原先的「主题色底 + 书名首字」已废弃。
-  ///
-  /// 底色由 [DefaultBookCover] 自己画：它检测到本卡片 `Card` 的 `Material` 后用
-  /// `Ink` 上色，ripple 仍压在底色之上（与上面 `Ink.image` 同一条口径）。
+  /// 原先的「主题色底 + 书名首字」已废弃。底色由 [DefaultBookCover] 自己在子树内画。
   Widget _buildPlaceholder() => DefaultBookCover(
     title: widget.record.title,
     author: widget.record.author,
@@ -360,7 +404,9 @@ class _BookCardState extends State<BookCard> {
     return SizedBox(
       height: kBookInfoHeight,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: kBookInfoHorizontalPadding),
+        padding: const EdgeInsets.symmetric(
+          horizontal: kBookInfoHorizontalPadding,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
