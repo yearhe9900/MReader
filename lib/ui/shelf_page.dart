@@ -25,12 +25,14 @@ import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
 import '../reader/progress_store.dart';
 import '../reader/reader_page.dart';
+import '../settings/shelf_layout_store.dart';
 import '../settings/shelf_prefs_store.dart';
-import 'book_card.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'library_search_page.dart';
+import 'shelf_folder_page.dart';
+import 'shelf_grid.dart';
 
 /// 书架首页。
 class ShelfPage extends StatefulWidget {
@@ -40,6 +42,7 @@ class ShelfPage extends StatefulWidget {
     required this.coverStore,
     required this.progressStore,
     required this.shelfPrefs,
+    required this.shelfLayout,
   });
 
   /// 书库仓库。
@@ -53,6 +56,9 @@ class ShelfPage extends StatefulWidget {
 
   /// 书架视图偏好（筛选 + 排序），进程内共享实例。
   final ShelfPrefsStore shelfPrefs;
+
+  /// 书架布局（手动顺序 + 文件夹归属），进程内共享实例。
+  final ShelfLayoutStore shelfLayout;
 
   @override
   State<ShelfPage> createState() => _ShelfPageState();
@@ -79,19 +85,22 @@ class _ShelfPageState extends State<ShelfPage> {
   @override
   void initState() {
     super.initState();
-    // 筛选 / 排序偏好一变即重绘（偏好是进程内共享实例，见 [ShelfPrefsStore]）。
-    widget.shelfPrefs.addListener(_onPrefsChanged);
+    // 筛选 / 排序偏好与书架布局（手动顺序 + 文件夹）一变即重绘
+    // （两者都是进程内共享实例，见 [ShelfPrefsStore] / [ShelfLayoutStore]）。
+    widget.shelfPrefs.addListener(_onStoreChanged);
+    widget.shelfLayout.addListener(_onStoreChanged);
     _loadBooks();
   }
 
   @override
   void dispose() {
-    widget.shelfPrefs.removeListener(_onPrefsChanged);
+    widget.shelfPrefs.removeListener(_onStoreChanged);
+    widget.shelfLayout.removeListener(_onStoreChanged);
     super.dispose();
   }
 
-  /// 偏好变更 → 重绘。
-  void _onPrefsChanged() {
+  /// 共享存储变更 → 重绘。
+  void _onStoreChanged() {
     if (mounted) {
       setState(() {});
     }
@@ -129,6 +138,26 @@ class _ShelfPageState extends State<ShelfPage> {
     }
 
     final List<BookRecord> sorted = list.toList();
+
+    // 手动顺序（拖拽重排的结果）单独一条路径：顺序**就是** `order` 本身，
+    // 不受升降序开关影响（否则「再点同项翻转方向」会把用户拖出来的顺序打乱）。
+    if (prefs.sortField == ShelfSortField.manual) {
+      final List<String> order = widget.shelfLayout.layout.order;
+      final Map<String, int> rank = <String, int>{
+        for (int i = 0; i < order.length; i++) order[i]: i,
+      };
+      sorted.sort((BookRecord a, BookRecord b) {
+        final int ra = rank[a.bookId] ?? -1;
+        final int rb = rank[b.bookId] ?? -1;
+        if (ra >= 0 && rb >= 0) return ra.compareTo(rb);
+        if (ra >= 0) return -1; // 有显式位置者在前
+        if (rb >= 0) return 1;
+        // 都没拖拽过（新导入的书）→ 按导入时间降序追加在后。
+        return -b.importedAt.compareTo(a.importedAt);
+      });
+      return sorted;
+    }
+
     sorted.sort((BookRecord a, BookRecord b) {
       final int cmp = switch (prefs.sortField) {
         ShelfSortField.importedAt => a.importedAt.compareTo(b.importedAt),
@@ -136,11 +165,37 @@ class _ShelfPageState extends State<ShelfPage> {
           _nullableIntCompare(a.lastReadAt, b.lastReadAt),
         ShelfSortField.title => a.title.compareTo(b.title),
         ShelfSortField.author => a.author.compareTo(b.author),
+        // 手动顺序已在上方单独返回（此分支不可达，仅为穷尽 switch）。
+        ShelfSortField.manual => 0,
       };
       // 缺省降序 = 「新的 / 靠后的在前」。
       return prefs.sortAscending ? cmp : -cmp;
     });
     return sorted;
+  }
+
+  /// 生效的文件夹：成员与当前可见书目有交集者。
+  ///
+  /// 于是「文件夹也参与筛选」——筛选后内部一本书都不命中的文件夹不会出现；
+  /// 而被删除的书所留下的孤儿引用同样在这里被挡掉（另有 [ShelfLayoutStore.prune]
+  /// 负责落盘清理，两者**不互相假设**）。
+  List<BookFolder> get _liveFolders {
+    final Set<String> visible =
+        _visibleBooks.map((BookRecord b) => b.bookId).toSet();
+    return <BookFolder>[
+      for (final BookFolder folder in widget.shelfLayout.layout.folders)
+        if (folder.bookIds.any(visible.contains)) folder,
+    ];
+  }
+
+  /// 散书：可见书目中**不归属任何文件夹**的那些。
+  ///
+  /// 拖拽重排只作用于这个线性空间（文件夹固定排在前面，不参与重排）。
+  List<BookRecord> get _looseBooks {
+    final Set<String> foldered = widget.shelfLayout.layout.folderedBookIds;
+    return _visibleBooks
+        .where((BookRecord b) => !foldered.contains(b.bookId))
+        .toList();
   }
 
   /// `null` 视为最小值——降序（默认）时自然落到末尾（「从未读过」排最后）。
@@ -157,6 +212,7 @@ class _ShelfPageState extends State<ShelfPage> {
         ShelfSortField.lastReadAt => '最近阅读',
         ShelfSortField.title => '书名',
         ShelfSortField.author => '作者',
+        ShelfSortField.manual => '手动排序',
       };
 
   Future<void> _loadBooks() async {
@@ -167,6 +223,10 @@ class _ShelfPageState extends State<ShelfPage> {
         _loading = false;
       });
     }
+    // 顺手清掉已删书籍在布局里留下的孤儿引用（无变化则不写盘）。
+    await widget.shelfLayout.prune(
+      books.map((BookRecord b) => b.bookId).toSet(),
+    );
   }
 
   Future<void> _pickAndImport() async {
@@ -222,11 +282,13 @@ class _ShelfPageState extends State<ShelfPage> {
       final String msg = errors.isEmpty
           ? '成功导入 $success 本'
           : '成功 $success 本，失败 ${errors.length} 本';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(msg),
-          duration: const Duration(seconds: 3),
-        ),
+      // 轻提示走 Overlay（`GlassOverlays.showToast`）：壳层无 Material `Scaffold`，
+      // `ScaffoldMessenger.showSnackBar` 会断言失败。
+      GlassOverlays.showToast(
+        context: context,
+        message: msg,
+        type: errors.isEmpty ? GlassToastType.success : GlassToastType.warning,
+        duration: const Duration(seconds: 3),
       );
     }
   }
@@ -376,24 +438,120 @@ class _ShelfPageState extends State<ShelfPage> {
     }
   }
 
-  /// 书架背景渐变（**两个色标都完全不透明**）。
+  // ── L3：拖拽重排 / 文件夹 ────────────────────────────────────────────────
+
+  /// 散书区拖拽重排。
   ///
-  /// anx-reader 用 `colorScheme.primary.withAlpha(5)` 叠在 Scaffold 底色上做出
-  /// 极淡的右上角光晕。本项目 `UI-04` 要求内容层不得半透明，故选**先把半透明色
-  /// 与底色合成**（[Color.alphaBlend]）——合成的结果 alpha 恒为 1，
-  /// 观感与「半透明叠底」等价，红线不破。
-  BoxDecoration _shelfBackground(ThemeData theme) {
-    final Color base = theme.scaffoldBackgroundColor;
-    final Color glow = Color.alphaBlend(
-      theme.colorScheme.primary.withValues(alpha: 0.02),
-      base,
+  /// [toIndex] 采用 `ReorderableListView` 的通行约定——下标以**移除前**的
+  /// 列表计，向后移动时内部减一（于是「拖到某本上」= 插到那本之前）。
+  Future<void> _reorder(String draggedBookId, int toIndex) async {
+    final List<String> ids = <String>[
+      for (final BookRecord record in _looseBooks) record.bookId,
+    ];
+    final int from = ids.indexOf(draggedBookId);
+    if (from < 0 || from == toIndex) return;
+
+    final String moved = ids.removeAt(from);
+    final int insertAt = from < toIndex ? toIndex - 1 : toIndex;
+    ids.insert(insertAt.clamp(0, ids.length), moved);
+
+    // 顺序先落盘、再切「手动排序」——反过来的话，`_visibleBooks` 会在切换瞬间
+    // 用**旧的** `order` 重排一次，用户刚拖出来的位置会跳变。
+    await widget.shelfLayout.setOrder(ids);
+    if (widget.shelfPrefs.prefs.sortField != ShelfSortField.manual) {
+      await widget.shelfPrefs.setSortField(ShelfSortField.manual);
+    }
+  }
+
+  /// 拖到另一本书上并悬停够时长 → 并入目标书所在（或新建）文件夹。
+  ///
+  /// 目标书已在某文件夹里 → 直接并入该文件夹；否则**新建**一个以目标书书名
+  /// 命名的文件夹（省掉一次命名弹窗，用户可在文件夹内重命名）。
+  Future<void> _mergeIntoFolder(BookRecord dragged, BookRecord target) async {
+    final BookFolder? existing =
+        widget.shelfLayout.layout.folderOf(target.bookId);
+    if (existing != null) {
+      await widget.shelfLayout.addToFolder(
+        existing.id,
+        <String>[dragged.bookId],
+      );
+      _toast('已把「${dragged.title}」移入「${existing.name}」');
+      return;
+    }
+    await widget.shelfLayout.createFolder(
+      name: target.title,
+      bookIds: <String>[target.bookId, dragged.bookId],
     );
-    return BoxDecoration(
-      gradient: RadialGradient(
-        center: Alignment.topRight,
-        radius: 1,
-        colors: <Color>[glow, base],
+    _toast('已创建文件夹「${target.title}」');
+  }
+
+  /// 拖到文件夹卡上 → 直接移入该文件夹。
+  Future<void> _dropIntoFolder(BookRecord dragged, String folderId) async {
+    final BookFolder? folder = _folderById(folderId);
+    await widget.shelfLayout.addToFolder(folderId, <String>[dragged.bookId]);
+    if (folder != null) {
+      _toast('已把「${dragged.title}」移入「${folder.name}」');
+    }
+  }
+
+  /// 点文件夹卡 → 文件夹内页。
+  Future<void> _openFolder(BookFolder folder) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ShelfFolderPage(
+          folderId: folder.id,
+          records: _books,
+          coverStore: widget.coverStore,
+          shelfLayout: widget.shelfLayout,
+          // 开书 / 详情管道**复用**本页实现，文件夹页不复制第二份。
+          onOpenDetail: (BookRecord record) => unawaited(_openDetail(record)),
+          onOpenBook: (BookRecord record) => unawaited(_openBook(record)),
+        ),
       ),
+    );
+    if (mounted) unawaited(_loadBooks());
+  }
+
+  /// 长按文件夹卡 → 操作单（重命名 / 解散）。
+  ///
+  /// 组件与确认流程来自 `shelf_folder_page.dart`，与文件夹内页**共用同一份**。
+  Future<void> _folderActions(BookFolder folder) async {
+    final FolderAction? action = await GlassOverlays.showSheet<FolderAction>(
+      context: context,
+      builder: (BuildContext sheetContext) => FolderActionSheet(folder: folder),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case FolderAction.rename:
+        final String? name = await askFolderName(context, folder);
+        if (name == null) return;
+        await widget.shelfLayout.renameFolder(folder.id, name);
+      case FolderAction.dissolve:
+        if (!await confirmDissolveFolder(context, folder)) return;
+        await widget.shelfLayout.dissolveFolder(folder.id);
+    }
+  }
+
+  /// 按 id 取文件夹；不存在时返回 `null`。
+  BookFolder? _folderById(String folderId) {
+    for (final BookFolder folder in widget.shelfLayout.layout.folders) {
+      if (folder.id == folderId) {
+        return folder;
+      }
+    }
+    return null;
+  }
+
+  /// 轻提示（操作结果反馈）。
+  ///
+  /// 走 `GlassOverlays.showToast`（Overlay 浮层）——**不能**用
+  /// `ScaffoldMessenger.showSnackBar`：壳层没有 Material `Scaffold`。
+  void _toast(String message) {
+    if (!mounted) return;
+    GlassOverlays.showToast(
+      context: context,
+      message: message,
+      type: GlassToastType.success,
     );
   }
 
@@ -441,16 +599,17 @@ class _ShelfPageState extends State<ShelfPage> {
       ),
       body: OpaqueContentSurface(
         child: DecoratedBox(
-          decoration: _shelfBackground(theme),
+          decoration: shelfGradientBackground(theme),
           child: _books.isEmpty
               ? _buildEmptyState(theme)
               : Column(
                   children: <Widget>[
                     _buildFilterBar(theme),
                     Expanded(
-                      child: _visibleBooks.isEmpty
+                      // 「文件夹 + 散书」都空才算无命中（文件夹也参与筛选）。
+                      child: _liveFolders.isEmpty && _looseBooks.isEmpty
                           ? _buildNoMatchState(theme)
-                          : _buildBookGrid(theme),
+                          : _buildBookGrid(),
                     ),
                     if (_importErrors.isNotEmpty) _buildErrorList(theme),
                   ],
@@ -621,30 +780,29 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 有书：网格展示（筛选 / 排序已在外层应用，这里直接用 [_visibleBooks]）。
-  Widget _buildBookGrid(ThemeData theme) {
-    final List<BookRecord> books = _visibleBooks;
-    return GridView.builder(
-      // 底部留给壳层的浮动胶囊（[kShellBottomInset]）——胶囊是浮层、
-      // 不占布局高度，不预留的话最后一行会被压住。
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, kShellBottomInset),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 180,
-        childAspectRatio: 0.5,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      itemCount: books.length,
-      itemBuilder: (BuildContext context, int index) {
-        final BookRecord record = books[index];
-        return BookCard(
-          record: record,
-          coverStore: widget.coverStore,
-          loading: _openingBookId == record.bookId,
-          onTap: () => unawaited(_openDetail(record)),
-          onLongPress: () => unawaited(_openBookActions(record)),
-        );
-      },
+  /// 有书：网格展示（筛选 / 排序已在外层应用；文件夹排在散书之前）。
+  ///
+  /// 拖拽交互（重排 / 建文件夹 / 移入文件夹）全在 [ShelfGrid] 内部，
+  /// 本页只提供「落到哪个语义动作」的回调。
+  Widget _buildBookGrid() {
+    return ShelfGrid(
+      folders: _liveFolders,
+      books: _looseBooks,
+      // 文件夹卡的封面要按 bookId 找回，故传**全部**可见书（含文件夹内的）。
+      allBooks: _visibleBooks,
+      coverStore: widget.coverStore,
+      openingBookId: _openingBookId,
+      onOpenBook: (BookRecord record) => unawaited(_openDetail(record)),
+      onBookActions: (BookRecord record) => unawaited(_openBookActions(record)),
+      onReorder: (String draggedBookId, int toIndex) =>
+          unawaited(_reorder(draggedBookId, toIndex)),
+      onOpenFolder: (BookFolder folder) => unawaited(_openFolder(folder)),
+      onFolderActions: (BookFolder folder) =>
+          unawaited(_folderActions(folder)),
+      onMergeBooks: (BookRecord dragged, BookRecord target) =>
+          unawaited(_mergeIntoFolder(dragged, target)),
+      onDropIntoFolder: (BookRecord dragged, String folderId) =>
+          unawaited(_dropIntoFolder(dragged, folderId)),
     );
   }
 

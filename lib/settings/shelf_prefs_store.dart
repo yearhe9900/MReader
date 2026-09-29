@@ -48,7 +48,13 @@ enum ShelfSortField {
   title,
 
   /// 作者。
-  author;
+  author,
+
+  /// **手动顺序**：由书架拖拽重排决定，顺序真值存于 `ShelfLayoutStore`
+  /// （`shelf_layout.json` 的 `order`），本枚举只记「当前用哪种排法」。
+  ///
+  /// 放在枚举末尾：菜单顺序即 `values` 顺序，既有四项的相对次序不动。
+  manual;
 
   /// 由持久化字符串解析；未知或缺失时回退 [ShelfSortField.importedAt]。
   static ShelfSortField fromName(String? name) {

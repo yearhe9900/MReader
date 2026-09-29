@@ -36,7 +36,7 @@ class BookCard extends StatefulWidget {
     required this.record,
     required this.coverStore,
     required this.onTap,
-    required this.onLongPress,
+    this.onLongPress,
     this.loading = false,
   });
 
@@ -49,8 +49,12 @@ class BookCard extends StatefulWidget {
   /// 点击（进入详情页）。
   final VoidCallback onTap;
 
-  /// 长按（后续接底部操作单）。
-  final VoidCallback onLongPress;
+  /// 长按回调（弹底部操作单）。
+  ///
+  /// 为 `null` 时**不响应长按**——书架网格里由外层拖拽容器统一接管
+  /// （`shelf_grid.dart`：长按不动 = 操作单，长按拖动 = 重排 / 建文件夹）。
+  /// 若这里也认长按，会与 `LongPressDraggable` 在手势竞技场里互抢。
+  final VoidCallback? onLongPress;
 
   /// 是否处于「打开准备中」：显示 loading 覆盖层（转圈），提示卡片正在响应。
   final bool loading;
