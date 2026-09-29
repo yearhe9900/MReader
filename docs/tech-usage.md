@@ -1135,6 +1135,41 @@ bash tool/test.sh reader                                    # 00:28 +226: All te
 
 **未做（如实登记，交负责人）**：① **本批未真机复跑**——`extendBody` 是全局布局改动，请重新安装后重点看书架 / 详情 / 设置三页顶部；② 顶栏渐隐已按拍板关闭，若真机上觉得生硬，备选修法（body 补 top spacer，代价是复制库算法）记录在上文；③ `parse` 组**未实跑**（与本批改动无交集）；④ `kShelfCoverTargetWidth` 仍未开放为设置项。
 
+### 2.42 书架阅读状态筛选改单选（2026-09-29）
+
+**触发**：负责人拍板「书架页标签应该是**已读完、正在读、未开始**，且是**单选**，参考 anx reader」——批次② `0991c43` 做的是多选（三个 `FilterChip` 可叠加、命中任一即保留）。
+
+**anx 的单选语义（实读源码，非凭 UI 猜测）**
+
+| 证据 | 位置 |
+|---|---|
+| `enum ReadingStatusFilter { none, finished, reading, notStarted }` —— 单值枚举自带 `none` | `providers/book_filters.dart:5` |
+| `toggle`：`state == status ? none : status` —— 点已选中即取消、点别的直接顶掉 | `:12-18` |
+| chips 顺序与文案 = **已读完 / 正在读 / 未开始** | `bookshelf_page.dart:111-141` |
+
+本项目不引 Riverpod → 同语义落在 `ShelfPrefsStore.toggleFilter`；`none` 对应 Dart 的 `null`。
+
+**改动三处**
+
+1. **数据模型**（`lib/settings/shelf_prefs_store.dart`）：`ShelfPrefs.filters`（`Set<ShelfReadingFilter>` 多选）→ **`filter`（`ShelfReadingFilter?` 单值，`null` = 不筛选）**。`copyWith` 的可空参数无法显式置空（`null` = 不修改），故 `clearFilters` 直接构造新 `ShelfPrefs`——这个坑在改字段类型时**全仓 grep 旧字面量**才能找齐调用点（工程约定既有条目，本次照做：`grep '\.filters\|filters:'` 确认零残留）。
+2. **持久化（键名不动，零迁移）**：落盘键沿用 `filters`，值为 **list 恒 0/1 元素**——旧版多选文件读进来时 `fromJson` 取**首个合法值**收敛为单选（旧 `Set` 迭代序 = 插入序 = 用户**先**点选的那个；取首还是取末都不影响「单选收敛」的正确性，选定首值并写死在测试里），其余丢弃；新文件老代码也能读。双向兼容、无需迁移逻辑。
+3. **UI**（`lib/ui/shelf_page.dart`）：筛选栏 chips 改 **已读完 / 正在读 / 未开始**（原 未读/在读/已读完，顺序与文案照搬 anx `:111-141`）；`_visibleBooks` 的三路「或」判定改**单 `switch(filter)`**（`switch` 表达式覆盖枚举全部三值，漏一支编译期即报非穷尽）。
+
+**测试**
+
+- 新增 `test/ui/shelf_prefs_store_test.dart` **10 条**（纯 `test()`）：单选顶掉/再点取消、`clearFilters` 保排序、`toJson` 恒 0/1 元素、往返一致、**旧多选文件取首值收敛**、非 Map / 非法类型回退、落盘后新实例 `load` 恢复。
+- `shelf_page_test` 追加 1 条 **widget**：断言 chips 顺序文案 `['已读完','正在读','未开始']`、选「已读完」只剩已读完的书、再选「正在读」**顶掉**（`_titles` 恰为半本，非并集）、再点同一 chip 取消回三本。进度用 `repo.markRead` 真实回写（`readProgress` 1.0 / 0.4 / `null` 三档齐）。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze                    # 0 error / 7 条既有 info
+flutter test test/ui/shelf_prefs_store_test.dart --timeout 30s            # +10
+bash tool/test.sh ui                                                      # 01:23 +104: All tests passed!
+```
+
+**复核边界**：anx 源码行号、三处改动（数据模型 / 持久化 / UI）为本批实读实改，两组测试数字为实跑；**真机上 chips 的观感与单选手感未复跑**，须负责人重装确认。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；

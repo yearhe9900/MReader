@@ -11,6 +11,7 @@
 
 ### 变更
 
+- **书架阅读状态筛选改单选**（负责人拍板「已读完、正在读、未开始，且是单选，参考 anx reader」）：`ShelfPrefs.filters`（`Set` 多选）→ **`filter`（单值，`null` = 不筛选）**——`toggleFilter` 对齐 anx `ReadingStatusFilterNotifier.toggle` 语义（`book_filters.dart:12-18`）：点未选中项选中并顶掉原值、点已选中项取消；`fromJson` 对旧版多选文件取**首个合法值**收敛、落盘键名沿用 `filters`（list 恒 0/1 元素，新旧双向兼容免迁移）。筛选栏 chips 顺序与文案照搬 anx（`bookshelf_page.dart:111-141`）：**已读完 / 正在读 / 未开始**（原为 未读/在读/已读完），`_visibleBooks` 的三路「或」判定改单 switch。测试：新增 `test/ui/shelf_prefs_store_test.dart` 10 条（单选顶掉/取消、旧文件收敛、落盘往返）+ `shelf_page_test` 1 条 widget（chips 顺序文案、选中即过滤、切换顶掉、再点取消），`tool/test.sh ui` **+104 全绿**
 - **书架几何抽成事实源 + 契约测试**（「直接复用 anx 代码」的落地形态，两项拍板之一）：新增 `lib/ui/shelf_geometry.dart`——所有几何数值只在此定义一次、每条附 anx 出处行号与差异声明（`shelf_grid.dart` 改为引用并 `export`，调用点 import 零改动；`book_card.dart` 三处字面量改常量）；新增 `test/ui/shelf_geometry_contract_test.dart` 5 个用例（常量 golden + 真实渲染契约：392 宽 3 列 / 119 宽 1 列下限兜底 / 卡片高宽比 2.1 / 封面下方合计 60 / 角标在封面右下），**期望值一律硬编码字面量而非常量引用**（引用即同义反复、永远红不了），测真实渲染尺寸故能同时抓「数值抄错」与「参数接错线」两类错。附带核对：当初抄的 5/55 与 anx 源码一致，但书名↔作者间距 2 与信息区水平内边距 2 **是本项目自有值、anx 该处为 0**，已在事实源照实标注 `a6cc900`
 
 ## 2026-09-28
