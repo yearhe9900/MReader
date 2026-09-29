@@ -1213,6 +1213,55 @@ bash tool/test.sh ui                                                     # +103:
 
 **顺带发现、未处理（报负责人）**：anx 阅读状态阈值是 `未开始 ≤0.02 / 已读完 ≥0.98`（`book_list.dart:83-94`），本项目筛选用 0/1 硬边界——口径差异，是否跟进未拍板。
 
+### 2.44 分组取代文件夹、书架去拖拽化（`P2-02` 提前落地，2026-09-29）
+
+**触发**：负责人两条指令——①「移除拖拽加入文件夹功能」；②「移除已读完、正在读、未开始，改为分组，默认全部，如将一本书设置为玄幻分组，则为全部、玄幻」。
+
+**拍板（两问两答）**：① 分组与文件夹的关系 = **分组取代文件夹**（不并存）；② 设置入口 = **详情页「分组」行**（书架长按操作单不加）。
+
+> 需求侧依据：PRD **`P2-02`「书架分组与筛选」**（原排 M4，`docs/进度表.md` 的 `P2-T02`）——「自定义分组（在读/读完/弃坑）」。本次是**提前落地**，PRD 条文无需改动。详情页本就有一行**禁用的「分组」占位**（`book_detail_page.dart` 原 `:502` 注释「`P2-02` 分组未实现：显示「未分组」且禁用，不自造分组系统」）——本批正是把它点亮。
+
+**为什么是「取代」而不是并存**：原 `BookFolder` 就是「一个名字 + 一组书，且**一本书归属唯一**」，与「一本书一个分组」在数据形状上完全同构；并存会造出两套语义重叠的归类系统（用户必然问「文件夹和分组有什么区别」）。
+
+**改动**
+
+1. **数据层**（`lib/settings/shelf_layout_store.dart`）：`BookFolder` → **`BookGroup`**；`ShelfLayout.folders` → `groups`；`folderOf`/`folderedBookIds` → `groupOf`/`groupedBookIds`；新增 `groupById` / `groupByName`；store 方法 `createFolder`→`createGroup`、`addToFolder`→`assignToGroup`、`removeFromFolder`→`removeFromGroup`、`dissolveFolder`→`deleteGroup`、`renameFolder`→`renameGroup`，**删 `setFolderOrder`**（内页拖拽重排的写入口，随重排一并消失）；新增 **`assignByName(bookId, name)`**——详情页「选已有分组 / 新建分组」两种动作共用它（同名并入、异名新建、空名拒绝）。
+   - **落盘键 `folders` → `groups`，读取兼容旧键**（`json['groups'] ?? json['folders']`）：旧数据一本不丢，下次写盘自动归一（测试逐字断言落盘文件不含 `"folders"`）。
+   - id 前缀 `f` → `g`（旧 `f...` id 照常读入，不冲突）。
+2. **偏好层**（`lib/settings/shelf_prefs_store.dart`）：删 `ShelfReadingFilter` 枚举与 `filter`/`toggleFilter`/`clearFilters`，改 **`groupId`（`String?`，`null` = 全部）+ `setGroup(String?)`**；`hasFilter` → `hasGroup`。
+   - 落盘键 `filters` → **`group`**（`null` 时**省略键**）；**旧 `filters` 键直接忽略、不迁移**——旧值是阅读状态枚举名，在新语义下不是合法分组 id，强行映射只会造出假分组；代价仅是「记住的筛选态」，用户重点一下即可。
+3. **书架网格**（`lib/ui/shelf_grid.dart`）：**去拖拽化**——删 `DragTarget` / `LongPressDraggable` / `_BookCell`（含 `_movedDuringDrag`、`_DragFeedback`、`_HoverOverlay`）/ `_FolderCell`（文件夹卡）/ `onMergeBooks` / `onDropIntoFolder` / `dragEnabled` / `folders` / `allBooks`，文件从约 570 行缩到约 150 行，只剩「按几何排布书卡」。长按操作单改由 `BookCard.onLongPress` **直接承载**——没有外层拖拽容器了，原先「网格内必须把 `onLongPress` 置 `null` 以避让手势竞技场」的理由随之消失。
+4. **删除** `lib/ui/shelf_folder_page.dart`（文件夹内页 + `FolderActionSheet` / `askFolderName` / `confirmDissolveFolder`）。
+5. **书架页**（`lib/ui/shelf_page.dart`）：删 `_liveFolders` / `_looseBooks` / `_mergeIntoFolder` / `_dropIntoFolder` / `_openFolder` / `_folderActions` / `_folderById` / `_toast`；`_visibleBooks` 改**分组筛选**（`null` = 全部）；顶部 chips 改为「**全部 + 各分组名**」横向可滚（分组数由用户决定，窄屏必然放不下）；空态文案改「这个分组里没有书」+「查看全部」。
+   - **选中的分组不存在时按「全部」渲染**（渲染层回落，**不改写** prefs）：书被删空后 `prune` 会清掉空分组，而 `groupId` 仍指着它——不回落的话书架会永久停在「没有符合当前筛选的书」，用户找不到恢复入口。已入测试。
+6. **详情页**（`lib/ui/book_detail_page.dart`）：新增注入 `ShelfLayoutStore shelfLayout`（与书架页共享同一实例）；原禁用「分组」占位行改 `_buildGroupEntry`——显示当前分组名（未分组时灰色「未分组」）+ 右箭头，点击弹 `_GroupPickerSheet`（未分组 / 各分组带「N 本」/ 新建分组…）；新建走玻璃输入框 → `assignByName`。
+
+**被推翻的旧定案**：§2.39 / §2.43 的**全部拖拽交互条目作废**（三态判据表、`kFolderMergeHoverDelay`、落点即建、文件夹卡投放、文件夹内页、重命名 / 解散、超 900ms 那套手感讨论）；§2.42 的**阅读状态单选作废**（`ShelfReadingFilter` 与其 chips 顺序 / 文案 / 阈值口径一并作废，连「anx 阈值 0.02/0.98 vs 本项目 0/1」的口径差异问题也随功能删除而关闭）。**未被推翻**：`shelf_layout.json` 独立文件的理由三条、孤儿引用两道兜底（`prune`）、`ValueKey` 防 element 复用、轻提示走 Overlay、几何事实源与契约测试、`ShelfSortField.manual` 旧顺序数据仍生效。
+
+**测试**
+
+- `shelf_layout_store_test`：改名 + 新增「旧 `folders` 键兼容」「落盘键为 `groups`」「`assignByName` 三种情形（同名并入 / 新建 / 空名拒绝）」+ 删 `setFolderOrder` 两组用例；**21 → 28 条**（口径：`grep -c "^\s*test\(Widgets\)\?(" test/ui/shelf_layout_store_test.dart`）。
+- `shelf_prefs_store_test`：整篇重写为分组筛选（默认全部 / 顶掉 / 同值空操作 / `group` 键省略 / 旧 `filters` 忽略 / 非法值回退 / 排序不受影响）；**10 → 15 条**（同上口径）。
+- `shelf_page_test`：删 4 条拖拽 / 文件夹用例与 1 条阅读状态筛选用例，新增 5 条（chips 基本行为、切组顶掉、选中组被删回落「全部」、**详情页设分组 → 返回书架 chips 出现**端到端、无分组时只有「全部」）；**19 条**（同上口径）。
+- `shelf_geometry_contract_test`：跟改 `ShelfGrid` 新签名。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze      # 全项目 0 error / 0 warning / 7 条既有 info
+bash tool/test.sh ui                                        # 00:53 +115: All tests passed!
+bash tool/test.sh data                                      # 00:10 +205: All tests passed!（含 meta/detail_test）
+```
+
+**两个实测踩到的坑（可复用）**
+
+| 坑 | 现象 / 根因 | 修法 |
+|---|---|---|
+| **玻璃弹窗关闭转场仍在读 `TextEditingController`** | 新建分组弹窗返回后立刻 `controller.dispose()` → `A TextEditingController was used after being disposed`，栈落在 `_AnimatedState.didUpdateWidget`（转场每帧重建内部 `TextField`、会对 controller `addListener`） | controller **与 State 同生命周期**（成员字段 + `State.dispose` 释放，下次打开前先释放上一个），**不在弹层返回时立刻释放**。原 `shelf_folder_page.askFolderName` 的 `try/finally { dispose() }` 写法是同一个坑，只是从未被 widget 测试覆盖到 |
+| **FakeAsync 推不动真文件 IO** | 端到端用例里点「确定」后 `pumpAndSettle()` → 分组写盘（`AtomicFile` 真 IO）永不完成 → `await` 之后的 `setState` 不执行 → 详情页不显示新组名 | 用 `_settle`（`runAsync` 让出真事件循环）；**凡「UI 操作 → store 写盘 → 再刷新 UI」的链路都要走它**，`pumpAndSettle` 只解决动画 |
+
+**复核边界**：全部改动与测试数字为本批实读实跑；**真机观感未复跑**（分组 chips 的选中手感、详情页弹层在窄屏的可用性、旧 `folders` 文件升级后的实际表现）；`parse` / `reader` 两组未跑（与本次改动零交集）。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
