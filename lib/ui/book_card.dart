@@ -1,7 +1,9 @@
 // `LIB-01`：书架上的单本书卡片。
 //
 // 视觉（2026-09-28 改版，参考 anx-reader `widgets/bookshelf/book_item.dart`）：
-// **不用卡片底板**——封面直接浮在书架渐变背景上，靠 `BoxShadow` 投出层次；
+// **不用卡片底板**——封面直接浮在书架渐变背景上，靠 `BoxShadow` 投出层次
+// （投影**色源随主题**：浅色照抄 anx 的固定灰、深色用主题阴影色，2026-09-29 拍板
+// 「跟主题走」，见 `bookCoverShadowOf`）；
 // 封面右下角一枚**格式标签角标**（PRD US-06 / LIB-01 要求，anx 原版没有，
 // 拍板「挪到封面上做角标」）；下方信息区为「书名（两行加粗）+ 作者 · 阅读进度」，
 // **高度固定 55**（照搬 anx `book_item.dart:89-90`）。
@@ -35,23 +37,42 @@ import '../model/book_meta.dart';
 import 'default_book_cover.dart';
 import 'shelf_geometry.dart';
 
-/// 封面投影（**2026-09-29 对齐 anx**）。
+/// **浅色主题**下的封面投影（= anx 原样；深色主题见 [bookCoverShadowOf]）。
 ///
 /// anx 出处：`book_item.dart:66-77` 的 `Container.decoration.boxShadow`——
 /// `Colors.grey.withAlpha(100)` / spread 5 / blur 10 / offset (0, 2)
-/// （anx 只在**非**电子墨水模式下画它，本项目无该开关，恒画）。
+/// （anx 只在**非**电子墨水模式下画它，本项目无该开关，浅色恒画）。
 ///
 /// 颜色写 `0x649E9E9E` 字面量：`Colors.grey.withAlpha(100)` 不是 const，
 /// 而 `0x64` = 100、`0x9E9E9E` = `Colors.grey` 的 RGB，两者等价（契约测试锁死）。
-///
-/// ⚠️ **固定灰、不随主题**（anx 原样如此）：深色主题下这颗投影比背景**亮**，
-/// 观感接近一道浅色描边。要改回跟主题走（`colorScheme.shadow`）只需换这一行。
 const BoxShadow kBookCoverShadow = BoxShadow(
   color: Color(0x649E9E9E),
   spreadRadius: 5,
   blurRadius: 10,
   offset: Offset(0, 2),
 );
+
+/// 当前主题下的封面投影（**2026-09-29 拍板「跟主题走」**）。
+///
+/// 浅色 → [kBookCoverShadow]（anx 原样）；深色 → `colorScheme.shadow`
+/// （M3 下恒为不透明黑，`color_scheme.dart:1304` 的 `_shadow ?? const Color(0xff000000)`）。
+///
+/// **为什么深色必须换**（负责人真机截图反馈「阴影太强烈，影响观感」）：anx 的投影是
+/// **固定灰**，在深色背景上比背景**亮**——`spread 5 + blur 10` 的一圈灰晕观感就是
+/// **一道浅色描边**，相邻书卡的光晕还会互相叠成亮带，于是「投影」变成了「发光」。
+///
+/// **只换色源**：透明度（anx 的 `withAlpha(100)` = 100/255）与几何
+/// （spread 5 / blur 10 / offset (0,2)）**一字不动**——深浅两主题只差一个色源，
+/// 既保住浅色下照抄 anx 得到的浮起层次，又让深色回到「靠暗投影分层」。
+/// 要再调强度，深浅两档都只动这一个函数。
+BoxShadow bookCoverShadowOf(ThemeData theme) => theme.brightness == Brightness.dark
+    ? BoxShadow(
+        color: theme.colorScheme.shadow.withValues(alpha: 100 / 255),
+        spreadRadius: 5,
+        blurRadius: 10,
+        offset: const Offset(0, 2),
+      )
+    : kBookCoverShadow;
 
 // ---------------------------------------------------------------------------
 // 长按抬起反馈（2026-09-29 拍板「采用 anx 的长按动画和效果」）
@@ -84,9 +105,13 @@ const Duration kBookLiftShadowDuration = Duration(milliseconds: 250);
 
 /// 抬起时浮现的阴影（出处见上方总注：包内 `_defaultBoxDecoration`）。
 ///
-/// 与静止态投影 [kBookCoverShadow] **叠加**——anx 也是两层同时在场：其书卡自带
+/// 与静止态投影（[bookCoverShadowOf]）**叠加**——anx 也是两层同时在场：其书卡自带
 /// 灰投影，拖拽期间再把这一层黑投影画在卡片背景上（`DecorationPosition.background`）。
 /// `0x33000000` = `Colors.black.withOpacity(0.2)`（`0x33` = 51 = 0.2 × 255）。
+///
+/// **不随主题**（anx 原样，即包内默认值）：深色主题下这颗黑投影与深色背景几乎同值，
+/// 抬起时主要靠**放大 1.05** 传达反馈、阴影那半贡献很小——如实登记，不去补
+/// 「深色下也看得见的亮边」：亮边正是 2026-09-29 从常驻投影上**去掉**的东西。
 const BoxShadow kBookLiftShadow = BoxShadow(
   color: Color(0x33000000),
   spreadRadius: 5,
@@ -268,8 +293,8 @@ class _BookCardState extends State<BookCard> {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(kBookCoverRadius),
         // 投影让封面「浮」在渐变背景上——这是本版视觉的主要层次来源。
-        // 数值 2026-09-29 对齐 anx（见 [kBookCoverShadow]）。
-        boxShadow: const <BoxShadow>[kBookCoverShadow],
+        // 色源**随主题**（浅色 = anx 原样，深色 = 主题阴影色，见 [bookCoverShadowOf]）。
+        boxShadow: <BoxShadow>[bookCoverShadowOf(theme)],
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(kBookCoverRadius),

@@ -24,6 +24,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/library/book_record.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/model/book_meta.dart';
+import 'package:mreader/theme/app_theme.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/home_shell.dart' show kShellBottomInset;
 // 几何常量经 `shelf_grid.dart` 的 `export 'shelf_geometry.dart'` 一并可用
@@ -82,12 +83,16 @@ Future<void> _pumpGrid(
   WidgetTester tester, {
   required double width,
   required int bookCount,
+  ThemeData? theme,
 }) async {
   final List<BookRecord> books = <BookRecord>[
     for (int i = 0; i < bookCount; i++) _book(i),
   ];
   await tester.pumpWidget(
     MaterialApp(
+      // 不传 = 与既有用例逐字一致（`MaterialApp` 自带浅色 M3 主题）。
+      // 封面投影**随主题**（见 `bookCoverShadowOf`），故深浅两档各需要一条用例。
+      theme: theme,
       home: Scaffold(
         body: SizedBox(
           width: width,
@@ -238,7 +243,7 @@ void main() {
           reason: '角标贴封面底，其下方还有信息区');
     });
 
-    testWidgets('封面圆角 8、投影 = anx 四参数（读渲染对象，不是读常量）', (
+    testWidgets('封面圆角 8、投影 = anx 四参数（**浅色主题**；读渲染对象，不是读常量）', (
       WidgetTester tester,
     ) async {
       await _pumpGrid(tester, width: 392, bookCount: 1);
@@ -266,7 +271,8 @@ void main() {
             offset: Offset(0, 2),
           ),
         ],
-        reason: '封面投影须为 anx `book_item.dart:69-75` 的四参数',
+        reason: '浅色主题下封面投影须为 anx `book_item.dart:69-75` 的四参数'
+            '（深色主题换色源，见下一条用例）',
       );
 
       // 裁切用的 `ClipRRect` 必须用**同一个**圆角，否则投影会从裁切角落露出来。
@@ -284,6 +290,49 @@ void main() {
       for (final ClipRRect clip in clips) {
         expect(clip.borderRadius, BorderRadius.circular(8));
       }
+    });
+
+    testWidgets('深色主题：封面投影改用主题阴影色（几何与透明度不变，不再是固定灰）', (
+      WidgetTester tester,
+    ) async {
+      // 前提自检：本用例必须真的跑在深色主题上，否则等于在重测浅色分支。
+      expect(AppTheme.dark().brightness, Brightness.dark);
+      await _pumpGrid(
+        tester,
+        width: 392,
+        bookCount: 1,
+        theme: AppTheme.dark(),
+      );
+
+      final RenderDecoratedBox surface = tester.renderObject<RenderDecoratedBox>(
+        find.byKey(kBookCoverSurfaceKey),
+      );
+      final BoxShadow shadow =
+          (surface.decoration as BoxDecoration).boxShadow!.single;
+
+      // 色源 = `colorScheme.shadow`（M3 下恒为不透明黑）；透明度与几何照抄 anx
+      // 不动 —— `0x64000000` 的 0x64 = 100 = anx 的 `withAlpha(100)`。
+      expect(
+        shadow,
+        const BoxShadow(
+          color: Color(0x64000000),
+          spreadRadius: 5,
+          blurRadius: 10,
+          offset: Offset(0, 2),
+        ),
+        reason: '深色主题的封面投影须为「主题阴影色 + anx 的透明度与几何」',
+      );
+      // **反向断言**：固定灰是这次要消灭的东西，回潮即红（浅色分支仍用它）。
+      expect(
+        shadow.color,
+        isNot(const Color(0x649E9E9E)),
+        reason: '固定灰在深色背景上比背景亮 → 一圈浅色描边（负责人反馈「太强烈」）',
+      );
+      // 圆角与浅色一致（换的是色源，不是几何）。
+      expect(
+        (surface.decoration as BoxDecoration).borderRadius,
+        BorderRadius.circular(8),
+      );
     });
   });
 }
