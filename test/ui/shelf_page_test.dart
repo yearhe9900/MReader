@@ -13,7 +13,6 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
-import 'package:mreader/library/book_record.dart';
 import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/platform/app_paths.dart';
@@ -25,7 +24,6 @@ import 'package:mreader/settings/shelf_prefs_store.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
-import 'package:mreader/ui/shelf_folder_page.dart';
 import 'package:mreader/ui/shelf_page.dart';
 
 import '../test_config.dart';
@@ -85,20 +83,16 @@ Finder _readerPages() => find.byType(ReaderPage, skipOffstage: false);
 /// 全树范围找 [BookDetailPage]（同上：覆盖栈里的详情页也要揪出来）。
 Finder _detailPages() => find.byType(BookDetailPage, skipOffstage: false);
 
-/// 长按启动拖拽。
-///
-/// `LongPressDraggable` 的 delay 默认是 `kLongPressTimeout`（500ms），
-/// 故先推 600ms 假帧让 drag 真正启动，再交给调用方 `moveTo`。
-Future<TestGesture> _startDrag(WidgetTester tester, Finder from) async {
-  final TestGesture gesture = await tester.startGesture(tester.getCenter(from));
-  await tester.pump(const Duration(milliseconds: 600));
-  return gesture;
-}
-
 /// 网格中书卡的显示顺序（element 顺序 = 网格顺序）。
 List<String> _titles(WidgetTester tester) => tester
     .widgetList<BookCard>(find.byType(BookCard))
     .map((BookCard card) => card.record.title)
+    .toList();
+
+/// 分组筛选栏的 chip 文案（顺序即渲染顺序，「全部」恒在首位）。
+List<String> _chipLabels(WidgetTester tester) => tester
+    .widgetList<FilterChip>(find.byType(FilterChip))
+    .map((FilterChip chip) => (chip.label as Text).data!)
     .toList();
 
 void main() {
@@ -511,136 +505,139 @@ void main() {
       expect(_readerPages(), findsOneWidget);
     });
 
-    // ── L3：拖拽建文件夹 / 移入文件夹（2026-09-29 对齐 anx：落点即建、
-    //    拖拽重排已删） ──────────────────────────────────────────────────
+    // ── 分组（`P2-02`；2026-09-29 取代「阅读状态筛选」，拖拽归类已移除） ──
 
-    testWidgets('L3 拖到另一本书上松手 → 立即新建文件夹（无悬停计时）',
+    testWidgets('分组 chips：默认「全部」，点分组只剩该分组的书，再点回「全部」',
         (WidgetTester tester) async {
+      late String groupId;
       await tester.runAsync(() async {
-        await repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt');
-        await Future<void>.delayed(const Duration(milliseconds: 5));
+        final ImportResult a =
+            await repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt');
         await repo.importFile(bytes: _txtBytes('B'), fileName: 'b.txt');
-      });
-
-      await tester.pumpWidget(buildApp());
-      await _settle(tester);
-      expect(find.byType(BookCard), findsNWidgets(2));
-
-      // 拖 b（默认降序下是第 0 张）到 a 上——**落点即建**，不需要悬停计时。
-      final TestGesture gesture =
-          await _startDrag(tester, find.byType(BookCard).at(0));
-      await gesture.moveTo(tester.getCenter(find.byType(BookCard).at(1)));
-      await tester.pump(); // 悬停一帧 → 已显示「新建文件夹」提示
-      expect(find.text('新建文件夹'), findsOneWidget);
-      await gesture.up();
-      await _settle(tester);
-
-      // 两本书都进了文件夹 → 散书区一张书卡都不剩，只剩文件夹卡。
-      expect(find.byType(BookCard), findsNothing);
-      expect(shelfLayout.layout.folders, hasLength(1));
-      expect(shelfLayout.layout.folders.single.bookIds, hasLength(2));
-      // 新文件夹以目标书书名命名（a），角标显示书数。
-      expect(find.text('a'), findsOneWidget);
-      expect(find.text('2 本'), findsOneWidget);
-      // 操作反馈轻提示走 Overlay（`GlassOverlays.showToast`）——壳层无
-      // Material `Scaffold`，此处若退回 `ScaffoldMessenger` 会直接断言崩溃。
-      expect(find.text('已创建文件夹「a」'), findsOneWidget);
-    });
-
-    testWidgets('L3 拖到文件夹卡上 → 移入该文件夹', (WidgetTester tester) async {
-      late String folderId;
-      await tester.runAsync(() async {
-        final ImportResult a =
-            await repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt');
-        final ImportResult b =
-            await repo.importFile(bytes: _txtBytes('B'), fileName: 'b.txt');
         await repo.importFile(bytes: _txtBytes('C'), fileName: 'c.txt');
-        folderId = await shelfLayout.createFolder(
-          name: '合集',
-          bookIds: <String>[a.record.bookId, b.record.bookId],
-        );
+        // 把 a 归入「玄幻」→ 书架顶部应出现「全部 / 玄幻」两个 chip。
+        groupId = (await shelfLayout.assignByName(a.record.bookId, '玄幻'))!;
       });
 
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 散书区只剩 c 一张书卡（a、b 已归属文件夹）。
-      expect(find.byType(BookCard), findsOneWidget);
-      expect(find.text('合集'), findsOneWidget);
+      // 默认「全部」：分组内的书在「全部」里**照常显示**（分组是筛选而非隔离）。
+      expect(_chipLabels(tester), <String>['全部', '玄幻']);
+      expect(_titles(tester), hasLength(3));
 
-      final Finder folderCell = find.ancestor(
-        of: find.text('合集'),
-        matching: find.byType(DragTarget<BookRecord>),
-      );
-      final TestGesture gesture =
-          await _startDrag(tester, find.byType(BookCard));
-      await gesture.moveTo(tester.getCenter(folderCell.first));
-      await tester.pump();
-      await gesture.up();
+      await tester.tap(find.text('玄幻'));
       await _settle(tester);
+      expect(_titles(tester), <String>['a']); // 默认降序 c,b,a → 只剩 a
+      expect(shelfPrefs.prefs.groupId, groupId);
 
-      final BookFolder folder = shelfLayout.layout.folders
-          .firstWhere((BookFolder f) => f.id == folderId);
-      expect(folder.bookIds, hasLength(3));
-      expect(find.byType(BookCard), findsNothing);
+      // 再点**已选中**的分组 → 回「全部」。
+      await tester.tap(find.text('玄幻'));
+      await _settle(tester);
+      expect(_titles(tester), hasLength(3));
+      expect(shelfPrefs.prefs.groupId, isNull);
     });
 
-    testWidgets('L3 点文件夹卡进文件夹内页，书都在里面', (WidgetTester tester) async {
-      await tester.runAsync(() async {
-        final ImportResult a =
-            await repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt');
-        final ImportResult b =
-            await repo.importFile(bytes: _txtBytes('B'), fileName: 'b.txt');
-        await shelfLayout.createFolder(
-          name: '合集',
-          bookIds: <String>[a.record.bookId, b.record.bookId],
-        );
-      });
-
-      await tester.pumpWidget(buildApp());
-      await _settle(tester);
-
-      await tester.tap(find.text('合集'));
-      await _settle(tester);
-
-      expect(find.byType(ShelfFolderPage), findsOneWidget);
-      // 文件夹内页显示两本书（顶栏标题 + 两张书卡）。
-      expect(find.byType(BookCard), findsNWidgets(2));
-    });
-
-    testWidgets('L3 长按文件夹卡 → 操作单；解散后书回到散书区',
+    testWidgets('分组 chips：切另一个分组顶掉原选择（单选，不叠加）',
         (WidgetTester tester) async {
+      late String xuanhuanId;
+      late String kehuanId;
       await tester.runAsync(() async {
         final ImportResult a =
             await repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt');
         final ImportResult b =
             await repo.importFile(bytes: _txtBytes('B'), fileName: 'b.txt');
-        await shelfLayout.createFolder(
-          name: '合集',
-          bookIds: <String>[a.record.bookId, b.record.bookId],
-        );
+        xuanhuanId = (await shelfLayout.assignByName(a.record.bookId, '玄幻'))!;
+        kehuanId = (await shelfLayout.assignByName(b.record.bookId, '科幻'))!;
       });
 
       await tester.pumpWidget(buildApp());
       await _settle(tester);
+      expect(_chipLabels(tester), <String>['全部', '玄幻', '科幻']);
 
-      await tester.longPress(find.text('合集'));
-      await tester.pumpAndSettle();
-      expect(find.text('重命名'), findsOneWidget);
-      expect(find.text('解散文件夹'), findsOneWidget);
+      await tester.tap(find.text('玄幻'));
+      await _settle(tester);
+      expect(_titles(tester), <String>['a']);
 
-      await tester.tap(find.text('解散文件夹'));
-      await tester.pumpAndSettle();
-      // 二次确认框（标题同名），此时操作单已关闭。
-      expect(find.text('解散'), findsOneWidget);
+      await tester.tap(find.text('科幻'));
+      await _settle(tester);
+      expect(_titles(tester), <String>['b']); // 顶掉玄幻，不是并集
+      expect(shelfPrefs.prefs.groupId, kehuanId);
+      expect(shelfPrefs.prefs.groupId, isNot(xuanhuanId));
+    });
 
-      await tester.tap(find.text('解散'));
+    testWidgets('选中分组被删掉（书被删空）→ chip 消失且书架回落「全部」',
+        (WidgetTester tester) async {
+      late String groupId;
+      await tester.runAsync(() async {
+        final ImportResult a =
+            await repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt');
+        groupId = (await shelfLayout.assignByName(a.record.bookId, '玄幻'))!;
+      });
+
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+      await tester.tap(find.text('玄幻'));
+      await _settle(tester);
+      expect(_titles(tester), <String>['a']);
+
+      // 分组不见了（书被删空后 `prune` 会清掉空分组；此处直接删组等价）。
+      await tester.runAsync(() => shelfLayout.deleteGroup(groupId));
       await _settle(tester);
 
-      expect(shelfLayout.layout.folders, isEmpty);
-      // 两本书回到散书区。
-      expect(find.byType(BookCard), findsNWidgets(2));
-      expect(find.text('合集'), findsNothing);
+      // chip 消失、书回到「全部」，且「全部」chip 呈选中态。
+      expect(find.text('玄幻'), findsNothing);
+      expect(_titles(tester), <String>['a']);
+      final FilterChip allChip = tester.widget<FilterChip>(
+        find.ancestor(of: find.text('全部'), matching: find.byType(FilterChip)),
+      );
+      expect(allChip.selected, isTrue);
+      // 渲染层回落，**不改写**用户偏好（分组可能因同步 / 撤销而回来）。
+      expect(shelfPrefs.prefs.groupId, groupId);
+    });
+
+    testWidgets('详情页「分组」行 → 新建分组后，返回书架 chips 出现该分组',
+        (WidgetTester tester) async {
+      // 详情页正文较长：调到接近真机的视口并钉 `devicePixelRatio = 1`
+      // （默认 dpr=3 会把逻辑高度算成 333，分组行被挤出 `ListView` 懒构建范围）。
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt'),
+      );
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+      expect(find.text('玄幻'), findsNothing); // 还没有任何分组
+
+      // 进详情页 → 点「分组」入口（当前显示「未分组」）。
+      await tester.tap(find.byType(BookCard));
+      await _settle(tester);
+      expect(find.byType(BookDetailPage), findsOneWidget);
+      await tester.tap(find.text('未分组'));
+      await _settle(tester);
+
+      // 弹层：「未分组 / 新建分组…」。
+      expect(find.text('新建分组…'), findsOneWidget);
+      await tester.tap(find.text('新建分组…'));
+      await _settle(tester);
+
+      // ⚠️ 写分组走 `AtomicFile` **真文件 IO**，`pumpAndSettle` 在 FakeAsync 区
+      // 推不动它 → 必须用 `_settle`（`runAsync` 让出真事件循环），否则
+      // `assignByName` 之后的那次 `setState` 永远不会执行。
+      await tester.enterText(find.byType(TextField), '玄幻');
+      await tester.tap(find.text('确定'));
+      await _settle(tester);
+
+      // 详情页分组行显示新组名（且分组已落盘到共享 store）。
+      expect(find.text('玄幻'), findsWidgets);
+      expect(shelfLayout.layout.groups.single.name, '玄幻');
+
+      // 返回书架 → chips 出现「玄幻」。
+      await tester.tap(find.byIcon(Icons.arrow_back));
+      await _settle(tester);
+      expect(_chipLabels(tester), <String>['全部', '玄幻']);
     });
 
     testWidgets('L3 排序菜单含「手动排序」一项', (WidgetTester tester) async {
@@ -658,60 +655,16 @@ void main() {
       expect(find.text('导入时间'), findsOneWidget);
     });
 
-    // ── 阅读状态筛选：单选（2026-09-29 改版，对齐 anx-reader） ──────────
-
-    testWidgets('筛选 chips：已读完/正在读/未开始，单选且立即过滤书目',
-        (WidgetTester tester) async {
-      final ImportResult finished = (await tester.runAsync(
-        () => repo.importFile(bytes: _txtBytes('读完的'), fileName: '完.txt'),
-      ))!;
-      final ImportResult reading = (await tester.runAsync(
-        () => repo.importFile(bytes: _txtBytes('读一半的'), fileName: '半.txt'),
-      ))!;
+    testWidgets('没有任何分组时，chips 只有「全部」', (WidgetTester tester) async {
       await tester.runAsync(
-        () => repo.importFile(bytes: _txtBytes('没读的'), fileName: '新.txt'),
+        () => repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt'),
       );
-      // 预置阅读进度：完=1.0（已读完）、半=0.4（正在读）、新=null（未开始）。
-      await tester.runAsync(() async {
-        await repo.markRead(
-          finished.record.bookId,
-          lastReadAt: 2,
-          readProgress: 1.0,
-        );
-        await repo.markRead(
-          reading.record.bookId,
-          lastReadAt: 1,
-          readProgress: 0.4,
-        );
-      });
 
       await tester.pumpWidget(buildApp());
       await _settle(tester);
-      expect(_titles(tester), hasLength(3));
 
-      // chips 文案与顺序（照搬 anx `bookshelf_page.dart:111-141`）。
-      final List<String> chipLabels = tester
-          .widgetList<FilterChip>(find.byType(FilterChip))
-          .map((FilterChip chip) => (chip.label as Text).data!)
-          .toList();
-      expect(chipLabels, <String>['已读完', '正在读', '未开始']);
-
-      // 选「已读完」→ 只剩读完的那本。
-      await tester.tap(find.text('已读完'));
-      await _settle(tester);
-      expect(_titles(tester), <String>['完']);
-
-      // 再选「正在读」→ **顶掉**上一个（单选，不是叠加）。
-      await tester.tap(find.text('正在读'));
-      await _settle(tester);
-      expect(_titles(tester), <String>['半']);
-      expect(shelfPrefs.prefs.filter, ShelfReadingFilter.reading);
-
-      // 再点已选中的「正在读」→ 取消 → 全部三本回来。
-      await tester.tap(find.text('正在读'));
-      await _settle(tester);
-      expect(_titles(tester), hasLength(3));
-      expect(shelfPrefs.prefs.filter, isNull);
+      expect(_chipLabels(tester), <String>['全部']);
+      expect(_titles(tester), hasLength(1));
     });
   });
 }

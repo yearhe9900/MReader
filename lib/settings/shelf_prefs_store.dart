@@ -1,4 +1,4 @@
-// 书架偏好持久化（阅读状态筛选 + 排序）。
+// 书架偏好持久化（分组筛选 + 排序）。
 //
 // 与 [SettingsStore] / [PerfPrefsStore] **同一形制**，勿另创写法：
 //   · 落盘一律经 `JsonStore` → `AtomicFile`（`DATA-01` 原子写入）；
@@ -9,36 +9,23 @@
 // 为什么单独一个文件而不是塞进 `Settings`：`Settings` 是**阅读偏好**
 // （主题 / 字号 / 行距），改动会触发阅读页重排；书架筛选属于**列表视图偏好**，
 // 生命周期与波及面都不同，混在一起会让「改字号」意外重写书架状态。
+//
+// ══════════════════════════════════════════════════════════════════════════════
+// 2026-09-29 拍板：**筛选项由「阅读状态」改为「分组」**
+// ══════════════════════════════════════════════════════════════════════════════
+// 原 `ShelfReadingFilter { unread, reading, finished }`（单选）整体删除——
+// 书架顶部 chips 改为「**全部** + 各分组名」，筛选值变成**分组 id**
+// （`null` = 全部）。分组本身由 `ShelfLayoutStore` 持有（`BookGroup`），
+// 本文件只记「用户当前在看哪个分组」。
+//
+// 旧 `shelf_prefs.json` 的 `filters` 键（阅读状态语义）**直接忽略、不迁移**：
+// 旧值（`finished` / `reading` / `unread`）在新语义下不是合法的分组 id，
+// 强行映射只会造出假分组；忽略后行为等价于「回到全部」，损失仅是「记住的
+// 筛选态」这一个视图状态，用户再点一下即可。
 import 'dart:io';
 
 import '../storage/atomic_file.dart';
 import '../storage/json_store.dart';
-
-/// 阅读状态筛选维度（**单选**：至多一个生效；`null` = 不筛选）。
-///
-/// 2026-09-29 由多选 `Set` 改为单值——对齐 anx-reader 的单选语义
-/// （`providers/book_filters.dart:5` 的 `ReadingStatusFilter { none, finished,
-/// reading, notStarted }`，其 `none` 在本项目即 `null`）。
-enum ShelfReadingFilter {
-  /// 未开始（`readProgress` 为空或 `0`）。
-  unread,
-
-  /// 在读（`0 < readProgress < 1`）。
-  reading,
-
-  /// 已读完（`readProgress >= 1`）。
-  finished;
-
-  /// 由持久化字符串解析；未知值返回 `null`（由调用方丢弃）。
-  static ShelfReadingFilter? fromName(String? name) {
-    for (final ShelfReadingFilter value in ShelfReadingFilter.values) {
-      if (value.name == name) {
-        return value;
-      }
-    }
-    return null;
-  }
-}
 
 /// 书架排序字段。
 enum ShelfSortField {
@@ -54,10 +41,11 @@ enum ShelfSortField {
   /// 作者。
   author,
 
-  /// **手动顺序**：由书架拖拽重排决定，顺序真值存于 `ShelfLayoutStore`
-  /// （`shelf_layout.json` 的 `order`），本枚举只记「当前用哪种排法」。
+  /// **手动顺序**：顺序真值存于 `ShelfLayoutStore`（`shelf_layout.json` 的
+  /// `order`），本枚举只记「当前用哪种排法」。
   ///
-  /// 放在枚举末尾：菜单顺序即 `values` 顺序，既有四项的相对次序不动。
+  /// 写入侧曾是书架拖拽重排（2026-09-29 已删）；本项保留以便继续消费历史
+  /// `order` 数据，菜单顺序即 `values` 顺序，既有四项的相对次序不动。
   manual;
 
   /// 由持久化字符串解析；未知或缺失时回退 [ShelfSortField.importedAt]。
@@ -75,13 +63,15 @@ enum ShelfSortField {
 class ShelfPrefs {
   /// 创建书架偏好。
   const ShelfPrefs({
-    this.filter,
+    this.groupId,
     this.sortField = ShelfSortField.importedAt,
     this.sortAscending = false,
   });
 
-  /// 生效的阅读状态筛选（**单选**；`null` = 不筛选）。
-  final ShelfReadingFilter? filter;
+  /// 当前选中的分组 id（**单选**；`null` = 「全部」，即不按分组筛选）。
+  ///
+  /// 注意这是**分组 id 而非名字**：分组可重名（本模型不禁止），只有 id 稳定。
+  final String? groupId;
 
   /// 排序字段。
   final ShelfSortField sortField;
@@ -89,20 +79,20 @@ class ShelfPrefs {
   /// 是否升序（默认降序 = 新的在前）。
   final bool sortAscending;
 
-  /// 是否处于筛选态（用于「清除筛选」入口的显隐）。
-  bool get hasFilter => filter != null;
+  /// 是否处于筛选态（用于「全部」chip 的选中态）。
+  bool get hasGroup => groupId != null;
 
   /// 复制并覆盖部分字段。
   ///
-  /// 注意 [filter] 为可空：**无法用它显式置空**（`null` = 不修改）。
-  /// 清除筛选走 [ShelfPrefsStore.clearFilters]，它直接构造新对象。
+  /// 注意 [groupId] 为可空：**无法用它显式置空**（`null` = 不修改）。
+  /// 回到「全部」走 [ShelfPrefsStore.setGroup] 传 `null`，它直接构造新对象。
   ShelfPrefs copyWith({
-    ShelfReadingFilter? filter,
+    String? groupId,
     ShelfSortField? sortField,
     bool? sortAscending,
   }) {
     return ShelfPrefs(
-      filter: filter ?? this.filter,
+      groupId: groupId ?? this.groupId,
       sortField: sortField ?? this.sortField,
       sortAscending: sortAscending ?? this.sortAscending,
     );
@@ -110,38 +100,27 @@ class ShelfPrefs {
 
   /// 序列化。
   ///
-  /// 键名沿用 `filters`（list 形态、**恒 0 或 1 个元素**）：与多选时代的
-  /// 落盘格式完全兼容，旧文件无需迁移——解析时只取首个合法值（见 [fromJson]）。
+  /// `group` 为 `null`（全部）时**省略该键**——不写 `"group": null`，
+  /// 让「全部」状态的文件保持最小形态。
   Map<String, Object?> toJson() => <String, Object?>{
-        'filters': <String>[
-          if (filter != null) filter!.name,
-        ],
+        if (groupId != null) 'group': groupId,
         'sortField': sortField.name,
         'sortAscending': sortAscending,
       };
 
   /// 由持久化 JSON 还原；字段缺失 / 类型异常时逐项回退默认值。
   ///
-  /// 旧版多选文件（多个维度）按**首个合法值**收敛为单选，其余丢弃。
+  /// 旧版 `filters` 键（阅读状态）**忽略**，见文件头注。
   static ShelfPrefs fromJson(Object? json) {
     if (json is! Map) {
       return const ShelfPrefs();
     }
-    final Object? rawFilters = json['filters'];
-    ShelfReadingFilter? filter;
-    if (rawFilters is List) {
-      for (final Object? item in rawFilters) {
-        final ShelfReadingFilter? parsed =
-            ShelfReadingFilter.fromName(item is String ? item : null);
-        if (parsed != null) {
-          filter = parsed; // 单选：多选旧文件取**首个**合法值，其余丢弃。
-          break;
-        }
-      }
-    }
+    final Object? rawGroup = json['group'];
+    final String? groupId =
+        (rawGroup is String && rawGroup.isNotEmpty) ? rawGroup : null;
     final Object? rawAscending = json['sortAscending'];
     return ShelfPrefs(
-      filter: filter,
+      groupId: groupId,
       sortField: ShelfSortField.fromName(json['sortField'] as String?),
       sortAscending: rawAscending is bool ? rawAscending : false,
     );
@@ -178,30 +157,24 @@ class ShelfPrefsStore {
     _notify();
   }
 
-  /// 切换筛选（**单选**，与 anx `ReadingStatusFilterNotifier.toggle` 同语义）：
-  /// 点**未选中**的维度 → 选中它（顶掉原值）；点**已选中**的 → 取消（回 `null`）。
-  Future<void> toggleFilter(ShelfReadingFilter filter) {
-    final ShelfReadingFilter? next =
-        _prefs.filter == filter ? null : filter;
-    if (next == null) {
-      return clearFilters();
-    }
-    return _update(_prefs.copyWith(filter: next));
-  }
-
-  /// 清除筛选（回「全部」）。
-  Future<void> clearFilters() {
-    if (_prefs.filter == null) {
+  /// 选中分组（**单选**）；传 `null` 回到「全部」。
+  ///
+  /// 再点**已选中**的 chips 也走这里传 `null`（交互层的「再点取消」语义）。
+  Future<void> setGroup(String? groupId) {
+    if (_prefs.groupId == groupId) {
       return Future<void>.value();
     }
-    // `copyWith` 的可空参数无法显式置空 → 直接构造新值对象。
-    return _update(
-      ShelfPrefs(
-        filter: null,
-        sortField: _prefs.sortField,
-        sortAscending: _prefs.sortAscending,
-      ),
-    );
+    if (groupId == null) {
+      // `copyWith` 的可空参数无法显式置空 → 直接构造新值对象。
+      return _update(
+        ShelfPrefs(
+          groupId: null,
+          sortField: _prefs.sortField,
+          sortAscending: _prefs.sortAscending,
+        ),
+      );
+    }
+    return _update(_prefs.copyWith(groupId: groupId));
   }
 
   /// 设置排序字段；点同一字段则**翻转方向**（列表类界面的通行手感）。

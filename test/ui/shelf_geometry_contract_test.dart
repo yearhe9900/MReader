@@ -22,7 +22,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/library/book_record.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/model/book_meta.dart';
-import 'package:mreader/settings/shelf_layout_store.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/home_shell.dart' show kShellBottomInset;
 // 几何常量经 `shelf_grid.dart` 的 `export 'shelf_geometry.dart'` 一并可用
@@ -92,9 +91,7 @@ Future<void> _pumpGrid(
           width: width,
           height: 700,
           child: ShelfGrid(
-            folders: const <BookFolder>[],
             books: books,
-            allBooks: books,
             coverStore: _FakeCoverStore(),
             openingBookId: null,
             onOpenBook: (_) {},

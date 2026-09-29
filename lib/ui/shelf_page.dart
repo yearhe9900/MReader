@@ -1,14 +1,28 @@
 // `LIB-01`：书架首页（替代 M0 验证台的 `HomePage`）。
 //
 // 空态：引导文案 + 导入按钮。
-// 有书：网格展示 [BookCard]（封面缩略图 + 书名 + 作者 + 格式标签）。
+// 有书：分组筛选栏（全部 + 各分组）+ 网格展示 [BookCard]
+//（封面缩略图 + 书名 + 作者 + 格式标签）。
 // 导入：`FilePicker` 多选 → 逐个调 `importFile`，展示进度 + 失败清单。
-// 删除：长按书卡 → 确认对话框 → `deleteBook`（`LIB-06` 二次确认）+ 连带清理阅读进度。
+// 删除：长按书卡 → 操作单 → 确认对话框 → `deleteBook`（`LIB-06` 二次确认）
+// + 连带清理阅读进度。
 // 点击书卡 → 进入书籍详情页（`F9` / `META-08`）；详情页底部「继续阅读」经**注入的**
 // `_openBook` 开书（详情页**不复制**开书管道），详情页 pop 后刷新列表
-// （编辑 / 移出 / 进度都靠这次刷新同步）。
+// （编辑 / 移出 / 分组 / 进度都靠这次刷新同步）。
 // 开书守卫 `_opening` **只覆盖 push 前的准备阶段**（修复「首点无响应」：守卫若覆盖
 // 整个阅读会话 + 关书刷新，关书后首点会被静默吞掉）；准备期被点卡片显示 loading。
+//
+// ══════════════════════════════════════════════════════════════════════════════
+// 2026-09-29 拍板：筛选项由「阅读状态」改为「分组」、移除拖拽归类
+// ══════════════════════════════════════════════════════════════════════════════
+// · 顶部 chips = **全部 + 各分组名**（分组来自 `ShelfLayoutStore`，顺序即创建序；
+//   只列「真有书」的分组——空分组由 `prune` 清掉）；
+// · 选中分组 → 网格只显示该分组的书；默认「全部」；再点已选中的 chip 回「全部」；
+// · 归类入口 = **书籍详情页的「分组」行**（需求 `P2-02`）。书架不再有拖拽
+//   （建文件夹 / 移入 / 重排全部移除）、不再有文件夹卡与文件夹内页
+//   （`shelf_folder_page.dart` 已删）；
+// · 一本书**只属一个分组**（`ShelfLayoutStore` 保证归属唯一），未分组的书在
+//   「全部」里正常展示，也在其他分组筛选下不可见（那是分组语义的必然）。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
 import 'dart:async';
@@ -31,7 +45,6 @@ import 'book_detail_page.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'library_search_page.dart';
-import 'shelf_folder_page.dart';
 import 'shelf_grid.dart';
 
 /// 书架首页。
@@ -54,10 +67,10 @@ class ShelfPage extends StatefulWidget {
   /// 阅读进度存储（`RD-04`）：传给阅读页；删书时连带清理。
   final ProgressStore progressStore;
 
-  /// 书架视图偏好（筛选 + 排序），进程内共享实例。
+  /// 书架视图偏好（分组筛选 + 排序），进程内共享实例。
   final ShelfPrefsStore shelfPrefs;
 
-  /// 书架布局（手动顺序 + 文件夹归属），进程内共享实例。
+  /// 书架布局（手动顺序 + 分组归属），进程内共享实例。
   final ShelfLayoutStore shelfLayout;
 
   @override
@@ -106,7 +119,7 @@ class _ShelfPageState extends State<ShelfPage> {
     }
   }
 
-  /// 应用「筛选 + 排序」后的可见书目。
+  /// 应用「分组筛选 + 排序」后的可见书目。
   ///
   /// 在渲染期计算（而非加载时缓存）：偏好一变立刻生效；书架是本地量级
   /// （几百本），每次 build 重排的成本可忽略。
@@ -114,18 +127,17 @@ class _ShelfPageState extends State<ShelfPage> {
     final ShelfPrefs prefs = widget.shelfPrefs.prefs;
     Iterable<BookRecord> list = _books;
 
-    final ShelfReadingFilter? filter = prefs.filter;
-    if (filter != null) {
-      list = list.where((BookRecord b) {
-        final double? p = b.readProgress;
-        // 单选：只按当前这一个维度判定（2026-09-29 由多选「或」关系改来，
-        // 对齐 anx-reader 的单选语义）。
-        return switch (filter) {
-          ShelfReadingFilter.unread => p == null || p <= 0,
-          ShelfReadingFilter.reading => p != null && p > 0 && p < 1,
-          ShelfReadingFilter.finished => p != null && p >= 1,
-        };
-      });
+    // 分组筛选（`null` = 全部）。
+    //
+    // 选中的分组**已不存在**时按「全部」处理：删掉某分组最后一本书后，`prune`
+    // 会清掉这个空分组，而 `ShelfPrefs.groupId` 仍指着它——不做回落的话书架
+    // 会永久显示「没有符合当前筛选的书」，用户找不到恢复入口。
+    final String? selected = prefs.groupId;
+    final BookGroup? group =
+        selected == null ? null : widget.shelfLayout.layout.groupById(selected);
+    if (group != null) {
+      final Set<String> members = group.bookIds.toSet();
+      list = list.where((BookRecord b) => members.contains(b.bookId));
     }
 
     final List<BookRecord> sorted = list.toList();
@@ -164,30 +176,6 @@ class _ShelfPageState extends State<ShelfPage> {
       return prefs.sortAscending ? cmp : -cmp;
     });
     return sorted;
-  }
-
-  /// 生效的文件夹：成员与当前可见书目有交集者。
-  ///
-  /// 于是「文件夹也参与筛选」——筛选后内部一本书都不命中的文件夹不会出现；
-  /// 而被删除的书所留下的孤儿引用同样在这里被挡掉（另有 [ShelfLayoutStore.prune]
-  /// 负责落盘清理，两者**不互相假设**）。
-  List<BookFolder> get _liveFolders {
-    final Set<String> visible =
-        _visibleBooks.map((BookRecord b) => b.bookId).toSet();
-    return <BookFolder>[
-      for (final BookFolder folder in widget.shelfLayout.layout.folders)
-        if (folder.bookIds.any(visible.contains)) folder,
-    ];
-  }
-
-  /// 散书：可见书目中**不归属任何文件夹**的那些。
-  ///
-  /// 拖拽重排只作用于这个线性空间（文件夹固定排在前面，不参与重排）。
-  List<BookRecord> get _looseBooks {
-    final Set<String> foldered = widget.shelfLayout.layout.folderedBookIds;
-    return _visibleBooks
-        .where((BookRecord b) => !foldered.contains(b.bookId))
-        .toList();
   }
 
   /// `null` 视为最小值——降序（默认）时自然落到末尾（「从未读过」排最后）。
@@ -349,6 +337,8 @@ class _ShelfPageState extends State<ShelfPage> {
             repository: widget.repository,
             coverStore: widget.coverStore,
             progressStore: widget.progressStore,
+            // 详情页「分组」行（`P2-02`）改的是书架布局，故注入同一个共享实例。
+            shelfLayout: widget.shelfLayout,
             onOpenBook: _openBook,
           ),
         ),
@@ -430,100 +420,10 @@ class _ShelfPageState extends State<ShelfPage> {
     }
   }
 
-  // ── L3：拖拽 → 建文件夹 / 移入文件夹 ──────────────────────────────────────
-
-  /// 落到另一本书卡上（落点即建，2026-09-29 对齐 anx）→ 并入目标书所在
-  /// （或新建）文件夹。
-  ///
-  /// 目标书已在某文件夹里 → 直接并入该文件夹；否则**新建**一个以目标书书名
-  /// 命名的文件夹（省掉一次命名弹窗，用户可在文件夹内重命名）。
-  Future<void> _mergeIntoFolder(BookRecord dragged, BookRecord target) async {
-    final BookFolder? existing =
-        widget.shelfLayout.layout.folderOf(target.bookId);
-    if (existing != null) {
-      await widget.shelfLayout.addToFolder(
-        existing.id,
-        <String>[dragged.bookId],
-      );
-      _toast('已把「${dragged.title}」移入「${existing.name}」');
-      return;
-    }
-    await widget.shelfLayout.createFolder(
-      name: target.title,
-      bookIds: <String>[target.bookId, dragged.bookId],
-    );
-    _toast('已创建文件夹「${target.title}」');
-  }
-
-  /// 拖到文件夹卡上 → 直接移入该文件夹。
-  Future<void> _dropIntoFolder(BookRecord dragged, String folderId) async {
-    final BookFolder? folder = _folderById(folderId);
-    await widget.shelfLayout.addToFolder(folderId, <String>[dragged.bookId]);
-    if (folder != null) {
-      _toast('已把「${dragged.title}」移入「${folder.name}」');
-    }
-  }
-
-  /// 点文件夹卡 → 文件夹内页。
-  Future<void> _openFolder(BookFolder folder) async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => ShelfFolderPage(
-          folderId: folder.id,
-          records: _books,
-          coverStore: widget.coverStore,
-          shelfLayout: widget.shelfLayout,
-          // 开书 / 详情管道**复用**本页实现，文件夹页不复制第二份。
-          onOpenDetail: (BookRecord record) => unawaited(_openDetail(record)),
-          onOpenBook: (BookRecord record) => unawaited(_openBook(record)),
-        ),
-      ),
-    );
-    if (mounted) unawaited(_loadBooks());
-  }
-
-  /// 长按文件夹卡 → 操作单（重命名 / 解散）。
-  ///
-  /// 组件与确认流程来自 `shelf_folder_page.dart`，与文件夹内页**共用同一份**。
-  Future<void> _folderActions(BookFolder folder) async {
-    final FolderAction? action = await GlassOverlays.showSheet<FolderAction>(
-      context: context,
-      builder: (BuildContext sheetContext) => FolderActionSheet(folder: folder),
-    );
-    if (!mounted || action == null) return;
-    switch (action) {
-      case FolderAction.rename:
-        final String? name = await askFolderName(context, folder);
-        if (name == null) return;
-        await widget.shelfLayout.renameFolder(folder.id, name);
-      case FolderAction.dissolve:
-        if (!await confirmDissolveFolder(context, folder)) return;
-        await widget.shelfLayout.dissolveFolder(folder.id);
-    }
-  }
-
-  /// 按 id 取文件夹；不存在时返回 `null`。
-  BookFolder? _folderById(String folderId) {
-    for (final BookFolder folder in widget.shelfLayout.layout.folders) {
-      if (folder.id == folderId) {
-        return folder;
-      }
-    }
-    return null;
-  }
-
-  /// 轻提示（操作结果反馈）。
-  ///
-  /// 走 `GlassOverlays.showToast`（Overlay 浮层）——**不能**用
-  /// `ScaffoldMessenger.showSnackBar`：壳层没有 Material `Scaffold`。
-  void _toast(String message) {
-    if (!mounted) return;
-    GlassOverlays.showToast(
-      context: context,
-      message: message,
-      type: GlassToastType.success,
-    );
-  }
+  // 拖拽 / 文件夹相关的方法（`_mergeIntoFolder` / `_dropIntoFolder` /
+  // `_openFolder` / `_folderActions` / `_folderById` / `_toast`）已随
+  // 2026-09-29 拍板整体移除：归类改走详情页「分组」行，书架不再有拖拽与
+  // 文件夹卡（本页仅剩导入结果一处轻提示，直接调 `GlassOverlays.showToast`）。
 
   @override
   Widget build(BuildContext context) {
@@ -574,10 +474,10 @@ class _ShelfPageState extends State<ShelfPage> {
               ? _buildEmptyState(theme)
               : Column(
                   children: <Widget>[
-                    _buildFilterBar(theme),
+                    _buildGroupFilterBar(),
                     Expanded(
-                      // 「文件夹 + 散书」都空才算无命中（文件夹也参与筛选）。
-                      child: _liveFolders.isEmpty && _looseBooks.isEmpty
+                      // 有书、但当前分组里一本都没有（如刚把书都移出了该分组）。
+                      child: _visibleBooks.isEmpty
                           ? _buildNoMatchState(theme)
                           : _buildBookGrid(),
                     ),
@@ -589,13 +489,16 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 筛选栏（状态**单选** chips + 清除入口）。
+  /// 分组筛选栏（**单选**：全部 / 各分组）。
   ///
-  /// 高 40、横向可滚：小屏下三个 chip 与「清除」并排放得下，超长则滑动。
-  /// 顺序与文案照搬 anx-reader（`bookshelf_page.dart:111-141`）：
-  /// **已读完 / 正在读 / 未开始**。
-  Widget _buildFilterBar(ThemeData theme) {
-    final ShelfPrefs prefs = widget.shelfPrefs.prefs;
+  /// 高 40、横向可滚——分组数量由用户决定，窄屏必然放不下，直接给滚动容器。
+  /// 「全部」恒在首位；分组顺序 = `ShelfLayoutStore` 的创建序（`groups` 列表序）。
+  /// 只列**真有书**的分组：空分组已由 `prune` 清掉，故此处无需再过滤。
+  Widget _buildGroupFilterBar() {
+    final String? selected = widget.shelfPrefs.prefs.groupId;
+    // 选中分组已消失（书被删空）→ 视作「全部」，chip 高亮随之回到「全部」。
+    final bool hasSelection = selected != null &&
+        widget.shelfLayout.layout.groupById(selected) != null;
     return SizedBox(
       height: 40,
       child: Row(
@@ -606,27 +509,34 @@ class _ShelfPageState extends State<ShelfPage> {
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: <Widget>[
-                  _buildFilterChip(ShelfReadingFilter.finished, '已读完'),
-                  _buildFilterChip(ShelfReadingFilter.reading, '正在读'),
-                  _buildFilterChip(ShelfReadingFilter.unread, '未开始'),
+                  _buildGroupChip(
+                    label: '全部',
+                    groupId: null,
+                    selected: !hasSelection,
+                  ),
+                  for (final BookGroup group
+                      in widget.shelfLayout.layout.groups)
+                    _buildGroupChip(
+                      label: group.name,
+                      groupId: group.id,
+                      selected: hasSelection && selected == group.id,
+                    ),
                 ],
               ),
             ),
           ),
-          if (prefs.hasFilter)
-            TextButton(
-              onPressed: () => unawaited(widget.shelfPrefs.clearFilters()),
-              child: const Text('清除筛选'),
-            ),
           const SizedBox(width: 4),
         ],
       ),
     );
   }
 
-  /// 单个状态筛选 chip（**单选**）：选中即生效，再点同一个取消。
-  Widget _buildFilterChip(ShelfReadingFilter filter, String label) {
-    final bool selected = widget.shelfPrefs.prefs.filter == filter;
+  /// 单个分组 chip（**单选**）：选中即筛选，再点**已选中**的回「全部」。
+  Widget _buildGroupChip({
+    required String label,
+    required String? groupId,
+    required bool selected,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: FilterChip(
@@ -634,7 +544,9 @@ class _ShelfPageState extends State<ShelfPage> {
         selected: selected,
         visualDensity: VisualDensity.compact,
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        onSelected: (_) => unawaited(widget.shelfPrefs.toggleFilter(filter)),
+        onSelected: (_) => unawaited(
+          widget.shelfPrefs.setGroup(selected ? null : groupId),
+        ),
       ),
     );
   }
@@ -680,7 +592,7 @@ class _ShelfPageState extends State<ShelfPage> {
     await widget.shelfPrefs.setSortField(picked);
   }
 
-  /// 筛选后无命中的空态（区别于「书架里一本书都没有」）。
+  /// 当前分组里一本都没有时的空态（区别于「书架里一本书都没有」）。
   Widget _buildNoMatchState(ThemeData theme) {
     return Center(
       child: Padding(
@@ -695,15 +607,15 @@ class _ShelfPageState extends State<ShelfPage> {
             ),
             const SizedBox(height: 12),
             Text(
-              '没有符合当前筛选的书',
+              '这个分组里没有书',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 16),
             OutlinedButton(
-              onPressed: () => unawaited(widget.shelfPrefs.clearFilters()),
-              child: const Text('清除筛选'),
+              onPressed: () => unawaited(widget.shelfPrefs.setGroup(null)),
+              child: const Text('查看全部'),
             ),
           ],
         ),
@@ -752,27 +664,17 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 有书：网格展示（筛选 / 排序已在外层应用；文件夹排在散书之前）。
+  /// 有书：网格展示（分组筛选 / 排序已在外层应用）。
   ///
-  /// 拖拽交互（建文件夹 / 移入文件夹）全在 [ShelfGrid] 内部，
-  /// 本页只提供「落到哪个语义动作」的回调。
+  /// 网格**不再含任何交互**（拖拽 / 文件夹卡随 2026-09-29 拍板移除），
+  /// 本页只把「点击进详情」「长按弹操作单」两个回调接上。
   Widget _buildBookGrid() {
     return ShelfGrid(
-      folders: _liveFolders,
-      books: _looseBooks,
-      // 文件夹卡的封面要按 bookId 找回，故传**全部**可见书（含文件夹内的）。
-      allBooks: _visibleBooks,
+      books: _visibleBooks,
       coverStore: widget.coverStore,
       openingBookId: _openingBookId,
       onOpenBook: (BookRecord record) => unawaited(_openDetail(record)),
       onBookActions: (BookRecord record) => unawaited(_openBookActions(record)),
-      onOpenFolder: (BookFolder folder) => unawaited(_openFolder(folder)),
-      onFolderActions: (BookFolder folder) =>
-          unawaited(_folderActions(folder)),
-      onMergeBooks: (BookRecord dragged, BookRecord target) =>
-          unawaited(_mergeIntoFolder(dragged, target)),
-      onDropIntoFolder: (BookRecord dragged, String folderId) =>
-          unawaited(_dropIntoFolder(dragged, folderId)),
     );
   }
 

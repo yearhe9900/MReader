@@ -30,6 +30,7 @@ import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
 import '../meta/meta_editor.dart';
 import '../reader/progress_store.dart';
+import '../settings/shelf_layout_store.dart';
 import 'cover_picker.dart';
 import 'glass_kit.dart';
 
@@ -41,6 +42,7 @@ class BookDetailPage extends StatefulWidget {
     required this.repository,
     required this.coverStore,
     required this.progressStore,
+    required this.shelfLayout,
     required this.onOpenBook,
   });
 
@@ -55,6 +57,11 @@ class BookDetailPage extends StatefulWidget {
 
   /// 阅读进度存储：「移出书架」时连带清理进度（`LIB-06`）。
   final ProgressStore progressStore;
+
+  /// 书架布局（分组归属的真值，`P2-02`）：本页的「分组」行读写它。
+  ///
+  /// 与书架页共享同一实例，故详情页改完返回书架，chips 与网格已是最新。
+  final ShelfLayoutStore shelfLayout;
 
   /// 开书回调：**复用书架的 `_openBook`**（含 `_opening` 守卫），本页禁止复制第二份。
   final Future<void> Function(BookRecord record) onOpenBook;
@@ -92,6 +99,15 @@ class _BookDetailPageState extends State<BookDetailPage> {
   /// 「恢复自动值」/ 换封面进行中（防重复点击）。
   bool _busy = false;
 
+  /// 新建分组的输入控制器（`P2-02`）。
+  ///
+  /// ⚠️ **不能**在弹层返回时立刻 `dispose()`：玻璃弹窗的**关闭转场**仍在重建
+  /// 内部 `TextField`（`_AnimatedState.didUpdateWidget` 会对 controller
+  /// `addListener`）→ 抛「A TextEditingController was used after being disposed」
+  /// （2026-09-29 实测）。故与 State 同生命周期、由 [dispose] 统一释放；
+  /// 再次打开前先释放上一个（那时转场早已结束）。
+  TextEditingController? _groupNameCtrl;
+
   @override
   void initState() {
     super.initState();
@@ -108,6 +124,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
     _titleCtrl?.dispose();
     _authorCtrl?.dispose();
     _introCtrl?.dispose();
+    _groupNameCtrl?.dispose();
     super.dispose();
   }
 
@@ -402,6 +419,148 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 
   // -------------------------------------------------------------------------
+  // 分组（`P2-02`，2026-09-29 落地）
+  // -------------------------------------------------------------------------
+
+  /// 分组入口（`P2-02`）：显示当前分组名 + 右箭头，点击弹选择层。
+  ///
+  /// 内容层（`UI-04`）→ 普通不透明控件；`MaterialType.transparency` 只为提供
+  /// `InkWell` 所需的 Material 祖先（不画底色，玻璃库浮层同理）。
+  Widget _buildGroupEntry(ThemeData theme) {
+    final BookGroup? current =
+        widget.shelfLayout.layout.groupOf(_record.bookId);
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: _busy ? null : () => unawaited(_editGroup()),
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  current?.name ?? '未分组',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: current == null
+                        ? theme.colorScheme.outline
+                        : theme.colorScheme.onSurface,
+                  ),
+                ),
+                const SizedBox(width: 2),
+                Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 选择 / 新建分组。
+  ///
+  /// 三种结果走 `ShelfLayoutStore` 的三条路径：移出分组、归入已有分组、
+  /// 按名新建（`assignByName` 同名的直接并入，不产生重复分组）。
+  Future<void> _editGroup() async {
+    final ShelfLayout layout = widget.shelfLayout.layout;
+    final BookGroup? current = layout.groupOf(_record.bookId);
+    final _GroupPick? pick = await GlassOverlays.showSheet<_GroupPick>(
+      context: context,
+      builder: (BuildContext sheetContext) => _GroupPickerSheet(
+        groups: layout.groups,
+        currentId: current?.id,
+      ),
+    );
+    if (!mounted || pick == null) return;
+
+    switch (pick.kind) {
+      case _GroupPickKind.clear:
+        if (current == null) return;
+        await widget.shelfLayout.removeFromGroup(
+          current.id,
+          <String>[_record.bookId],
+        );
+        _toast('已移出「${current.name}」');
+      case _GroupPickKind.existing:
+        final String? id = pick.groupId;
+        if (id == null) return;
+        await widget.shelfLayout.assignToGroup(id, <String>[_record.bookId]);
+        final String? name = widget.shelfLayout.layout.groupById(id)?.name;
+        if (name != null) _toast('已归入「$name」');
+      case _GroupPickKind.createNew:
+        final String? name = await _askNewGroupName();
+        if (!mounted || name == null) return;
+        final String trimmed = name.trim();
+        if (trimmed.isEmpty) {
+          _toast('分组名不能为空', type: GlassToastType.warning);
+          return;
+        }
+        await widget.shelfLayout.assignByName(_record.bookId, trimmed);
+        _toast('已归入「$trimmed」');
+    }
+    // 分组名显示读的是 `shelfLayout` 快照，改完需重绘本页。
+    if (mounted) setState(() {});
+  }
+
+  /// 询问新分组名（玻璃确认框 + 文本框）。取消 / 空白返回 `null`。
+  ///
+  /// controller 的释放见 [_groupNameCtrl] 的注释——**不在本方法内** `dispose()`。
+  Future<String?> _askNewGroupName() {
+    _groupNameCtrl?.dispose();
+    final TextEditingController controller = TextEditingController();
+    _groupNameCtrl = controller;
+    return GlassOverlays.showAlert<String>(
+      context: context,
+      title: '新建分组',
+      barrierDismissible: true,
+      maxWidth: 320,
+      // 玻璃浮层没有 Material 祖先（PRD §11.4），`TextField` 需要一层；
+      // `MaterialType.transparency` 不画底色，不破坏玻璃观感。
+      content: Material(
+        type: MaterialType.transparency,
+        child: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '分组名称',
+            hintText: '如：玄幻 / 在读 / 弃坑',
+          ),
+          onSubmitted: (String value) =>
+              Navigator.of(context).pop<String>(value),
+        ),
+      ),
+      actions: <GlassDialogAction>[
+        GlassDialogAction(
+          label: '取消',
+          onPressed: () => Navigator.of(context).pop<String>(),
+        ),
+        GlassDialogAction(
+          label: '确定',
+          isPrimary: true,
+          onPressed: () => Navigator.of(context).pop<String>(controller.text),
+        ),
+      ],
+    );
+  }
+
+  /// 轻提示（`GlassOverlays.showToast`）：壳层无 Material `Scaffold`，
+  /// 不能用 `ScaffoldMessenger.showSnackBar`。
+  void _toast(String message, {GlassToastType type = GlassToastType.success}) {
+    if (!mounted) return;
+    GlassOverlays.showToast(
+      context: context,
+      message: message,
+      type: type,
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // 展示
   // -------------------------------------------------------------------------
 
@@ -499,14 +658,10 @@ class _BookDetailPageState extends State<BookDetailPage> {
       ),
       _buildInfoRow(
         theme,
-        // `P2-02` 分组未实现：显示「未分组」且**禁用**（不提供入口、不自造分组系统）。
+        // `P2-02` 书架分组（2026-09-29 落地）：此前是**禁用占位**（恒显「未分组」、
+        // 不提供入口）；现在点它即可选择 / 新建分组，书架顶部 chips 随之多出该分组。
         '分组',
-        Text(
-          '未分组',
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.outline,
-          ),
-        ),
+        _buildGroupEntry(theme),
       ),
       const SizedBox(height: 16),
       _buildIntroSection(theme),
@@ -877,6 +1032,116 @@ class _FormatTag extends StatelessWidget {
         style: theme.textTheme.labelSmall?.copyWith(
           color: theme.colorScheme.onSecondaryContainer,
           fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+/// 分组选择的结果（`P2-02`）。
+///
+/// 用一个小值对象而不是 `String?`：`GlassOverlays.showSheet` 的「取消」也返回
+/// `null`，与「未分组」无法区分。
+class _GroupPick {
+  const _GroupPick(this.kind, [this.groupId]);
+
+  /// 动作类型。
+  final _GroupPickKind kind;
+
+  /// [ _GroupPickKind.existing] 时为目标分组 id，其余为 `null`。
+  final String? groupId;
+}
+
+/// 分组选择的三种动作。
+enum _GroupPickKind {
+  /// 移出分组（变「未分组」）。
+  clear,
+
+  /// 归入已有分组。
+  existing,
+
+  /// 新建分组（弹输入框）。
+  createNew,
+}
+
+/// 分组选择弹层（`P2-02`）。
+///
+/// 由 [GlassOverlays.showSheet] 承载（`UI-03` 浮层玻璃）；玻璃浮层**没有
+/// Material 祖先**（PRD §11.4），`ListTile` 需要一层 → 首层包透明 `Material`。
+class _GroupPickerSheet extends StatelessWidget {
+  const _GroupPickerSheet({required this.groups, required this.currentId});
+
+  /// 现有分组（顺序 = 书架 chips 顺序）。
+  final List<BookGroup> groups;
+
+  /// 当前所属分组 id；`null` = 未分组。
+  final String? currentId;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final Color checkColor = theme.colorScheme.primary;
+    return Material(
+      type: MaterialType.transparency,
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+              child: Text('设置分组', style: theme.textTheme.titleMedium),
+            ),
+            const Divider(height: 1),
+            if (groups.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+                child: Text(
+                  '还没有分组。选「新建分组」，书架顶部就会出现对应的筛选标签。',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            // 分组可能很多 → 列表部分限高可滚，标题与「新建」常驻可见。
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: <Widget>[
+                  ListTile(
+                    leading: const Icon(Icons.folder_off_outlined),
+                    title: const Text('未分组'),
+                    trailing: currentId == null
+                        ? Icon(Icons.check, color: checkColor)
+                        : null,
+                    onTap: () => Navigator.of(context)
+                        .pop(const _GroupPick(_GroupPickKind.clear)),
+                  ),
+                  for (final BookGroup group in groups)
+                    ListTile(
+                      leading: const Icon(Icons.folder_outlined),
+                      title: Text(group.name),
+                      subtitle: Text('${group.bookIds.length} 本'),
+                      trailing: group.id == currentId
+                          ? Icon(Icons.check, color: checkColor)
+                          : null,
+                      onTap: () => Navigator.of(context).pop(
+                        _GroupPick(_GroupPickKind.existing, group.id),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.create_new_folder_outlined),
+              title: const Text('新建分组…'),
+              onTap: () => Navigator.of(context)
+                  .pop(const _GroupPick(_GroupPickKind.createNew)),
+            ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
