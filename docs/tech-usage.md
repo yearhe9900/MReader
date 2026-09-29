@@ -1170,6 +1170,49 @@ bash tool/test.sh ui                                                      # 01:2
 
 **复核边界**：anx 源码行号、三处改动（数据模型 / 持久化 / UI）为本批实读实改，两组测试数字为实跑；**真机上 chips 的观感与单选手感未复跑**，须负责人重装确认。
 
+### 2.43 书架拖拽对齐 anx：落点即建文件夹、删拖拽重排（2026-09-29）
+
+**触发链**：负责人报「拖拽生成文件夹没有实现」→ 指令「先去了解 anx reader 的实现方式」（只调研不动代码）→ 调研汇报给出三个修复方向 → 拍板「**对齐 anx**」→ 唯一硬分叉（重排去留）单独确认，拍板「**删重排，完全对齐**」。
+
+**anx 的实现（全部实读源码取证）**
+
+| 证据 | 位置 |
+|---|---|
+| 拖起：散书包 `CustomDraggable`、文件夹不包（`lockedIndices`，注释 "folder can't be dragged"）；`longPressDelay: 300ms`；**`onReorder` 是空实现**（拖完不重排） | `bookshelf_page.dart:388-434` |
+| 投放区在**每个格子自身**：散书 `singleBookTarget` / 文件夹 `groupTarget` 都是 `DragTarget<Book>` | `book_folder.dart:89-98 / 100-195` |
+| 建组：目标书 `groupId == 0` → 先 `copyWith(groupId: 目标书自身 id)`（**文件夹 id = 目标书 id**），再 `moveBook(被拖书, targetGroupId)` | `book_folder.dart:34-44` |
+| 组名播种：`insertGroup(groupId, name: 被拖书.title)` | `book_list.dart:148-153` |
+| **无悬停计时**：`onWillAcceptBook` 进入即接受，**松手落在散书上直接建组**；悬停反馈只有 `AlwaysStoppedAnimation(0.5)` → 恒定 1.05 放大 | `book_folder.dart:46-65` |
+| 拖起即弹底部操作单 + 锁其他 index；文件夹内页 `book_opened_folder.dart` **无任何 Draggable/重排** | `bookshelf_page.dart:395-415` |
+
+**「没有实现」的定性（调研判断，非真机实证）**：功能链路存在（`shelf_page_test` L3 用例实测过建文件夹，批次③ `3869f52`），旧交互是「悬停 900ms armed 才建、否则判重排」且**零引导**——快速拖放全走重排路径，感知上等于「没实现」。anx 是落点即建 + 300ms 起拖 + 顶部提示条。
+
+**改动**
+
+1. **`lib/ui/shelf_grid.dart`（核心）**：删 `kFolderMergeHoverDelay` 与整套悬停计时（`_hoverTimer`/`_mergeArmed`/`_armHover`/`_cancelHover`/`onMove`/`onLeave`）；`onAcceptWithDetails` **落点即调 `onMergeBooks`**（对齐 anx `onAcceptBook`）；悬停反馈改为**立即**显示「新建文件夹」icon+文案（anx 用 1.05 放大表达同一语义）；删 `onReorder` 字段链（`ShelfGrid`/`_BookCell` 参数与字段一并删，`_BookCell.index` 随之无用也删）；**`BookCard.onLongPress` 改 `dragEnabled ? null : () => onBookActions(record)`**——禁拖时（文件夹内页）长按操作单改由卡片自身触发，否则禁拖即失去操作单入口。
+2. **`lib/ui/shelf_page.dart`**：删 `_reorder`（含「先落盘 order 再切 manual」逻辑）与 `onReorder` 传参；`_mergeIntoFolder` 语义注释改「落点即建」；`_visibleBooks` 的 `ShelfSortField.manual` 分支**保留**（消费旧 `order` 数据），注释注明 2026-09-29 起无拖拽写入口。
+3. **`lib/ui/shelf_folder_page.dart`**：传 **`dragEnabled: false`**（对齐 anx 内页无拖拽）、删 `onReorder` 与 `_reorder`（`setFolderOrder` 不再有 UI 调用者，**store API 与测试保留**——数据层能力，将来可有「移动到…」等新入口）。
+4. **manual 排序模式整体保留**（拍板选项 A 原文）：旧 `order` 数据继续生效、排序菜单项不动，只是不再能通过拖拽改顺序。
+
+**被推翻的旧定案（§2.39 三态表）**：「快速放下 = 重排」「悬停 900ms = 建文件夹」两行**作废**，`kFolderMergeHoverDelay` 常量删除；「`_reorder` 先落盘 order 再切 manual」「重排下标 `ReorderableListView` 约定」两条顺序坑**随逻辑一并删除**（不再有该路径）。**未被推翻**：长按不动抬手 = 操作单、`onDragUpdate` 标志位判移动、`ValueKey` 防 element 复用错位、不引第三方网格重排包、轻提示走 Overlay。
+
+**测试**
+
+- 删 `shelf_page_test`「L3 拖拽重排」用例（功能已不存在，**不改造成别的断言**）；
+- 改建文件夹用例为「**拖到另一本书上松手 → 立即新建文件夹（无悬停计时）**」——去掉两行 `pump(kFolderMergeHoverDelay)`，改为悬停一帧即断言「新建文件夹」提示出现，松手后断言建组与 toast 不变；
+- `shelf_geometry_contract_test` 删 `onReorder` 传参。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze                   # 全项目 0 error / 0 warning / 7 条既有 info
+bash tool/test.sh ui                                                     # +103: All tests passed!（原 104 − 删 1 用例）
+```
+
+**复核边界**：anx 源码行号、三文件改动、测试数字为本批实读实跑；**真机手感未复跑**（落点即建的拖放手感、文件夹内页禁拖后长按弹操作单），须负责人重装确认；`data`/`parse`/`reader` 组未跑（本批零数据层改动）。
+
+**顺带发现、未处理（报负责人）**：anx 阅读状态阈值是 `未开始 ≤0.02 / 已读完 ≥0.98`（`book_list.dart:83-94`），本项目筛选用 0/1 硬边界——口径差异，是否跟进未拍板。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
