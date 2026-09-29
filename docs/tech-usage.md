@@ -1536,6 +1536,57 @@ bash tool/test.sh reader                                                    # 00
 
 **复核边界**：`analyze` 与 `ui` / `data` / `reader` 三组为本批实跑——三组是 `lib/ui/glass_kit.dart` 引用方的完整分布（6 处弹层调用点分属 `test/ui/`、`test/meta/detail_test.dart`（data 组）、`test/reader/`）；`parse` 组未跑（`test/epub/`、`test/format/` 与弹层零交集）。**真机观感未复跑**——本批四条均为**观感/手感**类改动，必须由负责人在真机逐项确认：① 6 处弹层**都没有横条**；② 上下滑动弹层内容**不再触发关闭**（点遮罩仍可关）；③ 点击选项时**弹框不再整体放大、不再发光**；④ 底部滑入的入场动画仍在（这是保留项，非遗漏）。**未动项待拍板**：`stretch`（拖拽液态拉伸）与弹层圆角 / 外边距等外观参数；若真机上仍看到按压形变，再来关 `stretch`。
 
+### 2.50 导航栏去掉触摸「放大」形变（2026-09-29）
+
+**触发**：负责人「移除导航栏放大特效」。
+
+**根因（§2.49「薄封装没透传的参数会静默生效」的第二个实例，隔一小时再踩一次）**
+
+`GlassNavBar.build` 调 `GlassTabBar.bottom(…)` 时**未透传 `interactionBehavior`** → 吃库默认 **`GlassInteractionBehavior.full`**。库该枚举四档（`lib/src/types/glass_interaction_behavior.dart:21-56`）：
+
+| 档位 | 库 doc 原文 | `hasGlow` | `hasScale` |
+|---|---|---|---|
+| `none` | "No interaction feedback — **fully rigid** glass, no directional glow." | ✗ | ✗ |
+| `glowOnly` | "Directional glow only… Suitable for **flat navigation bars** that should remain **spatially stable** while still feeling reactive to touch." | ✓ | ✗ |
+| `scaleOnly` | "Physical **spring-scale only** — the bar inflates subtly on press and snaps back on release." | ✗ | ✓ |
+| **`full`（库默认）** | "Full iOS 26 interaction — directional glow **and** physical spring-scale… the glass **inflates** subtly (bottom-anchored spring) on touch." | ✓ | ✓ |
+
+所以「导航栏放大」= `hasScale` 的弹簧膨胀（`scaleOnly` / `full` 才有）。
+
+**处置（`lib/ui/glass_kit.dart` `GlassNavBar`，一行）**
+
+显式传 **`GlassInteractionBehavior.glowOnly`**——去形变、保留手指位置的柔和高光。选它而非 `none` 的依据：① 负责人原话只要求移除「**放大**」、未提光晕；② 库 doc 恰把这个档位推荐给导航栏（见上表 `glowOnly` 行）。消费点 `tab_bar_bottom_layout.dart:390` 的 `interactionScale: widget.interactionBehavior.hasScale ? … : 1.0` 据此把缩放钉成 `1.0`。
+
+> **若负责人要的是「连高光也不要有」**：改传 `GlassInteractionBehavior.none` 即可（一行，零成本回退）。已在 `GlassNavBar` 的 doc 与 CHANGELOG 里写明这个旋钮，免得后人重新调研。
+
+**边界**：「关」档的 Material `NavigationBar` 不受影响（它本无此缩放；选中指示器动画属 Material 标准行为）。宽屏的 `NavigationRail` 同理。
+
+**测试**
+
+| 文件 | 变更 | 断言要点 |
+|---|---|---|
+| `test/ui/glass_nav_form_test.dart` | **新建 1 条** | `GlassTabBar.interactionBehavior == GlassInteractionBehavior.glowOnly`（**硬编码字面量**、读**库 widget 自身字段**，非薄封装常量）+ **反向断言 `isNot(full)`**（把「又被改回库默认」直接测红）+ `hasScale == false` + `hasGlow == true` |
+
+宿主沿用 `glass_off_fallback_test.dart` 档位用例的写法（`Scaffold(bottomNavigationBar: GlassNavBar(...))`），`pumpWidget` 后直接断言——**无入场动画，故不需要 `pumpAndSettle`**（口径同 §2.49 口径 2）。
+
+**文档回填两轮**
+
+- **字符串轮**（`interactionBehavior` / `hasScale` / `hasGlow`）：除本批新增的代码注释、调用与测试外，`lib/` 与 `docs/` **零命中**——`GlassNavBar` 此前从未提及触摸反馈，故**无旧表述需要推翻**，只新增条目。
+- **同族参数的命中已逐条排除（不是「零命中」，别误读成漏改）**：`interactionScale` 命中 `lib/ui/glass_kit.dart:595/597/655` 与 §2.49 各处 → **全部来自上一批的弹层改动**（`GlassSheet.interactionScale`，库默认 1.01），是**同名参数的另一控件**，与导航栏的 `interactionBehavior` 无关；`放大` / `缩放` 另有两处同名不同物——§2.21（`FMT-02` 图片页「点页全屏缩放」）与 §2.43 一带（书架拖拽悬停反馈的「恒定 1.05 放大」）。以上**一律不改写**，避免误伤既有留档。
+- **行号口径（本会话刚踩）**：核对时**以章节号为准**——本批在 §2.17 表格后补的改道引用块已使其后的行号整体下移，例如「点页全屏缩放」由改动前的 557 行变为 **559 行**（§2.21）。文档内引用行号**必须实测后写**，不能沿用先前 grep 的旧行号。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze
+/c/src/flutter/bin/flutter test --timeout 30s test/ui/glass_nav_form_test.dart   # 00:00 +1: All tests passed!
+bash tool/test.sh ui                                                             # 01:19 +134: All tests passed!（133 → 134）
+bash tool/test.sh data                                                           # 00:19 +205: All tests passed!
+bash tool/test.sh reader                                                         # 00:23 +226: All tests passed!
+```
+
+**复核边界**：`analyze` 与 `ui` / `data` / `reader` 三组为本批实跑。`GlassNavBar` 的引用方经全仓 grep 确认为 `lib/ui/home_shell.dart`（生产唯一）+ `test/ui/glass_off_fallback_test.dart` / `test/ui/glass_nav_form_test.dart`——**全在 `ui` 组**，故 `data` / `reader` 两组实为保险性复跑（本批未触及 `showSheet` 等其他浮层路径）。`parse` 组未跑（零交集）。**真机观感未复跑**：需负责人在真机确认点击底栏 tab 时**胶囊不再膨胀**（手指位置的柔和高光仍在——这是保留项，非遗漏）；若仍嫌高光，回退旋钮见上。
+
 ## 测试分组与局部执行（2026-09-23）
 
 
