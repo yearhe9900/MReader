@@ -1014,6 +1014,63 @@ bash tool/test.sh data                                      # 00:16 +205: All te
 
 **未做（如实登记，交负责人）**：**L3 第二批 = 桌面拖文件入窗导入**（唯一新依赖 `desktop_drop`，已拍板待排期）；以及本批**未跑全量回归**（只跑了 `ui` + `data` 两组，`parse` / `reader` 与本批改动无交集但**未实跑**）。
 
+### 2.40 UI 重做批次③ · 书架布局几何复刻 anx reader（2026-09-28）
+
+**为什么是「几何」不是「全套视觉」**：anx-reader 的卡片字号、颜色、投影与本项目已有取舍（§2.38 记的「去卡片底板 + `BoxShadow`」），照搬会连带推翻 L1 的既定结论。故先问范围、两问两答再动手：
+
+- **拍板 ① 范围 = 只动布局几何**：列数算法 / 宽高比 / 间距 / padding / 卡片分区改；**字号、颜色、阴影一律保持本项目现状**；PRD 与测试不动。
+- **拍板 ② 格式标签 = 挪到封面上做角标**：信息区对齐 anx 的**固定 55px**（只剩书名 + 作者·进度），格式标签（PRD `US-06` / `LIB-01` 要求、anx 原版没有）改放封面右下角。
+
+**anx 取证（Explore 代理实读，均带 `路径:行号`）**
+
+| 项 | anx-reader 原文出处 | 原文值 |
+|---|---|---|
+| 列数算法 | `bookshelf_page.dart:453-454` | `crossAxisCount: constraints.maxWidth ~/ Prefs().bookCoverWidth`，`bookCoverWidth` 默认 **120**（设置页 80–260 步长 10） |
+| 高宽比 / 行距 | `bookshelf_page.dart:455-457` | `childAspectRatio: 1 / 2.1`、`mainAxisSpacing: 30`、`crossAxisSpacing: 20` |
+| 网格 padding | `bookshelf_page.dart:449` | `EdgeInsets.fromLTRB(20, 12, 20, 80)` |
+| 封面↔信息区间距 | `book_item.dart:88` | `SizedBox(height: 5)` |
+| 信息区 | `book_item.dart:89-90` | **`SizedBox(height: 55)`**（固定） |
+
+**改动前后对照**
+
+| 项 | 改前（MReader） | 改后（复刻 anx） |
+|---|---|---|
+| 列数 | `SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: 180)`（360dp 手机 **2 列**） | `LayoutBuilder` 内 `容器宽 ~/ 120`（360dp 手机 **3 列**），下限 1 / 上限 64 兜底 |
+| 高宽比 | `0.5` | `1 / 2.1` |
+| 行距 / 列距 | `8 / 8` | `30 / 20` |
+| padding | `(12, 12, 12, kShellBottomInset)` | `(20, 12, 20, kShellBottomInset)` |
+| 信息区 | 自适应（≈70，含格式标签行） | **固定 55**，格式标签移出 |
+| 格式标签 | 信息区第三行 | **封面右下角角标** `Positioned(6, 6)` |
+
+**为什么列数要包一层 `LayoutBuilder`**：`width ~/ 120` 需要 `GridView` 自身的可用宽，而 `SliverGridDelegate` 是在 sliver 布局期才拿到约束、拿不到整宽。anx 的结构是 `Expanded > LayoutBuilder > GridView`（其 `constraints.maxWidth` 同样是**含 padding 的整宽**），本项目照此结构；`width.isFinite` 时退回 3 列（anx 的手机默认值）。
+
+**两处刻意不照搬（PRD 冲突，非疏漏）**
+
+1. **格式标签**：`PRD.md:177` `US-06` 与 `:282` `LIB-01` 都要求书架展示格式，anx 无 → 不删，改角标（放在 `ClipRRect` **内**，随封面圆角一起裁切，不溢出）。
+2. **空态导入按钮**：`LIB-01` 验收②要求，anx 空态只有颜文字 → 保留 `FilledButton.icon('导入书籍')`。
+
+**同源防漂移**：新增 `kShelfCoverTargetWidth` / `kShelfGridPadding` 两个公开常量（`shelf_grid.dart`），`ShelfGrid` 构造默认值即 `kShelfGridPadding`，文件夹内页 `shelf_folder_page.dart` 的显式 padding 改用同一常量——原先两处各写一份 `EdgeInsets.fromLTRB(12, …)`，几何一旦改就会漂。底部 80 → `kShellBottomInset` 是**有意的差异**：两者目的相同（给悬浮胶囊留白），但本项目胶囊更高，用 anx 的 80 会被压住。
+
+**改动面（含测试）**
+
+- 修改：`lib/ui/shelf_grid.dart`（头注加「布局几何」段 + 两个公开常量 + `LayoutBuilder` 化）、`lib/ui/book_card.dart`（信息区固定 55 / 间距 5 / 格式标签上封面角标 + 头注与 `_FormatTag` 文档改写）、`lib/ui/shelf_folder_page.dart`（padding 同源 + 删多余 `kShellBottomInset` import）。
+- 测试：**一行未改**（既有 `ui` 组无任何断言格式标签位置 / 网格列数的用例，已 grep 核实）。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze      # 全仓：0 error / 7 条既有 info
+bash tool/test.sh ui                                        # 00:57 +85: All tests passed!
+bash tool/test.sh data                                      # 00:11 +205: All tests passed!
+```
+
+**复核边界（不伪造复核记录）**
+
+- **可复核 → 已复核**：上表 anx 行号与字面量、本项目改动 diff、`dart analyze` 与两组测试输出均为本批实跑/实读。
+- **不可复核 → 未声称**：**新几何的观感**（3 列是否过挤、55px 信息区在两行书名下是否够放、角标压在封面上是否挡图）须真机/桌面目视验收；本批只对「代码等于拍板的几何数值」负责，**未写「视觉已验收」**。
+
+**未做（如实登记，交负责人）**：① 新几何未做真机/桌面目视验收；② 本批仍只跑 `ui` + `data` 两组，`parse` / `reader` **未实跑**（与本批改动无交集）；③ `kShelfCoverTargetWidth` 目前**未开放为设置项**（anx 设置页可调 80–260，若要开放只改这一处常量的读取来源）。
+
 ## 测试分组与局部执行（2026-09-23）
 
 > 动机：全量 360+ 用例每次跑太耽误时间。测试**按目录天然成四组**，改动哪层跑哪组；
