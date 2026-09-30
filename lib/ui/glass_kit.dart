@@ -34,6 +34,10 @@
 //     约 3 秒基准，PRD §11.3）。自动降级走项目自己的 `PerfDegradePolicy` + `PerfFrameMonitor`。
 import 'dart:async';
 
+// `showCupertinoDialog` 不经 `material.dart` 导出（同 `CupertinoPageTransitionsBuilder`
+// 那个坑，见 `lib/theme/app_theme.dart`）——浮层统一配置要用它给确认框透传遮罩色，
+// 因为库 `GlassDialog.show` 的 `barrierColor` 是死参数（见 [OverlayStyle.barrier]）。
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
@@ -536,31 +540,120 @@ class GlassNavScaffold extends StatelessWidget {
 // 浮层（薄封装，最小集；档位生效 + 「关」档纯色退化）
 // ---------------------------------------------------------------------------
 
-/// 底部弹窗的遮罩色（玻璃档与「关」档共用同一色源）。
+// ---------------------------------------------------------------------------
+// 浮层共有配置（对话框 / 底部弹窗 / 轻提示 三处入口的**唯一**参数源）
+// ---------------------------------------------------------------------------
+//
+// 2026-09-30 批 —— 负责人「玻璃弹框的共有参数，采用统一配置」。
+//
+// 改之前的病灶：遮罩色与形态参数**散在** `showAlert` / `showSheet` 各自的默认值
+// 与方法体里，且四个入口的遮罩**来自三个不同源头**（已实读库与 SDK 源码核清）：
+//   · `showSheet` 玻璃档 / 关档 —— 本文件原先的 `kSheetBarrierColor` = `0x3D000000`；
+//   · `showAlert` 玻璃档 —— 库 `GlassDialog.show` 的 `barrierColor` 是**死参数**
+//     （`glass_dialog.dart:268` 声明、`:271-283` 调 `showCupertinoDialog` 时**未透传**）
+//     ⇒ 实际吃 `kCupertinoModalBarrierColor`（`cupertino/route.dart:53-56`：
+//     亮 `0x33000000` α0.2 / 暗 `0x7A000000` **α0.478**）；
+//   · `showAlert` 关档 —— Material `DialogRoute` 的 `super.barrierColor = Colors.black54`
+//     （`material/dialog.dart:1825`）= `0x8A000000` **α0.541**，正是 2026-09-29 已判为
+//     「太重的灰」的同一个值 —— 属**已拍板口径没落到确认框上**，不只是风格分歧。
+//
+// `AskUserQuestion` 两项拍板（2026-09-30）：① 四路遮罩**全统一**；② 统一范围 =
+// **遮罩 + 形态 + 尺寸**。
+//
+// 因此 [OverlayStyle] 成为本项目浮层参数的**唯一事实源**：三个入口一律从这里取，
+// **不要在方法体里另写默认值**。玻璃档与「关」档共用 [OverlayStyle.barrier]（两档
+// 观感一致）；其余「玻璃专属」项（形态 / 尺寸）在关档退化为 Material 时**不适用**
+// ——关档走平台标准外观（沿用原口径：`maxWidth` 等是玻璃档参数，见 `showAlert` 注释）。
+
+/// 浮层（对话框 / 底部弹窗 / 轻提示）的共有配置——**本项目浮层参数的唯一事实源**。
 ///
-/// 2026-09-29 修「长按书卡，**在操作单出现之前**整屏先蒙一层灰」时引入。
-///
-/// **库 / Material 默认都太重**：
-/// - 玻璃档 —— `GlassDefaults.barrierColor = 0x8A000000`
-///   （`glass_defaults.dart:154`，**α = 0.541**）；
-/// - 「关」档 —— `showModalBottomSheet` 的 `barrierColor` 默认 `Colors.black54`
-///   （**也是 `0x8A000000`**，同一个值）。
-///
-/// 两个默认值**数值相同**，所以这里给一颗常量、两档共用，避免日后只改一边。
-///
-/// **为什么必须压淡**（不只是审美）：`GlassSheet.show` 的遮罩与弹窗共用 350ms
-/// `transitionDuration`，而弹窗是从 `Offset(0, 1)`（屏幕外）往上滑的
-/// （`glass_sheet.dart:320-332`）⇒ 头 ~150ms 是「灰幕已到场、弹窗还没进屏」。
-/// 逐帧实测：50ms 时遮罩 α 已 0.093、100ms 已 **0.262**，而弹窗 top 仍 **788**
-/// （屏高 700，即完全在屏外）。0.54 的深灰在那一瞬就是一条**纯灰幕**，
-/// 这正是负责人反馈的「出现弹框前会有灰色背景」。详见 `GlassOverlays.showSheet`。
-///
-/// **取值**：`0x3D000000`（α = 61/255 ≈ **0.24**）。约等于库默认的 45%——
-/// 既保留「背后内容退到次要层」的模态语义（`UI-03` 浮层玻璃要求遮罩在场，
-/// 「点遮罩关闭」也要有可点的遮罩面），又不会在弹窗到位前形成一条突兀的灰幕。
-/// **只换色源、不动时序**（同 `bookCoverShadowOf` 的口径）：时序归库，
-/// 要改就得抄一份 `showGeneralDialog` 并放弃库的液态玻璃渲染，代价不成比例。
-const Color kSheetBarrierColor = Color(0x3D000000);
+/// 改这里即三处入口同改；同理，**不要在 [GlassOverlays.showAlert] /
+/// [GlassOverlays.showSheet] 的方法体里另写常量**（那就又散回去了）。
+/// 契约测试：`test/ui/overlay_style_test.dart`（常量字面量）+
+/// `test/ui/glass_sheet_form_test.dart`（玻璃档四路遮罩与形态尺寸的透传）。
+abstract final class OverlayStyle {
+  /// 模态遮罩色——**四个入口**（玻璃/关 × 弹窗/确认框）共用同一色源。
+  ///
+  /// 2026-09-29 修「长按书卡，**在操作单出现之前**整屏先蒙一层灰」时引入，
+  /// 2026-09-30 由「只管弹窗」扩到「管全部模态浮层」。
+  ///
+  /// **为什么必须压淡**（不只是审美）：`GlassSheet.show` 的遮罩与弹窗共用 350ms
+  /// `transitionDuration`，而弹窗是从 `Offset(0, 1)`（屏幕外）往上滑的
+  /// （`glass_sheet.dart:320-332`）⇒ 头 ~150ms 是「灰幕已到场、弹窗还没进屏」。
+  /// 逐帧实测：50ms 时遮罩 α 已 0.093、100ms 已 **0.262**，而弹窗 top 仍 **788**
+  /// （屏高 700，即完全在屏外）。0.54 的深灰在那一瞬就是一条**纯灰幕**，
+  /// 这正是负责人反馈的「出现弹框前会有灰色背景」。详见 `GlassOverlays.showSheet`。
+  ///
+  /// **取值**：`0x3D000000`（α = 61/255 ≈ **0.24**）。约等于库默认的 45%——
+  /// 既保留「背后内容退到次要层」的模态语义（`UI-03` 浮层玻璃要求遮罩在场、
+  /// 「点遮罩关闭」也要有可点的遮罩面），又不会在弹窗到位前形成一条突兀的灰幕。
+  /// **只换色源、不动时序**（同 `bookCoverShadowOf` 的口径）：时序归库，
+  /// 要改就得抄一份 `showGeneralDialog` 并放弃库的液态玻璃渲染，代价不成比例。
+  ///
+  /// ⚠️ **统一带来的代价（真机对照项）**：暗色主题下确认框的遮罩由 Cupertino 的
+  /// α0.478 变淡到 0.239，模态压迫感会明显减弱；若真机上觉得确认框「压不住背景」，
+  /// **只调本项**即可（四个入口会同步变重，这正是"统一"的本意）。
+  static const Color barrier = Color(0x3D000000);
+
+  // ── 形态：触摸反馈 ──────────────────────────────────────────────────────────
+  // 2026-09-29 拍板「去除弹框点击会有放大高亮特效」。三项均为本薄封装原先吃掉的
+  // **库默认值**（同 `GlassScaffold.extendBody` 库默认 `true` 一类坑），故在此写死。
+  // 症状 ↔ 库参数逐一对上：
+  //   · 「点击放大」 = `interactionScale`（库默认 **1.01**，`stretch.dart:249`
+  //     按下时 `pressed ? interactionScale : 1.0`）；
+  //   · 「点击高亮」 = `enableInteractionGlow`（库默认 true，"Glint follows finger"）
+  //     + `enableSaturationGlow`（库默认 true，"Pulsation on touch"），两条独立通路。
+
+  /// 按压缩放系数——`1.0` 即**无放大**。
+  static const double interactionScale = 1.0;
+
+  /// 触摸光晕（跟随手指的高光）——关。
+  static const bool interactionGlow = false;
+
+  /// 触摸饱和度脉冲——关。
+  static const bool saturationGlow = false;
+
+  // ── 形态：拖拽 ─────────────────────────────────────────────────────────────
+  // 2026-09-29 拍板「不需要上划的弹框，去除小横条」。
+  // 「上划」的确切含义 = **禁止拖拽关闭手势**：`enableDrag: false` 后库的
+  // `_DismissibleSheetWrapper` **完全不加 `GestureDetector`**（`glass_sheet.dart:433`
+  // 的 if 分支跳过，直接返回 child，零副作用）；**底部滑入的入场动画保留**——
+  // `GlassSheet.show` 的 `transitionBuilder` 是独立的 `SlideTransition`
+  // （`glass_sheet.dart:319`），与 `enableDrag` 无关；**点遮罩关闭不变**。
+
+  /// 顶部小横条——关（库内还带一个覆盖顶部 44px 的可拖拽 `handleZone`，
+  /// `glass_modal_sheet_internal.dart:294`）。
+  static const bool dragIndicator = false;
+
+  /// 拖拽关闭手势——关。
+  static const bool enableDrag = false;
+
+  // ── 尺寸 ───────────────────────────────────────────────────────────────────
+
+  /// 确认框最大宽（与库 `GlassDialog` 默认同值——iOS 标准警示框宽度）。
+  ///
+  /// 关档（Material `AlertDialog`）**不适用**：走平台标准宽度，见 [GlassOverlays.showAlert]。
+  static const double dialogMaxWidth = 280;
+
+  /// 底部弹窗顶部圆角（与库 `GlassSheet` 默认同值）。
+  static const double sheetTopBorderRadius = 32;
+
+  /// 底部弹窗外边距（与库 `GlassSheet` 默认同值：左右各留 8，露出背后内容）。
+  static const EdgeInsets sheetMargin =
+      EdgeInsets.symmetric(horizontal: 8, vertical: 8);
+
+  /// 轻提示停留时长（比库默认 3s 短 1s——本项目的提示都是短反馈）。
+  static const Duration toastDuration = Duration(seconds: 2);
+
+  // ── 明确**不**在此收口的（免得看起来是"漏了"）─────────────────────────────
+  // · `quality` —— 是**运行时值**（`GlassScope.configOf(context).scrollQuality`），
+  //   随用户偏好 ×「降低视觉特效」× 帧预算降档变，不是常量，见各入口；
+  // · `isScrollable` —— 由调用场景决定（内容自带列表时传 `false`，防纵向滚动嵌套）；
+  // · `padding` —— **内容自持**：库中 `null` 即 `EdgeInsets.zero`
+  //   （`glass_sheet.dart:562,569`），各弹层内容自己给内边距；
+  // · `stretch` / `resistance` / `glowRadius` —— 拖拽与光晕关掉后已无触发路径；
+  // · `settings` / `bottomBorderRadius` / `dragIndicatorColor` —— 未定制，走库默认。
+}
 
 /// 浮层玻璃入口（对话框 / 底部弹窗）。
 ///
@@ -575,6 +668,11 @@ abstract final class GlassOverlays {
   /// 返回值语义与 `showDialog<T>` 一致：动作回调里
   /// `Navigator.pop(ctx, value)`，barrier 关闭（[barrierDismissible]）返回 `null`。
   /// [barrierDismissible] 缺省 `false`（库默认）——确认框须显式选择，防误触取消。
+  ///
+  /// ⚠️ **玻璃档不走 `GlassDialog.show`**（缘由见方法体内注释：它的 `barrierColor`
+  /// 是**死参数**，无法经由它统一遮罩）。外观与行为与原先逐项等价，只是遮罩色与
+  /// `maxWidth` 都改从 [OverlayStyle] 取；`test/ui/glass_sheet_form_test.dart`
+  /// 有断言钉住这两项。
   static Future<T?> showAlert<T>({
     required BuildContext context,
     required List<GlassDialogAction> actions,
@@ -582,7 +680,7 @@ abstract final class GlassOverlays {
     String? message,
     Widget? content,
     bool barrierDismissible = false,
-    double maxWidth = 280,
+    double maxWidth = OverlayStyle.dialogMaxWidth,
   }) {
     final GlassTierConfig config = GlassScope.configOf(context);
     if (!config.glassEnabled) {
@@ -591,6 +689,11 @@ abstract final class GlassOverlays {
       return showDialog<T>(
         context: context,
         barrierDismissible: barrierDismissible,
+        // 遮罩统一（2026-09-30）：Material `DialogRoute` 的默认是
+        // `super.barrierColor = Colors.black54`（`material/dialog.dart:1825`，
+        // `0x8A000000`、**α0.541**）——正是 2026-09-29 已判为「太重」的那个值，
+        // 当时只改了底部弹窗、漏了确认框。这里显式换成共用的 [OverlayStyle.barrier]。
+        barrierColor: OverlayStyle.barrier,
         builder: (BuildContext dialogContext) => AlertDialog(
           title: title == null ? null : Text(title),
           content: message == null && content == null
@@ -621,15 +724,26 @@ abstract final class GlassOverlays {
         ),
       );
     }
-    return GlassDialog.show<T>(
+    // 玻璃档：**不经** `GlassDialog.show` —— 它的 `barrierColor` 是**死参数**
+    // （`glass_dialog.dart:268` 声明、`:271-283` 调 `showCupertinoDialog` 时未透传），
+    // 无法经由它设置遮罩色；统一配置要求确认框也用 [OverlayStyle.barrier]，
+    // 故照抄它那 12 行自行透传。除遮罩外与 `GlassDialog.show` **逐项等价**：
+    // 同一个 `showCupertinoDialog`、同一个 [GlassDialog] widget、同一套默认
+    // （`useRootNavigator: true`、`barrierDismissible` 透传、`barrierLabel` 留空
+    // 交由 `CupertinoDialogRoute` 取 `modalBarrierDismissLabel`、转场仍是
+    // `CupertinoDialogRoute` 的 250ms spring）。
+    return showCupertinoDialog<T>(
       context: context,
-      actions: actions,
-      title: title,
-      message: message,
-      content: content,
-      quality: config.scrollQuality,
       barrierDismissible: barrierDismissible,
-      maxWidth: maxWidth,
+      barrierColor: OverlayStyle.barrier,
+      builder: (BuildContext dialogContext) => GlassDialog(
+        title: title,
+        message: message,
+        content: content,
+        actions: actions,
+        quality: config.scrollQuality,
+        maxWidth: maxWidth,
+      ),
     );
   }
 
@@ -640,7 +754,8 @@ abstract final class GlassOverlays {
   /// 避免纵向滚动视图嵌套（外层会吃掉内层的拖拽手势）。
   ///
   /// ══════════════════════════════════════════════════════════════════════════
-  /// 本项目弹层形态口径（2026-09-29 拍板）—— 以下各项**硬编码，不做成参数**
+  /// 本项目弹层形态口径（2026-09-29 拍板）—— 参数源自 2026-09-30 起**统一收在
+  /// [OverlayStyle]**（本方法只负责透传，不再自带默认值）
   /// ══════════════════════════════════════════════════════════════════════════
   /// 负责人「去除弹框点击会有放大高亮特效，不需要上划的弹框，去除小横条」；
   /// `AskUserQuestion` 两项拍板：①「上划」= **禁止拖拽关闭手势**（保留底部滑入动画）；
@@ -671,7 +786,7 @@ abstract final class GlassOverlays {
   /// 并**删去原先自绘的 36×4 拖拽指示条**（本薄封装自己画的那条，非库的）。
   ///
   /// ══════════════════════════════════════════════════════════════════════════
-  /// 弹层遮罩（2026-09-29 修「出现弹框前会出现灰色背景」）—— 显式传 [kSheetBarrierColor]
+  /// 弹层遮罩（2026-09-29 修「出现弹框前会出现灰色背景」）—— 显式传 [OverlayStyle.barrier]
   /// ══════════════════════════════════════════════════════════════════════════
   /// 症状：长按书卡，**在操作单露头之前**，整屏先蒙上一层灰。
   ///
@@ -695,7 +810,7 @@ abstract final class GlassOverlays {
   /// 「出现弹框前会有灰色背景」。
   ///
   /// 处置：**只换遮罩色源、不动时序**（与 `bookCoverShadowOf`「只换色源」同口径）。
-  /// 两档**都**显式传同一个 [kSheetBarrierColor]：
+  /// 两档**都**显式传同一个 [OverlayStyle.barrier]：
   ///   · 玻璃档 → `GlassSheet.show(barrierColor: …)`（库参数，`glass_sheet.dart:309`）；
   ///   · 「关」档 → `showModalBottomSheet(barrierColor: …)`（Material 同名参数，默认
   ///     也是 `Colors.black54` = `0x8A000000`，同一副「太重的灰」）。
@@ -715,7 +830,8 @@ abstract final class GlassOverlays {
         context: context,
         isScrollControlled: true,
         enableDrag: false,
-        barrierColor: kSheetBarrierColor,
+        // 遮罩统一（2026-09-30）：两档共用 [OverlayStyle.barrier]。
+        barrierColor: OverlayStyle.barrier,
         builder: (BuildContext sheetContext) => Padding(
           padding: EdgeInsets.only(
             bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
@@ -739,14 +855,18 @@ abstract final class GlassOverlays {
       builder: builder,
       quality: config.scrollQuality,
       isScrollable: isScrollable,
-      // 本项目口径：无横条、不可拖拽关闭、无触摸放大 / 光晕 / 饱和度脉冲。
-      showDragIndicator: false,
-      enableDrag: false,
-      interactionScale: 1.0,
-      enableInteractionGlow: false,
-      enableSaturationGlow: false,
-      // 遮罩色源（库默认 0x8A000000 太重、且先于弹窗可见）——见上方本方法注释。
-      barrierColor: kSheetBarrierColor,
+      // 以下各项一律取自 [OverlayStyle]（浮层参数的唯一事实源）：
+      // 「无横条、不可拖拽关闭、无触摸放大 / 光晕 / 饱和度脉冲」口径（2026-09-29 拍板）
+      // + 尺寸（2026-09-30 收口）+ 遮罩色（库默认 0x8A000000 太重、且先于弹窗可见，
+      // 见上方本方法注释）。
+      showDragIndicator: OverlayStyle.dragIndicator,
+      enableDrag: OverlayStyle.enableDrag,
+      interactionScale: OverlayStyle.interactionScale,
+      enableInteractionGlow: OverlayStyle.interactionGlow,
+      enableSaturationGlow: OverlayStyle.saturationGlow,
+      topBorderRadius: OverlayStyle.sheetTopBorderRadius,
+      margin: OverlayStyle.sheetMargin,
+      barrierColor: OverlayStyle.barrier,
     );
   }
 
@@ -765,7 +885,7 @@ abstract final class GlassOverlays {
     required BuildContext context,
     required String message,
     GlassToastType type = GlassToastType.neutral,
-    Duration duration = const Duration(seconds: 2),
+    Duration duration = OverlayStyle.toastDuration,
   }) {
     final GlassTierConfig config = GlassScope.configOf(context);
     if (!config.glassEnabled) {

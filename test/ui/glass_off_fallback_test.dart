@@ -200,6 +200,20 @@ void main() {
     expect(find.text('删除书籍'), findsOneWidget);
     expect(find.text('取消'), findsOneWidget);
 
+    // 遮罩统一（2026-09-30 批）：关档确认框原先吃 Material `DialogRoute` 的默认
+    // `super.barrierColor = Colors.black54`（`material/dialog.dart:1825`，
+    // `0x8A000000`、**α0.541**）——正是 2026-09-29 已判为「太重」的那个值，
+    // 当时只改了底部弹窗、**漏了确认框**。现与弹窗共用 `OverlayStyle.barrier`。
+    // 断言读遮罩自己渲染出的色，不引用薄封装常量（与弹窗用例同口径）。
+    final Animation<Color?> alertBarrierAnim = tester
+        .widget<AnimatedModalBarrier>(find.byType(AnimatedModalBarrier))
+        .color;
+    expect(
+      (alertBarrierAnim.value!.a * 255).round(),
+      0x3D,
+      reason: '关档确认框遮罩也须用统一色源（0x3D000000），不得吃 Material 默认的 0x8A000000',
+    );
+
     // 返回值语义：动作回调里 Navigator.pop(ctx, value) → future 收到 value。
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
@@ -257,7 +271,7 @@ void main() {
 
     // 遮罩色源（2026-09-29 修「长按书卡，在操作单出现之前先蒙一层灰」）：
     // `showModalBottomSheet` 的 `barrierColor` 默认 `Colors.black54`（= `0x8A000000`），
-    // 与玻璃库默认**同一个值**——两档共用 `kSheetBarrierColor`（`0x3D000000`）。
+    // 与玻璃库默认**同一个值**——两档共用 `OverlayStyle.barrier`（`0x3D000000`）。
     // 断言读遮罩自己渲染出的色，不引用薄封装常量（与玻璃档用例同口径）。
     final Animation<Color?> barrierAnim = tester
         .widget<AnimatedModalBarrier>(find.byType(AnimatedModalBarrier))

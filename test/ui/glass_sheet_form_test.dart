@@ -94,6 +94,16 @@ void main() {
     expect(sheet.enableInteractionGlow, isFalse);
     expect(sheet.enableSaturationGlow, isFalse);
 
+    // 尺寸（2026-09-30「统一配置」批）：两项与库默认**同值**，但从「不传、吃库默认」
+    // 改成「显式传 `OverlayStyle` 的值」——统一源之后，库升级改默认值不会静默
+    // 改掉本项目观感。反向验证：把 `OverlayStyle.sheetTopBorderRadius` /
+    // `.sheetMargin` 改成别的值，本断言即变红（证明它读的确实是那处配置）。
+    expect(sheet.topBorderRadius, 32);
+    expect(
+      sheet.margin,
+      const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+    );
+
     // 「上划」= `enableDrag`。它落在库私有的 `_DismissibleSheetWrapper` 上、
     // **无公开字段可读**，故用**行为**验证：对弹层做一次下滑手势，
     // 若仍允许拖拽关闭，弹层会消失（库的阈值 = 弹层高度 25% 或下滑速度 > 500）。
@@ -157,7 +167,68 @@ void main() {
     expect(
       (barrier.a * 255).round(),
       0x3D,
-      reason: '遮罩色应为 `kSheetBarrierColor` 的 `0x3D000000`（α 61/255 ≈ 0.239）',
+      reason: '遮罩色应为 `OverlayStyle.barrier` 的 `0x3D000000`（α 61/255 ≈ 0.239）',
+    );
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 2026-09-30 追加：确认框（`showAlert` 玻璃档）的遮罩与宽度也统一
+  // ══════════════════════════════════════════════════════════════════════════
+  // 负责人「玻璃弹框的共有参数，采用统一配置」；`AskUserQuestion` 拍板「四路全统一」
+  // + 「遮罩 + 形态 + 尺寸」全部收口到 `OverlayStyle`。
+  //
+  // 病灶（读库源码核清）：库 `GlassDialog.show` 的 `barrierColor` 是**死参数**——
+  // `glass_dialog.dart:268` 声明了它，但 `:271-283` 直接调
+  // `showCupertinoDialog(context:…, barrierDismissible:…, builder:…)`，**没把它传下去**
+  // ⇒ 实际吃 `kCupertinoModalBarrierColor`（`cupertino/route.dart:53-56`）。
+  // 本测试宿主是**浅色** `MaterialApp`，故旧行为下这里会读到 `0x33000000`（α 51），
+  // 而不是 `0x3D`（α 61）——这就是本用例能变红的原因。
+  //
+  // 处置：玻璃档 `showAlert` **绕开** `GlassDialog.show`，自行
+  // `showCupertinoDialog(barrierColor: OverlayStyle.barrier)` +
+  // `GlassDialog(...)`（同一个库 widget，不丢玻璃渲染）。
+  testWidgets('确认框（玻璃档）：遮罩也统一到同一色源，宽度取自 OverlayStyle',
+      (WidgetTester tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(host(
+      GlassQualityTier.high, // 高档：浮层走 standard 玻璃档（永不 premium）
+      Scaffold(
+        body: Builder(
+          builder: (BuildContext context) {
+            ctx = context;
+            return const SizedBox.expand();
+          },
+        ),
+      ),
+    ));
+
+    GlassOverlays.showAlert<String>(
+      context: ctx,
+      title: '删除书籍',
+      message: '确认删除《测试》？',
+      actions: <GlassDialogAction>[
+        GlassDialogAction(label: '删除', isDestructive: true, onPressed: () {}),
+        GlassDialogAction(label: '取消', onPressed: () {}),
+      ],
+    ).ignore();
+    // 推进入场动画：`CupertinoDialogRoute` 的 transitionDuration 是 250ms。
+    // 不用 `pumpAndSettle` —— 玻璃档在软件光栅下每帧数百 ms（见文件头口径 2）。
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // 仍是库的 GlassDialog（只是绕开了它的 `show` 静态方法），内容照常渲染。
+    expect(find.byType(GlassDialog), findsOneWidget);
+    expect(find.text('删除书籍'), findsOneWidget);
+    // 宽度取自统一配置（`OverlayStyle.dialogMaxWidth`，硬编码 280）。
+    expect(tester.widget<GlassDialog>(find.byType(GlassDialog)).maxWidth, 280);
+
+    // 遮罩 = 统一色源。旧行为：Cupertino 自适应 `0x33000000`（α 51）。
+    final Color barrier = _finalBarrierColor(tester);
+    expect(
+      (barrier.a * 255).round(),
+      0x3D,
+      reason: '玻璃档确认框遮罩须用统一色源 0x3D000000（α 61），'
+          '不得吃 Cupertino 默认的 0x33000000（α 51）',
     );
   });
 }
