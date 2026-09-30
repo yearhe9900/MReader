@@ -240,6 +240,11 @@ class PdfSource implements BookSource {
   @override
   Future<int?> totalCharCount() async => null;
 
+  // `implements BookSource` 不继承接口默认实现：显式覆写，保持 null（伪章无文本
+  // → 调用方进度退化页数/等权加权，T03）。
+  @override
+  Future<List<int>?> chapterCharCounts() async => null;
+
   @override
   Future<Uint8List?> readResource(String href) async {
     try {

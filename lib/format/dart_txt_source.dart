@@ -113,6 +113,7 @@ class DartTxtSource implements BookSource {
   Future<void>? _preparing;
   Future<String>? _decoding;
   int? _totalChars;
+  List<int>? _chapterChars;
   bool _disposed = false;
 
   /// 已释放 / 竞态时 `load()` 的最小返回（title 不空、author 不空、origins 全 `none`）。
@@ -215,6 +216,33 @@ class DartTxtSource implements BookSource {
   }
 
   @override
+  Future<List<int>?> chapterCharCounts() async {
+    final List<int>? cached = _chapterChars;
+    if (cached != null) return cached;
+
+    await _ensurePrepared();
+    final List<_Segment>? segments = _segments;
+    final String? text = _text;
+    if (_disposed || segments == null || text == null) {
+      return null; // dispose 竞态：优雅返回 null
+    }
+
+    // 分段是全文的连续切分但**不含标题匹配文本**（`_splitByRule` 的
+    // segStart = m.end），故 Σ counts ≤ totalCharCount()（差为标题行的
+    // 非空白字数）——同一非空白 code unit 口径，仅作章间相对权重。
+    final List<int> counts = <int>[];
+    for (final _Segment segment in segments) {
+      int count = 0;
+      for (int i = segment.start; i < segment.end; i++) {
+        if (!_isWhitespaceUnit(text.codeUnitAt(i))) count++;
+      }
+      counts.add(count);
+    }
+    _chapterChars = counts;
+    return counts;
+  }
+
+  @override
   Stream<SearchEvent> search(String query, {required CancelToken cancel}) async* {
     if (query.isEmpty) return;
     await _ensurePrepared();
@@ -264,6 +292,7 @@ class DartTxtSource implements BookSource {
     _segments = null;
     _chapters = null;
     _totalChars = null;
+    _chapterChars = null;
   }
 
   /// 是否已释放（供体检 / 测试观察）。

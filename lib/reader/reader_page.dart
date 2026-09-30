@@ -158,6 +158,14 @@ class _ReaderPageState extends State<ReaderPage> {
 
   BookMeta? _meta;
   List<Chapter>? _chapters;
+
+  /// 每章字数权重（`M-PAGE` T03：全书进度**字数加权**；`null` = 尚未取到 /
+  /// 该源不支持（PDF/CBZ/CBR）→ 等权退化，与迁移前公式一致）。
+  ///
+  /// 来源 `BookSource.chapterCharCounts()`，`_open()` 内**不阻塞**首帧异步取
+  /// （取到前按等权显示，取到后 `setState` 切换；不改变开书时序）。
+  List<int>? _chapterWeights;
+
   Object? _error;
 
   /// 章正文的有界 LRU 缓存（`PERF-02`）。
@@ -385,6 +393,10 @@ class _ReaderPageState extends State<ReaderPage> {
         }
       });
       if (chapters.isEmpty) return;
+
+      // `M-PAGE` T03：字数权重**不阻塞**首帧——fire-and-forget，取到前全书
+      // 进度按等权显示（与旧行为一致），取到后切换为字数加权。
+      _loadChapterWeights();
 
       final ChapterAutoLoader loader = ChapterAutoLoader(
         chapterCount: chapters.length,
@@ -1168,11 +1180,34 @@ class _ReaderPageState extends State<ReaderPage> {
     return hint;
   }
 
-  /// 全书进度 `0.0 ~ 1.0`：分母为总章数，末章 `chapterPos == 1.0` 才恰好 100%。
+  /// 全书进度 `0.0 ~ 1.0`：**字数加权**（`M-PAGE` T03，选型 §6 拍板②）；
+  /// 权重未就绪 / 源不支持时退化为章节等权（与迁移前公式逐位一致）。
+  ///
+  /// 末章 `chapterPos == 1.0` 且末章有权重时恰好 100%。
   double _overallProgress(int index, double chapterPos) {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null || chapters.isEmpty) return 0.0;
-    return ((index + chapterPos) / chapters.length).clamp(0.0, 1.0).toDouble();
+    return overallReadingProgress(
+      chapterIndex: index,
+      chapterPos: chapterPos,
+      chapterCount: chapters.length,
+      chapterWeights: _chapterWeights,
+    );
+  }
+
+  /// 异步取每章字数权重（fire-and-forget，见 [_chapterWeights] 注释）。
+  ///
+  /// `null`（源不支持）保持等权；dispose / 竞态静默放弃，不写状态。
+  Future<void> _loadChapterWeights() async {
+    try {
+      final List<int>? weights = await widget.source.chapterCharCounts();
+      if (!mounted || _disposed || weights == null) return;
+      final List<Chapter>? chapters = _chapters;
+      if (chapters == null || weights.length != chapters.length) return;
+      setState(() => _chapterWeights = weights);
+    } catch (_) {
+      // 权重取不到不影响阅读：继续等权。
+    }
   }
 
   /// 显示用全书进度百分比（整数，向下取整——避免「差一点」就显示 100%）。
@@ -1182,8 +1217,12 @@ class _ReaderPageState extends State<ReaderPage> {
   int get _livePercent {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null || chapters.isEmpty) return 0;
-    final double overall =
-        ((_liveIndex + _livePos) / chapters.length).clamp(0.0, 1.0);
+    final double overall = overallReadingProgress(
+      chapterIndex: _liveIndex,
+      chapterPos: _livePos,
+      chapterCount: chapters.length,
+      chapterWeights: _chapterWeights,
+    );
     return (overall * 100).floor();
   }
 

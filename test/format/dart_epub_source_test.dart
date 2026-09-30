@@ -873,6 +873,26 @@ void main() {
 
       await source.dispose();
     });
+
+    test('chapterCharCounts：逐章字数（T03 字数加权原料），Σ == totalCharCount',
+        () async {
+      final BookSource source =
+          await openBook(fileName: 'nav3.epub', bytes: _epub3WithNav());
+
+      // 三章各一段 3 字（卷首。/ 章首。/ 节首。）——与 totalCharCount=9 同口径。
+      final List<int>? counts = await source.chapterCharCounts();
+      expect(counts, <int>[3, 3, 3]);
+      expect(
+        counts!.fold<int>(0, (int a, int b) => a + b),
+        await source.totalCharCount(),
+        reason: 'Σ chapterCharCounts == totalCharCount（接口文档承诺）',
+      );
+
+      // 缓存：二次调用同一实例。
+      expect(identical(counts, await source.chapterCharCounts()), isTrue);
+
+      await source.dispose();
+    });
   });
 
   // =====================================================================
@@ -900,6 +920,7 @@ void main() {
       expect(await source.chapters(), isEmpty);
       expect((await source.content(0)).isEmpty, isTrue);
       expect(await source.totalCharCount(), isNull);
+      expect(await source.chapterCharCounts(), isNull);
       expect(await source.search('卷', cancel: CancelToken()).toList(), isEmpty);
     });
 

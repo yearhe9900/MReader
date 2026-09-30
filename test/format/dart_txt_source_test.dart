@@ -241,6 +241,33 @@ void main() {
       await source.dispose();
     });
 
+    test('chapterCharCounts：按章非空白计数（T03 字数加权原料）', () async {
+      final DartTxtSource source =
+          DartTxtSource(fileName: 'c2.txt', bytes: _utf8(_twoChaptersText()));
+
+      final List<Chapter> chapters = await source.chapters();
+      expect(chapters, hasLength(2));
+
+      // 夹具字面量：每章正文 = _body(1500) = 69 行 × 21 非空白字 = 1449
+      // （段起点在标题匹配之后，标题行不计入）。
+      final List<int>? counts = await source.chapterCharCounts();
+      expect(counts, <int>[1449, 1449]);
+      expect(counts, hasLength(chapters.length),
+          reason: '长度与 chapters() 一致（接口契约）');
+
+      // Σ ≤ totalCharCount：差值 = 标题行的非空白字（各 4 字）+ 空行不计——
+      // 分段不含标题匹配文本，不承诺精确覆盖全书（接口文档口径）。
+      final int total = (await source.totalCharCount())!;
+      final int sum = counts!.fold<int>(0, (int a, int b) => a + b);
+      expect(sum, 2898);
+      expect(sum, lessThan(total));
+
+      // 缓存：二次调用同一实例。
+      expect(identical(counts, await source.chapterCharCounts()), isTrue);
+
+      await source.dispose();
+    });
+
     test('sniffFormat：.txt 与「无扩展名但内容是文本」都判 txt', () {
       expect(sniffFormat(fileName: 'a.txt', bytes: _utf8('hello')), FormatKind.txt);
       expect(
@@ -303,6 +330,7 @@ void main() {
       expect(await source.chapters(), isEmpty);
       expect((await source.content(0)).isEmpty, isTrue);
       expect(await source.totalCharCount(), isNull);
+      expect(await source.chapterCharCounts(), isNull);
       expect(
         await source.search('正文', cancel: CancelToken()).toList(),
         isEmpty,

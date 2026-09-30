@@ -139,6 +139,15 @@ class ReadingProgress {
   final int chapterIndex;
 
   /// 章内进度 `0.0 ~ 1.0`（构造时自动 clamp）。
+  ///
+  /// **真值语义 = 字符偏移比例**（`M-PAGE` §0 定义，选型 §6 拍板②）：
+  /// `chapterPos = charOffset / totalChars`，其中 charOffset 是章内字符偏移
+  /// （`ExtractedSection.paragraphs` 各段原文无分隔符拼接后的 UTF-16 偏移）。
+  ///
+  /// **旧几何比例值宽容读取**：`fromJson` 不做来源标记——旧版滚动视图写的
+  /// 几何比例（像素位置折算）与新语义数值同型同域，一律按比例直接采用
+  /// （首帧估算落位足够接近，随后由分页视图按 charOffset 采样回归一），
+  /// **写回时统一为字符偏移比例**（字段与 JSON 格式不变，`SYNC-02` 不动）。
   final double chapterPos;
 
   /// 更新时间戳（Unix 毫秒）。
@@ -334,4 +343,66 @@ class ChapterBlockSnapshot {
 
   final double pos = (-chosen.top / chosen.height).clamp(0.0, 1.0).toDouble();
   return (chapterIndex: chosen.index, chapterPos: pos);
+}
+
+// ---------------------------------------------------------------------------
+// M-PAGE T03：字符偏移比例换算 + 全书进度加权（纯函数，§0 / §6 拍板②）
+// ---------------------------------------------------------------------------
+
+/// 章内字符偏移 → `chapterPos` 比例（§0：`charOffset / totalChars`，clamp 0..1）。
+///
+/// [totalChars] ≤ 0（空章）时返回 `0.0`——不抛异常，空章没有可言的章内位置。
+double chapterPosOfCharOffset(int charOffset, int totalChars) {
+  if (totalChars <= 0) return 0.0;
+  return (charOffset / totalChars).clamp(0.0, 1.0).toDouble();
+}
+
+/// `chapterPos` 比例 → 章内字符偏移（重排恢复用：记 charOffset → 重分页 →
+/// 二分落位，选型 §6 保证②）。
+///
+/// [totalChars] ≤ 0 时返回 `0`；结果 clamp 到 `[0, totalChars]`。
+int charOffsetOfChapterPos(double chapterPos, int totalChars) {
+  if (totalChars <= 0) return 0;
+  final int offset = (chapterPos.clamp(0.0, 1.0) * totalChars).round();
+  return offset.clamp(0, totalChars);
+}
+
+/// 全书阅读进度（`0.0 ~ 1.0`）：**字数加权**（选型 §6 拍板②；图片页 / PDF
+/// 伪章退化为页数加权——即调用方不传 [chapterWeights] 时的等权形态）。
+///
+/// - [chapterWeights] 提供且长度 == [chapterCount] 且 `Σ > 0` →
+///   `(Σ 前章字数 + chapterPos × 本章字数) / Σ 全书字数`；
+/// - 否则（`null` / 长度不匹配 / 全 0，含 PDF 等不支持字数统计的源）→
+///   退化章节等权 `(chapterIndex + chapterPos) / chapterCount`——与迁移前
+///   `_overallProgress` 公式逐位一致，保证旧进度数值不突变。
+///
+/// 参数越界一律 clamp：`chapterIndex` 到 `[0, chapterCount-1]`、
+/// `chapterPos` 到 `[0,1]`、结果到 `[0,1]`；`chapterCount ≤ 0` 返回 `0.0`。
+double overallReadingProgress({
+  required int chapterIndex,
+  required double chapterPos,
+  required int chapterCount,
+  List<int>? chapterWeights,
+}) {
+  if (chapterCount <= 0) return 0.0;
+  final double pos = chapterPos.clamp(0.0, 1.0).toDouble();
+  final int index = chapterIndex.clamp(0, chapterCount - 1);
+
+  if (chapterWeights != null && chapterWeights.length == chapterCount) {
+    int total = 0;
+    for (final int w in chapterWeights) {
+      if (w > 0) total += w;
+    }
+    if (total > 0) {
+      int before = 0;
+      for (int i = 0; i < index; i++) {
+        final int w = chapterWeights[i];
+        if (w > 0) before += w;
+      }
+      final int cur = chapterWeights[index] > 0 ? chapterWeights[index] : 0;
+      return ((before + pos * cur) / total).clamp(0.0, 1.0).toDouble();
+    }
+    // 全 0 权重（如 PDF 空文本伪章）→ 落到等权退化。
+  }
+  return ((index + pos) / chapterCount).clamp(0.0, 1.0).toDouble();
 }

@@ -141,6 +141,10 @@ class CbrSource implements BookSource {
   @override
   Future<int?> totalCharCount() async => null;
 
+  // `implements BookSource` 不继承接口默认实现：显式覆写，保持 null（不支持）。
+  @override
+  Future<List<int>?> chapterCharCounts() async => null;
+
   @override
   Future<Uint8List?> readResource(String href) async {
     try {

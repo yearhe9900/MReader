@@ -128,6 +128,21 @@ abstract class BookSource {
   /// **不破坏 §A.1 的既有字段与签名**。
   Future<int?> totalCharCount() async => null;
 
+  /// 按 `chapters()` 顺序返回**每章字符数**（进度字数加权用，`M-PAGE` T03）。
+  /// 不支持时返回 `null`（调用方退化为页数 / 章节等权）。
+  ///
+  /// 口径与 [totalCharCount] **同一计数规则**（UTF-16 code unit：EPUB = 各段
+  /// `paragraph.length` 之和，TXT = 区间内非空白 code unit），但**不承诺**
+  /// `sum(result) == totalCharCount()`——TXT 分章规则的段起点在标题匹配之后
+  /// （标题行不属任何段），EPUB 目录项与 spine 也不保证一一对应；本值只用于
+  /// **章间相对权重**，无需精确覆盖全书。
+  /// 返回列表长度与 `chapters()` 一致；图片页 / PDF 伪章（无文本）返回 `null`
+  /// ——`charCountSupported: false` 的源不覆写本方法。
+  ///
+  /// 同 [searchSpec] 的「带默认实现的具体方法增补」手法：不破坏 §A.1。
+  /// 刻意**不在 `load()` 里算**：大书会把打开动作拖慢（同 `totalCharCount`）。
+  Future<List<int>?> chapterCharCounts() async => null;
+
   /// 按包内路径读取任意资源字节（图片 / 字体 / CSS）。
   ///
   /// [href] 是**已解析的绝对包内路径**（如 `OEBPS/images/cover.jpg`）。

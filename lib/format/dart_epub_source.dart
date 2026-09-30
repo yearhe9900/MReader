@@ -53,6 +53,7 @@ class DartEpubSource implements BookSource {
   Future<EpubParseResult>? _loading;
   List<Chapter>? _chapters;
   int? _totalChars;
+  List<int>? _chapterChars;
   bool _disposed = false;
 
   /// 已释放 / 竞态时 `load()` 的最小返回（title 不空、author 不空、origins 全 `none`）。
@@ -254,6 +255,34 @@ class DartEpubSource implements BookSource {
   }
 
   @override
+  Future<List<int>?> chapterCharCounts() async {
+    final List<int>? cached = _chapterChars;
+    if (cached != null) return cached;
+
+    final List<Chapter> chapterList = await chapters();
+    final EpubBook? book = await _bookOnce();
+    if (_disposed || book == null) return null; // 已释放 / 竞态
+
+    // 与 `search()` 同一映射（`_sectionFor`：href 优先、同序号兜底）与同一
+    // 取段口径（`extractSection` 整节，不含 fragment 定位）——权重只需章间
+    // 相对比例，不必与 `content(i)` 的 locate 细分完全一致。
+    final List<int> counts = List<int>.filled(chapterList.length, 0);
+    for (int i = 0; i < chapterList.length; i++) {
+      if (_disposed) return null; // 竞态
+      final EpubSection? section = _sectionFor(book, chapterList[i], i);
+      if (section == null) continue;
+      int sum = 0;
+      for (final String paragraph in extractSection(section.rawBytes).paragraphs) {
+        sum += paragraph.length;
+      }
+      counts[i] = sum;
+    }
+    if (_disposed) return null; // 竞态：算完已释放
+    _chapterChars = counts;
+    return counts;
+  }
+
+  @override
   Stream<SearchEvent> search(String query, {required CancelToken cancel}) async* {
     if (query.isEmpty) return;
 
@@ -299,6 +328,7 @@ class DartEpubSource implements BookSource {
     _loading = null;
     _chapters = null;
     _totalChars = null;
+    _chapterChars = null;
   }
 
   /// 是否已释放（供体检 / 测试观察）。

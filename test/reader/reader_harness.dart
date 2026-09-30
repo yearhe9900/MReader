@@ -136,6 +136,9 @@ class FakeBookSource implements BookSource {
   Future<int?> totalCharCount() async => null;
 
   @override
+  Future<List<int>?> chapterCharCounts() async => null;
+
+  @override
   Future<Uint8List?> readResource(String href) async => null;
 
   @override

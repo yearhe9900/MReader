@@ -315,6 +315,8 @@ void main() {
       expect(events.map((SearchEvent e) => e.hit).nonNulls, isEmpty);
       expect(events.map((SearchEvent e) => e.progress).nonNulls, hasLength(5));
       expect(await source.totalCharCount(), isNull);
+      // T03：伪章无文本 → 不覆写 chapterCharCounts → 默认 null → 进度退化等权。
+      expect(await source.chapterCharCounts(), isNull);
       await source.dispose();
     });
 
