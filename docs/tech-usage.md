@@ -1141,6 +1141,8 @@ bash tool/test.sh reader                                    # 00:28 +226: All te
 
 **未做（如实登记，交负责人）**：① **本批未真机复跑**——`extendBody` 是全局布局改动，请重新安装后重点看书架 / 详情 / 设置三页顶部；② 顶栏渐隐已按拍板关闭，若真机上觉得生硬，备选修法（body 补 top spacer，代价是复制库算法）记录在上文；③ `parse` 组**未实跑**（与本批改动无交集）；④ `kShelfCoverTargetWidth` 仍未开放为设置项。
 
+> ⚠️ **后续改道（2026-09-30，见 §2.58）**：本节的「`extendBody: false` **必须传**」口径**收窄为「默认值」**——`GlassNavScaffold` 已把 `extendBody` 暴露为参数（**默认仍 `false`**，本节修的 7 个页面行为一字不变），**书架页显式传 `true`** 走 edge-to-edge（全浮动头部形态：内容穿顶栏滚动 + `GlassScrollEdgeStyle.blur` 磨砂）。连带：本节「顶栏下方滚动渐隐一并关闭（拍板取舍）」只对**未开 `extendBody` 的页面**成立；书架侧该效果已按 `UI-02` ② 正式开启，首行保护改由 `shelfGridPadding` 承担。
+
 ### 2.42 书架阅读状态筛选改单选（2026-09-29）
 
 **触发**：负责人拍板「书架页标签应该是**已读完、正在读、未开始**，且是**单选**，参考 anx reader」——批次② `0991c43` 做的是多选（三个 `FilterChip` 可叠加、命中任一即保留）。
@@ -1307,6 +1309,8 @@ bash tool/test.sh data                                      # 00:13 +205: All te
 **既有噪音（非本批引入，已实测排除）**：`shelf_page_test.dart:578`（分组 chips 用例的**第二次** `tap(find.text('玄幻'))`）会打一条 `derived an Offset … would not hit test` 警告——命中结果是 chip 自身的 `RenderPhysicalShape`/Material，**chip 的 `onSelected` 确实触发**（其后的 `_titles` 与 `groupId` 两条断言若 tap 落空必红，故非假绿）。用 `git stash` 回退本批改动后单跑同一条用例，警告**依然为 1 次** → 与本批无关。想消音可改点为 chip 本体或传 `warnIfMissed: false`。
 
 **复核边界**：`analyze` 与两组测试为本批实跑；**真机观感未复跑**（靠左/铺满在窄屏上的实际比例、深色主题下 `outlineVariant` 描边的可见度）。`parse` / `reader` 两组未跑（与本次改动零交集）。
+
+> ⚠️ **后续改道（2026-09-30，见 §2.58）**：本节的 **「可用宽 ∩ 400」上限与 α0.9 填充已被参考图批改掉**——搜索胶囊改「**全宽** + α**0.6** 半透明玻璃底」（拍板「全宽搜索胶囊」；顶栏下方新增磨砂内容区作底，故 0.9 的不透明理由随之消失），`getSize(box).width > 300` 相应改为 `> 600`。**「1px 描边」口径继续有效**（本节「描边/底色区分」的结论未被推翻），`centerTitle: false` 与 `SizedBox(width: double.infinity)` 亦不变。原文保留作历史记录。
 
 ### 2.46 书架点书卡直接进阅读页、详情页入口改走长按操作单（PRD v2.9，2026-09-29）
 
@@ -2057,3 +2061,69 @@ bash tool/test.sh data     # +205: All tests passed!
 ```
 
 **复核边界**：`analyze` 与 `ui` / `data` 为本批实跑（`ui` 因既有 flake 用 `-j 1` 串行口径）。改动符号 `InkWell` 三参、`kSheetBarrierColor` 经全仓 grep，`kSheetBarrierColor` 引用方仅 `glass_kit.dart` 两处传参 + 两个测试文件；`parse` / `reader` 零交集，未跑。**真机观感未复跑**，需负责人确认：① 长按书卡到弹框出现的全程，书名/作者/进度与封面圆角缺口**无灰底**；② 弹层出现前遮罩明显更淡（α0.239）后，**模态语义是否仍够**；③ 按下/长按**完全无墨迹**是否可接受。
+
+### 2.58 书架标题栏改「全浮动头部」+ 内容 edge-to-edge（参考图批，2026-09-30）
+
+**触发**：负责人「**标题栏也参考图片，内容可以 edge to edge**」（附 HyperOS 主题商店首页截图）；`AskUserQuestion` 拍板 **「全浮动头部」**（另两档为「只改搜索胶囊」「全页面统一」，均未采纳——本批**不动**设置页 / 详情页 / 搜索页顶栏）。
+
+**参考图读法（写在前面，免得后人以为抄了细节）**：① 标题区 = **两行浮层**——全宽半透明玻璃搜索胶囊 + 分类胶囊 chips（选中 = 实心亮胶囊、未选中 = 半透明玻璃胶囊）；② 二者**压在 edge-to-edge 内容上**（横幅从胶囊下穿过、顶部被糊住）；③ 底部仍是浮动玻璃导航（本项目已是同形态，§2.50）。**截图为缩放图（500×1082）**，故行高 / 间距只作**估计**、不作精确依据——工程约定：截图只提供「什么形态」的信息，边界与颜色不可信。
+
+**本批要解决的既有状态（三处）**
+
+| # | 既有状态 | 证据 |
+|---|---|---|
+| ① | 内容**完全不穿顶栏**：`GlassNavScaffold` 写死 `extendBody: false` | §2.41 修「首行被盖」时的拍板取舍 |
+| ② | 因此 `glass_scaffold.dart:458` 的 `if (extendBody && …)` **恒假** ⇒ `GlassScrollEdgeEffect` 从未启用 ⇒ PRD `UI-02` ②「滚动时顶栏下内容透出模糊而非纯色遮挡」**实际未满足** | §2.41「已知代价」段 |
+| ③ | 搜索胶囊为不透明底（α0.9）+ 400 上限；chips 在主正文 `Column` 里（不属顶栏） | §2.45 + `shelf_page.dart` |
+
+**改动**
+
+1. **`GlassNavScaffold` 增加 `extendBody` 参数（默认 `false`）**：玻璃档透传库 `GlassScaffold.extendBody`，「关」档映射 `Scaffold.extendBodyBehindAppBar`（语义对齐）；并补上边缘效果口径 **`edgeStyle: GlassScrollEdgeStyle.blur`**——库默认 `soft` 是「内容**渐隐进背景**」（接近 `UI-02` ② 否定的「纯色遮挡」），`blur` 才是「内容**透出模糊**」（`ProgressiveBlur` 渐进磨砂）。**仅 `extendBody: true` 时生效**（`:458` 条件）。**回退旋钮**：要渐隐档改一行传 `GlassScrollEdgeStyle.soft`。默认 `false` ⇒ 其余 6 个调用点行为一字不变。
+2. **书架头部改两行浮层**（`_buildHeader()`）：`GlassTopBar(toolbarHeight: kShelfHeaderHeight, title: <两行 Column>, centerTitle: false)`，**`actions` 槽不再使用**——两按钮移进搜索行内（否则 48 高的按钮会在 96 高的条里垂直居中、正好卡在两行之间）。头部整体包 `MaterialType.transparency`：玻璃库**无 Material 祖先**（PRD §11.4），而 `FilterChip` **断言要求** Material 祖先（SDK `chip.dart:776` `debugCheckHasMaterial`）——chips 从正文（`OpaqueContentSurface` 提供的 `Material`）搬进顶栏后**必须自带一层**，否则 debug 断言直接失败（同 `_BookSearchEntry` 为 `InkWell` 包透明 Material 的手法）。
+3. **搜索胶囊**：撤 `maxWidth: 400`（拍板「全宽」）、填充 α0.9 → **α0.6**（顶栏下方现在是磨砂内容区，0.9 的不透明理由随之消失）、**描边保留**（α0.6 下更依赖它把可点控件从磨砂区里分出来——§2.45 的结论未被推翻）。
+4. **chips 胶囊化**：`StadiumBorder` + `showCheckmark: false`；未选中 `surfaceContainerHighest` α0.6 + `outlineVariant` 描边（与搜索胶囊同一套玻璃语言），选中 `secondaryContainer`（M3 选中态）。**文字色不动**——实读 SDK `_ChipDefaultsM3.labelStyle` 为 `onSurfaceVariant`、**不随选中态变**，两态通用故无需自定义 `labelStyle`。chips 行去掉了原正文里的 12 / 4 侧边距（左缘与搜索胶囊对齐）。
+5. **首行保护**（拍板验收条目）：新增 `shelfGridPadding(double topInset) = kShelfGridPadding.copyWith(top: topInset + kShelfHeaderHeight + 12)`——**「网格上间距 12」的原语义不变**，头部高度作为**叠加项**进 `top`；故 `kShelfGridPadding` 常量本身与 §2.40 的契约**一字未改**（既有断言照旧通过），避免把「页面级叠加」混进「网格固有间距」。
+6. **头部两行恒在场**（loading / 空态 / 有书）：原先 loading 态是 `Text('书架')`（44）、有书才换搜索框，且 chips 行随「有无书」出现——现统一 96，消除跳变。连带 `widget_test.dart` 冒烟断言（原依赖「顶栏标题『书架』三态恒存在」）改断言恒在的搜索胶囊占位文案。
+7. **排序菜单锚点**：`kToolbarHeight`(56) → `kShelfHeaderHeight`(96)（菜单应锚在新头部下沿）。
+
+**几何事实源**（`lib/ui/shelf_geometry.dart`）
+
+```dart
+const double kShelfSearchRowHeight = 44;
+const double kShelfHeaderRowGap   = 12;
+const double kShelfChipsRowHeight = 40;
+const double kShelfHeaderHeight = kShelfSearchRowHeight + kShelfHeaderRowGap + kShelfChipsRowHeight; // 96
+EdgeInsets shelfGridPadding(double topInset) =>
+    kShelfGridPadding.copyWith(top: topInset + kShelfHeaderHeight + kShelfGridPadding.top);
+```
+
+**测试（`ui` 组 155 → 159；`glass_nav_inset` +2、`shelf_page_test` +1、`shelf_geometry_contract` +1）**
+
+| 断言 | 口径 | 反向验证（本批实做，各自独立变红） |
+|---|---|---|
+| `GlassNavScaffold.extendBody == true` | 书架穿顶栏 | 改回 `false` → `Expected: true / Actual: false` |
+| 正文 top == 0（玻璃档、关档各一条） | 透传确实生效 | 两条透传分别写死 `false` → 各自 `Actual: 44.0` |
+| 搜索胶囊与 `FilterChip` 均在 `GlassTopBar` 子树内 | chips 属浮动头部 | chips 移回正文 → `Found 0 widgets with type "FilterChip" descending from GlassTopBar` |
+| `toolbarHeight == 96`、首行 `getTopLeft(BookCard).dy == 108` | 头部高 / 首行不被盖 | 撤 `padding: shelfGridPadding(topInset)` → `Actual: 12.0` |
+| `kShelfHeaderRowGap == 12` 等常量 + `shelfGridPadding(48) == LTRB(20,156,20,96)` | 事实源字面量锁 | 行距改 8 → `Expected: <12> / Actual: <8.0>` |
+
+断言一律在 `800×1000` 且**钉 `devicePixelRatio = 1`** 下跑（断言的是逻辑像素 96 / 108；默认 dpr 3 会把物理与逻辑搅在一起）。
+
+**文档回填两轮**
+
+- **字符串轮**（key 取原文「字面字符」；范围 `docs/*.md` + `CHANGELOG.md`）：`extendBody` **12**、`maxWidth` **8**、`400 上限` **3**、`kShelfGridPadding` **3**、`靠左铺满` **1**、`居中收缩` **1** → 命中除本节新增外，集中在 §2.41（顶栏避让）与 §2.45（搜索框靠左铺满）两处**事实层**，均已补改道指针，无第三处需改。
+- **语义轮**（找「被推翻约束」的等价表述、不含版本号）：「避让顶栏」**3**、「渐隐」**6**、「浮在中间」**2**、「顶栏内边距」**2**、「玻璃顶栏」**2** → 逐条核对均为**历史事实层**（§2.40 / §2.41 / §2.45 / §2.49 的过程记录）或**仍成立**的口径（`centerTitle: false`、1px 描边、内边距 8）；已在 §2.41 / §2.45 各补一处 `⚠️ 后续改道` 指针，原文不追改。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze                            # 0 error / 0 warning / 7 info
+/c/src/flutter/bin/flutter test --timeout 30s -j 1 test/ui test/widget_test.dart  # +159: All tests passed!
+/c/src/flutter/bin/flutter test --timeout 30s test/library test/meta test/storage test/task test/highperf_registry_test.dart  # +205: All tests passed!
+```
+
+**复核边界（不伪造复核记录）**
+
+- **可复核 → 已复核**：库源码行号（`glass_scaffold.dart:135/458/487-494`、`chip.dart:776`、`glass_scroll_edge_effect.dart` 三档 doc）、几何常量与两处测试字面量、五处反向验证实测值、`analyze` 与两组测试输出，均为本批实读 / 实跑。
+- **不可复核 → 未声称**：**真机观感未复跑**，需负责人确认：① 头部 96 / 行距 12 是否合眼（截图仅是缩放图、这几个数只是估计）；② 磨砂（`blur`）在真机 / Skia 上的开销与观感（库 doc 自述 Skia 比 `soft` 略贵）；③ 选中 chip 用 M3 `secondaryContainer` 够不够「选中感」（参考图是深色端「最亮 = 选中」的做法）；④ 胶囊 α0.6 在**浅色主题**下与磨砂区是否仍区分得开；⑤ 桌面宽窗下「全宽胶囊」是否过宽（原 400 上限已按拍板撤销）。
+- **未做（如实登记）**：① `parse` / `reader` 两组未跑（与本批零交集）；② 其余页面顶栏未动（拍板只做书架）；③ **PRD 无条文改动**——`LIB-01` 的「顶部为导入入口」仍成立（按钮保留在搜索行右侧），本批实质是把 `UI-02` ② 从「未满足」改为「已满足」，**未新增 / 修改任何需求条目**，故不加版本行（若要把它写成 PRD 版本行请指示）。

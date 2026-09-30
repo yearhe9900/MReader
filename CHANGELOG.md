@@ -3,6 +3,12 @@
 > 格式：Keep a Changelog 简化式。日期用 `YYYY-MM-DD`，**按日期倒序**排列。
 > 书写约定：每条一句话、**不复述过程**（分析、根因链、教训留在 PRD 与 `.workbuddy/memory/`），条目末尾附 commit hash 便于追溯。
 
+## 2026-09-30
+
+### 变更
+
+- **书架标题栏改「全浮动头部」+ 内容 edge-to-edge（参考图形态）**（负责人「标题栏也参考图片，内容可以 edge to edge」，附 HyperOS 主题商店首页截图；`AskUserQuestion` 拍板「全浮动头部」，未采纳「只改搜索胶囊」「全页面统一」两档）：① **头部改两行浮层**——`GlassTopBar.toolbarHeight` 由 44 提到 **96**（`kShelfHeaderHeight` = 搜索行 44 + 间距 12 + chips 行 40，新增于几何事实源），标题槽放「搜索行（全宽胶囊 + 导入 / 排序按钮）+ 分组 chips 行」的 `Column`，**`actions` 槽不再使用**（48 高的按钮若留在槽里会在 96 高的条中垂直居中、卡在两行之间）；搜索胶囊撤掉 §2.45 的 `maxWidth: 400` 上限（拍板「全宽」）、填充 **α0.9 → α0.6**（顶栏下方新增磨砂内容区作底，0.9 的不透明理由随之消失），**1px 描边保留**；分组 chips **胶囊化**（`StadiumBorder` + 去勾选角标，未选中 `surfaceContainerHighest` α0.6 + `outlineVariant` 描边、选中 `secondaryContainer`，文字色仍吃 chip 默认 `onSurfaceVariant`——实读 SDK `_ChipDefaultsM3.labelStyle` 证明它不随选中态变，无须自定义 `labelStyle`）；头部整体包 `MaterialType.transparency` —— `FilterChip` **断言要求** Material 祖先（SDK `chip.dart:776`），而玻璃库无 Material 祖先（PRD §11.4），chips 从正文搬进顶栏后必须自带一层。② **内容 edge-to-edge**：`GlassNavScaffold` 增加 `extendBody` 参数（**默认 `false`，其余 6 个调用点行为一字不变**），书架传 `true` → 正文从 y=0 起、滚动时从浮动头部下穿过；同时**补上边缘效果口径 `edgeStyle: GlassScrollEdgeStyle.blur`** —— 库默认 `soft` 是「内容渐隐进背景」、接近 `UI-02` ② 否定的「纯色遮挡」，`blur` 才是「内容透出模糊」，**PRD `UI-02` ② 由此从「实际未满足」变为已满足**（§2.41 曾因 `extendBody: false` 让 `glass_scaffold.dart:458` 的 `if (extendBody && …)` 恒假、渐隐整体关闭）；「关」档映射 `Scaffold.extendBodyBehindAppBar` 保持语义对齐。③ **首行保护**（拍板验收条目）：新增 `shelfGridPadding(topInset)` = `kShelfGridPadding.copyWith(top: 状态栏 + 96 + 12)` ——「网格上间距 12」的原语义不变、头部高作为**叠加项**，故 §2.40 的几何契约常量与既有断言**一字未改**。④ **头部两行恒在场**（loading / 空态 / 有书），消除「加载中 44 → 有书 96」的高度跳变（连带 `widget_test.dart` 冒烟断言由「顶栏标题『书架』三态恒存在」改为恒在的搜索胶囊占位文案）；排序菜单锚点 `kToolbarHeight`(56) → `kShelfHeaderHeight`(96)。测试：`glass_nav_inset` **+2**（`extendBody: true` 时玻璃档 / 关档正文 top 均为 0）、`shelf_page_test` **+1**（浮动头部 + edge-to-edge 契约：`extendBody == true`、搜索胶囊与 `FilterChip` 均在 `GlassTopBar` 子树内、`toolbarHeight == 96`、首行 `getTopLeft(BookCard).dy == 108`）+ 搜索胶囊用例改「全宽 `> 600` / α0.6」、`shelf_geometry_contract` **+1**（头部常量与 `shelfGridPadding` 字面量锁）、`widget_test` 冒烟断言同改；`ui` 组 **155 → 159 全绿**、`data` **205 全绿**，analyze 0 error / 0 warning / 7 info。**五处新断言逐条反向验证**（回退 `extendBody` → `Actual: false`、两条透传写死 → `Actual: 44.0`、chips 移回正文 → `Found 0 … descending from GlassTopBar`、撤首行留白 → `Actual: 12.0`、行距 12→8 → `Expected: <12> Actual: <8.0>`）均确实变红。**真机观感未复跑**（头部 96 / 行距 12、`blur` 磨砂开销、选中 chip 的 `secondaryContainer` 是否够「选中感」、浅色主题下 α0.6 的区分度、桌面宽窗「全宽胶囊」是否过宽）——详见 tech-usage §2.58 `0c395a0`
+
 ## 2026-09-29
 
 ### 修复
