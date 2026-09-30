@@ -1,21 +1,14 @@
-// 分页调度器（`T02`，里程碑 §1）：**目标页优先 + ±1 章窗口预分页**。
+// 分页调度器（T02）：**目标页优先 + ±1 章窗口预分页**。
+// 分工：[PaginationCache] 管已完成页表 LRU；[IncrementalPaginator] 管单章
+// 预算切片；本类管**跨章优先级**——当前章独占预算直到首屏就绪，完成后才
+// 轮到预分页队列（±1 章窗口，延迟一切非目标章工作）。
 //
-// 职责分工（对齐选型 §2.1 的「目标页增量分页 + 延迟一切非目标章工作」）：
-//   · [PaginationCache] 管已完成页表的 LRU 复用；
-//   · [IncrementalPaginator] 管单章按预算切片推进；
-//   · 本调度器管**跨章优先级**：当前章任务独占预算直到首屏就绪（目标页
-//     优先），完成后才轮到预分页队列（±1 章窗口，直译 567Reader
-//     `ReadBook.kt:534-543` / legado_flutter `reader_logic.dart:136-146`
-//     的邻章轮转）。
-//
-// ## 空闲帧驱动契约（上层 `reader_page` / T05 接线用）
-//   1. 开书/跳章 → [open]（内部先跑突发预算；未就绪返回 `false`）；
-//   2. 每空闲帧 → [stepIdle]，返回 `true` 表示还有活（继续排下一帧）；
-//   3. [stepIdle] 内部顺序：**当前章任务** → 预分页队列；一帧只给一个
-//      任务一个 [kIdleFrameBudget] 切片，超预算让出（动画期上层停调即冻结，
-//      对应 567Reader「动画期零排版」纪律，T04 落实）。
-//   4. 邻章窗口：[setWindow] 登记 prev/next；当前章完成前**不动**邻章
-//      （延迟一切非目标章工作）；换章时旧队列作废。
+// 帧驱动契约（上层接线用）：
+//   1. 开书/跳章 → [open]（内部跑突发预算；未就绪返回 `false`）；
+//   2. 每空闲帧 → [stepIdle]，`true` = 还有活；一帧只给一个任务一个
+//      [kIdleFrameBudget] 切片，超预算让出；
+//   3. 动画期上层调 [freeze]（保证③「动画期零排版」，T04）；
+//   4. [setWindow] 登记 prev/next；当前章完成前不动邻章，换章旧队列作废。
 import 'incremental_paginator.dart';
 import 'page_paginator.dart';
 import 'pagination_cache.dart';
@@ -55,14 +48,11 @@ class PaginationScheduler {
   /// 是否还有排版工作（任一任务未完成）。
   bool get hasWork => (_active?.hasWork ?? false) || _prefetch.isNotEmpty;
 
-  /// 动画期冻结开关（`T04`，保证 ③「动画期零排版」；567Reader 动画期
-  /// 零排版纪律的调度器侧落实）。
+  /// 动画期冻结开关（保证③「动画期零排版」，T04）。
   ///
-  /// `true` 时 [stepIdle] **直接返回、不推进任何任务**（任务与队列原样
-  /// 保留，解冻后继续）；[open] 不受冻结影响——开书/跳章是用户主动动作，
-  /// 必须立即响应（首次落位本身就以占位 + 增量补完为契约）。
-  /// 上层（T05 接线）在翻页手势按下 / settling 动画期间 `freeze()`，
-  /// 动画结束 `unfreeze()`。
+  /// `true` 时 [stepIdle] 直接返回、不推进任何任务（任务与队列原样保留）；
+  /// [open] 不受冻结影响——开书/跳章是用户主动动作，必须立即响应。
+  /// 上层在翻页手势按下 / settling 动画期 `freeze()`，动画结束 `unfreeze()`。
   bool get frozen => _frozen;
   bool _frozen = false;
 
@@ -82,14 +72,11 @@ class PaginationScheduler {
     return cache.get(href, cfg);
   }
 
-  /// 打开 / 跳转到 [href]。
-  ///
-  /// 顺序：作废异参数任务 → 查缓存（命中即就绪）→ 新建/复用任务 →
-  /// [IncrementalPaginator.prime] 突发到首屏就绪 → 登记 ±1 邻章预分页。
+  /// 打开 / 跳转到 [href]：作废异参数任务 → 查缓存（命中即就绪）→ 新建/复用
+  /// 任务 → [IncrementalPaginator.prime] 突发到首屏就绪 → 登记 ±1 邻章预分页。
   /// 返回「目标页已可落位」——`false` 时上层挂占位页、由 [stepIdle] 补完。
-  ///
-  /// 换章语义：旧当前章任务**丢弃**（部分页表不留缓存）、旧 ±1 队列
-  /// **整体作废**后重登新窗口；同章重开则保留进度与队列。
+  /// 换章时旧当前章任务丢弃（部分页表不留缓存）、旧 ±1 队列整体作废；
+  /// 同章重开保留进度与队列。
   bool open({
     required String href,
     required List<String> paragraphs,

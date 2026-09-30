@@ -1,24 +1,17 @@
 // 分页切页内核（纯 Dart：**不 import Flutter、不 import dart:io**）。
+// 职责：把已测量的行按页高切页，给出「页 ↔ 字符偏移」互查；测量（`TextPainter`）
+// 在 `page_paginator.dart`（`dart:ui` 只能 root isolate）。
 //
-// 职责：把「已测量好的行」按页高切成页，并给出「页 ↔ 字符偏移」的互查。
-// 测量（`TextPainter` 行排版）不在这里——`dart:ui` 文本排版只能在 root
-// isolate（这是与 567Reader「排版跑 IO 协程」最大的结构差异），故测量留在
-// `page_paginator.dart`，本文件只做与渲染无关的**纯数值切页**，便于纯 `test()`
-// 断言（本项目已两次实证 `testWidgets` + 真异步 IO 挂死）。
+// 切页规则（选型 §3 / 里程碑 §2.4）：
+//   1. 页 = 连续整行，切点必在行边界；
+//   2. 页内相邻段加段间距，跨页不加；
+//   3. 至少推进 1 行（单行超页高独占一页），绝不死循环；
+//   4. 断句回拉：切点在段中间时按类别优先级回拉到更自然的行边界
+//      （直译 legado `_findBestBreakPoint`，回拉粒度由「字符」改「行」）。
 //
-// 切页规则（选型文档 §3 + `docs/里程碑-分页引擎.md` §2.4）：
-//   1. 页 = 连续若干**整行**（词完整性由行断保证，切点必在行边界）；
-//   2. 页内相邻段之间加段间距；跨页处不加（页首无段间距）；
-//   3. 至少推进 1 行（单行高于整页时亦独占一页），绝不死循环；
-//   4. 「断句回拉」：切点在段中间时，按类别优先级把页尾回拉到更自然的行边界
-//      （直译 legado_flutter 未接线 `paginator.dart:114-142` 的 `_findBestBreakPoint`，
-//      唯一差异是把「回拉到字符」改成「回拉到行」——本方案切点只在行边界）。
-//
-// 字符偏移空间（全里程碑共享定义）：`ExtractedSection.paragraphs` 各段**原文**
-// （含 `\x00` 标记与 `<b>/<i>` 标签）**无分隔符**顺序拼接，`joinedOffset =
-// Σ 前段长度 + 段内偏移`。刻意与 `BookSource.totalCharCount()` 的「`paragraph.length`
-// 累加」口径一致，全书字数加权进度 `(前章字数 + 章内偏移) / totalCharCount()`
-// 才能天然连续（若改用 `\n` 拼接，每章会多出 n-1 的漂移）。
+// 字符偏移空间（全里程碑共享）：各段**原文**（含 `\x00` 标记与 `<b>/<i>` 标签）
+// **无分隔符**顺序拼接。刻意与 `totalCharCount()` 的 `paragraph.length` 累加
+// 口径一致，全书字数加权进度才天然连续（用 `\n` 拼接每章会多 n-1 漂移）。
 
 /// 行尾断点质量（供「断句回拉」判优先级）。
 ///
@@ -144,11 +137,8 @@ abstract final class PageBreaker {
 
       while (cursor < lines.length) {
         final double gap = _gapBefore(lines, cursor, lastLine, firstLine, paragraphSpacing);
-        // 「本页还没收进任何行」= cursor 仍停在页首行。
-        // 曾误写 `lastLine < firstLine`（初值 lastLine == firstLine 恒 false）：
-        // 首行高于整页时一行都收不进、cursor 不前进，外层 while 每轮
-        // pages.add 一页却原地踏步 → 列表无限增长 → 内存/磁盘打满、
-        // 测试 VM 被 OOM 打死（2026-09-30 实测，批量 `did not complete` 即此）。
+        // 页首未收行 = cursor 仍停页首。**勿改 `lastLine < firstLine`**（初值
+        // 恒 false）：首行超页高时一行收不进、cursor 不前进 → 页表无限增长 OOM。
         final bool pageEmpty = cursor == firstLine;
         // 放不下且页内已有行 → 关页；本页首行则必收（至少推进 1 行）。
         if (!pageEmpty && height + gap + lines[cursor].height > pageHeight) {
@@ -162,9 +152,7 @@ abstract final class PageBreaker {
         if (height > pageHeight) break;
       }
 
-      // 硬底线：任何路径下每轮必须至少推进 1 行（里程碑 §1「至少推进、
-      // 绝不死循环」）。正常路径不可达，纯防御——万一未来改动破坏了
-      // 上面的不变量，这里兜底推进，绝不让 pages 无限增长。
+      // 硬底线：每轮至少推进 1 行（正常路径不可达，纯防御——防页表无限增长）。
       if (cursor == firstLine) cursor = firstLine + 1;
 
       // 断句回拉：仅当切点落在段中间（下一行仍是同段续行）时尝试。
@@ -224,10 +212,9 @@ abstract final class PageBreaker {
   }
 
   /// 断句回拉：返回新的「页尾行下标」（不回拉则原样返回 [lastLine]）。
-  ///
-  /// 从页尾向前扫描，累计字符量不超过 [kMaxPullBackChars]；
-  /// **类别优先于位置**（legado 按类别依次 `lastIndexOf`，故窗口内更靠前的强断点
-  /// 胜过更靠后的弱断点），同类取最靠后；回拉后页内仍至少保留 1 行。
+  /// 从页尾向前扫描累计 ≤ [kMaxPullBackChars] 字符；**类别优先于位置**
+  /// （窗口内更靠前的强断点胜过更靠后的弱断点），同类取最靠后；
+  /// 回拉后页内仍至少保留 1 行。
   static int _pullBack(List<MeasuredLine> lines, int firstLine, int lastLine) {
     int best = -1;
     int bestRank = 0;

@@ -1,31 +1,14 @@
-// 分页测量层：原文投影 + 行测量 + 「可见文本偏移 → 原文偏移」映射。
+// 分页测量层：原文投影 + 行测量 + 「可见偏移 → 原文偏移」映射。
 //
-// 为什么分两层：`dart:ui` 的文本排版**只能在 root isolate**（`TextPainter` /
-// `ParagraphBuilder` 都依赖 root isolate 的渲染引擎），所以测量必须留在主
-// isolate；而「行 → 页」的纯数值切页逻辑抽到 `page_breaker.dart`（不 import
-// Flutter），既好单测、又给 T02 的增量调度留出「只切页不测量」的空间。
+// 测量留 root isolate（`TextPainter` 依赖渲染引擎）；「行 → 页」切页抽到
+// `page_breaker.dart`（不 import Flutter，纯 `test()` 可单测）。
 //
-// ## 为什么需要「投影」
-// 落盘进度的字符偏移口径是 `ExtractedSection.paragraphs` 的**原文**（含
-// `\x00IMG:src\x00` 图片标记、`\x00A:href\x00…\x00A\x00` 链接标记、
-// `\x00ID:id\x00` 锚点标记与 `<b>/<i>` 标签）；但排版时这些字符**不上屏**
-// （被 `typeset.dart` 的 span 构建消费掉），排版器看到的文本比原文短、
-// 且一一对应关系被「吃掉」的字符打断。于是测量前先做一次投影：
-//
-//   原文 `a␀IMG:x.png␀b` → 可见文本 `a␣b`（`␣` = 图片占位 1 个 U+FFFC）
-//
-// 并保留 `rawOfVisible[i]` = 第 i 个可见位置对应的原文下标，行边界再映射回原文。
-//
-// ## 与渲染的一致性（契约测试钉死）
-// 投影必须与 `typeset.dart` 的 span 构建同语义：`<b>/<i>` 白名单、图片标记 →
-// 占位、链接/锚点/未知标记吞掉、脏数据不抛异常。`test/reader/pagination_measure_test.dart`
-// 用 `parseInlineStyles` / `parseContentSpans` 做**对拍**（契约测试），
-// 故这里不改 `typeset.dart`（既有 226 条 reader 测试护着渲染管线，不动为妙）。
-//
-// ## 已知边界（T01，登记于 `docs/里程碑-分页引擎.md` §2）
-// 图片占位取 `_InlineImage` 的加载 / 错误态尺寸 48×48；**真图尺寸进测量归 T05**
-// （接 `ImageCacheLRU` 按实测尺寸重分页 + charOffset 重锚）。链接下划线不改变
-// 行度量，故投影只做文本投影、不叠链接样式。
+// 投影：进度偏移口径 = 段落**原文**（含 `\x00` 标记与 `<b>/<i>` 标签），
+// 但标记不上屏——投影产可见文本 + `rawOfVisible` 映射，行边界再映回原文
+// （`a␀IMG:x.png␀b` → `a␣b`，`␣` = 1 个 U+FFFC）。语义必须与
+// `typeset.dart` span 构建一致，由 `pagination_measure_test.dart` 对拍钉死。
+// 已知边界（里程碑 §2）：图片占位 48×48，真图尺寸进测量归 T05；链接
+// 下划线不改变行度量，故不叠链接样式。
 import 'package:flutter/material.dart';
 
 import 'page_breaker.dart';
@@ -209,15 +192,12 @@ abstract final class PagePaginator {
 
   /// 测量整章：逐段排版 → 行（偏移已映射回**章内拼接原文空间**）。
   ///
-  /// 每段用同一 `TextStyle` / 同一可用宽独立排版——与渲染侧「每段一个
-  /// `InlineParagraph`（独立 `Text.rich`）」同构，故行断与渲染一致；且贪心断行
-  /// 只依赖「行首字符 + 宽 + 样式」，所以页内某段的**续行**单独重排也能得到
-  /// 相同的行断（这是「页内渲染 == 测量结果」的依据，T05 接线时再以契约测试复核）。
+  /// 每段用同一样式同一可用宽独立排版——与渲染侧「每段一个 `InlineParagraph`」
+  /// 同构，故行断与渲染一致；贪心断行只依赖「行首字符 + 宽 + 样式」，页内段
+  /// 续行单独重排也得相同行断（「页内渲染 == 测量结果」的依据）。
   ///
-  /// [startIndex] / [baseOffset]：**增量测量**用（T02 `IncrementalPaginator`
-  /// 逐段推进）——[startIndex] = `paragraphs[0]` 在章内的段下标，
-  /// [baseOffset] = `paragraphs[0]` 在章内拼接原文中的起始偏移。全量测量
-  /// （默认 0/0）与逐段测量产出**完全相同**的行表（契约测试钉死）。
+  /// [startIndex] / [baseOffset]：增量测量用——`paragraphs[0]` 在章内的段下标
+  /// 与原文起始偏移。全量（默认 0/0）与逐段产出**完全相同**的行表（契约钉死）。
   static List<MeasuredLine> measureParagraphs({
     required List<String> paragraphs,
     required PaginationConfig config,
@@ -249,11 +229,9 @@ abstract final class PagePaginator {
         painter.layout(maxWidth: config.pageWidth);
         final List<LineMetrics> metrics = painter.computeLineMetrics();
 
-        // 行首字符偏移：`LineMetrics` **没有** startIndex/endIndex
-        // （`sky_engine/lib/ui/text.dart` 构造器只有 hardBreak/ascent/descent/
-        // unscaledAscent/height/width/left/baseline/lineNumber），故取「行垂直
-        // 中点、x=0」的最近位置 = 该行行首；行尾 = 下一行行首、末行 = 段末。
-        // 取**中点**而非行顶：行顶落在两行交界处时归属有歧义。
+        // 行首字符偏移：`LineMetrics` 无 startIndex/endIndex，取「行垂直中点、
+        // x=0」的最近位置（取中点而非行顶：行顶落在两行交界处归属有歧义）；
+        // 行尾 = 下一行行首、末行 = 段末。
         final List<int> starts = <int>[];
         for (final LineMetrics metric in metrics) {
           final double y = metric.baseline - metric.ascent + metric.height / 2;
@@ -296,9 +274,8 @@ abstract final class PagePaginator {
 
   /// 可见偏移 → 段内原文偏移（越界取段末哨兵）。
   static int _rawOffsetOf(VisibleProjection projection, int visibleOffset) {
-    // 注意 `visibleOffset == 0` **不是**越界——段首若有 `<b>` 等标签，可见
-    // 下标 0 对应原文下标 3，直接返回 0 会把标签算进字符区间（实测回归
-    // 「标签不进字符区间」暴露）。只有负偏移才兜底 0。
+    // 可见下标 0 **不是**越界（段首 `<b>` 等标签时对应原文下标 >0，返回 0 会
+    // 把标签算进字符区间）；仅负偏移才兜底 0。
     if (visibleOffset < 0) return 0;
     if (visibleOffset >= projection.rawOfVisible.length) return projection.rawLength;
     return projection.rawOfVisible[visibleOffset];

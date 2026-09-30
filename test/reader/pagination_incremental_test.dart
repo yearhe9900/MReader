@@ -1,17 +1,9 @@
-// 增量分页器契约测试（`T02`，里程碑 §1）：先 5 页上屏、预算让出、
-// **部分页表前缀 == 最终前缀**（`incremental_paginator.dart` 文件头指定本文件名）。
-//
-// 期望值一律**硬编码字面量**。夹具同 `pagination_measure_test.dart`：
-// flutter test 等宽字体、`fontSize 18 / height 1.6` → 字宽 18
-// （pageWidth 180 = 10 字/行）、行高 **29.0**。段落 `'0123456789' * 10`
-// = 100 字 = 10 行，恒切 2 页（与 `page_breaker.dart` 规则逐行推演一致）：
-//   · 页 2k   = `[100k, 100k+60)` 6 行 h=**174.0**（6×29，7 行 203 > 200）；
-//   · 页 2k+1 = `[100k+60, 100k+100)` 4 行 h=**116.0**
-//     （贪心越段收到下段第 2 行 → 回拉到段末 paragraphEnd，50 字窗口内）。
-// 段间距默认 8，但本夹具每个跨段切点都被回拉到段末，故任何页高都不含段距。
-//
-// `Duration.zero` 预算 = 每次 `step` 恰测 1 段（do-while 至少一轮），
-// 用它确定性地驱动帧序列、逐步钉死页表。
+// 增量分页器契约测试（T02）：先 5 页上屏、预算让出、**部分页表前缀 ==
+// 最终前缀**。期望值一律硬编码字面量。夹具同 `pagination_measure_test.dart`
+// （等宽、字宽 18、行高 29.0、页 6 行 174.0）：100 字段落恒切 2 页——
+// 页 2k = `[100k, 100k+60)` h=**174.0**、页 2k+1 = `[100k+60, 100k+100)`
+// h=**116.0**（跨段回拉到段末 paragraphEnd，50 字窗口内，页高不含段距）。
+// 全部用 `budget: Duration.zero` 驱动（step 零预算恰测 1 段），帧序列确定。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/reader/pagination/incremental_paginator.dart';

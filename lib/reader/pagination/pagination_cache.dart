@@ -1,18 +1,9 @@
-// 分页结果缓存（`T02`，里程碑 §1）：**LRU 5 章 + 配置哈希失效**。
-//
-// 与 `ChapterCache`（章**正文** LRU 30，`PERF-02`）分层配合：
-//   · ChapterCache 管「段落文本是否常驻」；
-//   · 本缓存管「该章在**一套排版参数**下是否已分好页」——换字号/边距即失效。
-//
-// key 口径（里程碑原文 = `href|宽|高|字号|行距|字距|字重|字族`）：宽/高在
-// [PaginationConfig]，字号/行距/字距/字重/字族都在其 `textStyle` 里，故**整套
-// config 即哈希**——[PaginationConfig] 已实现值相等 `==`/`hashCode`
-// （`page_paginator.dart`，契约测试钉死）。实现上以 `href` 为槽位、逐条校验
-// config：**不匹配即整条移除**（配置哈希失效），与「变化整体失效」的 §3 口径一致，
-// 且不会让旧配置条目占着 LRU 槽位。
-//
-// 只存**完整**分页结果：部分结果属于进行中的 [IncrementalPaginator]
-// （`pagination_scheduler.dart`），完成时才落库。
+// 分页结果缓存（T02）：**LRU 5 章 + 配置哈希失效**。
+// 与 `ChapterCache`（章正文 LRU 30）分层：那边管文本常驻，这边管「该章在
+// **一套排版参数**下是否已分好页」。以 `href` 为槽位、逐条校验
+// [PaginationConfig]（值相等 `==`/`hashCode` 即整套排版参数哈希），
+// **不匹配即整条移除**（不占 LRU 槽位）。
+// 只存**完整**结果——部分结果留在进行中的 [IncrementalPaginator]，完成才落库。
 import 'dart:collection';
 
 import 'page_breaker.dart';

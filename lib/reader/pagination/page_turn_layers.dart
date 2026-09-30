@@ -1,18 +1,10 @@
-// 页即图层（`M-PAGE` T04，选型 §2.3 1/2/3）：翻页动画 = 已排版页图层的
-// `Transform`/`ClipRect` 位移与裁切——**动画期零排版、页子树零 rebuild**。
-//
-// 结构契约（保证 ③ 的 Flutter 翻译，567Reader「截图回放」的 widget 树等价物）：
-//   · 每页 = `RepaintBoundary` 包裹的静态层，**排版完成后不再变化**；
-//   · `Transform` 在 `RepaintBoundary` **外侧**——动画只改变换矩阵
-//     （合成层平移），子层栅格缓存复用，不重光栅化页面内容；
-//   · 整体 `ClipRect` 裁到视口，移出的页不越界绘制；
-//   · cover 翻页线阴影 = 移动页左缘的渐变条（随页一起平移，alpha 恒定
-//     [kEdgeShadow]，动画中不逐帧变化）。
-//
-// **零 rebuild 的前提在调用方**（T05 接线约定）：`current` / `incoming`
-// 传入**同一批稳定 widget 实例**（预排好的页缓存）——实例相同 Flutter
-// 跳过子树重建，本组件重建只更新 Transform 矩阵。传新实例 = 该页重建，
-// 属接线层违约，契约测试钉住「同实例 → build 不增」。
+// 页即图层（T04，选型 §2.3）：翻页动画 = 已排版页图层的 `Transform`/
+// `ClipRect` 位移与裁切——**动画期零排版、页子树零 rebuild**。
+// 结构契约（保证③）：每页 = `RepaintBoundary` 静态层；`Transform` 在
+// `RepaintBoundary` **外侧**（动画只改合成层矩阵，页栅格缓存复用）；
+// 整体 `ClipRect` 裁视口；cover 阴影 = 移动页左缘渐变条（alpha 恒定）。
+// 零 rebuild 前提在调用方：`current`/`incoming` 必须传**同一批稳定实例**
+// ——传新实例 = 该页重建（接线违约），契约测试钉「同实例 → build 不增」。
 
 import 'package:flutter/material.dart';
 

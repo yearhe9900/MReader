@@ -1,12 +1,8 @@
-// 分页测量层单测（`T01`）：投影契约 + 行偏移映射 + 端到端切页。
-//
-// 期望值一律**硬编码字面量**。测试环境用 flutter test 默认等宽字体，实测：
-// `fontSize 18` → 每字宽 18（`pageWidth 180` = 每行 10 字）、行高 **29.0**
-// （= round(18 × 1.6)）、图片占位行高 **48.0**（`PlaceholderDimensions` 生效）。
-// 故「每行几字 / 每页几行」可精确钉死，不需要引用被测常量。
-//
-// 投影契约的对拍对象是 `typeset.dart` 的 `parseInlineStyles` / `parseContentSpans`
-// ——两条独立代码路径产出必须同语义（测量与渲染的行断一致性的前提）。
+// 分页测量层单测（T01）：投影契约 + 行偏移映射 + 端到端切页。
+// 期望值一律硬编码字面量。夹具（flutter test 等宽字体实测）：fontSize 18
+// → 字宽 18（pageWidth 180 = 10 字/行）、行高 **29.0**、图片占位行高 **48.0**。
+// 投影契约对拍 `typeset.dart` 的 `parseInlineStyles` / `parseContentSpans`
+// ——两条独立路径产出必须同语义（测量与渲染行断一致性的前提）。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/reader/pagination/page_breaker.dart';

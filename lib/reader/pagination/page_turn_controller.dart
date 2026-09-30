@@ -1,18 +1,10 @@
-// 翻页控制器（`M-PAGE` T04，里程碑 §1）：模式集合 + 跟手拖拽 commit/cancel +
-// 页图层几何 + 相邻页预排窗口（纯 Dart，无 Flutter 依赖，可直接单测）。
-//
-// 验收映射：选型 §6 ①③（slide + cover 首批、none 随后；scroll 归 T05、
-// curl P2 不阻塞）+ 保证 ③（动画期只回放页图层——几何与判定都在这里算好，
-// 视图层只做 Transform，见 `page_turn_layers.dart`）。
-//
-// 参照（选型 §4 翻页模式矩阵）：
-//   · slide = 两页平移（567Reader `HorizontalPageDelegate` / anx slide）；
-//   · cover = 新页盖旧页 + 边缘阴影（567Reader `CoverPageDelegate`
-//     translate+clip 回放）；反向（prev）= 当前页掀起露出下层，页序翻转；
-//   · none  = 无过渡直接切页（legado_flutter 选项集；低端降级兜底）。
-//
-// 阈值语义（anx `snap()` 0.3 距离阈值 / 甩动速度阈值）：
-// commit/cancel 在 [PageTurnController.endDrag] 一处判定，视图无权改判。
+// 翻页控制器（T04）：模式集合 + 跟手拖拽 commit/cancel + 页图层几何 +
+// 相邻页预排窗口（纯 Dart，无 Flutter 依赖，可单测）。
+// 选型 §6 ①③：slide + cover 首批、none 随后；scroll 归 T05、curl P2 不阻塞。
+// 保证③：动画期只回放页图层——几何与判定都在这里算好，视图层只做
+// Transform（见 `page_turn_layers.dart`）。
+// commit/cancel 在 [PageTurnController.endDrag] **一处判定**（0.3 距离阈值 /
+// 800 甩动阈值），视图无权改判。
 
 /// 翻页模式（§6 ③：slide + cover 首批、none 随后）。
 ///
@@ -186,12 +178,9 @@ PageLayerGeometry computeLayerGeometry({
   }
 }
 
-/// 相邻页预排窗口（保证 ③ 的「相邻页预排」原料；T05 接线）。
-///
-/// 返回 `[current-1, current, current+1, current+2]` 经 clamp / 去重后的**升序**
-/// 页码列表——prev/cur/next/nextPlus 4 页窗口（567Reader `preRenderPage`
-/// 的对应物），边界章只少不多。
-///
+/// 相邻页预排窗口（保证③「相邻页预排」的原料；T05 接线）：返回
+/// `[current-1, current, current+1, current+2]` 经 clamp / 去重后的**升序**
+/// 页码列表（prev/cur/next/nextPlus 共 4 页，边界只少不多）。
 /// [total] ≤ 0 → 空列表；[current] 越界按 clamp 处理。
 List<int> prebuildWindow({required int current, required int total}) {
   if (total <= 0) return const <int>[];
@@ -233,10 +222,9 @@ class PageTurnController {
   /// 静止中（既无手势也无动画）。
   bool get isIdle => _phase == PageTurnPhase.idle;
 
-  /// 当前图层几何；`null` = 视图只渲染当前页。返回 `null` 的两种情形：
-  ///   · idle（无方向）；
-  ///   · `none` 模式（无过渡图层——拖拽期保持当前页，commit 后由调用方
-  ///     **立刻**把 incoming 换成 current，这才是「直接切页」的正确渲染）。
+  /// 当前图层几何；`null` = 视图只渲染当前页。两种情形返回 null：idle
+  /// （无方向）；`none` 模式（无过渡图层——commit 后由调用方立刻换实例，
+  /// 这才是「直接切页」的正确渲染）。
   PageLayerGeometry? get geometry {
     final TurnDirection? dir = _direction;
     if (dir == null || mode == PageTurnMode.none) return null;
@@ -260,18 +248,15 @@ class PageTurnController {
     return _progress;
   }
 
-  /// 松手判定：[velocity] = 沿**翻页方向**的速度分量（px/s；调用方负责把
-  /// 拖拽速度投影到方向上——next 手势内容左滑、速度取 `-dx/dt`）。
-  ///
-  /// 规则（顺序判定，钉在契约测试）：
+  /// 松手判定：[velocity] = 沿**翻页方向**的速度分量（px/s；调用方把拖拽
+  /// 速度投影到方向上）。规则顺序判定（契约测试钉死）：
   ///   1. `velocity ≥ kFlingVelocity` → **commit**（正向甩，无视距离）；
-  ///   2. `velocity ≤ -kFlingVelocity` → **cancel**（反向甩，即使已拖过 0.3）；
+  ///   2. `velocity ≤ -kFlingVelocity` → **cancel**（反向甩，已拖过 0.3 也退）；
   ///   3. 否则 `progress ≥ kCommitDistance` → commit，其余 cancel。
   ///
-  /// 返回判定并进入 settling，**[progress] 停在松手值不动**——收尾动画由视图
-  /// 驱动：commit 补到 1、cancel 退回 0（经 [updateSettle]），完成后
-  /// [finishSettle] 复位。`none` 模式无过渡 → 直接回 idle，调用方据返回值
-  /// **立刻**换页。非 dragging 阶段调用无效 → 返回 cancel。
+  /// 返回判定并进入 settling，**[progress] 停在松手值**——收尾动画由视图驱动
+  /// （[updateSettle] / [finishSettle]）。`none` 模式无过渡 → 直接回 idle，
+  /// 调用方据返回值**立刻**换页。非 dragging 阶段调用无效 → 返回 cancel。
   TurnCommit endDrag(double velocity) {
     if (_phase != PageTurnPhase.dragging) return TurnCommit.cancel;
 
