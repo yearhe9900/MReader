@@ -55,6 +55,23 @@ class PaginationScheduler {
   /// 是否还有排版工作（任一任务未完成）。
   bool get hasWork => (_active?.hasWork ?? false) || _prefetch.isNotEmpty;
 
+  /// 动画期冻结开关（`T04`，保证 ③「动画期零排版」；567Reader 动画期
+  /// 零排版纪律的调度器侧落实）。
+  ///
+  /// `true` 时 [stepIdle] **直接返回、不推进任何任务**（任务与队列原样
+  /// 保留，解冻后继续）；[open] 不受冻结影响——开书/跳章是用户主动动作，
+  /// 必须立即响应（首次落位本身就以占位 + 增量补完为契约）。
+  /// 上层（T05 接线）在翻页手势按下 / settling 动画期间 `freeze()`，
+  /// 动画结束 `unfreeze()`。
+  bool get frozen => _frozen;
+  bool _frozen = false;
+
+  /// 冻结排版队列（幂等）。
+  void freeze() => _frozen = true;
+
+  /// 解冻排版队列（幂等）。
+  void unfreeze() => _frozen = false;
+
   /// 当前章的页表（进行中给部分结果；完成后给缓存定稿）。
   PaginatedChapter? get currentPage {
     final IncrementalPaginator? active = _active;
@@ -145,8 +162,11 @@ class PaginationScheduler {
   ///
   /// 返回 `true` = 还有活（下一帧继续）；`false` = 全部完成或无任务。
   /// 每次调用最多给**一个**任务一个 [budget] 切片（超时让出主线程）。
+  /// 冻结期（[frozen]）返回 `hasWork` 但**不推进**——上层据 `hasWork`
+  /// 继续持帧回调，解冻后自然续排。
   bool stepIdle({Duration budget = kIdleFrameBudget}) {
     if (!hasWork) return false;
+    if (_frozen) return true; // 动画期零排版（T04）：有活但本帧不动
 
     final IncrementalPaginator? active = _active;
     if (active != null && active.hasWork) {

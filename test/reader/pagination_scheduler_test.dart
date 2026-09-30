@@ -271,4 +271,60 @@ void main() {
       expect(s.prefetchJobs[1].href, 'n');
     });
   });
+
+  group('动画期冻结（T04，保证 ③ 动画期零排版）', () {
+    test('freeze 后 stepIdle 返 true 但零推进，unfreeze 后续排', () {
+      final PaginationScheduler s = PaginationScheduler();
+      openA(s, href: 'a', count: 4, prevHref: 'p', nextHref: 'n');
+      expect(s.stepIdle(budget: Duration.zero), isTrue); // a 测 1 段
+      expect(s.active!.measuredParagraphs, 1);
+
+      s.freeze();
+      expect(s.frozen, isTrue);
+      for (int frame = 1; frame <= 3; frame++) {
+        expect(s.stepIdle(budget: Duration.zero), isTrue,
+            reason: '冻结帧 $frame：有活继续持帧');
+        expect(s.active!.measuredParagraphs, 1, reason: '冻结帧 $frame 零推进');
+        expect(s.prefetchJobs[0].measuredParagraphs, 0);
+        expect(s.prefetchJobs[1].measuredParagraphs, 0);
+        expect(s.cache.count, 0, reason: '冻结期无新定稿');
+      }
+
+      s.unfreeze();
+      expect(s.frozen, isFalse);
+      expect(s.stepIdle(budget: Duration.zero), isTrue);
+      expect(s.active!.measuredParagraphs, 2, reason: '解冻后续排');
+    });
+
+    test('freeze/unfreeze 幂等；空调度器冻结期 stepIdle false', () {
+      final PaginationScheduler s = PaginationScheduler();
+      s.freeze();
+      s.freeze();
+      expect(s.frozen, isTrue);
+      expect(s.stepIdle(budget: Duration.zero), isFalse, reason: '无活仍 false');
+      s.unfreeze();
+      s.unfreeze();
+      expect(s.frozen, isFalse);
+    });
+
+    test('open 不受冻结影响：建任务、登记窗口、缓存命中直通照常', () {
+      final PaginationScheduler s = PaginationScheduler();
+      openA(s, href: 'n', count: 2);
+      while (s.stepIdle(budget: Duration.zero)) {}
+      expect(s.cache.count, 1);
+
+      s.freeze();
+      // 冻结中开新章：prime 照常执行（未就绪 false、任务挂起、窗口登记）。
+      expect(openA(s, href: 'a', count: 4, nextHref: 'm'), isFalse);
+      expect(s.activeHref, 'a');
+      expect(s.prefetchPending, 1, reason: '窗口登记不因冻结跳过');
+      // 冻结期 stepIdle 不推进。
+      expect(s.stepIdle(budget: Duration.zero), isTrue);
+      expect(s.active!.measuredParagraphs, 0);
+      // 缓存命中直通照常（换章到已定稿的 n）。
+      expect(openA(s, href: 'n', count: 2), isTrue);
+      expect(s.active, isNull);
+      expect(s.cache.count, 1);
+    });
+  });
 }
