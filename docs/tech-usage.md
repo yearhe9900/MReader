@@ -2007,6 +2007,8 @@ bash tool/test.sh data     # 00:22 +205: All tests passed!
 
 `test/ui/glass_sheet_form_test.dart` +1 条：读 **`AnimatedModalBarrier` widget 自身的 `color` 字段**断言 `(a*255).round() == 0x3D` 且 `< 0x8A`。两个坑：① **`AnimatedModalBarrier` 不是 `ModalBarrier` 的子类**（两个独立类，cast 直接炸）；② 其 `color` 是 **`Animation<Color?>`** 不是 `Color?`，取值要 `.value`。弹层在独立 Overlay/Route，`RepaintBoundary` 采不到遮罩，只能读 widget 字段。`glass_off_fallback_test.dart` 关档用例补同一断言（两档同色源）。**反向验证**：临时删掉传参 → 断言红，实测 `138.0`（= `0x8A`）与源码预测**逐字吻合**。
 
+> ⚠️ **后续改道（2026-09-30，见 §2.59）**：本节引入的 `kSheetBarrierColor` 已**更名**为 **`OverlayStyle.barrier`** 并**扩大适用范围**——由「只管底部弹窗」扩到**全部模态浮层**（新增：玻璃档确认框、关档确认框）。本节「取值 `0x3D000000`」「只换色源、不动时序」两条口径**未被推翻**；被改写的是「两档共用」里的**两档只有弹窗的玻璃/关两档**这一范围描述——当时**确认框两档另有来源**（Cupertino 自适应 / Material `Colors.black54`），本批才发现并统一。
+
 ### 2.57 书卡墨迹（高亮+水波纹）整体关闭：修「长按弹框前文字与圆角出现灰底」（2026-09-29）
 
 **触发**：负责人「**好好书架页的代码，不要猜，长按某个书籍弹起弹框前，该书籍文字和圆角会有灰色背景**」。症状精确到两处：**文字**（信息区）与**圆角**（封面圆角缺口）——这是决定性线索：**只有这两处在卡片上是透明的**（封面不透明、Card 透明、信息区无底色）。
@@ -2127,3 +2129,77 @@ EdgeInsets shelfGridPadding(double topInset) =>
 - **可复核 → 已复核**：库源码行号（`glass_scaffold.dart:135/458/487-494`、`chip.dart:776`、`glass_scroll_edge_effect.dart` 三档 doc）、几何常量与两处测试字面量、五处反向验证实测值、`analyze` 与两组测试输出，均为本批实读 / 实跑。
 - **不可复核 → 未声称**：**真机观感未复跑**，需负责人确认：① 头部 96 / 行距 12 是否合眼（截图仅是缩放图、这几个数只是估计）；② 磨砂（`blur`）在真机 / Skia 上的开销与观感（库 doc 自述 Skia 比 `soft` 略贵）；③ 选中 chip 用 M3 `secondaryContainer` 够不够「选中感」（参考图是深色端「最亮 = 选中」的做法）；④ 胶囊 α0.6 在**浅色主题**下与磨砂区是否仍区分得开；⑤ 桌面宽窗下「全宽胶囊」是否过宽（原 400 上限已按拍板撤销）。
 - **未做（如实登记）**：① `parse` / `reader` 两组未跑（与本批零交集）；② 其余页面顶栏未动（拍板只做书架）；③ **PRD 无条文改动**——`LIB-01` 的「顶部为导入入口」仍成立（按钮保留在搜索行右侧），本批实质是把 `UI-02` ② 从「未满足」改为「已满足」，**未新增 / 修改任何需求条目**，故不加版本行（若要把它写成 PRD 版本行请指示）。
+
+### 2.59 玻璃弹框共有参数统一配置：`OverlayStyle` + 确认框遮罩对齐（2026-09-30）
+
+**触发**：负责人「**玻璃弹框的共有参数，采用统一配置**」。`AskUserQuestion` 两项拍板：①「四路遮罩**全统一**」；② 统一范围 =「**遮罩 + 形态 + 尺寸**」。
+
+**改前状态：四个入口的遮罩来自三个源头**（实读库与 SDK 源码逐条核清）
+
+| 入口 | 玻璃档遮罩 | 「关」档遮罩 |
+|---|---|---|
+| `GlassOverlays.showSheet` | `kSheetBarrierColor` = `0x3D000000`（α0.239，§2.56） | 同一色源 |
+| `GlassOverlays.showAlert` | `kCupertinoModalBarrierColor`：亮 `0x33000000`（α0.2）/ 暗 `0x7A000000`（**α0.478**） | Material `Colors.black54` = **`0x8A000000`**（**α0.541**） |
+| `GlassOverlays.showToast` | **无遮罩**（纯 `OverlayEntry` 浮层、非模态） | — |
+
+两条根因链：
+
+1. **库 `GlassDialog.show` 的 `barrierColor` 是死参数**：`glass_dialog.dart:268` 声明了它，`:271-283` 却直接 `showCupertinoDialog(context: …, barrierDismissible: …, builder: …)`，**没把它传下去**。往下追到底：`showCupertinoDialog`（`cupertino/route.dart:1410-1433`）**接受** `Color? barrierColor` 并透传给 `CupertinoDialogRoute`，后者在 `:1501-1502` 做 `barrierColor ?? CupertinoDynamicColor.resolve(kCupertinoModalBarrierColor, context)`（常量定义 `:53-56`）⇒ **无法经由库的 `show` 设置确认框遮罩色**，只能自己调 `showCupertinoDialog`。
+2. **「关」档确认框仍在用那颗已被否定的重灰**：`showDialog` → `DialogRoute` 的 `super.barrierColor = Colors.black54`（`material/dialog.dart:1825`）= `0x8A000000`，正是 §2.56 判为「太重的灰」的**同一个值** —— 即 §2.56 的口径**只落到弹窗、漏了确认框**，属**已拍板口径未落全**，不只是风格分歧。
+
+**处置：`OverlayStyle`（浮层参数的唯一事实源），三个入口一律从它取**
+
+`lib/ui/glass_kit.dart` 新增 `abstract final class OverlayStyle`，把原先散在 `showAlert` / `showSheet` 默认值与方法体里的参数收成一处（`kSheetBarrierColor` 随之**更名并入**）：
+
+| 常量 | 值 | 库 / Material 默认 | 说明 |
+|---|---|---|---|
+| `barrier` | `0x3D000000`（α0.239） | 三源：`0x8A000000` / `Colors.black54` / Cupertino 自适应 | **四路统一** |
+| `interactionScale` | `1.0` | **1.01** | 无点击放大 |
+| `interactionGlow` | `false` | **true** | 无跟随手指高光 |
+| `saturationGlow` | `false` | **true** | 无触摸饱和度脉冲 |
+| `dragIndicator` | `false` | **true** | 无顶部小横条 |
+| `enableDrag` | `false` | **true** | 禁拖拽关闭手势 |
+| `dialogMaxWidth` | `280` | 280（同值） | 显式化 |
+| `sheetTopBorderRadius` | `32` | 32（同值） | 显式化 |
+| `sheetMargin` | `(8, 8)` | (8, 8)（同值） | 显式化 |
+| `toastDuration` | `2s` | 3s | 本项目提示都是短反馈 |
+
+「同值」三项**不是冗余**：显式化后库升级若改默认值，不会静默改掉本项目观感。
+
+四处接线：
+
+- **玻璃档确认框**：绕过 `GlassDialog.show`，自行 `showCupertinoDialog<T>` + `GlassDialog(...)`，只多传一个 `barrierColor: OverlayStyle.barrier`。与库的 `show` **逐项等价**（同一个 `showCupertinoDialog`、同一个 `GlassDialog` widget、`useRootNavigator: true`、`barrierLabel` 留空交 `CupertinoDialogRoute` 取 `modalBarrierDismissLabel`、转场仍是 250ms spring）——**代价 = 多 12 行**，换来遮罩可统一；库若修好那个死参数即可回退（代码注释已写明）。
+- **关档确认框**：`showDialog(barrierColor: OverlayStyle.barrier)` —— 修掉那条漏落的重灰。
+- **底部弹窗**：形态 / 尺寸 / 遮罩全部改读 `OverlayStyle`（值未变），并新增显式 `topBorderRadius` / `margin` 透传。
+- **轻提示**：默认时长改读 `OverlayStyle.toastDuration`（值未变）。
+
+**明确不在此收口**（免得日后看着像漏了）——`quality`（**运行时值**，随档位 / 特效开关 / 帧预算变）、`isScrollable`（调用场景语义）、`padding`（**内容自持**：库中 `null` 即 `EdgeInsets.zero`，`glass_sheet.dart:562,569`）、`stretch` / `resistance` / `glowRadius`（拖拽与光晕关掉后已无触发路径）、`settings` / `bottomBorderRadius` / `dragIndicatorColor`（未定制，走库默认）。
+
+**测试**
+
+新建 `test/ui/overlay_style_test.dart` **3 条**（常量契约，**硬编码字面量**——引用本仓常量 = 同义反复）；`glass_sheet_form_test.dart` **+1 条**（玻璃档确认框：`GlassDialog` 在场、`maxWidth == 280`、遮罩 `0x3D`）+ 既有形态用例 **+2 断言**（`topBorderRadius == 32` / `margin == (8,8)`）；`glass_off_fallback_test.dart` 关档确认框用例 **+1 断言**（遮罩 `0x3D`）。`ui` 组 **159 → 163 全绿**（`-j 1` 串行）、`data` **205 全绿**，analyze 0 error / 0 warning / 7 info。
+
+**反向验证（四条，各自独立变红）**
+
+| 回退动作 | 实测报错 | 与源码预测 |
+|---|---|---|
+| 玻璃档确认框改回 `GlassDialog.show` | `Expected: <61> Actual: <51>` | 吻合（Cupertino 亮色 `0x33000000` = α51） |
+| 关档确认框撤掉 `barrierColor` | `Expected: <61> Actual: <138>` | 吻合（Material `Colors.black54` = `0x8A` = 138） |
+| `OverlayStyle.sheetTopBorderRadius` 32 → 28 | `Actual: <28.0>`（**契约测试与透传测试同时红**） | 证明 `showSheet` 确实读该常量、并非「与库默认值巧合相等」 |
+| `OverlayStyle.barrier` 改 `0x8A000000` | `alpha: 0.5412` vs `0.2392` | 契约测试钉住值 |
+
+验后全部恢复并复跑绿（`grep "反向验证临时值\|ignore: dead_code" lib/ test/` = **0**）。
+
+**复现命令**
+
+```bash
+/c/src/flutter/bin/cache/dart-sdk/bin/dart.exe analyze                            # 0 error / 0 warning / 7 info
+/c/src/flutter/bin/flutter test --timeout 30s -j 1 test/ui test/widget_test.dart  # +163: All tests passed!
+/c/src/flutter/bin/flutter test --timeout 30s test/library test/meta test/storage test/task test/highperf_registry_test.dart  # +205: All tests passed!
+```
+
+**复核边界（不伪造复核记录）**
+
+- **可复核 → 已复核**：库 / SDK 源码行号（`glass_dialog.dart:268/271-283`、`glass_defaults.dart:154`、`glass_sheet.dart:285-313/320-332/562,569`、`cupertino/route.dart:53-56/1410-1433/1501-1502`、`material/dialog.dart:1825`）、四处反向验证实测值、`analyze` 与两组测试输出，均为本批实读 / 实跑。
+- **不可复核 → 未声称**：**真机观感未复跑**，需负责人确认：**暗色主题下确认框遮罩由 Cupertino 的 α0.478 变淡到 0.239**，模态压迫感会明显减弱 —— 若觉得「压不住背景」，**只调 `OverlayStyle.barrier` 一项**即可（四个入口会同步变重，这正是"统一"的本意）。
+- **未做（如实登记）**：① `parse` / `reader` 两组未跑（与本批零交集）；② **PRD 无条文改动**——`UI-03`（浮层玻璃化）只要求「所有确认框与选择器为玻璃样式 + 打开时背景内容被模糊折射」，**未规定遮罩色**，本批属实现口径统一，不新增 / 修改需求条目，故不加版本行。
