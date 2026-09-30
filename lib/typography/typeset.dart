@@ -13,13 +13,15 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 /// 首行缩进前缀：两个全角空格（U+3000），宽度恒 = 2 × 中文字宽。
-const String _kIndentPrefix = '\u3000\u3000';
+/// 渲染（`withFirstLineIndent`）与分页测量（`page_paginator.dart` 的
+/// `project`）共用此常量，保证行断一致。
+const String kFirstLineIndentPrefix = '\u3000\u3000';
 
 /// 给段落文本加首行缩进（`TYP-04`）。
 ///
 /// 全角空格（U+3000）宽度恒 = 1 个中文字宽，不受字号 / 字体影响。
 /// 对纯英文段落亦适用（宽度约 2em，符合中文排版惯例）。
-String withFirstLineIndent(String text) => '$_kIndentPrefix$text';
+String withFirstLineIndent(String text) => '$kFirstLineIndentPrefix$text';
 
 /// 搜索命中高亮底色（琥珀半透明；`CNT-06` 验收②「关键词高亮」）。
 ///

@@ -1,6 +1,7 @@
 // 分页测量层单测（T01）：投影契约 + 行偏移映射 + 端到端切页。
 // 期望值一律硬编码字面量。夹具（flutter test 等宽字体实测）：fontSize 18
 // → 字宽 18（pageWidth 180 = 10 字/行）、行高 **29.0**、图片占位行高 **48.0**。
+// 投影恒加 2 字符首行缩进前缀（`kFirstLineIndentPrefix`）：可见偏移 ≈ 原文 + 2。
 // 投影契约对拍 `typeset.dart` 的 `parseInlineStyles` / `parseContentSpans`
 // ——两条独立路径产出必须同语义（测量与渲染行断一致性的前提）。
 import 'package:flutter/material.dart';
@@ -36,11 +37,14 @@ void main() {
 
       final VisibleProjection projection = PagePaginator.project(raw, base);
 
-      expect(projection.visible, '加粗斜体正文');
-      expect(projection.rawOfVisible, <int>[3, 4, 12, 13, 18, 19]);
+      expect(projection.visible, '$kFirstLineIndentPrefix加粗斜体正文');
+      expect(projection.rawOfVisible, <int>[0, 0, 3, 4, 12, 13, 18, 19]);
       expect(projection.rawLength, 20);
       expect(projection.placeholderCount, 0);
-      expect(triples(projection.spans), triples(parseInlineStyles(raw, base)));
+      expect(
+        triples(projection.spans),
+        triples(parseInlineStyles(withFirstLineIndent(raw), base)),
+      );
     });
 
     test('标记：与 parseContentSpans 对拍 + 偏移映射', () {
@@ -48,13 +52,14 @@ void main() {
 
       final VisibleProjection projection = PagePaginator.project(raw, base);
 
-      // a ␀IMG:x.png␀ b ␀A:h␀ c ␀A␀ ␀ID:z␀ d（下标：0 / 1 / 12 / 18 / 28，长 29）
-      expect(projection.visible, 'a\uFFFCbcd');
+      // 缩进 + a ␀IMG:x.png␀ b ␀A:h␀ c ␀A␀ ␀ID:z␀ d（下标：0/0 / 0 / 1 / 12 / 18 / 28）
+      expect(projection.visible, '${kFirstLineIndentPrefix}a\uFFFCbcd');
       expect(projection.placeholderCount, 1);
-      expect(projection.rawOfVisible, <int>[0, 1, 12, 18, 28]);
+      expect(projection.rawOfVisible, <int>[0, 0, 0, 1, 12, 18, 28]);
       expect(projection.rawLength, 29);
 
-      final List<InlineSpan> reference = parseContentSpans(raw, base, (String _) async => null);
+      final List<InlineSpan> reference =
+          parseContentSpans(withFirstLineIndent(raw), base, (String _) async => null);
       expect(
         projection.visible,
         reference.map((InlineSpan s) => s is TextSpan ? (s.text ?? '') : '\uFFFC').join(),
@@ -63,27 +68,30 @@ void main() {
     });
 
     test('脏数据不抛：未闭合标记、未知标记、未闭合链接', () {
-      expect(PagePaginator.project('ab\x00IMG', base).visible, 'ab');
-      expect(PagePaginator.project('a\x00ZZZ\x00b', base).visible, 'ab');
-      expect(PagePaginator.project('\x00A:h\x00link', base).visible, 'link');
-      expect(PagePaginator.project('', base).visible, '');
+      expect(PagePaginator.project('ab\x00IMG', base).visible, '${kFirstLineIndentPrefix}ab');
+      expect(PagePaginator.project('a\x00ZZZ\x00b', base).visible, '${kFirstLineIndentPrefix}ab');
+      expect(
+        PagePaginator.project('\x00A:h\x00link', base).visible,
+        '${kFirstLineIndentPrefix}link',
+      );
+      expect(PagePaginator.project('', base).visible, kFirstLineIndentPrefix);
     });
   });
 
   group('行测量与偏移映射', () {
-    test('每行 10 字、行高 29，区间首尾相接且覆盖整段', () {
+    test('每行 10 字、行高 29，区间首尾相接且覆盖整段（缩进占行首 2 字）', () {
       final List<MeasuredLine> lines = PagePaginator.measureParagraphs(
         paragraphs: <String>['0123456789' * 12],
         config: config,
       );
 
-      expect(lines.length, 12);
+      expect(lines.length, 13); // 120 + 2 缩进 = 122 可见 → 13 行
       expect(lines.first.start, 0);
-      expect(lines.first.end, 10);
+      expect(lines.first.end, 8); // 首行 = 2 缩进 + 8 原文
       expect(lines.first.height, 29.0);
       expect(lines.first.quality, LineBreakQuality.none);
-      expect(lines[1].start, 10);
-      expect(lines.last.start, 110);
+      expect(lines[1].start, 8);
+      expect(lines.last.start, 118);
       expect(lines.last.end, 120);
       expect(lines.last.quality, LineBreakQuality.paragraphEnd);
       for (int i = 1; i < lines.length; i++) {
@@ -111,8 +119,8 @@ void main() {
       );
 
       expect(lines.length, 1);
-      expect(lines.single.start, 3); // `<b>` 之后
-      expect(lines.single.end, 9); // `</b>` 归入本页（原文长 9）
+      expect(lines.single.start, 0); // 缩进映射原文段首（含 `<b>` 标签起点）
+      expect(lines.single.end, 9); // `</b>` 归入本行（原文长 9）
     });
 
     test('多段：第二段基址 = Σ 前段长度（无分隔符）', () {
@@ -129,20 +137,25 @@ void main() {
   });
 
   group('端到端 paginate', () {
-    test('页高 200 / 行高 29 → 每页 6 行；120 字 = 2 页', () {
+    test('页高 200 / 行高 29 → 每页 6 行；120 字 = 3 页', () {
       final List<PageSlice> pages = PagePaginator.paginate(
         paragraphs: <String>['0123456789' * 12],
         config: config,
       );
 
-      expect(pages.length, 2);
+      expect(pages.length, 3);
       expect(pages[0].start, 0);
-      expect(pages[0].end, 60);
+      expect(pages[0].end, 58); // 2 缩进 + 58 原文 = 6 行可见
       expect(pages[0].lineCount, 6);
       expect(pages[0].height, 174.0);
-      expect(pages[1].start, 60);
-      expect(pages[1].end, 120);
+      expect(pages[1].start, 58);
+      expect(pages[1].end, 118);
       expect(pages[1].lineCount, 6);
+      expect(pages[1].height, 174.0);
+      expect(pages[2].start, 118);
+      expect(pages[2].end, 120);
+      expect(pages[2].lineCount, 1);
+      expect(pages[2].height, 29.0);
 
       for (int i = 1; i < pages.length; i++) {
         expect(pages[i].start, pages[i - 1].end);
@@ -152,7 +165,7 @@ void main() {
     test('段间距：页内跨段加、跨页不加', () {
       const PaginationConfig tight = PaginationConfig(
         pageWidth: 180,
-        pageHeight: 120,
+        pageHeight: 160,
         textStyle: base,
       );
 
@@ -161,12 +174,17 @@ void main() {
         config: tight,
       );
 
-      // 3 行（29×3）+ 2 个段间距（8×2）= 103 ≤ 120；第 4 段需 103+8+29 = 140 > 120。
+      // 缩进后每段 12 可见 = 2 行；页 0 收 4 行（29×4）+ 1 个页内段间距（8）
+      // = 124 ≤ 160，再收跨段行 = 161 > 160；页 1 同构（跨页段间距不加 → 124）。
       expect(pages.length, 2);
-      expect(pages[0].lineCount, 3);
-      expect(pages[0].height, 103.0);
-      expect(pages[1].lineCount, 1);
-      expect(pages[1].height, 29.0);
+      expect(pages[0].start, 0);
+      expect(pages[0].end, 20);
+      expect(pages[0].lineCount, 4);
+      expect(pages[0].height, 124.0);
+      expect(pages[1].start, 20);
+      expect(pages[1].end, 40);
+      expect(pages[1].lineCount, 4);
+      expect(pages[1].height, 124.0);
     });
 
     test('断句回拉：窗口内（≤50 字）的句读处收页', () {
@@ -175,25 +193,27 @@ void main() {
         pageHeight: 300,
         textStyle: base,
       );
-      // 12 行：L0 与 L6 以「。」结尾，其余数字；页高 300 容 10 行 → 切在 L9（段中间）。
-      final String text = '012345678。${'0123456789' * 5}012345678。${'0123456789' * 5}';
+      // 缩进 +2 后「。」放 raw[7]/raw[67] → 可见 9/69 = 行 0/行 6 行尾。
+      // 13 行；页高 300 容 10 行 → 贪心切在行 9（段中间），回拉到行 6。
+      final String text = '0123456。${'0123456789' * 5}012345678。${'0123456789' * 5}01';
 
       final List<PageSlice> pages = PagePaginator.paginate(paragraphs: <String>[text], config: tall);
 
-      // 回拉到 L6（页尾行 L9 与其相距 3 行 = 30 字 ≤ 50 窗口）。
+      // 行 6 尾 = 可见 70 → 原文 68（距贪心切点 3 行 = 30 字 ≤ 50 窗口）。
       expect(pages.length, 2);
-      expect(pages[0].end, 70);
+      expect(pages[0].end, 68);
       expect(pages[0].lineCount, 7);
-      expect(pages[1].start, 70);
+      expect(pages[1].start, 68);
       expect(pages[1].end, 120);
-      expect(pages[1].lineCount, 5);
+      expect(pages[1].lineCount, 6);
     });
 
     test('空章节 → 一个空页 [0, 0)', () {
       expect(PagePaginator.paginate(paragraphs: const <String>[], config: config).single.end, 0);
+      // 空段渲染为缩进空行（与 `withFirstLineIndent('')` 一致）→ 1 行 [0, 0)。
       expect(
         PagePaginator.paginate(paragraphs: const <String>[''], config: config).single.lineCount,
-        0,
+        1,
       );
       expect(PagePaginator.charCountOf(const <String>[]), 0);
     });
@@ -205,10 +225,12 @@ void main() {
       );
 
       expect(PageBreaker.findPageByCharOffset(pages, 0), 0);
-      expect(PageBreaker.findPageByCharOffset(pages, 59), 0);
-      expect(PageBreaker.findPageByCharOffset(pages, 60), 1);
-      expect(PageBreaker.findPageByCharOffset(pages, 119), 1);
-      expect(PageBreaker.findPageByCharOffset(pages, 120), 1); // 章末 → 末页
+      expect(PageBreaker.findPageByCharOffset(pages, 57), 0);
+      expect(PageBreaker.findPageByCharOffset(pages, 58), 1);
+      expect(PageBreaker.findPageByCharOffset(pages, 117), 1);
+      expect(PageBreaker.findPageByCharOffset(pages, 118), 2);
+      expect(PageBreaker.findPageByCharOffset(pages, 119), 2);
+      expect(PageBreaker.findPageByCharOffset(pages, 120), 2); // 章末 → 末页
     });
   });
 

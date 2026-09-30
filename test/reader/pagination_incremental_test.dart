@@ -1,8 +1,9 @@
 // 增量分页器契约测试（T02）：先 5 页上屏、预算让出、**部分页表前缀 ==
 // 最终前缀**。期望值一律硬编码字面量。夹具同 `pagination_measure_test.dart`
-// （等宽、字宽 18、行高 29.0、页 6 行 174.0）：100 字段落恒切 2 页——
-// 页 2k = `[100k, 100k+60)` h=**174.0**、页 2k+1 = `[100k+60, 100k+100)`
-// h=**116.0**（跨段回拉到段末 paragraphEnd，50 字窗口内，页高不含段距）。
+// （等宽、字宽 18、行高 29.0、页 6 行 174.0、段首 2 缩进）：100 字段落 =
+// 102 可见 → 11 行 → 恒切 2 页——页 2k = `[100k, 100k+58)` h=**174.0**、
+// 页 2k+1 = `[100k+58, 100k+100)` h=**145.0**（跨段回拉到段末
+// paragraphEnd，50 字窗口内，页高不含段距）。
 // 全部用 `budget: Duration.zero` 驱动（step 零预算恰测 1 段），帧序列确定。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,7 +24,7 @@ void main() {
     textStyle: base,
   );
 
-  /// 100 字段落（→ 10 行 → 2 页）。
+  /// 100 字段落（+2 缩进 → 11 行 → 2 页）。
   String para() => '0123456789' * 10;
 
   IncrementalPaginator jobOf(int paragraphCount, {int target = 0}) =>
@@ -52,12 +53,12 @@ void main() {
       expect(job.hasWork, isTrue);
 
       expect(job.pages.length, 2);
-      expect(bounds(job.pages), <(int, int)>[(0, 60), (60, 100)]);
+      expect(bounds(job.pages), <(int, int)>[(0, 58), (58, 100)]);
       expect(job.pages[0].height, 174.0);
       expect(job.pages[0].lineCount, 6);
       expect(job.pages[0].firstLine, 0);
-      expect(job.pages[1].height, 116.0);
-      expect(job.pages[1].lineCount, 4);
+      expect(job.pages[1].height, 145.0);
+      expect(job.pages[1].lineCount, 5);
       expect(job.pages[1].firstLine, 6);
     });
 
@@ -89,21 +90,21 @@ void main() {
       expect(job.measuredParagraphs, 4);
 
       expect(bounds(job.pages), <(int, int)>[
-        (0, 60),
-        (60, 100),
-        (100, 160),
-        (160, 200),
-        (200, 260),
-        (260, 300),
-        (300, 360),
-        (360, 400),
+        (0, 58),
+        (58, 100),
+        (100, 158),
+        (158, 200),
+        (200, 258),
+        (258, 300),
+        (300, 358),
+        (358, 400),
       ]);
       expect(job.pages[6].height, 174.0);
-      expect(job.pages[6].firstLine, 30);
+      expect(job.pages[6].firstLine, 33);
       expect(job.pages[6].lineCount, 6);
-      expect(job.pages[7].height, 116.0);
-      expect(job.pages[7].firstLine, 36);
-      expect(job.pages[7].lineCount, 4);
+      expect(job.pages[7].height, 145.0);
+      expect(job.pages[7].firstLine, 39);
+      expect(job.pages[7].lineCount, 5);
     });
   });
 
@@ -178,7 +179,7 @@ void main() {
       expect(partials.length, 3); // 第 4 步完成 → 循环体外
       expect([for (final List<PageSlice> p in partials) p.length],
           <int>[2, 4, 6]);
-      expect(bounds(partials[0]), <(int, int)>[(0, 60), (60, 100)]);
+      expect(bounds(partials[0]), <(int, int)>[(0, 58), (58, 100)]);
 
       for (final List<PageSlice> partial in partials) {
         // 除末页外：边界 / 行下标逐项与最终前缀相等。
@@ -207,14 +208,14 @@ void main() {
       expect(snap.complete, isFalse); // 完成态是快照时点的拷贝
       expect(snap.pages.length, 2);
       expect(identical(snap.lines, job.lines), isTrue);
-      expect(snap.lines.length, 10);
+      expect(snap.lines.length, 11); // 100 字 + 2 缩进 = 11 行
 
       while (job.step(Duration.zero)) {}
       expect(job.pages.length, 8);
       expect(snap.pages.length, 2); // 旧快照页表未被改写
       expect(snap.complete, isFalse);
-      expect(bounds(snap.pages), <(int, int)>[(0, 60), (60, 100)]);
-      expect(snap.lines.length, 40); // 共享行表只追加
+      expect(bounds(snap.pages), <(int, int)>[(0, 58), (58, 100)]);
+      expect(snap.lines.length, 44); // 共享行表只追加（4 段 × 11 行）
       expect(snap.totalChars, 400);
 
       // 共享行表 + 下标不过期：快照页区间在增长后的行表上仍成立。

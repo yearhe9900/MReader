@@ -7,10 +7,13 @@
 // 但标记不上屏——投影产可见文本 + `rawOfVisible` 映射，行边界再映回原文
 // （`a␀IMG:x.png␀b` → `a␣b`，`␣` = 1 个 U+FFFC）。语义必须与
 // `typeset.dart` span 构建一致，由 `pagination_measure_test.dart` 对拍钉死。
+// 投影恒加首行缩进（`kFirstLineIndentPrefix`，与渲染侧
+// `withFirstLineIndent` 一致）——故可见偏移比原文偏移多 2 个缩进字符。
 // 已知边界（里程碑 §2）：图片占位 48×48，真图尺寸进测量归 T05；链接
 // 下划线不改变行度量，故不叠链接样式。
 import 'package:flutter/material.dart';
 
+import '../../typography/typeset.dart';
 import 'page_breaker.dart';
 
 /// 图片占位尺寸（= `typeset.dart` 里 `_InlineImage` 加载态 / 错误态的 48×48）。
@@ -82,11 +85,13 @@ class VisibleProjection {
     required this.rawLength,
   });
 
-  /// 可见文本（排版 offset 空间）：每个图片标记占 **1 个** `U+FFFC` 槽位。
+  /// 可见文本（排版 offset 空间）：段首含 2 字符缩进前缀
+  /// （`kFirstLineIndentPrefix`），每个图片标记占 **1 个** `U+FFFC` 槽位。
+  /// 故可见偏移 ≈ 原文偏移 + 2（标签 / 标记另计）。
   final String visible;
 
   /// `rawOfVisible[i]` = 第 i 个可见位置在原文中的起始下标
-  /// （图片槽位 = 该标记的起始下标）。
+  /// （图片槽位 = 该标记的起始下标；缩进前缀映射到 0）。
   final List<int> rawOfVisible;
 
   /// 测量用 span（文本 span 长度之和 + 槽位数 == `visible.length`）。
@@ -118,6 +123,9 @@ abstract final class PagePaginator {
   }
 
   /// 原文 → 可见投影（见本文件头部说明）。
+  ///
+  /// 恒在段首种子 [kFirstLineIndentPrefix]（与渲染侧 `withFirstLineIndent`
+  /// 一致）：缩进字符不属原文，映射到原文偏移 0。
   static VisibleProjection project(String raw, TextStyle baseStyle) {
     final StringBuffer visible = StringBuffer();
     final List<int> rawOfVisible = <int>[];
@@ -126,6 +134,12 @@ abstract final class PagePaginator {
     bool bold = false;
     bool italic = false;
     int placeholders = 0;
+
+    // 首行缩进：进可见文本与首段 span；原文映射指向段首（0）。
+    visible.write(kFirstLineIndentPrefix);
+    segment.write(kFirstLineIndentPrefix);
+    rawOfVisible.add(0);
+    rawOfVisible.add(0);
 
     void flushSegment() {
       if (segment.isEmpty) return;
@@ -274,8 +288,7 @@ abstract final class PagePaginator {
 
   /// 可见偏移 → 段内原文偏移（越界取段末哨兵）。
   static int _rawOffsetOf(VisibleProjection projection, int visibleOffset) {
-    // 可见下标 0 **不是**越界（段首 `<b>` 等标签时对应原文下标 >0，返回 0 会
-    // 把标签算进字符区间）；仅负偏移才兜底 0。
+    // 缩进前缀占可见下标 0/1，映射到原文 0（段首含标签时即段起点）。
     if (visibleOffset < 0) return 0;
     if (visibleOffset >= projection.rawOfVisible.length) return projection.rawLength;
     return projection.rawOfVisible[visibleOffset];
