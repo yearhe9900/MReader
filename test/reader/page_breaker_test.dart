@@ -92,6 +92,61 @@ void main() {
     });
   });
 
+  group('章标题高预留（firstPageHeight 只裁页 0）', () {
+    test('页 0 用缩减预算、其余页仍用整页高', () {
+      final List<MeasuredLine> lines = <MeasuredLine>[
+        for (int i = 0; i < 7; i++) ln(i * 10, (i + 1) * 10, 30),
+      ];
+
+      final List<PageSlice> pages =
+          PageBreaker.paginate(lines, pageHeight: 100, firstPageHeight: 60);
+
+      expect(pages.length, 3);
+      expect(pages[0].end, 20); // 页 0 预算 60：2 行 = 60，第 3 行 90 > 60
+      expect(pages[0].lineCount, 2);
+      expect(pages[0].height, 60);
+      expect(pages[1].start, 20);
+      expect(pages[1].end, 50); // 页 1 恢复整页高 100：3 行 = 90
+      expect(pages[1].lineCount, 3);
+      expect(pages[2].start, 50);
+      expect(pages[2].end, 70); // 页 2：剩 2 行 = 60
+      expect(pages[2].lineCount, 2);
+    });
+
+    test('首行超高缩减预算仍必收 1 行（至少推进不因预留失效）', () {
+      final List<MeasuredLine> lines = <MeasuredLine>[
+        ln(0, 10, 30),
+        ln(10, 20, 30),
+        ln(20, 30, 30),
+      ];
+
+      final List<PageSlice> pages =
+          PageBreaker.paginate(lines, pageHeight: 100, firstPageHeight: 20);
+
+      expect(pages.length, 2);
+      expect(pages[0].end, 10);
+      expect(pages[0].lineCount, 1); // 30 > 20 但页首行必收
+      expect(pages[0].height, 30);
+      expect(pages[1].start, 10);
+      expect(pages[1].lineCount, 2);
+    });
+
+    test('firstPageHeight ≥ pageHeight → 与默认完全一致', () {
+      final List<MeasuredLine> lines = <MeasuredLine>[
+        for (int i = 0; i < 7; i++) ln(i * 10, (i + 1) * 10, 30),
+      ];
+
+      final List<PageSlice> pages =
+          PageBreaker.paginate(lines, pageHeight: 100, firstPageHeight: 150);
+
+      expect(pages.length, 3);
+      expect(pages[0].end, 30);
+      expect(pages[0].lineCount, 3);
+      expect(pages[1].end, 60);
+      expect(pages[2].lineCount, 1);
+    });
+  });
+
   group('断句回拉', () {
     test('页尾落在段中间且更早的行有句读 → 回拉到句读处', () {
       final List<MeasuredLine> lines = <MeasuredLine>[

@@ -113,12 +113,15 @@ abstract final class PageBreaker {
   /// 把 [lines] 按 [pageHeight] 切成页。
   ///
   /// [paragraphSpacing]：页内相邻段之间的间距（跨页不加）。
+  /// [firstPageHeight]：**页 0 独有的预算**（= 页高 − 章标题高，里程碑 §2
+  /// 决策「标题高预留、字符不进空间」）；其余页恒用 [pageHeight]。
   /// 空行表（空章）返回**一个空页** `[0, 0)`——保证「每章至少一页」，
   /// 免得上层到处判空页。
   static List<PageSlice> paginate(
     List<MeasuredLine> lines, {
     required double pageHeight,
     double paragraphSpacing = 0,
+    double firstPageHeight = double.infinity,
   }) {
     if (lines.isEmpty) {
       return const <PageSlice>[
@@ -134,6 +137,9 @@ abstract final class PageBreaker {
       int lastLine = cursor;
       double height = 0;
       double lastGap = 0;
+      // 页 0 用缩减预算（标题预留），其余页用整页高；上限仍是 pageHeight。
+      final double budget =
+          pages.isEmpty && firstPageHeight < pageHeight ? firstPageHeight : pageHeight;
 
       while (cursor < lines.length) {
         final double gap = _gapBefore(lines, cursor, lastLine, firstLine, paragraphSpacing);
@@ -141,7 +147,7 @@ abstract final class PageBreaker {
         // 恒 false）：首行超页高时一行收不进、cursor 不前进 → 页表无限增长 OOM。
         final bool pageEmpty = cursor == firstLine;
         // 放不下且页内已有行 → 关页；本页首行则必收（至少推进 1 行）。
-        if (!pageEmpty && height + gap + lines[cursor].height > pageHeight) {
+        if (!pageEmpty && height + gap + lines[cursor].height > budget) {
           break;
         }
         height += gap + lines[cursor].height;
@@ -149,7 +155,7 @@ abstract final class PageBreaker {
         lastLine = cursor;
         cursor++;
         // 单行高于整页：独占一页后立即关页（防死循环）。
-        if (height > pageHeight) break;
+        if (height > budget) break;
       }
 
       // 硬底线：每轮至少推进 1 行（正常路径不可达，纯防御——防页表无限增长）。

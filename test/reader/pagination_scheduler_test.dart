@@ -269,6 +269,79 @@ void main() {
     });
   });
 
+  group('章标题高预留（headingHeight 穿透，里程碑 §2 决策）', () {
+    test('open 的 headingHeight 裁页 0：首页 5 行、切点 48（基线 58）', () {
+      final PaginationScheduler s = PaginationScheduler();
+      expect(
+        s.open(
+          href: 'a',
+          paragraphs: paras(1),
+          config: cfg,
+          headingHeight: 48, // 页 0 预算 200−48=152：5 行 145.0 ≤ 152、6 行 174 超
+          budget: Duration.zero,
+        ),
+        isFalse,
+      );
+      expect(s.active!.headingHeight, 48);
+      while (s.stepIdle(budget: Duration.zero)) {}
+
+      final PaginatedChapter chapter = s.cache.get('a', cfg)!;
+      expect(chapter.pages.length, 2);
+      expect(chapter.pages[0].end, 48); // 5 行 = 50 可见 − 2 缩进
+      expect(chapter.pages[0].lineCount, 5);
+      expect(chapter.pages[0].height, 145.0);
+      expect(chapter.pages[1].start, 48);
+      expect(chapter.pages[1].end, 100); // 页 1 恢复整页高：6 行
+      expect(chapter.pages[1].lineCount, 6);
+    });
+
+    test('prev/next headingHeight 穿透到 ±1 预分页任务；setWindow 同', () {
+      final PaginationScheduler s = PaginationScheduler();
+      s.open(
+        href: 'a',
+        paragraphs: paras(4),
+        config: cfg,
+        budget: Duration.zero,
+        prevHref: 'p',
+        prevParagraphs: paras(2),
+        prevHeadingHeight: 36,
+        nextHref: 'n',
+        nextParagraphs: paras(2),
+        nextHeadingHeight: 72,
+      );
+      expect(s.prefetchJobs[0].href, 'p');
+      expect(s.prefetchJobs[0].headingHeight, 36);
+      expect(s.prefetchJobs[1].href, 'n');
+      expect(s.prefetchJobs[1].headingHeight, 72);
+
+      // setWindow 换窗口登记，高度同样穿透。
+      s.setWindow(
+        nextHref: 'm',
+        nextParagraphs: paras(2),
+        nextHeadingHeight: 60,
+      );
+      expect(s.prefetchJobs.last.href, 'm');
+      expect(s.prefetchJobs.last.headingHeight, 60);
+    });
+
+    test('同章重开 headingHeight 变化 → 丢弃旧任务重建（页 0 预算不同不可混用）', () {
+      final PaginationScheduler s = PaginationScheduler();
+      s.open(href: 'a', paragraphs: paras(4), config: cfg, budget: Duration.zero);
+      s.stepIdle(budget: Duration.zero); // 测 1 段（部分进度）
+      expect(s.active!.measuredParagraphs, 1);
+
+      s.open(
+        href: 'a',
+        paragraphs: paras(4),
+        config: cfg,
+        headingHeight: 48,
+        budget: Duration.zero,
+      );
+      expect(s.active!.headingHeight, 48);
+      expect(s.active!.measuredParagraphs, 0); // 新任务，进度不带入
+    });
+  });
+
   group('动画期冻结（T04，保证 ③ 动画期零排版）', () {
     test('freeze 后 stepIdle 返 true 但零推进，unfreeze 后续排', () {
       final PaginationScheduler s = PaginationScheduler();

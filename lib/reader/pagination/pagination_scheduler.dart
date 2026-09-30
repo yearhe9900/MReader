@@ -77,15 +77,23 @@ class PaginationScheduler {
   /// 返回「目标页已可落位」——`false` 时上层挂占位页、由 [stepIdle] 补完。
   /// 换章时旧当前章任务丢弃（部分页表不留缓存）、旧 ±1 队列整体作废；
   /// 同章重开保留进度与队列。
+  ///
+  /// [headingHeight]：本章标题占高（页 0 预算裁剪，里程碑 §2 决策）；
+  /// [prevHeadingHeight] / [nextHeadingHeight] 同理给 ±1 邻章。
+  /// 调用方须按章稳定提供——缓存键仍是 `href + config`（标题高由排版参数
+  /// 与标题文本决定，同章同参下恒定）；复用/提拔任务时高度不一致则丢弃重建。
   bool open({
     required String href,
     required List<String> paragraphs,
     required PaginationConfig config,
     int targetCharOffset = 0,
+    double headingHeight = 0,
     String? prevHref,
     List<String>? prevParagraphs,
+    double prevHeadingHeight = 0,
     String? nextHref,
     List<String>? nextParagraphs,
+    double nextHeadingHeight = 0,
     Duration budget = kFirstPaintBudget,
   }) {
     _acceptConfig(config);
@@ -95,25 +103,34 @@ class PaginationScheduler {
     if (hit != null) {
       if (_lastActiveHref != href) _prefetch.clear(); // 换章：旧窗口作废
       _adoptCached(href, hit);
-      _registerWindow(prevHref, prevParagraphs, nextHref, nextParagraphs);
+      _registerWindow(
+        prevHref, prevParagraphs, prevHeadingHeight,
+        nextHref, nextParagraphs, nextHeadingHeight,
+      );
       return true;
     }
 
     final IncrementalPaginator? current = _active;
     late final IncrementalPaginator job;
-    if (current != null && current.href == href) {
+    if (current != null && current.href == href && current.headingHeight == headingHeight) {
       job = current; // 同章重开：保留进度与 ±1 队列
     } else {
       // 换章：优先从旧队列提拔（保住已测进度），否则新建。
-      job = _prefetch.firstWhere(
-        (IncrementalPaginator p) => p.href == href,
-        orElse: () => IncrementalPaginator(
+      // 高度不一致的同名任务不可复用（页 0 预算不同 → 页表不可混用）。
+      final int queued = _prefetch.indexWhere(
+        (IncrementalPaginator p) => p.href == href && p.headingHeight == headingHeight,
+      );
+      if (queued >= 0) {
+        job = _prefetch[queued];
+      } else {
+        job = IncrementalPaginator(
           href: href,
           paragraphs: paragraphs,
           config: config,
+          headingHeight: headingHeight,
           targetCharOffset: targetCharOffset,
-        ),
-      );
+        );
+      }
       _prefetch.clear(); // 旧 ±1 窗口整体作废（随后按新章重登）
       _active = null; // 旧当前章任务丢弃（部分页表不留缓存）
     }
@@ -128,7 +145,10 @@ class PaginationScheduler {
       cache.put(job.snapshot());
       _active = null;
     }
-    _registerWindow(prevHref, prevParagraphs, nextHref, nextParagraphs);
+    _registerWindow(
+      prevHref, prevParagraphs, prevHeadingHeight,
+      nextHref, nextParagraphs, nextHeadingHeight,
+    );
     return ready;
   }
 
@@ -137,12 +157,17 @@ class PaginationScheduler {
   void setWindow({
     String? prevHref,
     List<String>? prevParagraphs,
+    double prevHeadingHeight = 0,
     String? nextHref,
     List<String>? nextParagraphs,
+    double nextHeadingHeight = 0,
   }) {
     final PaginationConfig? cfg = _config;
     if (cfg == null) return;
-    _registerWindow(prevHref, prevParagraphs, nextHref, nextParagraphs);
+    _registerWindow(
+      prevHref, prevParagraphs, prevHeadingHeight,
+      nextHref, nextParagraphs, nextHeadingHeight,
+    );
   }
 
   /// 一帧空闲排版：当前章任务优先，其次预分页队列头部。
@@ -202,14 +227,16 @@ class PaginationScheduler {
   void _registerWindow(
     String? prevHref,
     List<String>? prevParagraphs,
+    double prevHeadingHeight,
     String? nextHref,
     List<String>? nextParagraphs,
+    double nextHeadingHeight,
   ) {
-    _enqueuePrefetch(prevHref, prevParagraphs);
-    _enqueuePrefetch(nextHref, nextParagraphs);
+    _enqueuePrefetch(prevHref, prevParagraphs, prevHeadingHeight);
+    _enqueuePrefetch(nextHref, nextParagraphs, nextHeadingHeight);
   }
 
-  void _enqueuePrefetch(String? href, List<String>? paragraphs) {
+  void _enqueuePrefetch(String? href, List<String>? paragraphs, double headingHeight) {
     final PaginationConfig? cfg = _config;
     if (href == null || paragraphs == null || cfg == null) return;
     if (href == activeHref) return; // 不预分页自己
@@ -219,6 +246,7 @@ class PaginationScheduler {
       href: href,
       paragraphs: paragraphs,
       config: cfg,
+      headingHeight: headingHeight,
       targetCharOffset: 0,
     ));
   }

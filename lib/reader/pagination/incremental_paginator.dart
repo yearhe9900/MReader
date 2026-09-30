@@ -32,6 +32,7 @@ class IncrementalPaginator {
     required this.href,
     required this.paragraphs,
     required this.config,
+    this.headingHeight = 0,
     this.targetCharOffset = 0,
   })  : totalChars = PagePaginator.charCountOf(paragraphs),
         _complete = paragraphs.isEmpty,
@@ -39,6 +40,7 @@ class IncrementalPaginator {
           const <MeasuredLine>[],
           pageHeight: config.pageHeight,
           paragraphSpacing: config.paragraphSpacing,
+          firstPageHeight: config.pageHeight - headingHeight,
         );
 
   /// 章标识（缓存与调度的 key）。
@@ -49,6 +51,10 @@ class IncrementalPaginator {
 
   /// 排版参数（行测量与切页共用）。
   final PaginationConfig config;
+
+  /// 章标题占高（页 0 预算 = `pageHeight − headingHeight`）。
+  /// **不进 [PaginationConfig]**——逐章不同，进缓存键会触发全量失效。
+  final double headingHeight;
 
   /// 目标字符偏移（开书恢复 / 跳转落位点；可随复用改写）。
   int targetCharOffset;
@@ -146,6 +152,7 @@ class IncrementalPaginator {
       _lines,
       pageHeight: config.pageHeight,
       paragraphSpacing: config.paragraphSpacing,
+      firstPageHeight: config.pageHeight - headingHeight,
     );
   }
 }

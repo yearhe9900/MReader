@@ -274,15 +274,20 @@ abstract final class PagePaginator {
   }
 
   /// 门面：段落 + 排版参数 → 页表。
+  ///
+  /// [headingHeight]：章标题占高——只裁页 0 预算（`pageHeight − headingHeight`），
+  /// 标题字符不进分页输入（里程碑 §2 决策）。
   static List<PageSlice> paginate({
     required List<String> paragraphs,
     required PaginationConfig config,
+    double headingHeight = 0,
   }) {
     final List<MeasuredLine> lines = measureParagraphs(paragraphs: paragraphs, config: config);
     return PageBreaker.paginate(
       lines,
       pageHeight: config.pageHeight,
       paragraphSpacing: config.paragraphSpacing,
+      firstPageHeight: config.pageHeight - headingHeight,
     );
   }
 
