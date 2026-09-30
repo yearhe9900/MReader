@@ -69,12 +69,51 @@ const double kShelfCrossAxisSpacing = 20;
 /// `EdgeInsets.fromLTRB(20, 12, 20, 80)`）；
 /// **底部 80 换成本项目的 [kShellBottomInset]**——两者目的相同（给悬浮胶囊留白），
 /// 但本项目胶囊更高，用 anx 的 80 会被压住。
+///
+/// ⚠️ 本常量是**网格的固有间距**（上 12 = 网格与上方 UI 的间距）。书架页
+/// 内容 edge-to-edge 后（2026-09-29 浮动头部批），页面侧还须叠加
+/// `状态栏 + [kShelfHeaderHeight]` 的顶部留白——用 [shelfGridPadding] 合成，
+/// 不要直接把本常量喂给 `ShelfGrid` 就完事（首行会被浮动头部盖住）。
 const EdgeInsets kShelfGridPadding = EdgeInsets.fromLTRB(
   20,
   12,
   20,
   kShellBottomInset,
 );
+
+// ---------------------------------------------------------------------------
+// 浮动头部（搜索行 + 分组 chips 行；2026-09-29 参考图批）
+// ---------------------------------------------------------------------------
+// 参考图 = HyperOS 主题商店首页（负责人 2026-09-29 指令「标题栏也参考图片，
+// 内容可以 edge to edge」+ 拍板「全浮动头部」）：搜索胶囊与 chips 同属
+// 浮动头部、压在 edge-to-edge 的内容上。以下三值是**头部行高分解**，
+// [kShelfHeaderHeight] 由它们求和得出（改行高先改分解项）。
+
+/// 搜索行高（= 顶栏原 toolbarHeight：36 高搜索胶囊 + 两个 48 动作按钮的行）。
+const double kShelfSearchRowHeight = 44;
+
+/// 搜索行与 chips 行的间距（参考图上约为胶囊高度的一半 → 12）。
+const double kShelfHeaderRowGap = 12;
+
+/// 分组 chips 行高（原正文筛选栏的行高，随 chips 一并上移进头部）。
+const double kShelfChipsRowHeight = 40;
+
+/// 浮动头部总高（**状态栏之下**的部分；GlassAppBar 自带 SafeArea 吃掉状态栏）。
+///
+/// 同时是 `GlassTopBar.toolbarHeight` 与网格首行顶部留白的组成部分。
+/// 44 + 12 + 40 = **96**（契约测试按字面量锁）。行高/间距是**照参考图估的**
+/// 初始值（截图为缩放图，不作精确依据），真机复核后可整体调。
+const double kShelfHeaderHeight =
+    kShelfSearchRowHeight + kShelfHeaderRowGap + kShelfChipsRowHeight;
+
+/// 合成书架网格的最终内边距：`top = 状态栏 + 浮动头部高 + [kShelfGridPadding.top]`。
+///
+/// 顶部留白保证**首行不被浮动头部盖住**（拍板验收条目）；行仍会随滚动
+/// 从头部下穿过、透出磨砂模糊（`UI-02` ②）。`topInset` 传
+/// `MediaQuery.paddingOf(context).top`。
+EdgeInsets shelfGridPadding(double topInset) => kShelfGridPadding.copyWith(
+      top: topInset + kShelfHeaderHeight + kShelfGridPadding.top,
+    );
 
 // ---------------------------------------------------------------------------
 // 单卡分区（`BookCard`）

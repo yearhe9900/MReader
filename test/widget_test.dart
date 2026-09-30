@@ -179,10 +179,11 @@ void main() {
       ),
     );
 
-    // 断言「首屏由书架页承载」——AppBar 标题在 loading / 空态 / 有书三态**恒存在**，
+    // 断言「首屏由书架页承载」——**浮动头部**（2026-09-29 参考图批起取代了
+    // 原顶栏纯文本标题「书架」）在 loading / 空态 / 有书三态**恒存在**，
     // 因此不依赖 `ShelfPage` 在 `initState` 里发起的异步加载是否已完成，
     // 测试结果与真实 IO 调度无关（M1-T03 起 `HomePage` 已被书架页取代）。
     expect(find.byType(ShelfPage), findsOneWidget);
-    expect(find.text('书架'), findsOneWidget);
+    expect(find.text('搜索书名、作者'), findsOneWidget);
   });
 }

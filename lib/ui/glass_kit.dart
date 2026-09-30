@@ -439,9 +439,10 @@ class GlassNavBar extends StatelessWidget {
 
 /// 导航壳层（薄封装 [GlassScaffold]）。
 ///
-/// 保证顶栏 / 底栏玻璃永远绘制在正文之上，并给内容边缘做渐隐；正文请用
-/// [OpaqueContentSurface] 承载（`UI-04`）。「关」档（`UI-06` ②）退化为 Material
-/// [Scaffold]（appBar 由 [GlassTopBar] 自身退化，这里只换壳）。
+/// 保证顶栏 / 底栏玻璃永远绘制在正文之上；正文请用
+/// [OpaqueContentSurface] 承载（`UI-04`）。[extendBody] 决定正文是否穿顶栏
+/// （edge-to-edge + 顶栏下磨砂模糊，`UI-02` ②）。「关」档（`UI-06` ②）退化为
+/// Material [Scaffold]（appBar 由 [GlassTopBar] 自身退化，这里只换壳）。
 class GlassNavScaffold extends StatelessWidget {
   /// 创建玻璃导航壳层。
   const GlassNavScaffold({
@@ -450,6 +451,7 @@ class GlassNavScaffold extends StatelessWidget {
     this.appBar,
     this.bottomBar,
     this.background,
+    this.extendBody = false,
   });
 
   /// 页面正文（内容层请用 [OpaqueContentSurface] 承载）。
@@ -464,17 +466,35 @@ class GlassNavScaffold extends StatelessWidget {
   /// 背景层（仅玻璃档生效；退化档由 Scaffold 自身背景承担）。
   final Widget? background;
 
+  /// 正文是否铺满全屏、从顶栏下**穿过**（edge-to-edge；2026-09-29 书架浮动头部）。
+  ///
+  /// 默认 `false` = 正文避让顶栏（`top: topPad + appBarHeight`），多数页面保持
+  /// 此形态。传 `true` 后正文从 y=0 起、滚动时从玻璃顶栏下穿过，顶栏下方的
+  /// 内容透出**磨砂模糊**（`GlassScrollEdgeStyle.blur`，即 PRD `UI-02` ②
+  /// 「滚动时顶栏下内容透出模糊而非纯色遮挡」的正式落地形态——此前
+  /// `extendBody: false` 连渐隐都关着，该验收项实际未满足）。
+  ///
+  /// **传 `true` 的页面必须自行保证「首行不被盖住」**：给滚动内容的
+  /// `padding.top` 留出 `状态栏 + 顶栏高 + 间距`（书架见
+  /// `shelfGridPadding`），否则网格首行会被浮动顶栏永久压住——这正是
+  /// 2026-09-29 上午真机截图实证过的 bug，`test/ui/glass_nav_inset_test.dart`
+  /// 对**默认 `false`** 保留回归锁。
+  final bool extendBody;
+
   @override
   Widget build(BuildContext context) {
     final GlassTierConfig config = GlassScope.configOf(context);
     if (!config.glassEnabled) {
       // 「关」档（`UI-06` ②）：Material 纯色壳层，功能完整可用。
+      // `extendBodyBehindAppBar` 与 [extendBody] 同语义（正文是否穿顶栏）；
+      // 此档无磨砂渐隐（Material 无此物），正文从实心 AppBar 后滑过。
       return Scaffold(
         appBar: appBar is PreferredSizeWidget
             ? appBar! as PreferredSizeWidget
             : null,
         body: body,
         bottomNavigationBar: bottomBar,
+        extendBodyBehindAppBar: extendBody,
       );
     }
     return GlassScaffold(
@@ -482,22 +502,32 @@ class GlassNavScaffold extends StatelessWidget {
       appBar: appBar,
       bottomBar: bottomBar,
       background: background,
-      // 顶栏避让（批次① `06063c8` 漏传的参数，2026-09-29 修）。
+      // [extendBody] 语义与历史注释（2026-09-29 演进，原「必须 false」口径收窄）：
       //
       // 库默认 `extendBody: true` → `glass_scaffold.dart:487-489` 走
-      // `Positioned.fill`，**正文铺满整屏、从 y=0 起、完全不避让顶栏**：
-      // 书架的筛选栏被顶进状态栏、网格首行封面被顶栏盖住（真机截图实证）。
-      // `extendBody: false` 才走 `:491-494` 的 `top: topPad + appBarHeight`。
+      // `Positioned.fill`，正文铺满整屏从 y=0 起。默认 `false` 走
+      // `:491-494` 的 `top: topPad + appBarHeight`（正文避让顶栏）——
+      // 2026-09-29 上午批次① `06063c8` 漏传该参数曾把书架筛选栏顶进状态栏、
+      // 网格首行被顶栏盖住（真机截图实证），故默认保持 `false`；
       // 库文档 `:153` / `:83` 声称会「automatically add a top spacer」，
       // 但 1.7.0 全文 grep 只有这三处文字、**零处实现**——以代码为准。
       //
+      // 书架页（2026-09-29 浮动头部批）显式传 `true`：内容 edge-to-edge、
+      // 从浮动玻璃头部下穿过，首行保护改由页面自己的 `padding.top` 承担
+      // （见 [extendBody] 文档）。**传 true 必须配套内容顶部留白。**
+      //
       // 底部不受影响：本项目底栏是 `home_shell` 自己 `Positioned` 的
       // 浮动胶囊，**不走** `GlassScaffold.bottomBar`，故 `bottomBar == null`
-      // → `bottom: 0`，底部留白仍由各页的 `kShellBottomInset` 独立承担。
-      //
-      // 已知代价：`:458` 的 `if (extendBody && …)` 不再成立，正文不再包
-      // `GlassScrollEdgeEffect` → **顶栏下方的滚动渐隐一并关闭**（拍板取舍）。
-      extendBody: false,
+      // → 两档 `bottom` 恒 0，底部留白仍由各页的 `kShellBottomInset` 独立承担。
+      extendBody: extendBody,
+      // 边缘效果：**blur 档**（`UI-02` ②「顶栏下内容透出模糊」）。
+      // 库默认 `soft` 是「内容渐隐进背景」= 接近该验收项否定的「纯色遮挡」；
+      // `blur` 用 `ProgressiveBlur` 把穿顶栏滚动的内容渐进磨砂（顶部 sigma 最高），
+      // 与参考图（HyperOS 主题商店：搜索胶囊下横幅磨砂透出）同形态。
+      // 仅 `extendBody: true` 时生效（`:458` 的 `if (extendBody && …)`）。
+      // 代价（库文档自述）：Skia/Android 上 `BackdropFilterLayer` 逐帧合成，
+      // 比 soft 略贵——要退回渐隐档改传 `GlassScrollEdgeStyle.soft`（一行）。
+      edgeStyle: GlassScrollEdgeStyle.blur,
     );
   }
 }
@@ -617,7 +647,7 @@ abstract final class GlassOverlays {
   /// ② **全部弹层统一生效**（改本处即 6 处弹层同时生效）。
   ///
   /// 三项症状与库参数**逐一对上**（均为本薄封装原先吃掉的库默认值，同
-  /// `GlassNavScaffold.extendBody` 默认 `true` 一类坑，故这里直接写死）：
+  /// `GlassScaffold.extendBody` 库默认 `true` 一类坑，故这里直接写死）：
   ///   · 「点击放大」 = `interactionScale`（库默认 **1.01**，doc 自述
   ///     "Visual scale feedback on touch"；库 `stretch.dart:249` 按下时
   ///     `pressed ? interactionScale : 1.0`）→ 传 **1.0** 即无放大；

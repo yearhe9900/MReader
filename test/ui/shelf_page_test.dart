@@ -261,7 +261,7 @@ void main() {
       expect(isGlassWidget(find.byType(BookCard).evaluate().single.widget), isFalse);
     });
 
-    testWidgets('顶栏搜索框：靠左铺满（非居中）+ 自带描边与底色（可区分于玻璃顶栏）',
+    testWidgets('顶栏搜索胶囊：靠左铺满（全宽）+ 半透明玻璃底 + 保留描边',
         (WidgetTester tester) async {
       // 800 宽视口才分得清「靠左铺满」与「居中收缩」。须同时钉
       // `devicePixelRatio = 1`（默认 3 会把逻辑宽算成 266，动作按钮一挤
@@ -278,30 +278,89 @@ void main() {
 
       expect(find.text('搜索书名、作者'), findsOneWidget);
 
-      // 机制锁：顶栏须显式关掉居中档（默认 `true` 会走库的「等边距居中」分支）。
+      // 机制锁：顶栏须显式关掉居中档（默认 `true` 会走库的「等边距居中」分支，
+      // 两行头部会被收缩）。
       expect(
         tester.widget<GlassTopBar>(find.byType(GlassTopBar)).centerTitle,
         isFalse,
       );
 
       // 几何契约：靠左贴顶栏内边距（`GlassAppBar` 默认 horizontal padding = 8），
-      // 并铺满可用宽（此处取到 400 上限）。若退回居中，左边缘会变成
-      // `(800 - 400) / 2 ≈ 200` —— 断言立刻红。
+      // 并**铺满可用宽**——2026-09-29 参考图批撤掉原先的 `maxWidth: 400`
+      // 桌面上限（拍板「全宽搜索胶囊」）：800 - 16(两侧内边距) - 96(两按钮)
+      // ≈ 688，故断言 > 600；若退回 400 上限或居中档立刻红。
       final Finder box = find.byKey(const Key('shelf-search-entry'));
       expect(box, findsOneWidget);
       expect(tester.getTopLeft(box).dx, lessThanOrEqualTo(16));
-      expect(tester.getSize(box).width, greaterThan(300));
+      expect(tester.getSize(box).width, greaterThan(600));
       // 右侧仍留出两个动作按钮的位置（导入 / 排序）。
       expect(tester.getTopRight(box).dx, lessThan(800 - 48));
 
-      // 样式契约：填充不透明度须高于原先的 0.6（否则会「糊」进半透明玻璃
-      // 顶栏，分不出是可点控件），且必须有一道 1px 描边。
+      // 样式契约：**半透明玻璃底**（α0.6——参考图搜索胶囊磨砂透出底下内容）
+      // + 一道 1px 描边（同日「描边/底色区分」批次的口径不撤）。
       final BoxDecoration deco =
           tester.widget<Container>(box).decoration! as BoxDecoration;
-      expect(deco.color!.a, closeTo(0.9, 0.01));
+      expect(deco.color!.a, closeTo(0.6, 0.01));
       final Border border = deco.border! as Border;
       expect(border.top.width, 1.0);
       expect(border.top.style, BorderStyle.solid);
+    });
+
+    testWidgets('浮动头部 + 内容 edge-to-edge：两行头部恒在顶栏内、首行不被盖住',
+        (WidgetTester tester) async {
+      // 钉 dpr = 1：断言的是**逻辑像素**几何（96 / 108），默认 dpr 3 会把
+      // 物理尺寸与逻辑尺寸搅在一起。
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('一本'), fileName: 'a.txt'),
+      );
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      // ① 内容 edge-to-edge：壳层显式开 `extendBody`（正文从 y=0 起、
+      // 滚动时从浮动头部下穿过，顶栏下透出磨砂模糊 = `UI-02` ②）。
+      expect(
+        tester
+            .widget<GlassNavScaffold>(find.byType(GlassNavScaffold))
+            .extendBody,
+        isTrue,
+        reason: '书架是「全浮动头部」形态：正文必须穿顶栏（拍板 2026-09-29）',
+      );
+
+      // ② 头部两行**恒在顶栏内**：搜索胶囊与分组 chips 都是 `GlassTopBar` 的
+      // 子树（原实现里 chips 在正文 Column 里，移动回正文即红）。
+      expect(
+        find.descendant(
+          of: find.byType(GlassTopBar),
+          matching: find.byKey(const Key('shelf-search-entry')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(GlassTopBar),
+          matching: find.byType(FilterChip),
+        ),
+        findsWidgets,
+      );
+
+      // ③ 头部总高 96 = 搜索行 44 + 间距 12 + chips 行 40（`kShelfHeaderHeight`；
+      // 这里按**字面量**锁——引用常量等于同义反复）。
+      expect(
+        tester.widget<GlassTopBar>(find.byType(GlassTopBar)).toolbarHeight,
+        96,
+      );
+
+      // ④ 首行不被盖住：第一张书卡顶边 = 状态栏 0 + 头部 96 + 网格上间距 12 = 108。
+      // 去掉网格 `padding.top` 的头部留白 → 变 0，立即红。
+      expect(
+        tester.getTopLeft(find.byType(BookCard).first).dy,
+        108,
+        reason: '首行必须落在浮动头部之下（拍板验收条目），否则被磨砂头部盖住',
+      );
     });
 
     testWidgets('LIB-06 点击删除后书从列表移除', (WidgetTester tester) async {

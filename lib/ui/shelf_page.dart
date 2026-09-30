@@ -1,14 +1,16 @@
 // `LIB-01`：书架首页（替代 M0 验证台的 `HomePage`）。
 //
 // 空态：引导文案 + 导入按钮。
-// 有书：分组筛选栏（全部 + 各分组）+ 网格展示 [BookCard]
-//（封面缩略图 + 书名 + 作者 + 格式标签）。
+// 有书：浮动头部（全宽玻璃搜索胶囊 + 分组 chips，2026-09-29 参考图批）+
+// 网格展示 [BookCard]（封面缩略图 + 书名 + 作者 + 格式标签）；
+// 内容 edge-to-edge（`extendBody: true`）从头部下穿过、透出磨砂模糊（`UI-02` ②）。
 // 导入：`FilePicker` 多选 → 逐个调 `importFile`，展示进度 + 失败清单。
 // 删除：长按书卡 → 操作单 → 确认对话框 → `deleteBook`（`LIB-06` 二次确认）
 // + 连带清理阅读进度。
-// 点击书卡 → 进入书籍详情页（`F9` / `META-08`）；详情页底部「继续阅读」经**注入的**
-// `_openBook` 开书（详情页**不复制**开书管道），详情页 pop 后刷新列表
-// （编辑 / 移出 / 分组 / 进度都靠这次刷新同步）。
+// 点击书卡 = **直接进阅读页**（2026-09-29 v2.9 改道，与 anx-reader 一致）；
+// 长按操作单「书籍详情」是详情页**唯一**入口（`META-08`）。详情页底部
+// 「继续阅读」经**注入的** `_openBook` 开书（详情页**不复制**开书管道），
+// 详情页 pop 后刷新列表（编辑 / 移出 / 分组 / 进度都靠这次刷新同步）。
 // 开书守卫 `_opening` **只覆盖 push 前的准备阶段**（修复「首点无响应」：守卫若覆盖
 // 整个阅读会话 + 关书刷新，关书后首点会被静默吞掉）；准备期被点卡片显示 loading。
 //
@@ -446,128 +448,165 @@ class _ShelfPageState extends State<ShelfPage> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final double topInset = MediaQuery.paddingOf(context).top;
 
     // `UI-02` 导航层玻璃化：顶栏走 GlassTopBar、壳层走 GlassNavScaffold
     // （照抄 book_detail_page 范本）；内容整体不透明（`UI-04`）。
-    if (_loading) {
-      return GlassNavScaffold(
-        appBar: const GlassTopBar(title: Text('书架')),
-        body: const OpaqueContentSurface(
-          child: Center(child: CircularProgressIndicator()),
-        ),
-      );
-    }
-
+    //
+    // 2026-09-29 浮动头部批（负责人「标题栏也参考图片，内容可以 edge to edge」，
+    // 拍板「全浮动头部」）：搜索胶囊 + 分组 chips 组成两行**浮动头部**（参考图 =
+    // HyperOS 主题商店首页的「搜索条 + 分类 chips 压在内容上」）；正文
+    // `extendBody: true` 铺满全屏、从头部下穿过，顶栏下方内容透出磨砂模糊
+    // （`UI-02` ②）。首行保护 = 网格 `padding.top` 留出头部高度（见
+    // [shelfGridPadding]）。**头部两行恒在场**（含 loading / 空态），避免
+    // 「加载中 → 有书」头部高度跳变。
     return GlassNavScaffold(
+      extendBody: true,
       appBar: GlassTopBar(
-        // 标题位放「假搜索框」——外观是搜索框，点击进搜索页（照搬 anx-reader）。
-        title: _BookSearchEntry(onTap: _openSearch),
+        title: _buildHeader(),
         // **靠左不居中**：库的 `_ToolbarLayout` 在 `centerTitle: true`（默认）时
         // 按整条宽度居中，并把可用宽压成 `size.width - 2 * max(leading, actions)`
-        // （等边距口径，`glass_app_bar.dart:559-578`）——本页右侧有两个动作按钮，
-        // 搜索框会被压到约半宽、浮在中间。传 `false` 走 `:579-611`：从 leading 侧
-        // 起排（本页无 leading → 贴顶栏内边距），可用宽 = 整宽减去两侧与 8px 间距。
+        // （等边距口径，`glass_app_bar.dart:559-578`）——本页标题是两行头部，
+        // 居中收缩会破坏「全宽搜索胶囊 + 铺满 chips 行」形态。传 `false` 走
+        // `:579-611`：可用宽 = 整宽减去两侧内边距（本页无 leading/actions 槽）。
         centerTitle: false,
-        actions: <Widget>[
-          if (_importing)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.add),
-              tooltip: '导入书籍',
-              onPressed: _pickAndImport,
-            ),
-          IconButton(
-            icon: const Icon(Icons.sort),
-            tooltip: '排序方式',
-            onPressed: _showSortMenu,
-          ),
-        ],
+        toolbarHeight: kShelfHeaderHeight,
       ),
       body: OpaqueContentSurface(
         child: DecoratedBox(
           decoration: shelfGradientBackground(theme),
-          child: _books.isEmpty
-              ? _buildEmptyState(theme)
-              : Column(
-                  children: <Widget>[
-                    _buildGroupFilterBar(),
-                    Expanded(
-                      // 有书、但当前分组里一本都没有（如刚把书都移出了该分组）。
-                      child: _visibleBooks.isEmpty
-                          ? _buildNoMatchState(theme)
-                          : _buildBookGrid(),
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _books.isEmpty
+                  ? _buildEmptyState(theme)
+                  : Column(
+                      children: <Widget>[
+                        Expanded(
+                          // 有书、但当前分组里一本都没有（如刚把书都移出了该分组）。
+                          child: _visibleBooks.isEmpty
+                              ? _buildNoMatchState(theme)
+                              : _buildBookGrid(topInset),
+                        ),
+                        if (_importErrors.isNotEmpty) _buildErrorList(theme),
+                      ],
                     ),
-                    if (_importErrors.isNotEmpty) _buildErrorList(theme),
-                  ],
-                ),
         ),
       ),
     );
   }
 
-  /// 分组筛选栏（**单选**：全部 / 各分组）。
+  /// 浮动头部（两行，参考图形态）：搜索行（胶囊 + 导入/排序）+ 分组 chips 行。
   ///
-  /// 高 40、横向可滚——分组数量由用户决定，窄屏必然放不下，直接给滚动容器。
+  /// 整体包一层透明 [Material]：玻璃库无 Material 祖先（PRD §11.4），而
+  /// `FilterChip`/`InkWell` 都要求最近处有 Material（涟漪与文字样式）；
+  /// `MaterialType.transparency` 不绘制底色，不破坏玻璃观感（同
+  /// [_BookSearchEntry] 内部的手法）。
+  Widget _buildHeader() {
+    return Material(
+      type: MaterialType.transparency,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SizedBox(
+            height: kShelfSearchRowHeight,
+            child: Row(
+              children: <Widget>[
+                // 搜索胶囊铺满剩余宽（「全宽」形态；右侧两按钮保留在搜索行）。
+                Expanded(child: _BookSearchEntry(onTap: _openSearch)),
+                if (_importing)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                else
+                  IconButton(
+                    icon: const Icon(Icons.add),
+                    tooltip: '导入书籍',
+                    onPressed: _pickAndImport,
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.sort),
+                  tooltip: '排序方式',
+                  onPressed: _showSortMenu,
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: kShelfHeaderRowGap),
+          SizedBox(
+            height: kShelfChipsRowHeight,
+            child: _buildGroupFilterBar(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 分组筛选栏（**单选**：全部 / 各分组）—— 浮动头部第二行（参考图 chips 行）。
+  ///
+  /// 横向可滚——分组数量由用户决定，窄屏必然放不下，直接给滚动容器。
   /// 「全部」恒在首位；分组顺序 = `ShelfLayoutStore` 的创建序（`groups` 列表序）。
   /// 只列**真有书**的分组：空分组已由 `prune` 清掉，故此处无需再过滤。
+  /// 行高由 [_buildHeader] 的 `SizedBox(kShelfChipsRowHeight)` 统一给定；
+  /// 左缘与搜索胶囊对齐（同在标题槽内、共用顶栏内边距），不再另加侧边距。
   Widget _buildGroupFilterBar() {
     final String? selected = widget.shelfPrefs.prefs.groupId;
     // 选中分组已消失（书被删空）→ 视作「全部」，chip 高亮随之回到「全部」。
     final bool hasSelection = selected != null &&
         widget.shelfLayout.layout.groupById(selected) != null;
-    return SizedBox(
-      height: 40,
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
       child: Row(
         children: <Widget>[
-          const SizedBox(width: 12),
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: <Widget>[
-                  _buildGroupChip(
-                    label: '全部',
-                    groupId: null,
-                    selected: !hasSelection,
-                  ),
-                  for (final BookGroup group
-                      in widget.shelfLayout.layout.groups)
-                    _buildGroupChip(
-                      label: group.name,
-                      groupId: group.id,
-                      selected: hasSelection && selected == group.id,
-                    ),
-                ],
-              ),
-            ),
+          _buildGroupChip(
+            label: '全部',
+            groupId: null,
+            selected: !hasSelection,
           ),
-          const SizedBox(width: 4),
+          for (final BookGroup group in widget.shelfLayout.layout.groups)
+            _buildGroupChip(
+              label: group.name,
+              groupId: group.id,
+              selected: hasSelection && selected == group.id,
+            ),
         ],
       ),
     );
   }
 
   /// 单个分组 chip（**单选**）：选中即筛选，再点**已选中**的回「全部」。
+  ///
+  /// 胶囊形态（2026-09-29 参考图批）：`StadiumBorder` 全圆角 pill、去勾选
+  /// 角标——对齐参考图 chips（选中 = 实心亮胶囊、未选中 = 半透明玻璃胶囊，
+  /// 与搜索胶囊同一套玻璃语言）。颜色跟主题走（同封面投影的拍板口径）：
+  /// 未选中 `surfaceContainerHighest` α0.6 + `outlineVariant` 描边；
+  /// 选中 `secondaryContainer`（M3 选中态 tonal，深浅主题皆清晰）。
+  /// 文字色吃 chip 默认 `onSurfaceVariant`（两态通用，读 SDK
+  /// `_ChipDefaultsM3.labelStyle` 实证，无需自定义 labelStyle）。
   Widget _buildGroupChip({
     required String label,
     required String? groupId,
     required bool selected,
   }) {
+    final ThemeData theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: FilterChip(
         label: Text(label),
         selected: selected,
+        showCheckmark: false,
         visualDensity: VisualDensity.compact,
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: const StadiumBorder(),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
+        backgroundColor: theme.colorScheme.surfaceContainerHighest
+            .withValues(alpha: 0.6),
+        selectedColor: theme.colorScheme.secondaryContainer,
         onSelected: (_) => unawaited(
           widget.shelfPrefs.setGroup(selected ? null : groupId),
         ),
@@ -580,7 +619,8 @@ class _ShelfPageState extends State<ShelfPage> {
     final ThemeData theme = Theme.of(context);
     final ShelfPrefs prefs = widget.shelfPrefs.prefs;
     final Size screen = MediaQuery.of(context).size;
-    final double top = MediaQuery.of(context).padding.top + kToolbarHeight;
+    final double top =
+        MediaQuery.of(context).padding.top + kShelfHeaderHeight;
 
     final ShelfSortField? picked = await showMenu<ShelfSortField>(
       context: context,
@@ -692,11 +732,16 @@ class _ShelfPageState extends State<ShelfPage> {
   ///
   /// 网格**不再含任何交互**（拖拽 / 文件夹卡随 2026-09-29 拍板移除），
   /// 本页只把「点击直接开书」「长按弹操作单」两个回调接上。
-  Widget _buildBookGrid() {
+  ///
+  /// [topInset] = 状态栏高（`MediaQuery.padding.top`）；网格 `padding.top`
+  /// 经 [shelfGridPadding] 合成后 = `状态栏 + 浮动头部高 + 12`——**首行不被
+  /// 浮动头部盖住**的唯一保证（内容 edge-to-edge 后正文从 y=0 起）。
+  Widget _buildBookGrid(double topInset) {
     return ShelfGrid(
       books: _visibleBooks,
       coverStore: widget.coverStore,
       openingBookId: _openingBookId,
+      padding: shelfGridPadding(topInset),
       // 点书卡 = **直接进阅读页**（2026-09-29 拍板：原「点卡 → 详情页」改道；
       // 与 anx-reader 一致——其 `book_item.dart:51-53` 的 `onTap` 即
       // `pushToReadingPage`）。详情页入口改走长按操作单「书籍详情」。
@@ -757,59 +802,57 @@ class _BookSearchEntry extends StatelessWidget {
     final ThemeData theme = Theme.of(context);
     // 搜索框圆角（比高度 36 的一半 18 大也只会被裁到 18，直接写 18 免歧义）。
     const double radius = 18;
-    return ConstrainedBox(
-      // 宽屏（桌面）不让搜索框无限拉伸，上限 400。
-      // 窄屏由外层（`_ToolbarLayout` 靠左档 / `AppBar`）给的 `maxWidth` 收口。
-      constraints: const BoxConstraints(maxWidth: 400),
-      child: SizedBox(
-        // 撑满「可用宽 ∩ 400」——没有它，`InkWell` 只按内容宽收缩（又是居中即视感）。
-        width: double.infinity,
-        // 玻璃库无 Material 祖先（PRD §11.4），而 `InkWell` 的水波纹由最近的
-        // Material 绘制，故需自带一层。`MaterialType.transparency` 不绘制底色，
-        // 不破坏玻璃观感。
-        child: Material(
-          type: MaterialType.transparency,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(radius),
-            child: Container(
-              // 供契约测试定位（`test/ui/shelf_page_test.dart` 断言「靠左铺满 +
-              // 自带描边/底色」）。
-              key: const Key('shelf-search-entry'),
-              height: 36,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                // 顶栏是**半透明玻璃**：沿用原先 0.6 透明度的填充会「糊」进背后的
-                // 渐变里，看不出这是一块可点的控件 → 提高填充不透明度并加一道描边，
-                // 把搜索框从玻璃条面上分离出来。
-                color: theme.colorScheme.surfaceContainerHighest
-                    .withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(radius),
-                border: Border.all(
-                  color: theme.colorScheme.outlineVariant,
-                  width: 1,
-                ),
+    return SizedBox(
+      // 撑满外层 `Expanded` 给的可用宽（2026-09-29 参考图批「全宽搜索胶囊」：
+      // 原 `maxWidth: 400` 桌面上限随拍板撤销——胶囊与 chips 行同宽铺满）。
+      width: double.infinity,
+      // 玻璃库无 Material 祖先（PRD §11.4），而 `InkWell` 的水波纹由最近的
+      // Material 绘制，故需自带一层。`MaterialType.transparency` 不绘制底色，
+      // 不破坏玻璃观感。
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(radius),
+          child: Container(
+            // 供契约测试定位（`test/ui/shelf_page_test.dart` 断言「靠左铺满 +
+            // 描边 + 半透明玻璃底」）。
+            key: const Key('shelf-search-entry'),
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              // 2026-09-29 浮动头部批：内容 edge-to-edge 后顶栏下方是**磨砂内容区**
+              // （`GlassScrollEdgeStyle.blur`），胶囊改**半透明玻璃底**（参考图 =
+              // HyperOS 主题商店的搜索胶囊，磨砂透出底下内容）；描边保留
+              // （同日上午「描边/底色区分」批次的口径不撤，半透明下更要靠它
+              // 把可点控件从磨砂区里分出来）。
+              color: theme.colorScheme.surfaceContainerHighest
+                  .withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(radius),
+              border: Border.all(
+                color: theme.colorScheme.outlineVariant,
+                width: 1,
               ),
-              child: Row(
-                children: <Widget>[
-                  Icon(
-                    Icons.search,
-                    size: 18,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '搜索书名、作者',
-                      overflow: TextOverflow.ellipsis,
-                      // 仍是**占位符**口径（比正文弱一档），不因加边框提成正文色。
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+            ),
+            child: Row(
+              children: <Widget>[
+                Icon(
+                  Icons.search,
+                  size: 18,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '搜索书名、作者',
+                    overflow: TextOverflow.ellipsis,
+                    // 仍是**占位符**口径（比正文弱一档），不因加边框提成正文色。
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),

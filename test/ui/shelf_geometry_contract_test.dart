@@ -132,6 +132,29 @@ void main() {
       );
     });
 
+    test('浮动头部几何（2026-09-29 参考图批：搜索行 + chips 行）', () {
+      // 行高分解 44 / 12 / 40 → 头部 96。三值照参考图（HyperOS 主题商店）
+      // **估的初始值**（截图为缩放图，不作精确依据），真机复核后可整体调；
+      // 改这里 = 破坏契约，须同步 `shelf_page_test` 里 96 / 108 两处字面量。
+      expect(kShelfSearchRowHeight, 44);
+      expect(kShelfHeaderRowGap, 12);
+      expect(kShelfChipsRowHeight, 40);
+      expect(kShelfHeaderHeight, 96);
+
+      // 合成的网格内边距：top = 状态栏 + 头部 + 12。例：状态栏 48 → 156。
+      expect(
+        shelfGridPadding(48),
+        const EdgeInsets.fromLTRB(20, 156, 20, kShellBottomInset),
+      );
+      // 状态栏 0（widget 测试窗口）→ 首行顶边 = 0 + 96 + 12 = 108，
+      // 与 `shelf_page_test` 的 `getTopLeft(BookCard).dy == 108` 同一口径。
+      expect(shelfGridPadding(0).top, 108);
+      // 其余三边不受头部影响（左右 20 / 底部 kShellBottomInset）。
+      expect(shelfGridPadding(0).left, 20);
+      expect(shelfGridPadding(0).right, 20);
+      expect(shelfGridPadding(0).bottom, kShellBottomInset);
+    });
+
     test('单卡分区', () {
       // anx `book_item.dart:88` 封面↔信息间距 5、`:89-90` 信息区 55。
       expect(kBookCoverToInfoGap, 5);
