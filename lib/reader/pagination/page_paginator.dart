@@ -213,16 +213,24 @@ abstract final class PagePaginator {
   /// `InlineParagraph`（独立 `Text.rich`）」同构，故行断与渲染一致；且贪心断行
   /// 只依赖「行首字符 + 宽 + 样式」，所以页内某段的**续行**单独重排也能得到
   /// 相同的行断（这是「页内渲染 == 测量结果」的依据，T05 接线时再以契约测试复核）。
+  ///
+  /// [startIndex] / [baseOffset]：**增量测量**用（T02 `IncrementalPaginator`
+  /// 逐段推进）——[startIndex] = `paragraphs[0]` 在章内的段下标，
+  /// [baseOffset] = `paragraphs[0]` 在章内拼接原文中的起始偏移。全量测量
+  /// （默认 0/0）与逐段测量产出**完全相同**的行表（契约测试钉死）。
   static List<MeasuredLine> measureParagraphs({
     required List<String> paragraphs,
     required PaginationConfig config,
+    int startIndex = 0,
+    int baseOffset = 0,
   }) {
     assert(config.pageWidth > 0 && config.pageHeight > 0, '分页宽高必须为正');
     final List<MeasuredLine> lines = <MeasuredLine>[];
-    int paragraphBase = 0;
+    int paragraphBase = baseOffset;
 
-    for (int index = 0; index < paragraphs.length; index++) {
-      final String raw = paragraphs[index];
+    for (int p = 0; p < paragraphs.length; p++) {
+      final int index = startIndex + p;
+      final String raw = paragraphs[p];
       final VisibleProjection projection = project(raw, config.textStyle);
 
       if (projection.visible.isNotEmpty) {
