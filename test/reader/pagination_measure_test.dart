@@ -1,6 +1,7 @@
 // 分页测量层单测（T01）：投影契约 + 行偏移映射 + 端到端切页。
 // 期望值一律硬编码字面量。夹具（flutter test 等宽字体实测）：fontSize 18
-// → 字宽 18（pageWidth 180 = 10 字/行）、行高 **29.0**、图片占位行高 **48.0**。
+// → 字宽 18（pageWidth 180 = 10 字/行）、行高 **29.0**、图片占位混排行高 **51.0**
+//（占位 48 + 缩进文本同行，bottom 对齐——与渲染 `typeset.dart` WidgetSpan 默认一致）。
 // 投影恒加 2 字符首行缩进前缀（`kFirstLineIndentPrefix`）：可见偏移 ≈ 原文 + 2。
 // 投影契约对拍 `typeset.dart` 的 `parseInlineStyles` / `parseContentSpans`
 // ——两条独立路径产出必须同语义（测量与渲染行断一致性的前提）。
@@ -100,7 +101,7 @@ void main() {
       }
     });
 
-    test('图片标记：占 1 个可见槽位，行高取占位 48（不是文本行高 29）', () {
+    test('图片标记：占 1 个可见槽位，行高取占位（48 底 + 缩进文本 → 51，非文本行高 29）', () {
       final List<MeasuredLine> lines = PagePaginator.measureParagraphs(
         paragraphs: <String>['\x00IMG:a.png\x00'],
         config: config,
@@ -109,7 +110,7 @@ void main() {
       expect(lines.length, 1);
       expect(lines.single.start, 0);
       expect(lines.single.end, 11); // ␀IMG:a.png␀ = 11 个原文码元
-      expect(lines.single.height, 48.0);
+      expect(lines.single.height, 51.0);
       expect(lines.single.quality, LineBreakQuality.paragraphEnd);
     });
 
@@ -135,9 +136,9 @@ void main() {
         config: config,
         imageSizes: imageSizes,
       );
-      // 60×30 原样进占位（fit 不动）：行高实测 32.0——flutter test 字体下
-      // 「30 高占位 + 缩进文本同行」的行盒交互值，与未命中回退的 48.0 可区分。
-      expect(small.single.height, 32.0);
+      // 60×30 原样进占位（fit 不动）：行高实测 33.0——flutter test 字体下
+      // 「30 高占位 + 缩进文本同行」的 bottom 对齐行盒值，与回退的 51.0 可区分。
+      expect(small.single.height, 33.0);
 
       // 未命中（不传 / 表里没有）→ 48×48 加载态回退。
       final List<MeasuredLine> miss = PagePaginator.measureParagraphs(
@@ -145,13 +146,13 @@ void main() {
         config: config,
         imageSizes: imageSizes,
       );
-      expect(miss.single.height, 48.0);
+      expect(miss.single.height, 51.0);
 
       final List<MeasuredLine> noTable = PagePaginator.measureParagraphs(
         paragraphs: <String>['\x00IMG:wide.png\x00'],
         config: config,
       );
-      expect(noTable.single.height, 48.0);
+      expect(noTable.single.height, 51.0);
     });
 
     test('标签不进字符区间：偏移保持原文口径', () {

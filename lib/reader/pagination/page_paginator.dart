@@ -173,7 +173,9 @@ abstract final class PagePaginator {
               width: kImagePlaceholderSize.width,
               height: kImagePlaceholderSize.height,
             ),
-            alignment: PlaceholderAlignment.middle,
+            // 对齐渲染侧：`typeset.dart` 的 WidgetSpan 用默认 bottom
+            //（探针实证混排行 middle 48.0 / bottom 51.0，测量必须取 bottom）。
+            alignment: PlaceholderAlignment.bottom,
           ));
           placeholders++;
           placeholderSrcs.add(body.substring('IMG:'.length));
@@ -255,7 +257,8 @@ abstract final class PagePaginator {
             final Size? real = imageSizes?[src];
             dimensions.add(PlaceholderDimensions(
               size: fitWithinWidth(real ?? config.imageSize, config.pageWidth),
-              alignment: PlaceholderAlignment.middle,
+              // 同上：与渲染 `typeset.dart` WidgetSpan 默认 bottom 一致。
+              alignment: PlaceholderAlignment.bottom,
             ));
           }
           painter.setPlaceholderDimensions(dimensions);
