@@ -9,17 +9,27 @@
 //      [kIdleFrameBudget] 切片，超预算让出；
 //   3. 动画期上层调 [freeze]（保证③「动画期零排版」，T04）；
 //   4. [setWindow] 登记 prev/next；当前章完成前不动邻章，换章旧队列作废。
+import 'package:flutter/painting.dart';
+
 import 'incremental_paginator.dart';
 import 'page_paginator.dart';
 import 'pagination_cache.dart';
 
 /// 分页调度器：当前章优先、±1 章窗口预分页（纯逻辑，帧驱动由上层负责）。
 class PaginationScheduler {
-  PaginationScheduler({PaginationCache? cache})
-      : cache = cache ?? PaginationCache();
+  PaginationScheduler({PaginationCache? cache, Map<String, Size>? imageSizes})
+      : cache = cache ?? PaginationCache(),
+        imageSizes = imageSizes ?? <String, Size>{};
 
   /// 已完成页表的 LRU 缓存（可注入，便于测试观察）。
   final PaginationCache cache;
+
+  /// 图片真尺寸表（src → Size，书级共享引用；T05-b）。
+  /// 所有任务构造时引用它——`ensureImageSize` 补入即全局可见，但已测行不
+  /// 自动重排，须随后调 [invalidateForImageSizes] 重分页。
+  /// **不进 [PaginationConfig]**：它是运行时增长的异步产物，进缓存键等于
+  /// 每补一图全量失效；缓存清理由失效方法显式承担。
+  final Map<String, Size> imageSizes;
 
   /// 当前章的进行中任务（首屏就绪前独占预算）。
   IncrementalPaginator? _active;
@@ -128,6 +138,7 @@ class PaginationScheduler {
           paragraphs: paragraphs,
           config: config,
           headingHeight: headingHeight,
+          imageSizes: imageSizes,
           targetCharOffset: targetCharOffset,
         );
       }
@@ -150,6 +161,19 @@ class PaginationScheduler {
       nextHref, nextParagraphs, nextHeadingHeight,
     );
     return ready;
+  }
+
+  /// 图片真尺寸补入后重分页（T05-b；`ensureImageSize` 返回 `true` 时调用）。
+  ///
+  /// 清进行中任务、预分页队列与全部缓存页表（页行高依赖 [imageSizes]，
+  /// 旧行表已不可信；缓存不记 src 无法精准定位受影响章，按「一图入表即
+  /// 重分页」整体换新——尺寸入表次数 = 图片数，上层随后带原
+  /// `targetCharOffset` 重 [open] 即重锚，与布局突变同语义）。
+  /// 保留 [config]、[activeHref] 与 [frozen]——排版参数与阅读位置不动。
+  void invalidateForImageSizes() {
+    _active = null;
+    _prefetch.clear();
+    cache.clear();
   }
 
   /// 登记 ±1 章预分页窗口（仅收**未完成**且不在缓存/队列中的邻章；
@@ -247,6 +271,7 @@ class PaginationScheduler {
       paragraphs: paragraphs,
       config: cfg,
       headingHeight: headingHeight,
+      imageSizes: imageSizes,
       targetCharOffset: 0,
     ));
   }

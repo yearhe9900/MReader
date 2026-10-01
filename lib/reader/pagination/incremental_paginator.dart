@@ -10,6 +10,8 @@
 // 外，已产出页边界不随后续测量改变；`covers` 只信末页覆盖范围。
 // 与渲染一致性：[lines] 只追加、[pages] 每次换新列表 → 快照下标永不过期。
 // 两条均由 `pagination_incremental_test.dart` 钉死。
+import 'package:flutter/painting.dart';
+
 import 'pagination_cache.dart';
 import 'page_breaker.dart';
 import 'page_paginator.dart';
@@ -33,6 +35,7 @@ class IncrementalPaginator {
     required this.paragraphs,
     required this.config,
     this.headingHeight = 0,
+    this.imageSizes,
     this.targetCharOffset = 0,
   })  : totalChars = PagePaginator.charCountOf(paragraphs),
         _complete = paragraphs.isEmpty,
@@ -55,6 +58,12 @@ class IncrementalPaginator {
   /// 章标题占高（页 0 预算 = `pageHeight − headingHeight`）。
   /// **不进 [PaginationConfig]**——逐章不同，进缓存键会触发全量失效。
   final double headingHeight;
+
+  /// 图片真尺寸表（src → Size，书级共享引用；T05-b）。
+  /// **不进 [PaginationConfig]**——运行中会增长（`ensureImageSize` 异步补入），
+  /// 由调度方 `invalidateForImageSizes()` 显式重分页，不走配置失效。
+  /// null / 未命中 → 48×48 占位回退。
+  final Map<String, Size>? imageSizes;
 
   /// 目标字符偏移（开书恢复 / 跳转落位点；可随复用改写）。
   int targetCharOffset;
@@ -106,6 +115,7 @@ class IncrementalPaginator {
         config: config,
         startIndex: _nextParagraph,
         baseOffset: _baseOffset,
+        imageSizes: imageSizes,
       ));
       _baseOffset += raw.length;
       _nextParagraph++;

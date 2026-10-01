@@ -55,6 +55,7 @@ void main() {
       // 缩进 + a ␀IMG:x.png␀ b ␀A:h␀ c ␀A␀ ␀ID:z␀ d（下标：0/0 / 0 / 1 / 12 / 18 / 28）
       expect(projection.visible, '${kFirstLineIndentPrefix}a\uFFFCbcd');
       expect(projection.placeholderCount, 1);
+      expect(projection.placeholderSrcs, <String>['x.png']); // T05-b 记 src
       expect(projection.rawOfVisible, <int>[0, 0, 0, 1, 12, 18, 28]);
       expect(projection.rawLength, 29);
 
@@ -110,6 +111,47 @@ void main() {
       expect(lines.single.end, 11); // ␀IMG:a.png␀ = 11 个原文码元
       expect(lines.single.height, 48.0);
       expect(lines.single.quality, LineBreakQuality.paragraphEnd);
+    });
+
+    test('图片真尺寸（T05-b）：命中查表按页宽 fit，未命中回退 48', () {
+      final Map<String, Size> imageSizes = <String, Size>{
+        'wide.png': const Size(300, 150), // > 页宽 180 → fit 180×90
+        'small.png': const Size(60, 30), // 不超页宽 → 原样 60×30
+      };
+
+      final List<MeasuredLine> wide = PagePaginator.measureParagraphs(
+        paragraphs: <String>['\x00IMG:wide.png\x00'],
+        config: config,
+        imageSizes: imageSizes,
+      );
+      // fit 后 180 宽：段首 2 缩进（36px）+ 180 > 页宽 → 图片换行成 2 行
+      //（缩进行 29.0 + 图行 90.0，与渲染侧行断一致）。
+      expect(wide.length, 2);
+      expect(wide[0].height, 29.0);
+      expect(wide[1].height, 90.0);
+
+      final List<MeasuredLine> small = PagePaginator.measureParagraphs(
+        paragraphs: <String>['\x00IMG:small.png\x00'],
+        config: config,
+        imageSizes: imageSizes,
+      );
+      // 60×30 原样进占位（fit 不动）：行高实测 32.0——flutter test 字体下
+      // 「30 高占位 + 缩进文本同行」的行盒交互值，与未命中回退的 48.0 可区分。
+      expect(small.single.height, 32.0);
+
+      // 未命中（不传 / 表里没有）→ 48×48 加载态回退。
+      final List<MeasuredLine> miss = PagePaginator.measureParagraphs(
+        paragraphs: <String>['\x00IMG:none.png\x00'],
+        config: config,
+        imageSizes: imageSizes,
+      );
+      expect(miss.single.height, 48.0);
+
+      final List<MeasuredLine> noTable = PagePaginator.measureParagraphs(
+        paragraphs: <String>['\x00IMG:wide.png\x00'],
+        config: config,
+      );
+      expect(noTable.single.height, 48.0);
     });
 
     test('标签不进字符区间：偏移保持原文口径', () {

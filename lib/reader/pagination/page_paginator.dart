@@ -9,11 +9,13 @@
 // `typeset.dart` span 构建一致，由 `pagination_measure_test.dart` 对拍钉死。
 // 投影恒加首行缩进（`kFirstLineIndentPrefix`，与渲染侧
 // `withFirstLineIndent` 一致）——故可见偏移比原文偏移多 2 个缩进字符。
-// 已知边界（里程碑 §2）：图片占位 48×48，真图尺寸进测量归 T05；链接
-// 下划线不改变行度量，故不叠链接样式。
+// 已知边界（里程碑 §2）：链接下划线不改变行度量，故不叠链接样式。
+// 图片真尺寸（T05-b）：`measureParagraphs(imageSizes:)` 查表 + [fitWithinWidth]
+// 与渲染同式；未命中回退 48×48 加载态（`typeset.dart` `_InlineImage`）。
 import 'package:flutter/material.dart';
 
 import '../../typography/typeset.dart';
+import '../image_dimensions.dart';
 import 'page_breaker.dart';
 
 /// 图片占位尺寸（= `typeset.dart` 里 `_InlineImage` 加载态 / 错误态的 48×48）。
@@ -82,6 +84,7 @@ class VisibleProjection {
     required this.rawOfVisible,
     required this.spans,
     required this.placeholderCount,
+    required this.placeholderSrcs,
     required this.rawLength,
   });
 
@@ -99,6 +102,10 @@ class VisibleProjection {
 
   /// 图片占位数（`TextPainter.setPlaceholderDimensions` 需要同长列表）。
   final int placeholderCount;
+
+  /// 每个占位对应的图片 src（按出现序，长度 == [placeholderCount]）。
+  /// 测量方拿它查 `imageSizes` 真尺寸；未命中回退 [kImagePlaceholderSize]。
+  final List<String> placeholderSrcs;
 
   /// 原文长度（段末哨兵：可见位置越界时映射到它）。
   final int rawLength;
@@ -134,6 +141,7 @@ abstract final class PagePaginator {
     bool bold = false;
     bool italic = false;
     int placeholders = 0;
+    final List<String> placeholderSrcs = <String>[];
 
     // 首行缩进：进可见文本与首段 span；原文映射指向段首（0）。
     visible.write(kFirstLineIndentPrefix);
@@ -168,6 +176,7 @@ abstract final class PagePaginator {
             alignment: PlaceholderAlignment.middle,
           ));
           placeholders++;
+          placeholderSrcs.add(body.substring('IMG:'.length));
         }
         // 链接 / 锚点 / 未知标记：一律吞掉（不上屏、不占 offset）。
         i = close + 1;
@@ -200,6 +209,7 @@ abstract final class PagePaginator {
       rawOfVisible: rawOfVisible,
       spans: spans,
       placeholderCount: placeholders,
+      placeholderSrcs: placeholderSrcs,
       rawLength: raw.length,
     );
   }
@@ -212,11 +222,16 @@ abstract final class PagePaginator {
   ///
   /// [startIndex] / [baseOffset]：增量测量用——`paragraphs[0]` 在章内的段下标
   /// 与原文起始偏移。全量（默认 0/0）与逐段产出**完全相同**的行表（契约钉死）。
+  ///
+  /// [imageSizes]：src → 真尺寸（`image_dimensions.dart` 头解析产物）。命中则
+  /// 占位按 [fitWithinWidth]（与渲染 `box.dart:317` 同式）适配页宽；未命中 /
+  /// 传 null 回退 [config.imageSize]（默认 48×48 加载态）。
   static List<MeasuredLine> measureParagraphs({
     required List<String> paragraphs,
     required PaginationConfig config,
     int startIndex = 0,
     int baseOffset = 0,
+    Map<String, Size>? imageSizes,
   }) {
     assert(config.pageWidth > 0 && config.pageHeight > 0, '分页宽高必须为正');
     final List<MeasuredLine> lines = <MeasuredLine>[];
@@ -235,10 +250,15 @@ abstract final class PagePaginator {
           maxLines: null,
         );
         if (projection.placeholderCount > 0) {
-          painter.setPlaceholderDimensions(List<PlaceholderDimensions>.filled(
-            projection.placeholderCount,
-            PlaceholderDimensions(size: config.imageSize, alignment: PlaceholderAlignment.middle),
-          ));
+          final List<PlaceholderDimensions> dimensions = <PlaceholderDimensions>[];
+          for (final String src in projection.placeholderSrcs) {
+            final Size? real = imageSizes?[src];
+            dimensions.add(PlaceholderDimensions(
+              size: fitWithinWidth(real ?? config.imageSize, config.pageWidth),
+              alignment: PlaceholderAlignment.middle,
+            ));
+          }
+          painter.setPlaceholderDimensions(dimensions);
         }
         painter.layout(maxWidth: config.pageWidth);
         final List<LineMetrics> metrics = painter.computeLineMetrics();
@@ -281,8 +301,13 @@ abstract final class PagePaginator {
     required List<String> paragraphs,
     required PaginationConfig config,
     double headingHeight = 0,
+    Map<String, Size>? imageSizes,
   }) {
-    final List<MeasuredLine> lines = measureParagraphs(paragraphs: paragraphs, config: config);
+    final List<MeasuredLine> lines = measureParagraphs(
+      paragraphs: paragraphs,
+      config: config,
+      imageSizes: imageSizes,
+    );
     return PageBreaker.paginate(
       lines,
       pageHeight: config.pageHeight,

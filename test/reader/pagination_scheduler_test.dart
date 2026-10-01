@@ -397,4 +397,59 @@ void main() {
       expect(s.cache.count, 1);
     });
   });
+
+  group('图片真尺寸进测量（T05-b）', () {
+    test('任务共享 imageSizes 引用：入表即对进行中任务可见', () {
+      final PaginationScheduler s = PaginationScheduler();
+      expect(s.imageSizes, isEmpty);
+
+      openA(s, href: 'a', count: 4, prevHref: 'p', nextHref: 'n');
+      expect(s.active!.imageSizes, same(s.imageSizes));
+      expect(s.prefetchJobs[0].imageSizes, same(s.imageSizes));
+
+      s.imageSizes['a.png'] = const Size(300, 150);
+      expect(s.active!.imageSizes!['a.png'], const Size(300, 150));
+    });
+
+    test('真尺寸改变行高：宽图 fit 页宽 180 → 90（回退口径 48）', () {
+      final PaginationScheduler s = PaginationScheduler();
+      s.imageSizes['a.png'] = const Size(300, 150);
+
+      s.open(
+        href: 'img',
+        paragraphs: <String>['\x00IMG:a.png\x00'],
+        config: cfg,
+        budget: Duration.zero,
+      );
+      expect(s.stepIdle(budget: Duration.zero), isFalse); // 单段章一轮测完
+      final PaginatedChapter chapter = s.currentPage!;
+      expect(chapter.complete, isTrue);
+      // fit 180 宽 → 缩进 36px 挤不下，图换行：2 行（29.0 + 90.0），仍 1 页。
+      expect(chapter.lines.length, 2);
+      expect(chapter.lines[1].height, 90.0);
+      expect(chapter.pageCount, 1);
+    });
+
+    test('invalidateForImageSizes：清任务/队列/缓存，保留 config 与定位', () {
+      final PaginationScheduler s = PaginationScheduler();
+      openA(s, href: 'a', count: 4, prevHref: 'p', nextHref: 'n');
+      s.stepIdle(budget: Duration.zero); // 部分进度
+      expect(s.active, isNotNull);
+      expect(s.prefetchPending, 2);
+
+      s.imageSizes['a.png'] = const Size(300, 150);
+      s.invalidateForImageSizes();
+
+      expect(s.active, isNull, reason: '进行中任务作废（行表不可信）');
+      expect(s.prefetchPending, 0, reason: '预分页队列作废');
+      expect(s.cache.count, 0, reason: '缓存页表整体换新');
+      expect(s.activeHref, 'a', reason: '阅读定位保留');
+      expect(s.config, cfg, reason: '排版参数保留');
+
+      // 重开（上层带原 targetCharOffset）= 从零重建、共享新表。
+      expect(openA(s, href: 'a', count: 4), isFalse);
+      expect(s.active!.measuredParagraphs, 0);
+      expect(s.active!.imageSizes, same(s.imageSizes));
+    });
+  });
 }
