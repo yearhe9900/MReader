@@ -82,6 +82,14 @@ class PaginationCache {
     return true;
   }
 
+  /// 取 [href] 在 [config] 下的分页结果，**不触碰** LRU 序、不移除失效项
+  /// （供签名计算/只读判定；写路径仍走 [get]）。
+  PaginatedChapter? peek(String href, PaginationConfig config) {
+    final PaginatedChapter? entry = _entries[href];
+    if (entry == null || entry.config != config) return null;
+    return entry;
+  }
+
   /// 取 [href] 在 [config] 下的分页结果；命中提位，未命中/配置失效返回 `null`。
   PaginatedChapter? get(String href, PaginationConfig config) {
     final PaginatedChapter? entry = _entries[href];

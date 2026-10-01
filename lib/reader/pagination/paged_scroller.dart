@@ -9,7 +9,9 @@
 // 跨页段间距：切页口径「页内加、跨页不加」（`page_breaker.dart`），滚动拼接
 // 必须补——相邻页分属不同段时补 `paragraphSpacing`，否则跨页两段黏连；
 // 同段续页不补（正文连续）。章间不加额外间距（标题 widget 自带留白）。
-// 标题占位与页同窗口：所属章有页在可见区间才挂标题（随区间进出场）。
+// 标题占位与页同窗口：按**章几何与可见带相交**判定（有页章 = 章顶到下章
+// 顶；无页占位章 = headingHeight 块）——标题区进入缓冲带即挂载，无页
+// 占位章（页表未就绪）的「载入中」标题也能上屏。
 //
 // 采样（选型 §2.3 ④「停手 200ms 防抖」）：ScrollUpdate / ScrollEnd 不断重置
 // 计时器——滚动期不采，静默 [kScrollSampleDebounce] 后取**视口顶**所在页换算
@@ -449,13 +451,18 @@ class PagedScrollerState extends State<PagedScroller> {
     );
   }
 
-  /// 字符偏移 → 滚动偏移（页顶 + 页内比例线性折算）。
-  /// 章不在窗口 / 页表未覆盖（`charOffset >` 末页页尾）→ null（占位语义）。
-  double? offsetForCharOffset(String href, int charOffset) {
-    final int c =
-        widget.chapters.indexWhere((PagedChapterView v) => v.href == href);
+  /// 字符偏移 → 滚动偏移（页顶 + 页内比例线性折算；静态版）。
+  /// 章不在 [chapters] / 页表未覆盖（`charOffset >` 末页页尾）→ null（占位
+  /// 语义）。c3 跳转流用它对**预计算新布局**先算偏移再 jump（单帧无闪）。
+  static double? offsetFor(
+    PagedLayout layout,
+    List<PagedChapterView> chapters,
+    String href,
+    int charOffset,
+  ) {
+    final int c = chapters.indexWhere((PagedChapterView v) => v.href == href);
     if (c < 0) return null;
-    final List<PageSlice> pages = widget.chapters[c].pages;
+    final List<PageSlice> pages = chapters[c].pages;
     if (pages.isEmpty) return null;
     if (charOffset > pages.last.end) return null;
     final int p = PageBreaker.findPageByCharOffset(pages, charOffset);
@@ -465,8 +472,12 @@ class PagedScrollerState extends State<PagedScroller> {
     final double fraction = span > 0
         ? ((charOffset - page.start) / span).clamp(0.0, 1.0).toDouble()
         : 0;
-    return _layout.pageTops[c][p] + fraction * page.height;
+    return layout.pageTops[c][p] + fraction * page.height;
   }
+
+  /// 实例委托（当前布局 + 当前窗口）。
+  double? offsetForCharOffset(String href, int charOffset) =>
+      offsetFor(_layout, widget.chapters, href, charOffset);
 
   /// 一次落位：算偏移 → clamp 上界 → 单跳（无校正环）。返回是否落位成功。
   /// 落位后按停手采样（`jumpTo` 是否发通知不作假设，显式重置计时器）。
@@ -538,21 +549,26 @@ class PagedScrollerState extends State<PagedScroller> {
     );
   }
 
-  /// 可见层：所属章有页在区间的标题 + 区间内各页（页框 = 内容自然高）。
+  /// 可见层：章几何与可见带相交的标题（含无页占位章）+ 区间内各页
+  /// （页框 = 内容自然高）。
   List<Widget> _buildLayer() {
     final VisibleRange range = _visible;
-    if (range.isEmpty) return const <Widget>[];
+    final double bandLo = offset - widget.config.pageHeight;
+    final double bandHi =
+        offset + (_viewportHeight ?? 0) + widget.config.pageHeight;
     final List<Widget> out = <Widget>[];
 
     for (int c = 0; c < widget.chapters.length; c++) {
       final PagedChapterView chapter = widget.chapters[c];
       final Widget? heading = chapter.heading;
       if (heading == null || chapter.headingHeight <= 0) continue;
-      final int start = _layout.chapterFlatStart[c];
-      final int end = _layout.chapterFlatEnd[c];
-      if (end < start || end < range.first || start > range.last) continue;
+      final double top = _layout.chapterTops[c];
+      final double bottom = c + 1 < _layout.chapterTops.length
+          ? _layout.chapterTops[c + 1]
+          : _layout.totalHeight;
+      if (bottom <= bandLo || top >= bandHi) continue;
       out.add(Positioned(
-        top: _layout.chapterTops[c],
+        top: top,
         left: 0,
         right: 0,
         height: chapter.headingHeight,

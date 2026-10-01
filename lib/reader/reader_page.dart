@@ -2,6 +2,11 @@
 // （从第 1 章一路滚到最后一章），且正文**增量加载**（不一次性解析全书）。
 //
 // 设计要点：
+//   · **双模式（T05-c c3 分叉）**：目标章是**文本**（EPUB/TXT）→ `_pagedMode = true`
+//     走 [PagedScroller] 页拼接（`PaginationScheduler` 增量分页 + 三章窗口，
+//     分页层细节见 `lib/reader/pagination/`）；目标章是**图片页**（CBZ/CBR/PDF）
+//     → `_pagedMode = false` 保留下面的旧 `ListView` 路径（异步图片高不进静态
+//     布局表，FMT-02 P1 不迁）。分页模式一次落位、无可见中间跳转（不盖遮罩）；
 //   · **连续滚动**：**全部章节塞进一个 `ListView.builder`**，每章一个 item（`Column`：
 //     章节标题 + 该章全部段落）。章与章之间不切页，滚到底自然进入下一章；
 //   · **正文增量加载（`PERF-02`）**：首帧**只等恢复目标章**（±1 邻章预取不阻塞；见
@@ -77,6 +82,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../diagnostics/perf_log.dart';
 import '../format/book_source.dart';
@@ -95,7 +101,14 @@ import 'bookmark_store.dart';
 import 'chapter_cache.dart';
 import 'control_bar.dart';
 import 'image_cache.dart';
+import 'image_dimensions.dart';
 import 'link_navigator.dart';
+import 'pagination/incremental_paginator.dart';
+import 'pagination/page_breaker.dart';
+import 'pagination/page_paginator.dart';
+import 'pagination/paged_scroller.dart';
+import 'pagination/pagination_cache.dart';
+import 'pagination/pagination_scheduler.dart';
 import 'progress_store.dart';
 import 'reader_fonts.dart';
 import 'reader_progress_indicator.dart';
@@ -324,6 +337,68 @@ class _ReaderPageState extends State<ReaderPage> {
   /// `null` = 尚无布局基线，不校正。
   double? _laidOutPixels;
 
+  // ── T05-c c3：分页模式状态（`_pagedMode == false` 时全部闲置）──
+
+  /// 分页模式（c3 分叉）：首帧批次的目标章是**文本**（EPUB/TXT）→ `true`
+  /// 走 `PagedScroller` 页拼接；**图片章**（CBZ/CBR/PDF 出图）→ `false`
+  /// 保留旧 `ListView` 路径（异步图片高不进静态布局表，FMT-02 P1 不迁）。
+  bool _pagedMode = false;
+
+  /// 分页调度器（目标页优先 + ±1 章窗口预分页；文本模式在 `_open` 创建）。
+  PaginationScheduler? _scheduler;
+
+  /// 三章窗口 `[current−1, current, current+1]`（连续章下标；滚动中**只增不移**，
+  /// trim 只在停稳后执行）。
+  List<int> _window = const <int>[];
+
+  /// 窗口章视图（与 [_window] 同序；只在应用时机整批换新，见 [_applyPagedViews]）。
+  List<PagedChapterView> _pageViews = const <PagedChapterView>[];
+
+  /// 已应用视图的签名（`_computeSignature` 产物；链式补页后比对判重建）。
+  String _viewsSignature = '';
+
+  /// 生效排版参数（与 `_pageViews` 同批换新——config 与视图**原子一致**）。
+  PaginationConfig? _pageConfig;
+
+  /// 待换排版参数（字号 / 页边距 / 视口变化后挂起；prime 同步段交换）。
+  PaginationConfig? _pendingConfig;
+
+  /// 待落位目标（跳转 / reprime：页表未覆盖时挂起，`stepIdle` 链补完后
+  /// 二次落位；`null` = 无挂起）。
+  ({int index, int charOffset})? _pendingLand;
+
+  /// 程序化跳转中（`jumpTo` 同步派发的通知基于陈旧布局 → 处理器抑制）。
+  bool _inPagedOp = false;
+
+  /// 跳转流进行中（含异步图片 ensure 段；reprime 见此让位防互相踩踏）。
+  bool _jumpInFlight = false;
+
+  /// `stepIdle` 空闲帧链是否在跑（postFrame 链，每帧一个切片）。
+  bool _pagedFramesRunning = false;
+
+  /// prime 序号（异步 ensure 后校验：更新的 prime 已接管则本次作废）。
+  int _primeSeq = 0;
+
+  /// reprime 请求 / 运行标志（config 换新或图片尺寸入表后的重分页）。
+  bool _reprimeRequested = false;
+  bool _reprimeRunning = false;
+
+  /// 图片尺寸预 ensure 深度（>0 时 `_resolveImage` 的尺寸钩子不触发 reprime：
+  /// open 即将吃到新尺寸，无需失效重分页）。
+  int _ensuringSizes = 0;
+
+  /// 章标题样式（测量与渲染**同源**——`_headingHeightOf` / `_headingWidget` 共用）。
+  TextStyle? _headingTextStyle;
+
+  /// 占位章文字样式（「第N章 · 载入中…」）。
+  TextStyle? _placeholderTextStyle;
+
+  /// 分页滚动容器 key（取 [PagedScrollerState] 的布局表 / 采样口）。
+  final GlobalKey<PagedScrollerState> _scrollerKey = GlobalKey<PagedScrollerState>();
+
+  /// 停稳流程序号：用户再次滚动即作废在途的 async 停稳序列。
+  int _pagedStopSeq = 0;
+
   @override
   void initState() {
     super.initState();
@@ -410,11 +485,20 @@ class _ReaderPageState extends State<ReaderPage> {
       await loader.loadFirstBatch(index);
       firstWatch.done('target=$index');
       if (!mounted || _disposed) return;
-      setState(() => _ready = true);
+      // T05-c c3 分叉：首帧批次的目标章是文本 → 分页模式（图片章保留 ListView）。
+      final bool paged = _cache.peek(index)?.imagePages == null;
+      setState(() {
+        _ready = true;
+        _pagedMode = paged;
+        if (paged) {
+          _scheduler = PaginationScheduler();
+          _restoreMask = false; // 分页一次落位、无可见中间跳转
+        }
+      });
       // 开书到「首帧可渲染」的总时长（用户感知的等待上限；恢复校正另计 restore.*）。
       PerfLog.step('reader.ready', openClock.elapsedMilliseconds,
-          'target=$index pos=${pos.toStringAsFixed(3)} chapters=${chapters.length}');
-      _scheduleEstimateRefresh();
+          'target=$index pos=${pos.toStringAsFixed(3)} chapters=${chapters.length} paged=$paged');
+      if (!paged) _scheduleEstimateRefresh(); // 估高只服务 ListView
       // **不在此处启动后台补齐**（`PERF-02` 时序修正 2026-09-28）：补齐会逐批
       // 「占位→真实」合入、改动总高，而此刻控制器还没建、首次恢复校正也还没跑
       // （真机日志：本行让 9 批合入抢在 `restore.begin` 之前，全部
@@ -454,11 +538,15 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 返回的字节交给 `Image.memory` 渲染；Flutter 内部缓存解码结果。
   Future<Uint8List?> _resolveImage(String href) async {
     final Uint8List? cached = _imageCache.get(href);
-    if (cached != null) return cached;
+    if (cached != null) {
+      _noteImageSize(href, cached);
+      return cached;
+    }
     if (_disposed) return null;
     final Uint8List? bytes = await widget.source.readResource(href);
     if (bytes != null && !_disposed) {
       _imageCache.put(href, bytes);
+      _noteImageSize(href, bytes);
     }
     return bytes;
   }
@@ -495,6 +583,29 @@ class _ReaderPageState extends State<ReaderPage> {
   ///     则像素语义已失效，seed 无意义 → 从 0 起跳照常估算。
   void _ensureController() {
     if (_controller != null) return;
+    if (_pagedMode) {
+      // 分页模式：窗口 + 视图先同步建好，seed 落在目标章占位块内；
+      // 真实落位由 postFrame 的 [_pagedJumpTo] 一次完成（无遮罩中间跳转）。
+      final PaginationConfig? cfg = _pageConfig;
+      final List<Chapter>? chapters = _chapters;
+      if (cfg == null || chapters == null || chapters.isEmpty) return;
+      _window = _computeWindow(_restoreIndex);
+      _pageViews = _buildPageViews(_window, cfg);
+      _viewsSignature = _computeSignature(_window);
+      final int windowPos = math.max(0, _window.indexOf(_restoreIndex));
+      final double seed = (windowPos * cfg.pageHeight +
+              _restorePos.clamp(0.0, 1.0) * cfg.pageHeight)
+          .clamp(0.0, double.infinity);
+      _controller = ScrollController(initialScrollOffset: seed);
+      PerfLog.mark('reader.seed', 'branch=paged seed=${seed.toStringAsFixed(1)}');
+      final int restoreIndex = _restoreIndex;
+      final double restorePos = _restorePos;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _disposed) return;
+        unawaited(_pagedJumpTo(restoreIndex, pos: restorePos, saveOld: false));
+      });
+      return;
+    }
     final LocalLayoutHint? hint = _localHint;
     final bool sameLayout = hint != null &&
         _viewportWidth > 0 &&
@@ -890,6 +1001,18 @@ class _ReaderPageState extends State<ReaderPage> {
         batches++;
         batchWatch.done('current=$_currentIndex batch=$batches more=$more');
         if (!mounted || _disposed) return;
+        if (_pagedMode) {
+          // 分页模式：内容补齐后登记窗口未分页章 + 推进空闲分页帧；
+          // 不走 `_applyLayoutChange` / 估高刷新（那是 ListView 的总高重锚）。
+          _registerWindowUnpaginated();
+          _startPagedFrames();
+          if (!more) {
+            PerfLog.mark('autofill.end',
+                'batches=$batches ms=${clock.elapsedMilliseconds}');
+            return;
+          }
+          continue;
+        }
         if (!more) {
           PerfLog.mark('autofill.end',
               'batches=$batches ms=${clock.elapsedMilliseconds}');
@@ -981,6 +1104,799 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
+  // ── T05-c c3：分页模式方法组（`_pagedMode == false` 时全部不被调用）──
+
+  /// 分页滚动容器状态（取布局表 / 采样口；未挂载为 null）。
+  PagedScrollerState? get _scroller => _scrollerKey.currentState;
+
+  /// 三章窗口 `[index−1, index, index+1]`（连续章下标，clamp 书边界）。
+  List<int> _computeWindow(int index) {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return const <int>[];
+    final int center = index.clamp(0, chapters.length - 1);
+    final int lo = math.max(0, center - 1);
+    final int hi = math.min(chapters.length - 1, center + 1);
+    return <int>[for (int i = lo; i <= hi; i++) i];
+  }
+
+  /// 第 [index] 章在 [_pageConfig] 下的分页结果：进行中任务的快照优先，
+  /// 否则查缓存（只读 peek，不触 LRU 序）。
+  PaginatedChapter? _paginatedOf(int index) {
+    final PaginationScheduler? scheduler = _scheduler;
+    final PaginationConfig? cfg = _pageConfig;
+    final List<Chapter>? chapters = _chapters;
+    if (scheduler == null || cfg == null || chapters == null) return null;
+    if (index < 0 || index >= chapters.length) return null;
+    final String href = chapters[index].href;
+    final IncrementalPaginator? active = scheduler.active;
+    if (active != null && active.href == href && active.config == cfg) {
+      return active.snapshot();
+    }
+    return scheduler.cache.peek(href, cfg);
+  }
+
+  /// 章标题文本（渲染与测量同源；空标题回落「第 N 节」，同 ListView 口径）。
+  String _headingTitle(int index) {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || index < 0 || index >= chapters.length) return '';
+    final String title = chapters[index].title;
+    return title.isNotEmpty ? title : '第 ${index + 1} 节';
+  }
+
+  /// 章标题占高（测量与渲染**同源**）：TextPainter 行高 + 19（6+1+12 留白链）。
+  double _headingHeightOf(int index, PaginationConfig cfg) {
+    if (_headingTextStyle == null) return 0;
+    final TextPainter painter = TextPainter(
+      text: TextSpan(text: _headingTitle(index), style: _headingTextStyle),
+      textDirection: TextDirection.ltr,
+      textScaler: TextScaler.linear(cfg.textScaleFactor),
+    )..layout(maxWidth: cfg.pageWidth);
+    final double height = painter.height;
+    painter.dispose();
+    return height + 19;
+  }
+
+  /// 章标题 widget（与 [_headingHeightOf] 同一文本 / 样式 / 缩放）。
+  Widget _headingWidget(int index, PaginationConfig cfg) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Text(
+          _headingTitle(index),
+          textAlign: TextAlign.center,
+          textScaler: TextScaler.linear(cfg.textScaleFactor),
+          style: _headingTextStyle,
+        ),
+        const SizedBox(height: 6),
+        const Divider(height: 1),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  /// 构建窗口章视图：正文 + 分页结果都有 → 真视图；否则占位章
+  /// （headingHeight = 整页高，seed / 估算落位正好落在占位块内）。
+  List<PagedChapterView> _buildPageViews(
+      List<int> window, PaginationConfig cfg) {
+    final List<Chapter>? chapters = _chapters;
+    final List<PagedChapterView> out = <PagedChapterView>[];
+    if (chapters == null) return out;
+    for (final int i in window) {
+      if (i < 0 || i >= chapters.length) continue;
+      final ChapterContent? content = _cache.peek(i);
+      final PaginatedChapter? pag = _paginatedOf(i);
+      if (content != null &&
+          content.imagePages == null &&
+          content.paragraphList.isNotEmpty &&
+          pag != null) {
+        out.add(PagedChapterView(
+          href: chapters[i].href,
+          paragraphs: content.paragraphList,
+          lines: pag.lines,
+          pages: pag.pages,
+          headingHeight: _headingHeightOf(i, cfg),
+          heading: _headingWidget(i, cfg),
+        ));
+      } else {
+        out.add(PagedChapterView(
+          href: chapters[i].href,
+          paragraphs: const <String>[],
+          lines: const <MeasuredLine>[],
+          pages: const <PageSlice>[],
+          headingHeight: cfg.pageHeight,
+          heading: Center(
+            child: Text(
+              '第 ${i + 1} 章 · 载入中…',
+              style: _placeholderTextStyle,
+            ),
+          ),
+        ));
+      }
+    }
+    return out;
+  }
+
+  /// 窗口签名（逐章「页数 + 完整标记」）：链式补页 / 占位→真 视图切换的判据。
+  String _computeSignature(List<int> window) {
+    final StringBuffer sb = StringBuffer();
+    for (int k = 0; k < window.length; k++) {
+      if (k > 0) sb.write('|');
+      final PaginatedChapter? pag = _paginatedOf(window[k]);
+      sb.write('${window[k]}:'
+          '${pag == null ? 'ph' : '${pag.pages.length}${pag.complete ? 'c' : 'p'}'}');
+    }
+    return sb.toString();
+  }
+
+  /// 收新排版参数（LayoutBuilder 每帧调用）：首次直接生效；变更挂
+  /// [_pendingConfig] 并 [_requestReprime]（build 期不 prime，帧末再跑）。
+  void _syncPageConfig(PaginationConfig cfg) {
+    if (!_pagedMode) return;
+    final PaginationConfig? current = _pageConfig;
+    if (current == cfg) return;
+    if (current == null) {
+      _pageConfig = cfg; // 首次：[_ensureController] 随后消费（build 内直接赋字段）
+      return;
+    }
+    _pendingConfig = cfg;
+    _requestReprime();
+  }
+
+  /// 请求 reprime（config 换新 / 图片尺寸入表）：build 期挂帧末，
+  /// 跳转中 / 已在跑则只置标志等收尾重入。
+  void _requestReprime() {
+    _reprimeRequested = true;
+    if (_reprimeRunning || _jumpInFlight) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _kickReprime());
+    } else {
+      _kickReprime();
+    }
+  }
+
+  /// 真正启动 reprime：滚动中推迟（jumpTo 会掐断甩动），等 ScrollEnd 停稳
+  /// 流程⑦再 kick。
+  void _kickReprime() {
+    if (!mounted || _disposed || !_pagedMode) return;
+    if (_reprimeRunning || _jumpInFlight) return;
+    final ScrollController? controller = _controller;
+    if (controller != null &&
+        controller.hasClients &&
+        controller.position.isScrollingNotifier.value) {
+      return;
+    }
+    _runReprime();
+  }
+
+  /// reprime 循环：对齐现场身份 → [_primeOpenSync] 按当前语义坐标重分页。
+  /// 内容未就绪返回 false 时保留待办（下次 kick 续跑）。
+  void _runReprime() {
+    if (_reprimeRunning || !mounted || _disposed) return;
+    _reprimeRunning = true;
+    try {
+      while (_reprimeRequested) {
+        _reprimeRequested = false;
+        if (_jumpInFlight) {
+          _reprimeRequested = true; // 跳转流收尾的 finally 会再 kick
+          return;
+        }
+        final PaginationScheduler? scheduler = _scheduler;
+        if (scheduler == null || _pageConfig == null) continue;
+        if (_pendingLand == null) _syncPagedIdentity();
+        if (!_primeOpenSync(charOffset: _currentCharOffset())) {
+          _reprimeRequested = true; // 内容未就绪：保留待办
+          return;
+        }
+      }
+    } finally {
+      _reprimeRunning = false;
+    }
+  }
+
+  /// 当前语义字符偏移：挂起落位优先 → 现场采样（href 匹配）→ 存档比例换算。
+  int _currentCharOffset() {
+    final ({int index, int charOffset})? pending = _pendingLand;
+    if (pending != null) return pending.charOffset;
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return 0;
+    final int index = _currentIndex.clamp(0, chapters.length - 1);
+    final PaginatedChapter? pag = _paginatedOf(index);
+    final PagedScrollerState? scroller = _scroller;
+    if (scroller != null && pag != null) {
+      final ScrollSample? sample = scroller.sampleNow();
+      if (sample != null && sample.href == chapters[index].href) {
+        return sample.charOffset.clamp(0, pag.totalChars);
+      }
+    }
+    final int total = pag?.totalChars ??
+        PagePaginator.charCountOf(
+            _cache.peek(index)?.paragraphList ?? const <String>[]);
+    if (total <= 0) return 0;
+    return (_chapterPos.clamp(0.0, 1.0) * total).round().clamp(0, total);
+  }
+
+  /// prime 同步段（**不得在 build 期调用**）：消费 [_pendingConfig] →
+  /// [PaginationScheduler.open]（首屏突发 + 登记 ±1）→ 预计算视图与布局 →
+  /// 精确落位（offsetFor）或估算挂 [_pendingLand]。返回 `true` = 已精确落位。
+  bool _primeOpenSync({required int charOffset}) {
+    if (!mounted || _disposed || !_pagedMode) return false;
+    final PaginationScheduler? scheduler = _scheduler;
+    final PaginationConfig? pendingCfg = _pendingConfig;
+    final PaginationConfig? currentCfg = _pageConfig;
+    if (scheduler == null || (pendingCfg == null && currentCfg == null)) {
+      return false;
+    }
+    if (_window.isEmpty) {
+      _window = _computeWindow(_currentIndex);
+      if (_window.isEmpty) return false;
+    }
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return false;
+    final int index = _currentIndex.clamp(0, chapters.length - 1);
+    final ChapterContent? content = _cache.peek(index);
+    if (content == null ||
+        content.imagePages != null ||
+        content.paragraphList.isEmpty) {
+      return false; // 内容未就绪：调用方保留待办
+    }
+    final PaginationConfig cfg = pendingCfg ?? currentCfg!;
+    final bool cfgChanged = currentCfg != cfg;
+    _pendingConfig = null;
+    _pageConfig = cfg; // 消费待换参数（视图与 config 同批换新）
+
+    final String href = chapters[index].href;
+    final ChapterContent? prev =
+        index > 0 ? _cache.peek(index - 1) : null;
+    final ChapterContent? next =
+        index + 1 < chapters.length ? _cache.peek(index + 1) : null;
+    final bool prevOk = prev != null &&
+        prev.imagePages == null &&
+        prev.paragraphList.isNotEmpty;
+    final bool nextOk = next != null &&
+        next.imagePages == null &&
+        next.paragraphList.isNotEmpty;
+    scheduler.open(
+      href: href,
+      paragraphs: content.paragraphList,
+      config: cfg,
+      targetCharOffset: charOffset,
+      headingHeight: _headingHeightOf(index, cfg),
+      prevHref: prevOk ? chapters[index - 1].href : null,
+      prevParagraphs: prevOk ? prev.paragraphList : null,
+      prevHeadingHeight: prevOk ? _headingHeightOf(index - 1, cfg) : 0,
+      nextHref: nextOk ? chapters[index + 1].href : null,
+      nextParagraphs: nextOk ? next.paragraphList : null,
+      nextHeadingHeight: nextOk ? _headingHeightOf(index + 1, cfg) : 0,
+    );
+
+    final List<PagedChapterView> views = _buildPageViews(_window, cfg);
+    final String sig = _computeSignature(_window);
+    final PagedLayout layout =
+        PagedLayout.build(views, paragraphSpacing: cfg.paragraphSpacing);
+    double? landAt =
+        PagedScrollerState.offsetFor(layout, views, href, charOffset);
+    final bool landed = landAt != null;
+    if (landAt == null) {
+      // 页表未覆盖目标（占位/部分页）：按窗口位置 + 章内比例估算落位，
+      // 挂 pending 等空闲帧补完后二次精确落位（`RC1`：期间不写盘）。
+      final int total = PagePaginator.charCountOf(content.paragraphList);
+      final double frac = total > 0
+          ? (charOffset / total).clamp(0.0, 1.0)
+          : _chapterPos.clamp(0.0, 1.0);
+      final int windowPos = _window.indexOf(index);
+      landAt = ((windowPos < 0 ? 0 : windowPos) * cfg.pageHeight +
+              frac * cfg.pageHeight)
+          .clamp(0.0, double.infinity);
+      _pendingLand = (index: index, charOffset: charOffset);
+      _positionConverged = false;
+      _positionSampled = false;
+      PerfLog.mark('paged.estimate',
+          'index=$index char=$charOffset off=${landAt.toStringAsFixed(0)}');
+    } else {
+      _pendingLand = null;
+      _positionConverged = true; // `RC1`：一次精确落位即收敛
+      PerfLog.mark('paged.prime',
+          'index=$index char=$charOffset off=${landAt.toStringAsFixed(0)}');
+    }
+    if (cfgChanged || sig != _viewsSignature) {
+      _applyPagedViews(views, cfg, sig, offset: landAt);
+    } else {
+      _jumpPaged(landAt);
+    }
+    return landed;
+  }
+
+  /// 程序化跳转包装：期间派发的通知基于陈旧布局，处理器抑制。
+  void _pagedOp(VoidCallback op) {
+    _inPagedOp = true;
+    try {
+      op();
+    } finally {
+      _inPagedOp = false;
+    }
+  }
+
+  /// 单跳到 [target]：|Δ|<0.01 跳过；在旧上界内立即跳（pre-jump），
+  /// 超出则帧末补跳（setState 后新布局已建，接受 1 帧滑移——
+  /// 同帧先跳会被旧 `maxScrollExtent` 弹簧拉回）。
+  void _jumpPaged(double target) {
+    final ScrollController? controller = _controller;
+    if (controller == null || !controller.hasClients) return;
+    final double pixels = controller.position.pixels;
+    if ((target - pixels).abs() < 0.01) return;
+    if (target >= 0 && target <= controller.position.maxScrollExtent) {
+      _pagedOp(() => controller.jumpTo(target));
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !controller.hasClients) return;
+      final double clamped = target
+          .clamp(0.0, controller.position.maxScrollExtent);
+      if ((clamped - controller.position.pixels).abs() < 0.01) return;
+      _pagedOp(() => controller.jumpTo(clamped));
+    });
+  }
+
+  /// 应用新视图（**唯一**换 [_pageViews] 的入口）：先按「当前章章顶差」
+  /// pre-jump 重锚（offset 给定时直接跳该值），再 setState 换新。
+  /// delta==0（尾部追加 / 当前章自身补页）零扰动不跳。
+  void _applyPagedViews(
+    List<PagedChapterView> views,
+    PaginationConfig cfg,
+    String sig, {
+    double? offset,
+  }) {
+    if (!mounted) return;
+    double? target = offset;
+    if (target == null) {
+      final PagedScrollerState? scroller = _scroller;
+      final List<Chapter>? chapters = _chapters;
+      if (scroller != null &&
+          chapters != null &&
+          scroller.scrollController.hasClients) {
+        final List<PagedChapterView> oldViews = scroller.widget.chapters;
+        final int tNew = views.indexWhere(
+            (PagedChapterView v) => v.href == _hrefAt(_currentIndex));
+        final int tOld = oldViews.indexWhere(
+            (PagedChapterView v) => v.href == _hrefAt(_currentIndex));
+        if (tNew >= 0 && tOld >= 0) {
+          final double delta = PagedLayout.build(views,
+                      paragraphSpacing: cfg.paragraphSpacing)
+                  .chapterTops[tNew] -
+              scroller.layout.chapterTops[tOld];
+          if (delta.abs() >= 0.01) {
+            target = scroller.scrollController.position.pixels + delta;
+          }
+        }
+      }
+    }
+    if (target != null) _jumpPaged(target); // pre-jump 在 setState 前
+    setState(() {
+      _pageViews = views;
+      _viewsSignature = sig;
+      _pageConfig = cfg;
+    });
+  }
+
+  /// 章下标的 href（越界返回 ''）。
+  String _hrefAt(int index) {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || index < 0 || index >= chapters.length) return '';
+    return chapters[index].href;
+  }
+
+  /// 按当前 [_window] 重建视图并按需换新；[tryPendingLand] 时尝试把
+  /// 挂起落位收敛到精确偏移（命中 → 清 pending + postFrame 采样）。
+  void _syncPagedViews({bool tryPendingLand = false}) {
+    if (!mounted || _disposed || !_pagedMode) return;
+    final PaginationConfig? cfg = _pageConfig;
+    if (cfg == null || _window.isEmpty) return;
+    final List<PagedChapterView> views = _buildPageViews(_window, cfg);
+    final String sig = _computeSignature(_window);
+    double? landOffset;
+    if (tryPendingLand) {
+      final ({int index, int charOffset})? pending = _pendingLand;
+      if (pending != null && pending.index < (_chapters?.length ?? 0)) {
+        final PagedLayout layout = PagedLayout.build(
+            views, paragraphSpacing: cfg.paragraphSpacing);
+        landOffset = PagedScrollerState.offsetFor(
+            layout, views, _hrefAt(pending.index), pending.charOffset);
+        if (landOffset != null) {
+          _pendingLand = null;
+          _positionConverged = true;
+          PerfLog.mark('paged.land',
+              'index=${pending.index} off=${landOffset.toStringAsFixed(0)}');
+        }
+      }
+    }
+    if (sig == _viewsSignature && landOffset == null) return;
+    _applyPagedViews(views, cfg, sig, offset: landOffset);
+    if (landOffset != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _samplePagedNow();
+      });
+    }
+  }
+
+  /// 停稳期把窗口收敛回 `[_currentIndex±1]`（滚动中只增不移，trim 只在此做）。
+  void _maintainWindowIdle() {
+    if (_chapters == null || _chapters!.isEmpty) return;
+    final List<int> desired = _computeWindow(_currentIndex);
+    bool same = desired.length == _window.length;
+    if (same) {
+      for (int i = 0; i < desired.length; i++) {
+        if (desired[i] != _window[i]) {
+          same = false;
+          break;
+        }
+      }
+    }
+    if (same) return;
+    PerfLog.mark('paged.window', 'was=$_window now=$desired');
+    _window = desired;
+  }
+
+  /// 确保窗口图片尺寸入表后按现场坐标重 prime（停稳流程⑤）。
+  Future<void> _ensurePagedActive() async {
+    await _ensureWindowImageSizes(_window);
+    if (!mounted || _disposed || _jumpInFlight) return;
+    _primeOpenSync(charOffset: _currentCharOffset());
+  }
+
+  /// 把窗口内「有正文但未分页」的章登记进预分页队列（prev 槽位复用，
+  /// 队列按 href 去重；当前章 / 已有定稿的自动跳过）。
+  void _registerWindowUnpaginated() {
+    final PaginationScheduler? scheduler = _scheduler;
+    final PaginationConfig? cfg = _pageConfig;
+    if (scheduler == null || cfg == null) return;
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null) return;
+    for (final int i in _window) {
+      if (i < 0 || i >= chapters.length) continue;
+      final ChapterContent? content = _cache.peek(i);
+      if (content == null ||
+          content.imagePages != null ||
+          content.paragraphList.isEmpty) {
+        continue;
+      }
+      scheduler.setWindow(
+        prevHref: chapters[i].href,
+        prevParagraphs: content.paragraphList,
+        prevHeadingHeight: _headingHeightOf(i, cfg),
+      );
+    }
+  }
+
+  /// 启动空闲分页帧链（postFrame 逐帧切片；防重入）。
+  void _startPagedFrames() {
+    if (_pagedFramesRunning || !mounted || _disposed) return;
+    if (_scheduler == null) return;
+    _pagedFramesRunning = true;
+    WidgetsBinding.instance.addPostFrameCallback(_stepPagedIdle);
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// 一个空闲分页切片：stepIdle → 合视图（含 pending 收敛）→ 有活续链。
+  void _stepPagedIdle(Duration _) {
+    _pagedFramesRunning = false;
+    if (!mounted || _disposed || !_pagedMode) return;
+    final PaginationScheduler? scheduler = _scheduler;
+    if (scheduler == null) return;
+    final bool more = scheduler.stepIdle();
+    _syncPagedViews(tryPendingLand: true);
+    if (more && mounted && !_disposed) {
+      _pagedFramesRunning = true;
+      WidgetsBinding.instance.addPostFrameCallback(_stepPagedIdle);
+      WidgetsBinding.instance.scheduleFrame();
+    }
+  }
+
+  /// 滚动中（分页）：维护三章窗口（尾追加零扰动；首部仅**手指拖拽**时
+  /// prepend + delta 跳，ballistic 等停稳）+ 实时显示采样。
+  bool _onPagedScrollUpdate(ScrollUpdateNotification notification) {
+    if (notification.depth != 0) return false;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      return false; // didUpdateWidget 收缩跳派发于 build 期：禁 setState
+    }
+    if (!_pagedMode || _inPagedOp || _jumpInFlight) return false;
+    final PagedScrollerState? scroller = _scroller;
+    if (scroller == null || !scroller.scrollController.hasClients) {
+      return false;
+    }
+    // 用户接管：挂起落位作废 + 在途停稳序列作废。
+    _pendingLand = null;
+    _pagedStopSeq++;
+
+    final PagedLayout layout = scroller.layout;
+    final int gi = layout.chapterAtOrBefore(notification.metrics.pixels);
+    final List<Chapter>? chapters = _chapters;
+    if (gi >= 0 &&
+        gi < scroller.widget.chapters.length &&
+        chapters != null &&
+        chapters.isNotEmpty) {
+      final String href = scroller.widget.chapters[gi].href;
+      int book = -1;
+      if (gi < _window.length && _hrefAt(_window[gi]) == href) {
+        book = _window[gi]; // 快路径：窗口与视图同构
+      } else {
+        book = chapters.indexWhere((Chapter c) => c.href == href);
+      }
+      if (book >= 0) {
+        if (gi == scroller.widget.chapters.length - 1 &&
+            book + 1 < chapters.length &&
+            !_window.contains(book + 1)) {
+          _window.add(book + 1); // 尾部追加：当前章顶不动，零扰动
+          _syncPagedViews();
+        } else if (gi == 0 &&
+            book - 1 >= 0 &&
+            !_window.contains(book - 1) &&
+            notification.dragDetails != null) {
+          // 首部插入会改布局 → 需 delta 跳；ballistic 无手指时不做，等停稳。
+          _window.insert(0, book - 1);
+          _syncPagedViews();
+        }
+        final ScrollSample? sample = scroller.sampleNow();
+        if (sample != null) {
+          final PaginatedChapter? pag = _paginatedOf(book);
+          final int total = pag?.totalChars ?? 0;
+          final double pos = total > 0
+              ? (sample.charOffset / total).clamp(0.0, 1.0)
+              : _livePos;
+          if (book != _liveIndex || (pos - _livePos).abs() > 1e-6) {
+            setState(() {
+              _liveIndex = book;
+              _livePos = pos;
+            });
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /// 停稳通知（分页）：进入 9 步停稳流程。返回 false 不拦截。
+  bool _onPagedScrollEnd(ScrollEndNotification notification) {
+    if (notification.depth != 0) return false;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      return false;
+    }
+    if (!_pagedMode || _inPagedOp || _jumpInFlight) return false;
+    if (!mounted || _disposed) return false;
+    unawaited(_onPagedStopped());
+    return false;
+  }
+
+  /// 停稳流程（序号防重入；任一 await 后序号变了即作废——用户又滚动 /
+  /// 新跳转接管）：①同步身份 ②开闸 ③载正文 ④收敛窗口 ⑤图片尺寸+prime
+  /// ⑥合视图收敛落位 ⑦排空 reprime ⑧触发补齐 ⑨postFrame 采样+落盘。
+  Future<void> _onPagedStopped() async {
+    final int seq = ++_pagedStopSeq;
+    if (!mounted || _disposed || !_pagedMode) return;
+    _syncPagedIdentity(); // ① 不保存（采样置后原则）
+    if (!mounted || seq != _pagedStopSeq) return;
+    _positionConverged = true; // ② `RC1`：停稳即用户认可的位置
+    await _loader?.loadFirstBatch(_currentIndex); // ③ 邻章内容兜底
+    if (!mounted || _disposed || seq != _pagedStopSeq) return;
+    _maintainWindowIdle(); // ④ trim 只在停稳期
+    await _ensurePagedActive(); // ⑤
+    if (!mounted || _disposed || seq != _pagedStopSeq) return;
+    _syncPagedViews(tryPendingLand: true); // ⑥
+    if (_reprimeRequested && !_jumpInFlight) _kickReprime(); // ⑦
+    _ensureAutoFill(); // ⑧
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // ⑨ 序号校验：期间又滚动则本次采样作废
+      if (!mounted || _disposed || seq != _pagedStopSeq) return;
+      _samplePagedNow();
+      unawaited(_saveProgress());
+    });
+  }
+
+  /// 停手 200ms 防抖采样回调（PagedScroller 计时器 → 事件相位）。
+  void _onPagedDebounced(ScrollSample sample) {
+    if (!mounted || _disposed || !_pagedMode || _inPagedOp || _jumpInFlight) {
+      return;
+    }
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      return;
+    }
+    _applyPagedSample(sample, save: true);
+  }
+
+  /// 同步语义身份（不落盘；停稳流程① / reprime 前对齐现场用）。
+  void _syncPagedIdentity() =>
+      _applyPagedSample(_scroller?.sampleNow(), save: false);
+
+  /// 立即采样并落盘（postFrame 落位确认后 / 停稳⑨）。
+  void _samplePagedNow() => _applyPagedSample(_scroller?.sampleNow(), save: true);
+
+  /// 把采样写进语义坐标：有页采样 → 章 + 章内位置（RC1 闸门内可写）；
+  /// 无页采样（占位章盖顶）→ 只更章身份、`_positionSampled = false`（RC3）。
+  /// [_pendingLand] 挂起期间整体忽略（估算位置不可信）。
+  void _applyPagedSample(ScrollSample? sample, {required bool save}) {
+    if (!mounted || _disposed || !_pagedMode) return;
+    if (_pendingLand != null) return;
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return;
+
+    if (sample == null) {
+      final PagedScrollerState? scroller = _scroller;
+      if (scroller == null || !scroller.scrollController.hasClients) return;
+      final PagedLayout layout = scroller.layout;
+      int c = layout.chapterAtOrBefore(scroller.scrollController.offset);
+      if (c < 0) c = 0;
+      if (c >= _window.length) c = _window.length - 1;
+      final int book = _window[c].clamp(0, chapters.length - 1);
+      _positionSampled = false; // `RC3`：章内位置不可信，不写盘
+      if (book != _currentIndex || book != _liveIndex) {
+        setState(() {
+          _currentIndex = book;
+          _liveIndex = book;
+        });
+      }
+      return;
+    }
+
+    int book = -1;
+    for (final int i in _window) {
+      if (i >= 0 && i < chapters.length && chapters[i].href == sample.href) {
+        book = i;
+        break;
+      }
+    }
+    if (book < 0) return;
+    final int total = _paginatedOf(book)?.totalChars ?? 0;
+    final double pos =
+        total > 0 ? (sample.charOffset / total).clamp(0.0, 1.0) : _chapterPos;
+    final bool changed =
+        book != _currentIndex || (pos - _chapterPos).abs() > 1e-9;
+    if (changed) {
+      setState(() {
+        _currentIndex = book;
+        _chapterPos = pos;
+        _liveIndex = book;
+        _livePos = pos;
+      });
+    }
+    _positionSampled = true;
+    if (save) unawaited(_saveProgress());
+  }
+
+  /// 分页跳转流（目录 / 链接 / 书签 / 恢复统一入口）：序号防并发
+  /// （快速连点时旧流在每个 await 后自废）→ 载正文 → 预 ensure 图片尺寸
+  /// （异步段全在 UI 变更前）→ setState 换窗口 → prime 同步落位 →
+  /// 帧链补页 + 补齐 → 精确落位则 postFrame 采样。
+  Future<void> _pagedJumpTo(
+    int index, {
+    double pos = 0.0,
+    int? charOffset,
+    bool saveOld = true,
+  }) async {
+    if (!mounted || _disposed || !_pagedMode) return;
+    final List<Chapter>? chapters = _chapters;
+    final ChapterAutoLoader? loader = _loader;
+    if (chapters == null || chapters.isEmpty || loader == null) return;
+    final int target = index.clamp(0, chapters.length - 1);
+
+    final int seq = ++_primeSeq;
+    _jumpInFlight = true;
+    try {
+      if (saveOld) await _saveProgress(); // 此刻身份仍是旧位置
+      if (!mounted || seq != _primeSeq) return;
+      await loader.loadFirstBatch(target);
+      if (!mounted || seq != _primeSeq) return;
+      final ChapterContent? content = _cache.peek(target);
+      if (content == null ||
+          content.imagePages != null ||
+          content.paragraphList.isEmpty) {
+        return;
+      }
+      final int total = PagePaginator.charCountOf(content.paragraphList);
+      final int offset = (charOffset ??
+              (pos.clamp(0.0, 1.0) * total).round())
+          .clamp(0, total);
+      final List<int> win = _computeWindow(target);
+      await _ensureWindowImageSizes(win);
+      if (!mounted || seq != _primeSeq) return;
+      final double ratio = total > 0 ? offset / total : 0.0;
+      setState(() {
+        _currentIndex = target;
+        _chapterPos = ratio;
+        _liveIndex = target;
+        _livePos = ratio;
+        _restoreIndex = target;
+        _restorePos = ratio;
+        _window = win;
+        _pendingLand = null;
+        _positionConverged = false; // `RC1`：落位确认前不写盘
+        _positionSampled = false;
+      });
+      final bool landed = _primeOpenSync(charOffset: offset);
+      PerfLog.mark('paged.jump',
+          'target=$target char=$offset/$total landed=$landed win=${win.length}');
+      _startPagedFrames();
+      _ensureAutoFill();
+      if (landed) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || seq != _primeSeq) return;
+          _samplePagedNow();
+        });
+      }
+    } finally {
+      if (seq == _primeSeq) _jumpInFlight = false;
+      if (_reprimeRequested) _kickReprime();
+    }
+  }
+
+  /// 预 ensure 窗口内全部图片真尺寸（分页前排齐图片高，避免入表后整书
+  /// 重分页）。期间 `_ensuringSizes > 0` 抑制 [_noteImageSize] 钩子——
+  /// open 即将吃到新尺寸，无需失效重分页。
+  Future<void> _ensureWindowImageSizes(List<int> window) async {
+    final PaginationScheduler? scheduler = _scheduler;
+    if (scheduler == null) return;
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null) return;
+    final List<String> srcs = <String>[];
+    for (final int i in window) {
+      if (i < 0 || i >= chapters.length) continue;
+      final ChapterContent? content = _cache.peek(i);
+      if (content == null ||
+          content.imagePages != null ||
+          content.paragraphList.isEmpty) {
+        continue;
+      }
+      for (final String s in imageSrcsOf(content.paragraphList)) {
+        if (!srcs.contains(s)) srcs.add(s);
+      }
+    }
+    if (srcs.isEmpty) return;
+    _ensuringSizes++;
+    try {
+      for (final String s in srcs) {
+        await ensureImageSize(s, scheduler.imageSizes, _resolveImage);
+        if (!mounted || _disposed) return;
+      }
+    } finally {
+      _ensuringSizes--;
+    }
+  }
+
+  /// 图片尺寸钩子（`_resolveImage` 出口）：分页模式下首见尺寸 →
+  /// 写表 + 失效重分页 + reprime（页行高依赖真尺寸）。
+  void _noteImageSize(String href, Uint8List bytes) {
+    if (!_pagedMode || _disposed || _ensuringSizes > 0) return;
+    final PaginationScheduler? scheduler = _scheduler;
+    if (scheduler == null || scheduler.config == null) return;
+    if (scheduler.imageSizes.containsKey(href)) return;
+    final Size? size = parseImageSize(bytes);
+    if (size == null) return;
+    scheduler.imageSizes[href] = size;
+    scheduler.invalidateForImageSizes();
+    _requestReprime();
+  }
+
+  /// 分页滚动体（[_buildBody] LayoutBuilder 内、视图就绪后上屏）。
+  Widget _buildPagedBody() {
+    final PaginationConfig? cfg = _pageConfig;
+    if (cfg == null || _pageViews.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return PagedScroller(
+      key: _scrollerKey,
+      chapters: _pageViews,
+      config: cfg,
+      resolveImage: _resolveImage,
+      controller: _controller,
+      onSampled: _onPagedDebounced,
+      onLinkTap: _onLinkTapped,
+      highlightQuery: _searchHighlight.isEmpty ? null : _searchHighlight,
+    );
+  }
+
   /// 跳到第 [index] 章章首（目录点击 / 上下一章按钮）。
   Future<void> _goToChapter(int index) async {
     final List<Chapter>? chapters = _chapters;
@@ -994,6 +1910,10 @@ class _ReaderPageState extends State<ReaderPage> {
     }
     final int target = index.clamp(0, chapters.length - 1);
     PerfLog.mark('nav.goto', 'target=$target from=$_currentIndex');
+    if (_pagedMode) {
+      await _pagedJumpTo(target, pos: 0.0); // saveOld 在流内
+      return;
+    }
     // 保存旧位置（此时 _currentIndex / _chapterPos 仍是旧位置）。
     await _saveProgress();
     if (!mounted) return;
@@ -1058,6 +1978,27 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 执行链接跳转（`CNT-04c`）：跳前 [ScrollAnchor.capture] 压入 [LinkBackStack]，
   /// 目标段落懒挂 [GlobalKey]，再走「估算 + 校正」恢复路径做段落级对齐。
   Future<void> _jumpToLink(int chapterIndex, int paraIndex) async {
+    if (_pagedMode) {
+      // 分页：压栈用语义坐标（章索引 + 章内字符比例），跳转走统一分页流。
+      final List<Chapter>? chapters = _chapters;
+      if (chapters == null || chapters.isEmpty) return;
+      final int target = chapterIndex.clamp(0, chapters.length - 1);
+      _linkStack.push(ScrollAnchor(
+          chapterIndex: _currentIndex, relativePos: _chapterPos));
+      setState(() {}); // 让「返回」按钮出现。
+      await _loader?.loadFirstBatch(target);
+      if (!mounted) return;
+      final List<String> paragraphs =
+          _cache.peek(target)?.paragraphList ?? const <String>[];
+      int charOffset = 0;
+      for (int p = 0; p < paraIndex && p < paragraphs.length; p++) {
+        charOffset += paragraphs[p].length;
+      }
+      final int total = PagePaginator.charCountOf(paragraphs);
+      await _pagedJumpTo(target,
+          pos: total > 0 ? charOffset / total : 0.0, charOffset: charOffset);
+      return;
+    }
     final ScrollController? controller = _controller;
     if (controller == null || !controller.hasClients) return;
     final ChapterAutoLoader? loader = _loader;
@@ -1112,6 +2053,11 @@ class _ReaderPageState extends State<ReaderPage> {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null || chapters.isEmpty) return;
     final int target = anchor.chapterIndex.clamp(0, chapters.length - 1);
+    if (_pagedMode) {
+      // 分页：流内 saveOld 保存跳转后位置，弹栈按语义坐标一次落位。
+      await _pagedJumpTo(target, pos: anchor.relativePos);
+      return;
+    }
     setState(() {
       _currentIndex = target;
       _chapterPos = anchor.relativePos;
@@ -1453,6 +2399,11 @@ class _ReaderPageState extends State<ReaderPage> {
     final int target = matched >= 0
         ? matched
         : bookmark.chapterIndex.clamp(0, chapters.length - 1);
+    if (_pagedMode) {
+      // 分页：saveOld 在流内保存当前位置，书签位置一次落位。
+      await _pagedJumpTo(target, pos: bookmark.chapterPos);
+      return;
+    }
     // 保存旧位置（此时 _currentIndex / _chapterPos 仍是旧位置）。
     await _saveProgress();
     if (!mounted) return;
@@ -1649,11 +2600,26 @@ class _ReaderPageState extends State<ReaderPage> {
     );
     final Color pageColor = _pageColor(theme);
 
+    // 分页模式的标题 / 占位样式（与测量同源：_headingHeightOf / _headingWidget）。
+    _headingTextStyle = theme.textTheme.titleMedium?.copyWith(
+      fontWeight: FontWeight.bold,
+      color: bodyStyle.color,
+    );
+    _placeholderTextStyle = theme.textTheme.bodySmall
+        ?.copyWith(color: bodyStyle.color?.withValues(alpha: 0.6));
+
     // 在布局期拿到视口尺寸（用于版面签名与坐标换算），并据内容就绪创建控制器。
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         _viewportWidth = constraints.maxWidth;
         _viewportHeight = constraints.maxHeight;
+        _syncPageConfig(PaginationConfig(
+          pageWidth: constraints.maxWidth - _settings.pageMargin.horizontal,
+          pageHeight: constraints.maxHeight,
+          textStyle: bodyStyle,
+          paragraphSpacing: 16,
+          textScaleFactor: MediaQuery.textScalerOf(context).scale(1.0),
+        ));
         _ensureController();
         return SizedBox.expand(
           key: _viewportKey,
@@ -1662,18 +2628,23 @@ class _ReaderPageState extends State<ReaderPage> {
               Positioned.fill(
                 child: NotificationListener<ScrollUpdateNotification>(
                   // `TYP-09` 验收②：滚动实时刷新进度显示（只写显示字段）。
-                  onNotification: _onScrollUpdate,
+                  onNotification:
+                      _pagedMode ? _onPagedScrollUpdate : _onScrollUpdate,
                   child: NotificationListener<ScrollEndNotification>(
-                    onNotification: _onScrollEnd,
-                    child: ListView.builder(
-                      controller: _controller,
-                      // bottom 留出进度指示条高度（约 28px）+ 留白，
-                      // 避免末段正文被常驻指示条压住看不见。
-                      padding: const EdgeInsets.only(top: 8, bottom: 40),
-                      itemCount: chapters.length,
-                      itemBuilder: (BuildContext context, int index) =>
-                          _buildChapterItem(theme, bodyStyle, index),
-                    ),
+                    onNotification:
+                        _pagedMode ? _onPagedScrollEnd : _onScrollEnd,
+                    child: _pagedMode
+                        ? _buildPagedBody()
+                        : ListView.builder(
+                            controller: _controller,
+                            // bottom 留出进度指示条高度（约 28px）+ 留白，
+                            // 避免末段正文被常驻指示条压住看不见。
+                            padding:
+                                const EdgeInsets.only(top: 8, bottom: 40),
+                            itemCount: chapters.length,
+                            itemBuilder: (BuildContext context, int index) =>
+                                _buildChapterItem(theme, bodyStyle, index),
+                          ),
                   ),
                 ),
               ),
@@ -1759,6 +2730,11 @@ class _ReaderPageState extends State<ReaderPage> {
   /// `TYP-02` 位置锚定：用 [ScrollAnchor] 记录「视口顶在当前章的相对位置」，
   /// 列表重建后用同一章块的新位置算出 delta，`jumpTo` 校正，使该段仍在视口内。
   void _applySettings(ReaderSettings newSettings) {
+    if (_pagedMode) {
+      // 分页：LayoutBuilder 下一帧检出 cfg 变化 → reprime 保位重分页。
+      setState(() => _settings = newSettings);
+      return;
+    }
     final ScrollAnchor? anchor = ScrollAnchor.capture(
       controller: _controller,
       viewportBox: _viewportBox(),
