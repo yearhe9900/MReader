@@ -11,6 +11,7 @@ import 'package:mreader/platform/app_paths.dart';
 import 'package:mreader/stats/reading_session.dart';
 import 'package:mreader/stats/session_store.dart';
 import 'package:mreader/stats/stats_service.dart';
+import 'package:mreader/ui/stats/heatmap.dart';
 import 'package:mreader/ui/stats_page.dart';
 
 import '../test_config.dart';
@@ -183,5 +184,32 @@ void main() {
     expect(find.text('不限'), findsOneWidget);
     expect(find.text('47 分钟 至今'), findsOneWidget);
     expect(find.text('统计全部记录'), findsOneWidget);
+  });
+
+  testWidgets('STAT-05 ②：点热力图某天弹明细——总时长 + 按书时长（与下钻数据一致）',
+      (WidgetTester tester) async {
+    _tall(tester);
+    await tester.pumpWidget(buildApp());
+    await _settle(tester);
+
+    // 经观测口拿格子中心，点中 09-10（当天 600+120=720s，只读了 bookA）。
+    final ReadingHeatmapState heat =
+        tester.state<ReadingHeatmapState>(find.byType(ReadingHeatmap));
+    final Offset center = heat.centerOf('2026-09-10')!;
+    final Rect plot = tester.getRect(
+      find.byKey(const ValueKey<String>('heatmap-plot-2026')),
+    );
+    await tester.tapAt(plot.topLeft + center);
+    await tester.pumpAndSettle(); // 明细弹窗
+
+    expect(find.text('9月10日'), findsOneWidget); // 弹窗标题
+    expect(find.text('总时长 12 分钟'), findsOneWidget); // 720s
+    // 无 repository → 降级显示 bookId；按书聚合只剩一行。
+    expect(find.text('bookA · 12 分钟'), findsOneWidget);
+    expect(find.text('bookB · 5 分钟'), findsNothing);
+
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    expect(find.text('9月10日'), findsNothing);
   });
 }

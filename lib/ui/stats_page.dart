@@ -17,12 +17,14 @@ import 'package:flutter/material.dart';
 
 import '../library/library_repository.dart';
 import '../stats/aggregator.dart';
+import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'settings_kit.dart';
 import 'stats/bar_chart.dart';
 import 'stats/drill_down_page.dart';
+import 'stats/heatmap.dart';
 import 'stats/overview_card.dart';
 
 /// 阅读统计页。
@@ -96,6 +98,12 @@ class _StatsPageState extends State<StatsPage> {
                     onTapBar: _openDrill,
                   ),
                   const SizedBox(height: 12),
+                  ReadingHeatmap(
+                    sessions: service.sessions,
+                    sinceDay: service.sinceDay,
+                    onTapDay: _openDayDetail,
+                  ),
+                  const SizedBox(height: 12),
                   SettingsGroupCard(
                     header: '统计设置',
                     children: <Widget>[
@@ -132,6 +140,73 @@ class _StatsPageState extends State<StatsPage> {
         repository: widget.repository,
       ),
     ));
+  }
+
+  /// 点格弹当天明细（`STAT-05`：总时长 + 当天读过的书与各自时长；
+  /// 数据走 [sessionsInRange] 单日过滤，与 `STAT-04` 下钻天然一致）。
+  Future<void> _openDayDetail(String dayKey) async {
+    final Map<String, String> titles = await _bookTitles();
+    if (!mounted) {
+      return;
+    }
+    final List<ReadingSession> list = sessionsInRange(
+      widget.service.sessions,
+      fromDay: dayKey,
+      toDay: dayKey,
+      sinceDay: widget.service.sinceDay,
+    );
+    int total = 0;
+    for (final ReadingSession s in list) {
+      total += s.duration;
+    }
+    final Map<String, int> byBook = StatsIndex.of(list).secondsByBook;
+    final List<MapEntry<String, int>> rows = byBook.entries.toList()
+      ..sort((MapEntry<String, int> a, MapEntry<String, int> b) =>
+          b.value.compareTo(a.value));
+    final DateTime d = DateTime.parse(dayKey);
+    await GlassOverlays.showAlert<void>(
+      context: context,
+      title: '${d.month}月${d.day}日',
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text('总时长 ${formatReadingDuration(total)}'),
+          const SizedBox(height: 8),
+          if (list.isEmpty) const Text('该天无阅读记录'),
+          for (final MapEntry<String, int> e in rows)
+            Text('${titles[e.key] ?? e.key} · ${formatReadingDuration(e.value)}'),
+        ],
+      ),
+      actions: <GlassDialogAction>[
+        GlassDialogAction(
+          label: '关闭',
+          onPressed: () => Navigator.pop(context),
+        ),
+      ],
+    );
+  }
+
+  /// 书名映射（懒加载一次；repository 为 null 或失败 → 降级显示 bookId）。
+  Map<String, String>? _titles;
+
+  Future<Map<String, String>> _bookTitles() async {
+    final Map<String, String>? cached = _titles;
+    if (cached != null) {
+      return cached;
+    }
+    final LibraryRepository? repo = widget.repository;
+    if (repo == null) {
+      return _titles = const <String, String>{};
+    }
+    try {
+      final books = await repo.loadBooks();
+      return _titles = <String, String>{
+        for (final b in books) b.bookId: b.title,
+      };
+    } catch (_) {
+      return _titles = const <String, String>{};
+    }
   }
 
   /// 起始日期：弹选择层（不限 / 选日期…），选日期再进系统日期选择器。

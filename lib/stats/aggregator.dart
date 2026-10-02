@@ -171,13 +171,7 @@ List<PeriodBar> aggregateBars(
   String? sinceDay,
 }) {
   // dayKey → 当日有效秒数（与 overview 同口径：since 过滤 + duration > 0）。
-  final Map<String, int> secondsByDay = <String, int>{};
-  for (final ReadingSession s in filterSince(sessions, sinceDay)) {
-    if (s.duration <= 0) {
-      continue;
-    }
-    secondsByDay[s.dayKey] = (secondsByDay[s.dayKey] ?? 0) + s.duration;
-  }
+  final Map<String, int> secondsByDay = daySeconds(sessions, sinceDay: sinceDay);
   final String today = _dayKey(now);
 
   switch (period) {
@@ -243,3 +237,42 @@ String _dayKey(DateTime d) =>
     '${d.year.toString().padLeft(4, '0')}-'
     '${d.month.toString().padLeft(2, '0')}-'
     '${d.day.toString().padLeft(2, '0')}';
+
+// ------------------------------------------------------------------
+// M3-T12：热力图分档（`STAT-05`）
+// ------------------------------------------------------------------
+
+/// dayKey → 当天有效阅读秒数（`duration > 0` 求和 + 起始日期过滤，
+/// 与 [aggregateOverview] / [aggregateBars] 同口径；单遍）。
+Map<String, int> daySeconds(
+  Iterable<ReadingSession> sessions, {
+  String? sinceDay,
+}) {
+  final Map<String, int> out = <String, int>{};
+  for (final ReadingSession s in filterSince(sessions, sinceDay)) {
+    if (s.duration <= 0) {
+      continue;
+    }
+    out[s.dayKey] = (out[s.dayKey] ?? 0) + s.duration;
+  }
+  return out;
+}
+
+/// 热力图分档阈值（秒）：≤1 分钟 / ≤30 分钟 / ≤1 小时 / >1 小时 = 档 1~4。
+///
+/// PRD `STAT-05` ① 只约束「读 1 分钟进最低档、加深单调」，未定具体数值——
+/// 本阈值为实现口径（1 分钟恰在档 1 上界）。
+const List<int> heatBucketSeconds = <int>[60, 1800, 3600];
+
+/// 当天有效秒数 → 热力档位（`STAT-05`）：0 = 无记录空白格，1..4 由浅到深。
+int heatLevel(int seconds) {
+  if (seconds <= 0) {
+    return 0;
+  }
+  for (int i = 0; i < heatBucketSeconds.length; i++) {
+    if (seconds <= heatBucketSeconds[i]) {
+      return i + 1;
+    }
+  }
+  return heatBucketSeconds.length + 1;
+}
