@@ -212,4 +212,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('9月10日'), findsNothing);
   });
+
+  testWidgets('M3-T13 在场：按书排行卡 + 连续天数卡（口径文案常驻）',
+      (WidgetTester tester) async {
+    _tall(tester);
+    await tester.pumpWidget(buildApp());
+    await _settle(tester);
+
+    expect(find.text('按书排行'), findsOneWidget);
+    expect(find.text('连续阅读'), findsOneWidget);
+    // `Q13`：归零口径必须写在界面上。
+    expect(find.textContaining('连续 2 天未读才重新计算'), findsOneWidget);
+    // seed：09-10/09-11 连续 2 天（历史最长），08-15 单天。
+    expect(find.textContaining('历史最长 2 天'), findsOneWidget);
+    expect(find.textContaining('今日待读'), findsOneWidget);
+  });
 }

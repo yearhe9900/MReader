@@ -276,3 +276,119 @@ int heatLevel(int seconds) {
   }
   return heatBucketSeconds.length + 1;
 }
+
+// ------------------------------------------------------------------
+// M3-T13：按书排行（`STAT-06`）
+// ------------------------------------------------------------------
+
+/// 排行周期（`STAT-06`：日 / 周 / 月 / 年 / 全部；窗口 = [now] 定锚的自然周期）。
+enum RankPeriod { day, week, month, year, all }
+
+/// 单本书的排行条目（秒数降序）。
+class RankEntry {
+  const RankEntry({
+    required this.bookId,
+    required this.seconds,
+    required this.percent,
+  });
+
+  /// 归属书籍。
+  final String bookId;
+
+  /// 周期内有效阅读秒数。
+  final int seconds;
+
+  /// 占该周期总时长的百分比（整数；**最大项补余**使各行之和恰为 100，
+  /// 满足 `STAT-06` ②「百分比之和为 100%」）。
+  final int percent;
+}
+
+/// 排行结果（[entries] 按秒数降序；无记录 = [RankResult.empty]）。
+class RankResult {
+  const RankResult({required this.entries, required this.totalSeconds});
+
+  /// 空态（该周期无阅读记录）。
+  static const RankResult empty = RankResult(
+    entries: <RankEntry>[],
+    totalSeconds: 0,
+  );
+
+  /// 排行条目（秒数降序，同秒按 bookId 升序保证稳定）。
+  final List<RankEntry> entries;
+
+  /// 周期内总有效秒数（百分比分母）。
+  final int totalSeconds;
+}
+
+/// 排行周期窗口（含两端 `YYYY-MM-DD`；[RankPeriod.all] 用哨兵区间表「不限」，
+/// 起始日期过滤仍由 [sinceDay] 承担）。排行与单书统计**共用**此窗口。
+(String, String) rankWindow(RankPeriod period, DateTime now) {
+  return switch (period) {
+    RankPeriod.day => (_dayKey(now), _dayKey(now)),
+    RankPeriod.week => _weekRange(now),
+    RankPeriod.month => (
+        _dayKey(DateTime(now.year, now.month, 1)),
+        _dayKey(DateTime(now.year, now.month + 1, 0)),
+      ),
+    RankPeriod.year => (
+        _dayKey(DateTime(now.year, 1, 1)),
+        _dayKey(DateTime(now.year, 12, 31)),
+      ),
+    RankPeriod.all => ('0001-01-01', '9999-12-31'),
+  };
+}
+
+/// 按书聚合排行（`STAT-06`；与全局同口径：[sessionsInRange] 过滤 +
+/// `duration > 0`，窗口按 [period] 取自然周期）。
+RankResult rankByBook(
+  Iterable<ReadingSession> sessions, {
+  required RankPeriod period,
+  required DateTime now,
+  String? sinceDay,
+}) {
+  final (String from, String to) = rankWindow(period, now);
+  final List<ReadingSession> list = sessionsInRange(
+    sessions,
+    fromDay: from,
+    toDay: to,
+    sinceDay: sinceDay,
+  );
+  final Map<String, int> byBook = <String, int>{};
+  int total = 0;
+  for (final ReadingSession s in list) {
+    byBook[s.bookId] = (byBook[s.bookId] ?? 0) + s.duration;
+    total += s.duration;
+  }
+  if (total <= 0 || byBook.isEmpty) {
+    return RankResult.empty;
+  }
+  final List<MapEntry<String, int>> sorted = byBook.entries.toList()
+    ..sort((MapEntry<String, int> a, MapEntry<String, int> b) {
+      final int bySeconds = b.value.compareTo(a.value);
+      return bySeconds != 0 ? bySeconds : a.key.compareTo(b.key);
+    });
+  final List<RankEntry> entries = <RankEntry>[];
+  int assigned = 0;
+  for (final MapEntry<String, int> e in sorted) {
+    final int percent = e.value * 100 ~/ total; // 向下取整，余数补最大项。
+    entries.add(RankEntry(bookId: e.key, seconds: e.value, percent: percent));
+    assigned += percent;
+  }
+  final int rest = 100 - assigned;
+  if (rest != 0) {
+    final RankEntry top = entries.first;
+    entries[0] = RankEntry(
+      bookId: top.bookId,
+      seconds: top.seconds,
+      percent: top.percent + rest,
+    );
+  }
+  return RankResult(entries: entries, totalSeconds: total);
+}
+
+/// 本周窗口（周一 ~ 周日，`YYYY-MM-DD` 含两端）。
+(String, String) _weekRange(DateTime now) {
+  final DateTime monday = DateTime(now.year, now.month, now.day)
+      .subtract(Duration(days: now.weekday - 1));
+  return (_dayKey(monday), _dayKey(monday.add(const Duration(days: 6))));
+}

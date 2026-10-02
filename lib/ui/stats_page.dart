@@ -19,6 +19,7 @@ import '../library/library_repository.dart';
 import '../stats/aggregator.dart';
 import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
+import '../stats/streak.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'settings_kit.dart';
@@ -26,6 +27,7 @@ import 'stats/bar_chart.dart';
 import 'stats/drill_down_page.dart';
 import 'stats/heatmap.dart';
 import 'stats/overview_card.dart';
+import 'stats/rank_list.dart';
 
 /// 阅读统计页。
 class StatsPage extends StatefulWidget {
@@ -102,6 +104,21 @@ class _StatsPageState extends State<StatsPage> {
                     sessions: service.sessions,
                     sinceDay: service.sinceDay,
                     onTapDay: _openDayDetail,
+                  ),
+                  const SizedBox(height: 12),
+                  BookRankCard(
+                    sessions: service.sessions,
+                    sinceDay: service.sinceDay,
+                    repository: widget.repository,
+                    onTapBook: _openBookStats,
+                  ),
+                  const SizedBox(height: 12),
+                  StreakCard(
+                    streak: computeStreak(
+                      service.sessions,
+                      sinceDay: service.sinceDay,
+                      now: DateTime.now(),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   SettingsGroupCard(
@@ -207,6 +224,19 @@ class _StatsPageState extends State<StatsPage> {
     } catch (_) {
       return _titles = const <String, String>{};
     }
+  }
+
+  /// 点排行行 → 单书统计页（`STAT-06`；窗口 = 排行卡当前周期）。
+  void _openBookStats(String bookId, String title, RankPeriod period) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => BookStatsPage(
+        bookId: bookId,
+        title: title,
+        sessions: widget.service.sessions,
+        period: period,
+        sinceDay: widget.service.sinceDay,
+      ),
+    ));
   }
 
   /// 起始日期：弹选择层（不限 / 选日期…），选日期再进系统日期选择器。
