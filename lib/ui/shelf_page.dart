@@ -36,6 +36,7 @@ import 'package:flutter/services.dart';
 import '../diagnostics/perf_log.dart';
 import '../format/book_registry.dart';
 import '../format/book_source.dart';
+import '../format/structure_cache.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
@@ -390,9 +391,15 @@ class _ShelfPageState extends State<ShelfPage> {
       }
 
       final PerfWatch sniffWatch = PerfLog.watch('open.sniff');
+      // M-PAGE `T06`：结构缓存判据（副本 mtime/size + bookId）；文件缺失 → null
+      // → 缓存对不启用，开书行为与无缓存时一致。
+      final StructureCacheKey? cacheKey =
+          await widget.repository.structureCacheKey(record);
       final BookSource source = await openBook(
         fileName: record.fileName,
         bytes: bytes,
+        structureCache: widget.repository.structureCache,
+        cacheKey: cacheKey,
       );
       sniffWatch.done('impl=${source.implId}');
       // 不在导航前 eager 解析：全量 load() 在主 isolate 同步执行会冻结 UI，

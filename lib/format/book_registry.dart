@@ -17,6 +17,7 @@ import 'dart_epub_source.dart';
 import 'dart_txt_source.dart';
 import 'pdf_source.dart';
 import 'sniffer.dart';
+import 'structure_cache.dart';
 
 // `MReaderFormatException` / `FormatErrorCode` 经 `book_source.dart` 的
 // `export 'error_messages.dart';` 转出，不再单独 import（避免重复导入同一个库）。
@@ -97,6 +98,12 @@ class BookRegistry {
   ///
   /// 返回的永远是 [BookSource] 抽象——调用方无法、也无需知道来源。
   ///
+  /// ## 结构缓存注入缝（M-PAGE `T06`）
+  ///
+  /// [structureCache] + [cacheKey] **成对**透传给 [DartEpubSource]（判据命中零解析，
+  /// 见 `lib/format/structure_cache.dart`）；缺一即不启用，其余格式忽略这两参。
+  /// 签名兼容：两参皆带默认值 `null`，既有调用点一字不动。
+  ///
   /// ## 加速层择实现的位置（**当前状态如实写明，别当成已接完**）
   ///
   /// 架构 §A.1 的目标形态是：`epub` / `txt` 两路按
@@ -112,10 +119,17 @@ class BookRegistry {
   Future<BookSource> open({
     required String fileName,
     required Uint8List bytes,
+    StructureCacheStore? structureCache,
+    StructureCacheKey? cacheKey,
   }) async {
     switch (sniffFormat(fileName: fileName, bytes: bytes)) {
       case FormatKind.epub:
-        return DartEpubSource(fileName: fileName, bytes: bytes);
+        return DartEpubSource(
+          fileName: fileName,
+          bytes: bytes,
+          structureCache: structureCache,
+          cacheKey: cacheKey,
+        );
       case FormatKind.txt:
         return DartTxtSource(fileName: fileName, bytes: bytes);
       case FormatKind.cbz:
@@ -133,7 +147,10 @@ class BookRegistry {
 }
 
 /// 便捷包装：等价于 `BookRegistry(highPerf: registry).open(...)`
-/// （**签名与 M1-T02A 冻结时向后兼容**：只多了一个带默认值的可选参数）。
+/// （**签名与 M1-T02A 冻结时向后兼容**：只多了带默认值的可选参数）。
+///
+/// [structureCache] + [cacheKey]：M-PAGE `T06` 结构缓存透传，**成对**才有意义
+/// （缺一即不启用），见 [BookRegistry.open]。
 ///
 /// 三种取值别混用：
 ///   · 不给 [registry]（或给 `const BookRegistry()`）→ **走组合根注入点**
@@ -146,8 +163,15 @@ Future<BookSource> openBook({
   required String fileName,
   required Uint8List bytes,
   BookRegistry registry = const BookRegistry(),
+  StructureCacheStore? structureCache,
+  StructureCacheKey? cacheKey,
 }) =>
-    registry.open(fileName: fileName, bytes: bytes);
+    registry.open(
+      fileName: fileName,
+      bytes: bytes,
+      structureCache: structureCache,
+      cacheKey: cacheKey,
+    );
 
 /// 一级（扩展名）+ 二级（魔数）分发（PRD §7.3 二级判定；`FMT-06` 魔数纠偏，
 /// M2b-T03 落地；M2b-T01 追加 PDF）。

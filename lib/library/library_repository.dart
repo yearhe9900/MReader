@@ -11,9 +11,11 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../format/structure_cache.dart';
 import '../meta/cover_store.dart';
 import '../model/book_meta.dart';
 import '../platform/app_paths.dart';
+import '../storage/structure_cache_store.dart';
 import 'book_index.dart';
 import 'book_record.dart';
 import 'import_service.dart';
@@ -43,6 +45,13 @@ class LibraryRepository {
   final CoverStore _coverStore;
   final BookIndex _index;
   final ImportService _importService;
+
+  /// 结构缓存（M-PAGE `T06`）磁盘实现（惰性单例，目录 `subDir('structure')`）。
+  late final FileStructureCacheStore _structureCache =
+      FileStructureCacheStore(_paths);
+
+  /// 开书管道用的结构缓存（`shelf_page` / `book_detail_page` 经此取用）。
+  StructureCacheStore get structureCache => _structureCache;
 
   /// 加载全部在库书籍（`LIB-01` / `LIB-03`）。
   Future<List<BookRecord>> loadBooks() => _index.load();
@@ -93,6 +102,9 @@ class LibraryRepository {
       await bookFile.delete();
     }
 
+    // ②b 删结构缓存（M-PAGE `T06` 连带清理；best-effort，删不掉不阻断删除）
+    await _structureCache.delete(record.bookId);
+
     // ③ 从索引移除
     final List<BookRecord> records = await _index.load();
     records.removeWhere((BookRecord r) => r.bookId == record.bookId);
@@ -123,6 +135,24 @@ class LibraryRepository {
     );
     if (!await file.exists()) return null;
     return file.readAsBytes();
+  }
+
+  /// 取某本书的结构缓存判据（M-PAGE `T06`：`bookId` + library 副本 mtime/size）。
+  ///
+  /// 副本文件缺失 → `null`（调用方按「不启用缓存」处理）。
+  /// 只 `stat` 不读内容——判据不含字节（`PERF-02`）。
+  Future<StructureCacheKey?> structureCacheKey(BookRecord record) async {
+    final Directory libDir = await _paths.subDir('library');
+    final File file = File(
+      '${libDir.path}${Platform.pathSeparator}${record.filePath}',
+    );
+    if (!await file.exists()) return null;
+    final FileStat stat = await file.stat();
+    return StructureCacheKey(
+      bookId: record.bookId,
+      mtimeMs: stat.modified.millisecondsSinceEpoch,
+      size: stat.size,
+    );
   }
 
   /// library 副本文件大小（字节；`META-08` 详情页「文件大小」展示用）。

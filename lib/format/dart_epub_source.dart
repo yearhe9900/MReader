@@ -23,6 +23,7 @@ import '../meta/meta_source.dart' show kUnknownAuthor;
 import '../model/epub_book.dart';
 import '../task/isolate_runner.dart';
 import 'book_source.dart';
+import 'structure_cache.dart';
 
 /// 打开本地 EPUB（纯字节入口）。
 ///
@@ -38,6 +39,8 @@ class DartEpubSource implements BookSource {
     required this.fileName,
     required this.bytes,
     this.runner = const IsolateRunner(),
+    this.structureCache,
+    this.cacheKey,
   });
 
   /// 原始文件名（书名缺失时兜底显示；错误细节里也用）。
@@ -48,6 +51,16 @@ class DartEpubSource implements BookSource {
 
   /// isolate 派发器（`PERF-01`）：默认派真实后台 isolate，测试可注入 spy / 故障 runner。
   final IsolateRunner runner;
+
+  /// 结构缓存（M-PAGE `T06`）：与 [cacheKey] **成对**提供，缺一即不启用。
+  ///
+  /// 命中（判据全等）→ 跳过 isolate 派发、直接 `bindEpubResult`（零解析）；
+  /// miss → 既有后台解析路径，成功后写回。读/写失败一律降级为「当没接过缓存」，
+  /// 开书绝不因缓存坏掉而失败。
+  final StructureCacheStore? structureCache;
+
+  /// 缓存判据（`bookId + 副本 mtime/size`）；与 [structureCache] 成对提供。
+  final StructureCacheKey? cacheKey;
 
   EpubParseResult? _parsed;
   Future<EpubParseResult>? _loading;
@@ -94,7 +107,20 @@ class DartEpubSource implements BookSource {
   /// `PERF-01` 接线：结构解析在**后台 isolate**（纯数据往返），绑定在**本 isolate**
   /// （闭包从不出境）；派发失败经 [IsolateRunner.runWithFallback] 回落本 isolate 现跑，
   /// 业务错误（[EpubParseOutcome] 信封）与旧直解析路径同型同码。
+  ///
+  /// M-PAGE `T06`：接了缓存且判据命中时**整段跳过**（零 isolate 派发、零 zip 重扫
+  /// 之外的解析），只保留本 isolate 的 `bindEpubResult`；miss 走原路径，成功后写回。
   Future<EpubParseResult> _parseOffloaded() async {
+    final StructureCacheStore? cache = structureCache;
+    final StructureCacheKey? key = cacheKey;
+
+    if (cache != null && key != null) {
+      final PerfWatch cacheWatch = PerfLog.watch('epub.cache');
+      final EpubStructure? hit = await _cacheRead(cache, key);
+      cacheWatch.done('hit=${hit == null ? 0 : 1} book=${key.bookId}');
+      if (hit != null) return _bindStructure(hit); // 命中：零解析
+    }
+
     final EpubParseOutcome outcome =
         await runner.runWithFallback<EpubParseRequest, EpubParseOutcome>(
       parseEpubStructureTask,
@@ -108,7 +134,33 @@ class DartEpubSource implements BookSource {
       // 不变量：无错必有结构。信封被破坏按坏文件处理。
       throw const MReaderFormatException(FormatErrorCode.corruptFile);
     }
-    // 耗时日志：绑定（主 isolate 重扫 zip 中央目录 + 绑闭包）与后台结构解析分账。
+    final EpubParseResult result = _bindStructure(structure);
+    if (cache != null && key != null) {
+      // 写回失败静默：缓存是加速层不是数据，绝不因此让开书失败。
+      try {
+        await cache.write(key, structure);
+      } catch (_) {}
+    }
+    return result;
+  }
+
+  /// 缓存读的兜底：任何异常当 miss（同 [_cacheWrite] 的「不阻断开书」原则）。
+  Future<EpubStructure?> _cacheRead(
+    StructureCacheStore cache,
+    StructureCacheKey key,
+  ) async {
+    try {
+      return await cache.read(key);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 绑定（本 isolate）：重扫 zip 中央目录 + 绑闭包（`PERF-01` 后半程）。
+  ///
+  /// 命中与 miss 两条路径共用——缓存只省掉**结构解析**，绑定开销不变
+  /// （闭包必须现绑，`EpubStructure` 里没有字节句柄）。
+  EpubParseResult _bindStructure(EpubStructure structure) {
     final PerfWatch bindWatch = PerfLog.watch('epub.bind');
     final EpubParseResult result = bindEpubResult(bytes, structure);
     bindWatch.done('bytes=${bytes.length}');
