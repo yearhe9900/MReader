@@ -19,11 +19,15 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mreader/ai/ai_client.dart';
+import 'package:mreader/ai/provider_store.dart';
+import 'package:mreader/ai/secure_key_store.dart';
 import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/reader/pagination/paged_scroller.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
+import 'package:mreader/platform/secure_store_io.dart';
 import 'package:mreader/settings/perf_prefs_store.dart';
 import 'package:mreader/settings/settings_store.dart';
 import 'package:mreader/settings/shelf_layout_store.dart';
@@ -214,6 +218,11 @@ void main() {
             shelfLayout: ShelfLayoutStore(tempDir),
             settings: SettingsStore(tempDir),
             statsService: service,
+            aiStore: ProviderStore(
+              tempDir,
+              AiKeyVault(FileSecureStore(directory: tempDir)),
+            ),
+            aiClient: AiClient(),
           ),
         ),
       );

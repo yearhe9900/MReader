@@ -8,6 +8,9 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import 'ai/ai_client.dart';
+import 'ai/provider_store.dart';
+import 'ai/secure_key_store.dart';
 import 'app.dart';
 import 'highperf/high_perf_registry.dart';
 import 'library/library_repository.dart';
@@ -16,6 +19,7 @@ import 'platform/app_paths.dart';
 import 'platform/path_provider_app_paths.dart';
 import 'platform/pdf_engine.dart';
 import 'platform/pdfrx_pdf_engine.dart';
+import 'platform/secure_store_io.dart';
 import 'reader/progress_store.dart';
 import 'settings/perf_frame_monitor.dart';
 import 'settings/perf_prefs_store.dart';
@@ -60,12 +64,21 @@ Future<void> main() async {
   // 连带重写布局数据；也因为不动 `BookRecord` 的序列化，**没有旧索引兼容问题**
   // （见 `ShelfLayoutStore` 头注的拍板记录）。
   final ShelfLayoutStore shelfLayout = ShelfLayoutStore(dataDir);
+  // M3-T01：AI 底座（`AI-01`/`AI-08`/`AI-09`）——SecureStore（`DATA-02` 明文降级
+  // 实现，M4 接系统密钥库）→ 密钥门面 → 配置存储；AiClient 是全 AI 功能共用的
+  // 流式 / 取消 / 并发闸出口。三者均为进程内唯一实例。
+  final ProviderStore aiStore = ProviderStore(
+    dataDir,
+    AiKeyVault(FileSecureStore(directory: dataDir)),
+  );
+  final AiClient aiClient = AiClient();
   await Future.wait(<Future<void>>[
     _warmUpGlassShaders(),
     settings.load(),
     perfPrefs.load(),
     shelfPrefs.load(),
     shelfLayout.load(),
+    aiStore.load(),
     highPerf.warmUp(),
   ]);
 
@@ -118,6 +131,8 @@ Future<void> main() async {
           shelfLayout: shelfLayout,
           settings: settings,
           statsService: statsService,
+          aiStore: aiStore,
+          aiClient: aiClient,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,

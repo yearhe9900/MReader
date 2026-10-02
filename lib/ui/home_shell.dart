@@ -30,6 +30,8 @@
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
 import 'package:flutter/material.dart';
 
+import '../ai/ai_client.dart';
+import '../ai/provider_store.dart';
 import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
 import '../reader/progress_store.dart';
@@ -69,6 +71,8 @@ class HomeShell extends StatefulWidget {
     required this.shelfLayout,
     required this.settings,
     required this.statsService,
+    required this.aiStore,
+    required this.aiClient,
   });
 
   /// 书库仓库（书架页）。
@@ -95,6 +99,12 @@ class HomeShell extends StatefulWidget {
 
   /// 统计服务（统计页；`M3-T10`——组合根创建的进程内唯一实例，注入各页共享）。
   final StatsService statsService;
+
+  /// AI 配置存储（设置页 → AI 设置页）。
+  final ProviderStore aiStore;
+
+  /// AI 客户端（AI 设置页的测试连接）。
+  final AiClient aiClient;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -149,7 +159,12 @@ class _HomeShellState extends State<HomeShell> {
         StatsPage(service: widget.statsService, repository: widget.repository),
         const AiPage(),
         const NotesPage(),
-        SettingsPage(perfPrefs: widget.perfPrefs, settings: widget.settings),
+        SettingsPage(
+          perfPrefs: widget.perfPrefs,
+          settings: widget.settings,
+          aiStore: widget.aiStore,
+          aiClient: widget.aiClient,
+        ),
       ];
 
   void _select(int index) {

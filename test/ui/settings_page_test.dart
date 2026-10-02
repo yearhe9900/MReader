@@ -29,6 +29,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:mreader/ai/ai_client.dart';
+import 'package:mreader/ai/provider_store.dart';
+import 'package:mreader/ai/secure_key_store.dart';
+import 'package:mreader/platform/secure_store_io.dart';
 import 'package:mreader/settings/perf_prefs_store.dart';
 import 'package:mreader/settings/settings_store.dart';
 import 'package:mreader/ui/glass_kit.dart';
@@ -102,14 +106,20 @@ void main() {
   late Directory tempDir;
   late PerfPrefsStore perfPrefs;
   late SettingsStore settings;
+  late ProviderStore aiStore;
 
   setUp(() async {
     // `setUp` 在 FakeAsync 之外，可照常 await（含真异步 IO）。
     tempDir = await Directory.systemTemp.createTemp('mreader_settings_');
     perfPrefs = PerfPrefsStore(tempDir);
     settings = SettingsStore(tempDir);
+    aiStore = ProviderStore(
+      tempDir,
+      AiKeyVault(FileSecureStore(directory: tempDir)),
+    );
     await perfPrefs.load();
     await settings.load();
+    await aiStore.load();
   });
 
   tearDown(() async {
@@ -118,8 +128,12 @@ void main() {
     }
   });
 
-  Widget buildPage() =>
-      SettingsPage(perfPrefs: perfPrefs, settings: settings);
+  Widget buildPage() => SettingsPage(
+        perfPrefs: perfPrefs,
+        settings: settings,
+        aiStore: aiStore,
+        aiClient: AiClient(),
+      );
 
   group('设置页 · 壳层与档位退化', () {
     testWidgets('关档：壳层 / 顶栏走 Material，大标题仍在场（UI-06 ②）',

@@ -35,9 +35,12 @@
 // 玻璃质感组件，`UI-06` ② 的「纯色退化」不受影响。
 import 'package:flutter/material.dart';
 
+import '../ai/ai_client.dart';
+import '../ai/provider_store.dart';
 import '../settings/perf_prefs_store.dart';
 import '../settings/settings_store.dart';
 import '../theme/app_theme.dart';
+import 'ai_settings_page.dart';
 import 'glass_kit.dart';
 import 'glass_settings_section.dart';
 import 'home_shell.dart' show kShellBottomInset;
@@ -53,6 +56,8 @@ class SettingsPage extends StatefulWidget {
     super.key,
     required this.perfPrefs,
     required this.settings,
+    required this.aiStore,
+    required this.aiClient,
   });
 
   /// 性能偏好服务（玻璃质量档位 / 降低视觉特效开关的持久化）。
@@ -60,6 +65,12 @@ class SettingsPage extends StatefulWidget {
 
   /// 设置服务（主题三态；`app.dart` 由它驱动 `MaterialApp.themeMode`）。
   final SettingsStore settings;
+
+  /// AI 配置存储（「AI 服务」入口 → AI 设置页）。
+  final ProviderStore aiStore;
+
+  /// AI 客户端（注入 AI 设置页的测试连接）。
+  final AiClient aiClient;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -167,6 +178,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
                     _buildAppearanceGroup(),
+                    _buildAiGroup(),
                     GlassSettingsSection(perfPrefs: widget.perfPrefs),
                     // 后续分组（同步备份 / RUST-10 加速参数…）在此追加。
                   ],
@@ -191,6 +203,30 @@ class _SettingsPageState extends State<SettingsPage> {
           subtitle: '日间 / 夜间 / 跟随系统',
           value: appThemeModeLabel(widget.settings.settings.themeMode),
           onTap: _pickThemeMode,
+        ),
+      ],
+    );
+  }
+
+  /// 「AI」组：进 AI 设置页（配置 / 密钥 / `AI-09` 开关）。
+  Widget _buildAiGroup() {
+    return SettingsGroupCard(
+      header: 'AI',
+      children: <Widget>[
+        SettingsTile(
+          icon: Icons.auto_awesome_outlined,
+          accent: SettingsAccents.purple,
+          title: 'AI 服务',
+          subtitle: '模型配置 / 密钥 / 隐私开关',
+          value: widget.aiStore.prefs.aiEnabled ? '已启用' : '已关闭',
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute<void>(
+              builder: (_) => AiSettingsPage(
+                store: widget.aiStore,
+                client: widget.aiClient,
+              ),
+            ),
+          ),
         ),
       ],
     );
