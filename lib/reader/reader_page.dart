@@ -88,6 +88,8 @@ import '../diagnostics/perf_log.dart';
 import '../format/book_source.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
+import '../stats/reading_session.dart';
+import '../stats/stats_service.dart';
 import '../task/search_session.dart';
 import '../typography/anchor.dart';
 import '../typography/reader_settings.dart';
@@ -138,6 +140,7 @@ class ReaderPage extends StatefulWidget {
     required this.repository,
     this.bookmarkStore,
     this.readingPrefsStore,
+    this.statsService,
   });
 
   /// 书籍内容来源（`BookSource` 抽象，EPUB / TXT 通用）。
@@ -165,11 +168,16 @@ class ReaderPage extends StatefulWidget {
   /// `null` = 尚未接线：偏好本会话内有效，不落盘。
   final ReadingPrefsStore? readingPrefsStore;
 
+  /// 阅读时长采集（`STAT-01`），由书架从组合根透传。
+  ///
+  /// `null` = 尚未接线：不计时、不写库（与 [bookmarkStore] 同款降级口径）。
+  final StatsService? statsService;
+
   @override
   State<ReaderPage> createState() => _ReaderPageState();
 }
 
-class _ReaderPageState extends State<ReaderPage> {
+class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   ReaderSettings _settings = const ReaderSettings();
 
   BookMeta? _meta;
@@ -415,9 +423,19 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 停稳流程序号：用户再次滚动即作废在途的 async 停稳序列。
   int _pagedStopSeq = 0;
 
+  /// 阅读会话采集器（`STAT-01`）：进页起表、离页 / 切后台收尾；`null` = 不采集。
+  ///
+  /// 切后台收尾后置空、回前台重建——两次会话、总时长不重复（验收④）。
+  SessionTracker? _tracker;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    if (widget.statsService != null) {
+      _tracker = SessionTracker(bookId: widget.record.bookId);
+      _noteReading(); // 进页起表（`STAT-01`：进入阅读页开始计时）
+    }
     _open();
   }
 
@@ -427,12 +445,62 @@ class _ReaderPageState extends State<ReaderPage> {
     // 注：`Scrollable` 子节点**先于本 State** 卸载，进到这里控制器通常已 detach
     // （`hasClients == false`）→ 现场版面快照读不到，`_saveProgress` 会回退
     // [_lastLocalHint]（见 [_buildLocalHint]），**不会用 null 覆盖已存快照**。
+    WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
+    _finishSession(); // 退出阅读页：停止计时并落库（`STAT-01`；写库只在此与切后台）
     unawaited(_saveProgress());
     _imageCache.dispose();
     _controller?.dispose();
     unawaited(widget.source.dispose());
     super.dispose();
+  }
+
+  /// 切后台停止计时并落库、回前台另起会话（`STAT-01` ④：两次会话、不重复计时）。
+  ///
+  /// 只响应 [AppLifecycleState.paused]（真正离开前台）；`inactive` / `hidden`
+  /// 是瞬态（通知栏下拉、任务切换预览），不拆会话。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _finishSession();
+    } else if (state == AppLifecycleState.resumed &&
+        _tracker == null &&
+        !_disposed) {
+      _tracker = SessionTracker(bookId: widget.record.bookId);
+      _noteReading();
+    }
+  }
+
+  /// 记一次阅读活跃（交互汇聚点统一入口；`STAT-01`）。
+  ///
+  /// 只采集不写库（验收⑤：翻页期间统计文件 0 写入）；未注入服务 /
+  /// 已收尾（切后台后未回前台）/ 已释放时静默跳过。
+  void _noteReading() {
+    final SessionTracker? tracker = _tracker;
+    if (tracker == null || _disposed) return;
+    tracker.noteActivity(
+      at: DateTime.now().millisecondsSinceEpoch,
+      chapterHref: _hrefAt(_currentIndex),
+      chapterPos: _chapterPos,
+    );
+  }
+
+  /// 收尾当前会话并落库（退出阅读页 / 切后台；`STAT-01`）。
+  ///
+  /// [SessionTracker.finish] 幂等，但本方法**置空**采集器，保证一个活跃段
+  /// 只收尾一次；空会话（瞬开瞬关，`duration <= 0`）不落库。
+  void _finishSession() {
+    final SessionTracker? tracker = _tracker;
+    _tracker = null;
+    final StatsService? service = widget.statsService;
+    if (tracker == null || service == null) return;
+    final List<ReadingSession> sessions = tracker.finish(
+      at: DateTime.now().millisecondsSinceEpoch,
+      chapterHref: _hrefAt(_currentIndex),
+      chapterPos: _chapterPos,
+    );
+    if (sessions.isEmpty) return;
+    unawaited(service.ingest(sessions));
   }
 
   /// 取元数据 + 章节表 + 已存进度 → 定位；**首帧只等「目标章 ±1」**，随后后台补齐。
@@ -485,6 +553,7 @@ class _ReaderPageState extends State<ReaderPage> {
         }
       });
       if (chapters.isEmpty) return;
+      _noteReading(); // 定位完成：补记一次带真实坐标的活跃（起表在 initState）
 
       // `M-PAGE` T03：字数权重**不阻塞**首帧——fire-and-forget，取到前全书
       // 进度按等权显示（与旧行为一致），取到后切换为字数加权。
@@ -993,6 +1062,7 @@ class _ReaderPageState extends State<ReaderPage> {
     watch.done('index=$_currentIndex sampled=$_positionSampled');
     _cache.touch(_currentIndex);
     _ensureAutoFill();
+    _noteReading(); // 滚动停稳 = 交互（`STAT-01`）
     unawaited(_saveProgress());
     return false;
   }
@@ -1795,6 +1865,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _syncPagedIdentity(); // ① 不保存（采样置后原则）
     if (!mounted || seq != _pagedStopSeq) return;
     _positionConverged = true; // ② `RC1`：停稳即用户认可的位置
+    _noteReading(); // 分页停稳 = 交互（翻页提交与拖拽停手都汇到这）
     await _loader?.loadFirstBatch(_currentIndex); // ③ 邻章内容兜底
     if (!mounted || _disposed || seq != _pagedStopSeq) return;
     _maintainWindowIdle(); // ④ trim 只在停稳期
@@ -2193,6 +2264,7 @@ class _ReaderPageState extends State<ReaderPage> {
   /// + 挡 reprime；false = 解闸，待办 reprime 立即补跑。
   void _onTurnGesture(bool active) {
     if (active) {
+      _noteReading(); // 翻页手势起手 = 交互（含未提交就取消的滑动）
       _pagedStopSeq++;
       _pendingLand = null;
       _turnGestureActive = true;
@@ -2229,6 +2301,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// 跳到第 [index] 章章首（目录点击 / 上下一章按钮）。
   Future<void> _goToChapter(int index) async {
+    _noteReading(); // 目录 / 上一章下一章按钮 = 交互
     final List<Chapter>? chapters = _chapters;
     final ChapterAutoLoader? loader = _loader;
     final ScrollController? controller = _controller;
@@ -2308,6 +2381,7 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 执行链接跳转（`CNT-04c`）：跳前 [ScrollAnchor.capture] 压入 [LinkBackStack]，
   /// 目标段落懒挂 [GlobalKey]，再走「估算 + 校正」恢复路径做段落级对齐。
   Future<void> _jumpToLink(int chapterIndex, int paraIndex) async {
+    _noteReading(); // 链接 / 书签 / 搜索命中跳转 = 交互
     if (_pagedMode) {
       // 分页：压栈用语义坐标（章索引 + 章内字符比例），跳转走统一分页流。
       final List<Chapter>? chapters = _chapters;
@@ -2374,6 +2448,7 @@ class _ReaderPageState extends State<ReaderPage> {
   ///
   /// 栈空（弹出 `null`）静默返回，不抛异常。
   Future<void> _goBack() async {
+    _noteReading(); // 返回 = 交互
     final ScrollAnchor? anchor = _linkStack.pop();
     if (anchor == null) return;
     setState(() {}); // 栈可能已空：让「返回」按钮消失。

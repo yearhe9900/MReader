@@ -2,6 +2,8 @@
 //
 // 职责：
 //   · 载入 / 刷新会话明细（经 [SessionStore]，`STAT-02` 分片存储的唯一入口）；
+//   · [ingest] 回吐会话（阅读页关书 / 切后台 → 合并落库 + 内存刷新 + 通知，
+//     `STAT-01` 的**唯一写入入口**，采集侧只管 `finish` 不碰存储）；
 //   · 持有「起始日期」配置（`STAT-03` ③，落 `stats/stats-config.json`——与会话
 //     分片**分文件**：改起始日期不该重写全部会话分片）；
 //   · 暴露 [overview] 聚合与 [sessions] 原始明细（供 T11~T13 的周期聚合复用）；
@@ -76,6 +78,23 @@ class StatsService {
     _sessions = await _store.loadAll();
     _sinceDay = await _readSinceDay();
     _loaded = true;
+    _notify();
+  }
+
+  /// 回吐会话（阅读页关书 / 切后台时调用；`STAT-01` 写入的唯一入口）。
+  ///
+  /// 按 `id` 并集合并进月分片（`STAT-08` 幂等，`duration <= 0` 由存储侧丢弃）→
+  /// 重载内存明细 → 通知（统计页即时刷新）。尚未 [load] 时先载入，防止用
+  /// 空表当真值；写失败静默（统计落库失败不影响阅读）。
+  Future<void> ingest(Iterable<ReadingSession> sessions) async {
+    if (sessions.isEmpty) return;
+    if (!_loaded) await load();
+    try {
+      await _store.merge(sessions);
+    } catch (_) {
+      return; // 写失败静默：内存保持与磁盘一致的旧数据。
+    }
+    _sessions = await _store.loadAll();
     _notify();
   }
 

@@ -44,6 +44,7 @@ import '../reader/progress_store.dart';
 import '../reader/reader_page.dart';
 import '../settings/shelf_layout_store.dart';
 import '../settings/shelf_prefs_store.dart';
+import '../stats/stats_service.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
@@ -59,6 +60,7 @@ class ShelfPage extends StatefulWidget {
     required this.progressStore,
     required this.shelfPrefs,
     required this.shelfLayout,
+    this.statsService,
   });
 
   /// 书库仓库。
@@ -75,6 +77,11 @@ class ShelfPage extends StatefulWidget {
 
   /// 书架布局（手动顺序 + 分组归属），进程内共享实例。
   final ShelfLayoutStore shelfLayout;
+
+  /// 统计服务（`STAT-01` 采集落库；`M3-T10b`），透传给阅读页。
+  ///
+  /// `null` = 尚未接线：阅读页不采集（与其它可选注入同款降级口径）。
+  final StatsService? statsService;
 
   @override
   State<ShelfPage> createState() => _ShelfPageState();
@@ -413,6 +420,7 @@ class _ShelfPageState extends State<ShelfPage> {
           record: record,
           progressStore: widget.progressStore,
           repository: widget.repository,
+          statsService: widget.statsService,
         ),
       );
       // 不 await push 的 Future（它要等路由 pop 才返回）——push 一发起（路由已
