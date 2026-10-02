@@ -146,7 +146,7 @@ class _HomeShellState extends State<HomeShell> {
           shelfLayout: widget.shelfLayout,
           statsService: widget.statsService,
         ),
-        StatsPage(service: widget.statsService),
+        StatsPage(service: widget.statsService, repository: widget.repository),
         const AiPage(),
         const NotesPage(),
         SettingsPage(perfPrefs: widget.perfPrefs, settings: widget.settings),

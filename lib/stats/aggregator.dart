@@ -100,3 +100,146 @@ String formatReadingDuration(int seconds) {
   }
   return '$hours 小时 $rest 分';
 }
+
+// ------------------------------------------------------------------
+// M3-T11：周期柱状图聚合（`STAT-04`）
+// ------------------------------------------------------------------
+
+/// 柱状图周期分段（`STAT-04`：周 / 月 / 年三段切换）。
+enum StatsPeriod { week, month, year }
+
+/// 周期视图的一根柱（纯数据；`STAT-04`）。
+///
+/// [startDay] / [endDay] 为柱覆盖的自然日区间（`YYYY-MM-DD`，含两端）——
+/// 下钻明细用 [sessionsInRange] 按同一区间过滤，**「下钻求和 = 柱高」由此保证**。
+class PeriodBar {
+  const PeriodBar({
+    required this.startDay,
+    required this.endDay,
+    required this.label,
+    required this.seconds,
+    required this.isCurrent,
+  });
+
+  /// 区间首日（`YYYY-MM-DD`）。
+  final String startDay;
+
+  /// 区间末日（`YYYY-MM-DD`，含）。
+  final String endDay;
+
+  /// 轴标签（周「一…日」/ 月「1…31」/ 年「1月…12月」）。
+  final String label;
+
+  /// 区间内有效阅读秒数（`duration > 0` 求和，柱高真值）。
+  final int seconds;
+
+  /// 当前自然日（周 / 月视图）或当前月份（年视图）→ 高亮（`STAT-04`）。
+  final bool isCurrent;
+}
+
+/// 区间内有效会话：`duration > 0` + 起始日期过滤 + `dayKey ∈ [fromDay, toDay]`
+/// （两端含）——柱聚合与下钻明细**共用同一谓词**，求和天然与柱高一致。
+List<ReadingSession> sessionsInRange(
+  Iterable<ReadingSession> sessions, {
+  required String fromDay,
+  required String toDay,
+  String? sinceDay,
+}) {
+  final List<ReadingSession> out = <ReadingSession>[];
+  for (final ReadingSession s in filterSince(sessions, sinceDay)) {
+    if (s.duration <= 0) {
+      continue;
+    }
+    if (s.dayKey.compareTo(fromDay) < 0 || s.dayKey.compareTo(toDay) > 0) {
+      continue;
+    }
+    out.add(s);
+  }
+  return out;
+}
+
+/// 聚合出 [period] 视图的柱序列（`STAT-04` ①②；纯函数、单遍）。
+///
+/// 周期口径（本地时区自然周期，[now] 定锚）：
+///   · 周 = 本周**周一 ~ 周日**，恒 7 根（标签 一…日）；
+///   · 月 = 当月 1 日 ~ 月末，柱数 = 当月天数（标签 日号）；
+///   · 年 = 当年 1~12 月，恒 12 根（标签 `N月`）。
+List<PeriodBar> aggregateBars(
+  Iterable<ReadingSession> sessions, {
+  required StatsPeriod period,
+  required DateTime now,
+  String? sinceDay,
+}) {
+  // dayKey → 当日有效秒数（与 overview 同口径：since 过滤 + duration > 0）。
+  final Map<String, int> secondsByDay = <String, int>{};
+  for (final ReadingSession s in filterSince(sessions, sinceDay)) {
+    if (s.duration <= 0) {
+      continue;
+    }
+    secondsByDay[s.dayKey] = (secondsByDay[s.dayKey] ?? 0) + s.duration;
+  }
+  final String today = _dayKey(now);
+
+  switch (period) {
+    case StatsPeriod.week:
+      final DateTime monday = DateTime(now.year, now.month, now.day)
+          .subtract(Duration(days: now.weekday - 1));
+      const List<String> labels = <String>['一', '二', '三', '四', '五', '六', '日'];
+      final List<PeriodBar> week = <PeriodBar>[];
+      for (int i = 0; i < 7; i++) {
+        final String day = _dayKey(monday.add(Duration(days: i)));
+        week.add(_dayBar(day, labels[i], today, secondsByDay));
+      }
+      return week;
+    case StatsPeriod.month:
+      final int days = DateTime(now.year, now.month + 1, 0).day;
+      final List<PeriodBar> month = <PeriodBar>[];
+      for (int d = 1; d <= days; d++) {
+        final String day = _dayKey(DateTime(now.year, now.month, d));
+        month.add(_dayBar(day, '$d', today, secondsByDay));
+      }
+      return month;
+    case StatsPeriod.year:
+      final String todayMonthPrefix = today.substring(0, 8); // `YYYY-MM-`
+      final List<PeriodBar> out = <PeriodBar>[];
+      for (int m = 1; m <= 12; m++) {
+        final String prefix =
+            '${now.year.toString().padLeft(4, '0')}-${m.toString().padLeft(2, '0')}-';
+        int seconds = 0;
+        secondsByDay.forEach((String day, int sec) {
+          if (day.startsWith(prefix)) seconds += sec;
+        });
+        final int lastDay = DateTime(now.year, m + 1, 0).day;
+        out.add(PeriodBar(
+          startDay: '${prefix}01',
+          endDay: '$prefix$lastDay',
+          label: '$m月',
+          seconds: seconds,
+          isCurrent: prefix == todayMonthPrefix,
+        ));
+      }
+      return out;
+  }
+}
+
+/// 单日柱（周 / 月视图）：区间 = 该自然日自身。
+PeriodBar _dayBar(
+  String day,
+  String label,
+  String today,
+  Map<String, int> secondsByDay,
+) {
+  return PeriodBar(
+    startDay: day,
+    endDay: day,
+    label: label,
+    seconds: secondsByDay[day] ?? 0,
+    isCurrent: day == today,
+  );
+}
+
+/// 本地自然日键（`YYYY-MM-DD`；与 [sessionDayKey] 同形，直接格式化免经毫秒）。
+String _dayKey(DateTime d) =>
+    '${d.year.toString().padLeft(4, '0')}-'
+    '${d.month.toString().padLeft(2, '0')}-'
+    '${d.day.toString().padLeft(2, '0')}';

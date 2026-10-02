@@ -8,26 +8,33 @@
 // （§15.5 禁 Riverpod / Provider）；服务实例由组合根经 `HomeShell` 注入。
 // 首次进入异步 [StatsService.load]，载入完成回调里 setState 一次。
 //
-// 页面排布（`STAT-03`）：总览卡片（累计总时长「X 至今」/ 活跃天数 / 书籍数）
-// → 统计设置（起始日期 / 清空统计数据，形制同设置页分组卡片）。
-// 后续 M3-T11~T13 的柱状图 / 热力图 / 排行依次插在总览卡片之后。
+// 页面排布（`STAT-03`/`STAT-04`）：总览卡片（累计总时长「X 至今」/ 活跃天数 /
+// 书籍数）→ 周期柱状图（点柱下钻明细）→ 统计设置（起始日期 / 清空统计数据，
+// 形制同设置页分组卡片）。后续 M3-T12~T13 的热力图 / 排行依次插在其后。
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../library/library_repository.dart';
+import '../stats/aggregator.dart';
 import '../stats/stats_service.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'settings_kit.dart';
+import 'stats/bar_chart.dart';
+import 'stats/drill_down_page.dart';
 import 'stats/overview_card.dart';
 
 /// 阅读统计页。
 class StatsPage extends StatefulWidget {
   /// 创建统计页（[service] 由组合根注入，进程内唯一实例）。
-  const StatsPage({super.key, required this.service});
+  const StatsPage({super.key, required this.service, this.repository});
 
   /// 统计服务（载入 / 聚合 / 起始日期 / 清空）。
   final StatsService service;
+
+  /// 书库仓库（可选：下钻明细解析书名；`null` 降级显示 bookId）。
+  final LibraryRepository? repository;
 
   @override
   State<StatsPage> createState() => _StatsPageState();
@@ -82,6 +89,13 @@ class _StatsPageState extends State<StatsPage> {
                     overview: service.overview,
                     sinceDay: service.sinceDay,
                   ),
+                  const SizedBox(height: 12),
+                  PeriodBarChart(
+                    sessions: service.sessions,
+                    sinceDay: service.sinceDay,
+                    onTapBar: _openDrill,
+                  ),
+                  const SizedBox(height: 12),
                   SettingsGroupCard(
                     header: '统计设置',
                     children: <Widget>[
@@ -106,6 +120,18 @@ class _StatsPageState extends State<StatsPage> {
               ),
       ),
     );
+  }
+
+  /// 点柱下钻（`STAT-04`：单日柱 → 会话明细；年视图月柱 → 按天分组明细）。
+  void _openDrill(PeriodBar bar) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => DrillDownPage(
+        bar: bar,
+        sessions: widget.service.sessions,
+        sinceDay: widget.service.sinceDay,
+        repository: widget.repository,
+      ),
+    ));
   }
 
   /// 起始日期：弹选择层（不限 / 选日期…），选日期再进系统日期选择器。

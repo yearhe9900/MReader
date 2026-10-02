@@ -43,6 +43,13 @@ Future<void> _settle(WidgetTester tester, {int rounds = 40}) async {
   }
 }
 
+/// T11 图表插入后页面高于 800×600：拉高视口让总览 / 图表 / 设置同屏，
+/// 文本断言不跨滚动区（dpr 3 → 逻辑 800×1200）。
+void _tall(WidgetTester tester) {
+  tester.view.physicalSize = const Size(2400, 3600);
+  addTearDown(tester.view.reset);
+}
+
 /// 构造一条记录（id 派生口径同采集器）。
 ReadingSession _session({
   required String bookId,
@@ -94,6 +101,7 @@ void main() {
 
   testWidgets('STAT-03 ①：首屏三指标 —— 47 分钟 至今 / 3 天 / 2 本',
       (WidgetTester tester) async {
+    _tall(tester);
     await tester.pumpWidget(buildApp());
     await _settle(tester); // 排 service.load()
 
@@ -109,6 +117,7 @@ void main() {
 
   testWidgets('STAT-03 ③：设置起始日期后，数字与文案同步变化（8 月不计）',
       (WidgetTester tester) async {
+    _tall(tester);
     await tester.pumpWidget(buildApp());
     await _settle(tester);
 
@@ -126,6 +135,7 @@ void main() {
 
   testWidgets('STAT-03 ④：清空走二次确认——确认后三指标归零、页面仍在',
       (WidgetTester tester) async {
+    _tall(tester);
     await tester.pumpWidget(buildApp());
     await _settle(tester);
     expect(find.text('47 分钟 至今'), findsOneWidget);
@@ -158,6 +168,7 @@ void main() {
 
   testWidgets('起始日期弹层选「不限」→ 回到全部记录口径',
       (WidgetTester tester) async {
+    _tall(tester);
     await tester.runAsync(() => service.setSinceDate(DateTime(2026, 9, 1)));
     await tester.pumpWidget(buildApp());
     await _settle(tester);
