@@ -20,6 +20,7 @@ import 'package:mreader/library/book_record.dart';
 import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/platform/app_paths.dart';
+import 'package:mreader/reader/pagination/paged_scroller.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
 
@@ -147,9 +148,32 @@ Finder _richTextContaining(String needle) => find.byWidgetPredicate(
 double _topOf(WidgetTester tester, String needle) =>
     tester.getTopLeft(_richTextContaining(needle)).dy;
 
-/// 视口（正文滚动区）顶部 y。
+/// 视口（正文滚动区）顶部 y（分页容器即正文滚动区，`T05-c`）。
 double _viewportTop(WidgetTester tester) =>
-    tester.getTopLeft(find.byType(ListView)).dy;
+    tester.getTopLeft(find.byType(PagedScroller)).dy;
+
+/// 视口高（分页容器高）。
+double _viewportHeight(WidgetTester tester) =>
+    tester.getSize(find.byType(PagedScroller)).height;
+
+/// 落位后 [needle] 段落必须**进入视口**（页级落位契约，选型 §跳转：
+/// 段落级定位降级为页级 + 页内比例微调，不再保证段落顶 == 视口顶）。
+void _expectInViewport(WidgetTester tester, String needle, String why) {
+  final Finder para = _richTextContaining(needle);
+  final double top = tester.getTopLeft(para).dy;
+  final double bottom = tester.getBottomRight(para).dy;
+  final double vpTop = _viewportTop(tester);
+  expect(
+    top,
+    lessThan(vpTop + _viewportHeight(tester)),
+    reason: '$why：段落顶应在视口内（跳转未命中）',
+  );
+  expect(
+    bottom,
+    greaterThan(vpTop),
+    reason: '$why：段落未被滚过头（仍在视口内可见）',
+  );
+}
 
 /// 精确点击 [needle] 字形（链接文字）：用 [RenderParagraph.getBoxesForSelection]
 /// 取字形盒中心，避免点到行内空白导致命中失败（`CNT-04b` 教训）。
@@ -214,11 +238,8 @@ void main() {
       await _tapGlyph(tester, '[1]');
       await _settle(tester);
 
-      // 注释段对齐视口顶部（段落定位精确）。
-      expect(
-        _topOf(tester, '这是注释一的内容'),
-        closeTo(_viewportTop(tester), 5),
-      );
+      // 注释段已跳达（页级落位：进入视口即可，见 [_expectInViewport]）。
+      _expectInViewport(tester, '这是注释一的内容', '验收①');
       // 已压栈 → 浮动「返回」按钮出现。
       expect(find.byIcon(Icons.arrow_back), findsOneWidget);
     });
@@ -279,11 +300,8 @@ void main() {
       await _tapGlyph(tester, '[2]');
       await _settle(tester);
 
-      // 反查 Chapter 命中第 2 章，且 #note2 段落对齐视口顶。
-      expect(
-        _topOf(tester, '这是注释二的内容'),
-        closeTo(_viewportTop(tester), 5),
-      );
+      // 反查 Chapter 命中第 2 章，且 #note2 段落进入视口（页级落位）。
+      _expectInViewport(tester, '这是注释二的内容', '跨文件跳转');
       expect(find.textContaining('第2章'), findsWidgets);
       expect(find.byIcon(Icons.arrow_back), findsOneWidget);
 

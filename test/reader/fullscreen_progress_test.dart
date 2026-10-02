@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/reader/control_bar.dart';
+import 'package:mreader/reader/pagination/paged_scroller.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
 
@@ -112,8 +113,8 @@ void main() {
       expect((initial.chapter, initial.total, initial.percent), (1, 3, 0));
 
       // 手势按住拖动（**未抬起** = 必然没有 ScrollEnd）：一帧后进度即变化。
-      final TestGesture gesture =
-          await tester.startGesture(tester.getCenter(find.byType(ListView)));
+      final TestGesture gesture = await tester
+          .startGesture(tester.getCenter(find.byType(PagedScroller)));
       await gesture.moveBy(const Offset(0, -150));
       await tester.pump();
 

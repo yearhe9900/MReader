@@ -1371,9 +1371,9 @@ class _ReaderPageState extends State<ReaderPage> {
       nextHeadingHeight: nextOk ? _headingHeightOf(index + 1, cfg) : 0,
     );
 
-    final List<PagedChapterView> views = _buildPageViews(_window, cfg);
-    final String sig = _computeSignature(_window);
-    final PagedLayout layout =
+    List<PagedChapterView> views = _buildPageViews(_window, cfg);
+    String sig = _computeSignature(_window);
+    PagedLayout layout =
         PagedLayout.build(views, paragraphSpacing: cfg.paragraphSpacing);
     double? landAt =
         PagedScrollerState.offsetFor(layout, views, href, charOffset);
@@ -1400,6 +1400,18 @@ class _ReaderPageState extends State<ReaderPage> {
       PerfLog.mark('paged.prime',
           'index=$index char=$charOffset off=${landAt.toStringAsFixed(0)}');
     }
+    // 锚点可达性：窗口截断出「伪书尾」时锚点超滚动域 → 必越界 clamp 掉进
+    // 上一章（身份漂移）。不足则扩窗补足（当前章在窗口中部，append 不改
+    // windowPos / 落点）。
+    final repaired = _repairReachable(
+        views: views,
+        layout: layout,
+        sig: sig,
+        anchor: landAt,
+        cfg: cfg);
+    views = repaired.views;
+    layout = repaired.layout;
+    sig = repaired.sig;
     if (cfgChanged || sig != _viewsSignature) {
       _applyPagedViews(views, cfg, sig, offset: landAt);
     } else {
@@ -1437,6 +1449,40 @@ class _ReaderPageState extends State<ReaderPage> {
       if ((clamped - controller.position.pixels).abs() < 0.01) return;
       _pagedOp(() => controller.jumpTo(clamped));
     });
+  }
+
+  /// 窗口可达性修补：锚点 [anchor] 所需滚动域（`anchor + 视口高`）超出窗口
+  /// 布局总高时，顺次 append 后续章重建，直到可达或书尾。三章窗口会把书
+  /// 截断出「伪书尾」——不补则越界 clamp 掉进上一章，采样身份漂到上一章尾
+  /// （进度回退）；真书尾仍不足则原样返回诚实 clamp（与滚动到底同语义）。
+  ({List<PagedChapterView> views, PagedLayout layout, String sig})
+      _repairReachable({
+    required List<PagedChapterView> views,
+    required PagedLayout layout,
+    required String sig,
+    required double anchor,
+    required PaginationConfig cfg,
+  }) {
+    final List<Chapter>? chapters = _chapters;
+    final double vh = _viewportHeight;
+    if (chapters == null || vh <= 0 || anchor < 0) {
+      return (views: views, layout: layout, sig: sig);
+    }
+    final int before = _window.length;
+    while (layout.totalHeight < anchor + vh &&
+        _window.last < chapters.length - 1) {
+      _window.add(_window.last + 1);
+      views = _buildPageViews(_window, cfg);
+      layout =
+          PagedLayout.build(views, paragraphSpacing: cfg.paragraphSpacing);
+      sig = _computeSignature(_window);
+    }
+    if (_window.length != before) {
+      PerfLog.mark('paged.extend',
+          'window=$_window total=${layout.totalHeight.toStringAsFixed(0)} '
+          'anchor=${anchor.toStringAsFixed(0)}');
+    }
+    return (views: views, layout: layout, sig: sig);
   }
 
   /// 应用新视图（**唯一**换 [_pageViews] 的入口）：先按「当前章章顶差」
@@ -1493,8 +1539,8 @@ class _ReaderPageState extends State<ReaderPage> {
     if (!mounted || _disposed || !_pagedMode) return;
     final PaginationConfig? cfg = _pageConfig;
     if (cfg == null || _window.isEmpty) return;
-    final List<PagedChapterView> views = _buildPageViews(_window, cfg);
-    final String sig = _computeSignature(_window);
+    List<PagedChapterView> views = _buildPageViews(_window, cfg);
+    String sig = _computeSignature(_window);
     double? landOffset;
     if (tryPendingLand) {
       final ({int index, int charOffset})? pending = _pendingLand;
@@ -1512,6 +1558,26 @@ class _ReaderPageState extends State<ReaderPage> {
       }
     }
     if (sig == _viewsSignature && landOffset == null) return;
+    // 可达性修补：章页表收缩（占位→真）或停稳 trim 后，现场 offset 可能
+    // 超出新滚动域 → 不补则被 clamp 掉进上一章（身份漂移）。
+    double? anchor = landOffset;
+    if (anchor == null) {
+      final PagedScrollerState? scroller = _scroller;
+      if (scroller != null && scroller.scrollController.hasClients) {
+        anchor = scroller.scrollController.offset;
+      }
+    }
+    if (anchor != null) {
+      final repaired = _repairReachable(
+          views: views,
+          layout: PagedLayout.build(views,
+              paragraphSpacing: cfg.paragraphSpacing),
+          sig: sig,
+          anchor: anchor,
+          cfg: cfg);
+      views = repaired.views;
+      sig = repaired.sig;
+    }
     _applyPagedViews(views, cfg, sig, offset: landOffset);
     if (landOffset != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1521,9 +1587,27 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   /// 停稳期把窗口收敛回 `[_currentIndex±1]`（滚动中只增不移，trim 只在此做）。
+  /// 收敛带可达性护栏：尾部章不足一屏时直接 trim 会让现场 offset 越界被
+  /// clamp 掉进上一章（身份漂移）——补尾章到放得下为止（或到书尾）。
   void _maintainWindowIdle() {
-    if (_chapters == null || _chapters!.isEmpty) return;
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return;
     final List<int> desired = _computeWindow(_currentIndex);
+    final PaginationConfig? cfg = _pageConfig;
+    final PagedScrollerState? scroller = _scroller;
+    if (cfg != null &&
+        scroller != null &&
+        scroller.scrollController.hasClients &&
+        _viewportHeight > 0) {
+      final double offset = scroller.scrollController.offset;
+      while (desired.last < chapters.length - 1) {
+        final PagedLayout probe = PagedLayout.build(
+            _buildPageViews(desired, cfg),
+            paragraphSpacing: cfg.paragraphSpacing);
+        if (probe.totalHeight >= offset + _viewportHeight) break;
+        desired.add(desired.last + 1);
+      }
+    }
     bool same = desired.length == _window.length;
     if (same) {
       for (int i = 0; i < desired.length; i++) {

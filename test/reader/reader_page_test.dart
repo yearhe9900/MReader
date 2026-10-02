@@ -13,11 +13,13 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:mreader/diagnostics/perf_log.dart';
 import 'package:mreader/format/book_source.dart';
 import 'package:mreader/library/book_record.dart';
 import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/platform/app_paths.dart';
+import 'package:mreader/reader/pagination/paged_scroller.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_progress.dart';
@@ -367,11 +369,20 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      final ListView list = tester.widget<ListView>(find.byType(ListView));
+      // 第二次打开：分页模式 seed 按**语义坐标**（窗口位×页高 + 章内比例×
+      // 页高）落在目标章占位块——像素 hint 不再直接搬用，但「首帧不从 0 起跳」
+      // 的验收不变（旧 ListView 实现此分支从 0 起跳 → 用户先看到前几页）。
+      final PagedScroller paged =
+          tester.widget<PagedScroller>(find.byType(PagedScroller));
+      final ScrollController? seedController = paged.controller;
+      expect(seedController, isNotNull);
+      // 目标下标 2、3 章书窗口 [1,2] → 窗口位 1；章内比例 = 存档 chapterPos。
+      final double expectedSeed =
+          (1 + saved!.chapterPos.clamp(0.0, 1.0)) * paged.config.pageHeight;
       expect(
-        list.controller!.initialScrollOffset,
-        hint.scrollOffset,
-        reason: '回退分支必须 seed 同版面 hint.scrollOffset（方案 A），不得从 0 起跳',
+        seedController!.initialScrollOffset,
+        expectedSeed,
+        reason: '分页 seed 必须按语义坐标落在目标章占位块（窗口位×页高+章内比例×页高），不得从 0 起跳',
       );
       expect(find.text('第三章'), findsOneWidget);
       expect(find.text('第一章'), findsNothing);
@@ -444,7 +455,7 @@ void main() {
       }
     });
 
-    testWidgets('回归②：深章节恢复必须收敛（章高模型 seek，替代 maxScrollExtent 比例外推）',
+    testWidgets('回归②：深章节恢复必须收敛（分页一次落位，语义坐标写回）',
         (WidgetTester tester) async {
       final _CountingProgressStore counting = _CountingProgressStore(paths);
       // 播种存档：目标第 6 章（下标 5）章中 0.5。
@@ -473,8 +484,9 @@ void main() {
       // 真机同型故障：2026-09-28 绍宋（447 章 EPUB）`[perf]` 日志 —— 8 帧全
       // `kind=estimate`、`restore.end converged=false sampled=false`、遮罩 1248ms。
       //
-      // **新实现**（章高模型）：seek 只用「占位高已知 + 已测真实高记忆」累加算目标章首，
-      // 朝目标**单向逼近**；进入布局窗口后转实测精确校正。本用例锁死「必须收敛且写盘」——
+      // **新实现**（分页一次落位）：恢复 seed 落目标章占位块，prime 按 offsetFor
+      // 精确算偏移单跳落位（首屏突发盖不住目标字符时挂估算落位，空闲帧补完后
+      // 二次精确收敛）。本用例锁死「必须收敛且写盘」——
       // 这也正是修复前后的行为差异（旧断言是 `find.text('第六章') findsNothing` +
       // 零落盘，前提已被本次修复消除，故整条改写）。
       final List<int> counts = List<int>.generate(20, (int i) {
@@ -494,14 +506,14 @@ void main() {
       );
       await _settle(tester);
 
-      // 非空验证：书确实开了（列表就位）且内容确实渲染（排除空壳假绿）。
-      expect(find.byType(ListView), findsOneWidget);
+      // 非空验证：书确实开了（分页容器就位）且内容确实渲染（排除空壳假绿）。
+      expect(find.byType(PagedScroller), findsOneWidget);
       expect(find.byType(RichText, skipOffstage: false), findsWidgets,
           reason: '应有内容渲染（占位章也算），排除空壳假绿');
 
       // 收敛断言：目标章标题与正文都进了树（旧实现两者皆无）。
       expect(find.text('第六章'), findsOneWidget,
-          reason: '章高模型 seek 必须把目标章带进布局窗口并落定');
+          reason: '分页一次落位必须把目标章带进布局窗口并落定');
       // 注：正文段落由 `InlineParagraph` 渲染为 `Text.rich`（RichText），
       // `find.textContaining` 默认**不匹配富文本**，必须显式 `findRichText: true`。
       expect(find.textContaining('第6章正文', findRichText: true), findsWidgets,
@@ -541,31 +553,41 @@ void main() {
         ),
       );
       expect(counting.saveCount, 1); // 播种本身
+      PerfLog.records.clear(); // 只认本次会话的 paged 打点
 
+      // 目标章（下标 5）超长 → 首屏突发（kFirstPaintBudget=16ms）盖不住 0.5
+      // 处字符，prime 走估算分支挂 `_pendingLand`（打点 `paged.estimate`），
+      // `RC1` 闸门保持关闭；空闲帧还要排很久才可能精确落位——本用例看到
+      // 估算打点后立即关书，抓的就是「未落定」这个窗口（旧实现同型手法是
+      // 「遮罩在位」；分页一次落位无遮罩，改抓打点）。
       await tester.pumpWidget(
         buildApp(
           source: _FakeSource(
-            paragraphCounts: List<int>.generate(20, (int i) => i == 4 ? 400 : 20),
-            hangIndices: <int>{
-              for (int i = 0; i < 20; i++)
-                if (i < 4 || i > 6) i,
-            },
+            paragraphCounts:
+                List<int>.generate(20, (int i) => i == 5 ? 10000 : 20),
           ),
           store: counting,
         ),
       );
 
-      // 轮询到「遮罩在位」= 恢复校正**进行中**（与「方案B」同一手法；收敛需多帧，
-      // 抓到遮罩即证明尚未落定 —— 这同时是非空验证，排除「什么都没发生」的假绿）。
-      final Finder mask = find.byKey(const Key('reader-restore-mask'));
-      bool sawMask = false;
-      for (int i = 0; i < 60 && !sawMask; i++) {
+      // 轮询 PerfLog 到「估算落位挂起」= 恢复**未落定**进行中（抓到即证明
+      // 尚未落定——这同时是非空验证，排除「什么都没发生」的假绿）。
+      bool sawEstimate = false;
+      for (int i = 0; i < 60 && !sawEstimate; i++) {
         await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 8)));
         await tester.pump(const Duration(milliseconds: 8));
-        sawMask = mask.evaluate().isNotEmpty;
+        for (final String line in PerfLog.records) {
+          if (line.contains('paged.estimate')) {
+            sawEstimate = true;
+            break;
+          }
+        }
       }
-      expect(sawMask, isTrue, reason: '须抓在恢复校正中途（否则本用例失去意义）');
+      expect(sawEstimate, isTrue,
+          reason: '须抓在恢复落位中途（否则本用例失去意义）');
+      expect(find.byType(PagedScroller), findsOneWidget,
+          reason: '分页容器应已就位（书确实开了，排除空壳假绿）');
 
       // 校正未落定即关书：dispose 的保存必须被闸门拦下（`_positionConverged`
       // 与 `_positionSampled` 都还没置位）。
@@ -606,7 +628,8 @@ void main() {
       expect(find.text('第一章'), findsNothing);
       expect(find.textContaining('第2章'), findsWidgets);
       final double titleTop = tester.getTopLeft(find.text('第二章')).dy;
-      final double viewportTop = tester.getTopLeft(find.byType(ListView)).dy;
+      final double viewportTop =
+          tester.getTopLeft(find.byType(PagedScroller)).dy;
       expect(titleTop - viewportTop, lessThan(-300),
           reason: '应落在章中部而非章首（chapterPos≈0.5 已生效）');
 
@@ -624,9 +647,9 @@ void main() {
       expect(saved.chapterPos, inInclusiveRange(0.4, 0.6));
     });
 
-    testWidgets('方案B：开书首跳校正期间遮罩盖住列表，落定后撤除（backlog①）',
+    testWidgets('方案B（分页改写）：恢复一次落位——全程无遮罩、无跳变，直接落目标章（backlog①）',
         (WidgetTester tester) async {
-      // 播种进度指向第 3 章（恢复目标非书首 → 遮罩必现）。
+      // 播种进度指向第 3 章（恢复目标非书首）。
       await tester.runAsync(
         () => progressStore.save(
           ReadingProgress(
@@ -640,21 +663,26 @@ void main() {
       );
 
       await tester.pumpWidget(buildApp());
-      // 校正全程只有寥寥数帧（seed 命中时 2 帧内落定），须逐帧轮询抓中间态。
+      // 逐帧轮询中间态。旧 ListView 实现契约 = 校正期间**有**遮罩（盖住跳动）；
+      // 分页实现契约相反 = **一次落位**——seed 已把首帧放在目标章占位块上，
+      // 恢复全程不得出现遮罩，也不得闪现书首内容（「前几页 → 当前页」跳变）。
       final Finder mask = find.byKey(const Key('reader-restore-mask'));
       bool sawMask = false;
-      for (int i = 0; i < 90 && !sawMask; i++) {
+      bool sawWrongChapter = false;
+      for (int i = 0; i < 90; i++) {
         await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 8)));
         await tester.pump(const Duration(milliseconds: 8));
-        sawMask = mask.evaluate().isNotEmpty;
+        if (mask.evaluate().isNotEmpty) sawMask = true;
+        // 窗口只含 [1,2]：出现「第一章」= 布局落到了书首，属错误跳变。
+        if (find.text('第一章').evaluate().isNotEmpty) sawWrongChapter = true;
       }
-      expect(sawMask, isTrue,
-          reason: '首跳校正期间应有遮罩（否则用户会看到「前几页 → 当前页」跳动）');
+      expect(sawMask, isFalse,
+          reason: '分页一次落位：恢复期间不得出现遮罩（旧方案B 遮罩契约已反转）');
+      expect(sawWrongChapter, isFalse,
+          reason: '恢复期间不得闪现书首内容（「前几页 → 当前页」跳变）');
 
       await _settle(tester);
-      expect(mask.evaluate().isEmpty, isTrue,
-          reason: '校正落定（含超帧数放弃路径）后遮罩必须撤除，不得常驻');
       // 非空验证：恢复确实落到了目标章（排除「什么都没发生」的假绿）。
       expect(find.text('第三章'), findsOneWidget);
       expect(find.text('第一章'), findsNothing);
@@ -687,7 +715,7 @@ void main() {
 
       // 落定：记「第 2 章标题顶 − 视口顶」间距 d1（第 1 章仍是估算占位高）。
       final Finder title = find.text('第二章');
-      final Finder viewport = find.byType(ListView);
+      final Finder viewport = find.byType(PagedScroller);
       expect(title, findsOneWidget, reason: '恢复应落到第 2 章');
       final double d1 =
           tester.getTopLeft(title).dy - tester.getTopLeft(viewport).dy;
