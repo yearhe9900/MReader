@@ -44,6 +44,9 @@ class PageTurnLayers extends StatelessWidget {
 
         if (g == null) {
           // 静止：单页直渲（仍包 RepaintBoundary——翻页起手即有层可动）。
+          // key 与两层态的 current 图层**同款**：起手（单层 → 双层）与收尾
+          // （双层 → 单层）只增删 incoming 层，current 页元素不被替换——
+          // 「同实例 → 页 build 不增」在 idle↔动画的边界转换上也成立。
           return ClipRect(
             child: Stack(
               fit: StackFit.expand,
@@ -52,7 +55,7 @@ class PageTurnLayers extends StatelessWidget {
                   page: current,
                   dx: 0,
                   width: width,
-                  layerKey: null,
+                  layerKey: const ValueKey<String>('mreader-layer-current'),
                   shadowAlpha: 0,
                 ),
               ],

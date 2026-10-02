@@ -47,6 +47,7 @@ void main() {
       expect(prefs.settings.pageMargin, PageMargin.normal);
       expect(prefs.brightness, 1.0);
       expect(prefs.background, ReaderBackground.white);
+      expect(prefs.pageMode, ReaderPageMode.scroll, reason: '翻页方式默认滚动');
     });
 
     test('亮度构造 clamp 到 [0.2, 1.0]', () {
@@ -66,9 +67,17 @@ void main() {
         ),
         brightness: 0.5,
         background: ReaderBackground.sepia,
+        pageMode: ReaderPageMode.cover,
       );
       final ReadingPrefs restored = ReadingPrefs.fromJson(prefs.toJson());
       expect(restored, prefs);
+    });
+
+    test('ReaderPageMode.fromName：命中还原、未知 / 缺失回退 scroll', () {
+      expect(ReaderPageMode.fromName('slide'), ReaderPageMode.slide);
+      expect(ReaderPageMode.fromName('none'), ReaderPageMode.none);
+      expect(ReaderPageMode.fromName('bogus'), ReaderPageMode.scroll);
+      expect(ReaderPageMode.fromName(null), ReaderPageMode.scroll);
     });
 
     test('fromJson 防御：非 Map 整体默认；字段逐项回退默认', () {
@@ -89,6 +98,7 @@ void main() {
         'pageMargin': 'bogus', // 未知 → normal
         'brightness': 'x', // 类型错 → 1.0
         'background': 'bogus', // 未知 → white
+        'pageMode': 'bogus', // 未知 → scroll
       });
       expect(partial.settings.fontSize, 18);
       expect(partial.settings.lineHeight, 2.0);
@@ -97,6 +107,7 @@ void main() {
       expect(partial.settings.pageMargin, PageMargin.normal);
       expect(partial.brightness, 1.0);
       expect(partial.background, ReaderBackground.white);
+      expect(partial.pageMode, ReaderPageMode.scroll);
 
       // 数值越界 clamp（亮度 [0.2, 1.0]、字号 [12, 36]、行距 [1.0, 2.6]）。
       final ReadingPrefs clamped = ReadingPrefs.fromJson(<String, Object?>{
@@ -118,6 +129,13 @@ void main() {
       expect(next.brightness, 0.4);
       expect(next.background, ReaderBackground.black);
       expect(next.settings, base.settings, reason: 'settings 不传则保持');
+      expect(next.pageMode, base.pageMode, reason: 'pageMode 不传则保持');
+
+      final ReadingPrefs turned = base.copyWith(pageMode: ReaderPageMode.slide);
+      expect(turned.pageMode, ReaderPageMode.slide);
+      expect(turned.brightness, base.brightness, reason: '无关字段不连坐');
+      expect(turned.background, base.background);
+      expect(turned.settings, base.settings);
     });
   });
 

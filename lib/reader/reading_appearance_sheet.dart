@@ -14,6 +14,16 @@ import '../typography/reader_settings.dart';
 import 'reading_background.dart';
 import 'reading_prefs.dart';
 
+/// 翻页方式的展示标签（面板专用文案）。
+extension ReaderPageModeLabel on ReaderPageMode {
+  String get label => switch (this) {
+        ReaderPageMode.scroll => '滚动',
+        ReaderPageMode.slide => '滑动',
+        ReaderPageMode.cover => '覆盖',
+        ReaderPageMode.none => '无动画',
+      };
+}
+
 /// 阅读外观面板（字体 / 亮度 / 背景色）。
 class ReadingAppearanceSheet extends StatefulWidget {
   const ReadingAppearanceSheet({
@@ -97,6 +107,22 @@ class _ReadingAppearanceSheetState extends State<ReadingAppearanceSheet> {
                     settings: _settingsWith(fontFamily: 'sans-serif'),
                   )),
                 ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text('翻页方式', style: theme.textTheme.labelLarge),
+            const SizedBox(height: 8),
+            // `M-PAGE T05-d`：模式切换由用户可选（选型拍板①③）。
+            Wrap(
+              spacing: 8,
+              children: <Widget>[
+                for (final ReaderPageMode mode in ReaderPageMode.values)
+                  ChoiceChip(
+                    key: Key('pageMode-${mode.name}'),
+                    label: Text(mode.label),
+                    selected: _prefs.pageMode == mode,
+                    onSelected: (_) => _emit(_prefs.copyWith(pageMode: mode)),
+                  ),
               ],
             ),
             const SizedBox(height: 16),

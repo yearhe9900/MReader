@@ -10,6 +10,9 @@
 //     #1F1F1F 字 ≈ 13.5:1）；
 //   · `TYP-08` ③ 夜间模式不产生白底 —— 暗色主题下底色恒为暗色
 //     （#121212 / 纯黑 #000000），正文浅色。
+//   · `M-PAGE T05-d` ① 翻页方式 chip 即时切换渲染形态 —— 滚动体只翻
+//     `Offstage`、Element 全程同一（不重挂）；② 滑动模式下拖拽翻页推进
+//     语义进度（章标题从页 0 消失），滚动体全程保活。
 //
 // 预期值人工推演（遮罩不透明度）：亮度 b → 遮罩黑层不透明度 `1 - b`；
 // b = 0.5 时为 0.5（`Color.fromRGBO(0,0,0,·).a` 精确等于该值）。
@@ -19,6 +22,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/library/library_repository.dart';
+import 'package:mreader/reader/pagination/paged_scroller.dart';
+import 'package:mreader/reader/pagination/paged_turn_body.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_prefs.dart';
@@ -96,18 +101,20 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('font-serif')));
-      await tester.pump(); // 只 pump 一帧 —— 立即生效，不等任何异步。
+      // 分页模式正文样式走 `PaginationConfig`：cfg 变化挂帧末 reprime 重分页
+      // 后才换样式（`M-PAGE` 迁移；原滚动模式口径为单帧生效，观感仍即时）。
+      await tester.pumpAndSettle();
       expect(paragraph(tester).style.fontFamily, 'serif');
       // 验收②：回退链非空（Windows 不认通用族名，靠回退链保中文无豆腐块）。
       expect(paragraph(tester).style.fontFamilyFallback, isNotEmpty);
 
       await tester.tap(find.byKey(const Key('font-sans')));
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(paragraph(tester).style.fontFamily, 'sans-serif');
       expect(paragraph(tester).style.fontFamilyFallback, isNotEmpty);
 
       await tester.tap(find.byKey(const Key('font-default')));
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(paragraph(tester).style.fontFamily, isNull);
     });
 
@@ -208,7 +215,8 @@ void main() {
       await tester.tap(find.byKey(const Key('reader-appearance')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('background-black')));
-      await tester.pump();
+      // 底色单帧即生效（直接 build）；正文色在分页 cfg 下随帧末 reprime 收敛。
+      await tester.pumpAndSettle();
       final Scaffold dark = tester.widget<Scaffold>(find.byType(Scaffold));
       expect(dark.backgroundColor, const Color(0xFF000000));
       expect(paragraph(tester).style.color, const Color(0xFFD9D9D9));
@@ -218,6 +226,106 @@ void main() {
         _contrastRatio(const Color(0xFF000000), const Color(0xFFD9D9D9)),
         greaterThanOrEqualTo(4.5),
       );
+    });
+
+    // ── `M-PAGE T05-d`：翻页方式接入外观面板 ─────────────────────────────
+
+    testWidgets('T05-d 验收①：翻页 chip 即时切换渲染形态，滚动体 Element 不重挂',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      final Finder scrollerFinder =
+          find.byType(PagedScroller, skipOffstage: false);
+      final Finder turnFinder = find.byType(PageTurnBody);
+
+      // 初始滚动模式：滚动体在场（未 offstage），无翻页体。
+      expect(scrollerFinder, findsOneWidget);
+      expect(find.byType(PagedScroller), findsOneWidget);
+      expect(turnFinder, findsNothing);
+      final Element scrollerBefore = tester.element(scrollerFinder);
+
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
+
+      // 切「滑动」：翻页体出场；滚动体只翻 Offstage，Element 同一
+      // （布局表 / ScrollController / GlobalKey 全保留 → 不重挂）。
+      await tester.tap(find.byKey(const Key('pageMode-slide')));
+      await tester.pumpAndSettle();
+      expect(turnFinder, findsOneWidget);
+      expect(scrollerFinder, findsOneWidget);
+      expect(
+        find.byType(PagedScroller),
+        findsNothing,
+        reason: '默认 finder 跳过 Offstage → 滚动体已出场但未卸载',
+      );
+      expect(
+        tester.element(scrollerFinder),
+        same(scrollerBefore),
+        reason: 'scroll ↔ turn 只翻 Offstage，滚动体 Element 必须同一',
+      );
+      expect(
+        tester.widget<ChoiceChip>(find.byKey(const Key('pageMode-slide'))).selected,
+        isTrue,
+        reason: 'chip 选中态随 prefs 即时刷新',
+      );
+
+      // 切回「滚动」：翻页体退场、滚动体复出，Element 仍同一。
+      await tester.tap(find.byKey(const Key('pageMode-scroll')));
+      await tester.pumpAndSettle();
+      expect(turnFinder, findsNothing);
+      expect(find.byType(PagedScroller), findsOneWidget);
+      expect(tester.element(scrollerFinder), same(scrollerBefore));
+      expect(
+        tester.widget<ChoiceChip>(find.byKey(const Key('pageMode-scroll'))).selected,
+        isTrue,
+      );
+
+      // 收尾：关面板（点遮罩）并排空采样 debounce / 落盘。
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+      await settle(tester);
+    });
+
+    testWidgets('T05-d 验收②：滑动模式拖拽翻页推进语义进度，滚动体全程保活',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      // 开面板切「滑动」→ 点遮罩关面板回阅读页。
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('pageMode-slide')));
+      await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      final Finder scrollerFinder =
+          find.byType(PagedScroller, skipOffstage: false);
+      final Finder turnFinder = find.byType(PageTurnBody);
+      expect(turnFinder, findsOneWidget);
+      expect(scrollerFinder, findsOneWidget);
+      expect(
+        find.text('第一章'),
+        findsOneWidget,
+        reason: '页 0 渲染章标题（翻页体内；滚动体 Offstage 被跳过）',
+      );
+
+      // 翻页体宽度 = 阅读页 body 全宽 800 → 位移 300 → progress = 0.375
+      // ≥ 0.3（kCommitDistance）→ commit 下一页。
+      await tester.drag(turnFinder, const Offset(-300, 0));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('第一章'),
+        findsNothing,
+        reason: '已翻到页 1：章标题只渲染在页 0',
+      );
+      expect(turnFinder, findsOneWidget, reason: '仍在翻页态');
+      expect(scrollerFinder, findsOneWidget, reason: '滚动体全程保活（未重挂）');
+
+      // 排空停稳采样 debounce / 进度落盘的真异步与 timer。
+      await settle(tester);
     });
   });
 }

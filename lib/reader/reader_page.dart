@@ -106,7 +106,10 @@ import 'link_navigator.dart';
 import 'pagination/incremental_paginator.dart';
 import 'pagination/page_breaker.dart';
 import 'pagination/page_paginator.dart';
+import 'pagination/page_renderer.dart';
+import 'pagination/page_turn_controller.dart';
 import 'pagination/paged_scroller.dart';
+import 'pagination/paged_turn_body.dart';
 import 'pagination/pagination_cache.dart';
 import 'pagination/pagination_scheduler.dart';
 import 'progress_store.dart';
@@ -344,6 +347,19 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 保留旧 `ListView` 路径（异步图片高不进静态布局表，FMT-02 P1 不迁）。
   bool _pagedMode = false;
 
+  /// 翻页方式（`M-PAGE T05-d`）：`scroll` = 滚动拼接（[PagedScroller] 可见）；
+  /// 其余（slide / cover / none）= 翻页体叠层（[PageTurnBody] 可见，滚动体
+  /// 藏进 `Offstage` 但保持挂载——布局 / 采样 / `jumpToCharOffset` 照常有效）。
+  ReaderPageMode _pageTurnMode = ReaderPageMode.scroll;
+
+  /// 当前是否处于翻页形态（`scroll` 之外皆是）。
+  bool get _pageTurnModeAsTurn => _pageTurnMode != ReaderPageMode.scroll;
+
+  /// 翻页手势活跃中（拖拽或 settle 动画未落定）。
+  /// 为 `true` 时：[`_kickReprime`] 让位、父级换视图 / 跳转被抑制，
+  /// 防止动画期底下的页表被抽换（`T05-d` 三重闸之一）。
+  bool _turnGestureActive = false;
+
   /// 分页调度器（目标页优先 + ±1 章窗口预分页；文本模式在 `_open` 创建）。
   PaginationScheduler? _scheduler;
 
@@ -450,6 +466,7 @@ class _ReaderPageState extends State<ReaderPage> {
           _settings = prefs.settings;
           _brightness = prefs.brightness;
           _background = prefs.background;
+          _pageTurnMode = prefs.pageMode;
         }
         _bookmarks = bookmarks;
         _meta = meta;
@@ -1257,10 +1274,11 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   /// 真正启动 reprime：滚动中推迟（jumpTo 会掐断甩动），等 ScrollEnd 停稳
-  /// 流程⑦再 kick。
+  /// 流程⑦再 kick；翻页手势中让位（`T05-d` 三重闸——动画期不许抽换页表）。
   void _kickReprime() {
     if (!mounted || _disposed || !_pagedMode) return;
     if (_reprimeRunning || _jumpInFlight) return;
+    if (_turnGestureActive) return;
     final ScrollController? controller = _controller;
     if (controller != null &&
         controller.hasClients &&
@@ -1296,6 +1314,9 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   /// 当前语义字符偏移：挂起落位优先 → 现场采样（href 匹配）→ 存档比例换算。
+  ///
+  /// 翻页模式（`T05-d`）：滚动体藏在 Offstage 里、拖拽期停在旧位——采样
+  /// 不作数，直接按 `_chapterPos × total` 换算（与写入口同源无二义）。
   int _currentCharOffset() {
     final ({int index, int charOffset})? pending = _pendingLand;
     if (pending != null) return pending.charOffset;
@@ -1303,6 +1324,13 @@ class _ReaderPageState extends State<ReaderPage> {
     if (chapters == null || chapters.isEmpty) return 0;
     final int index = _currentIndex.clamp(0, chapters.length - 1);
     final PaginatedChapter? pag = _paginatedOf(index);
+    if (_pageTurnModeAsTurn) {
+      final int total = pag?.totalChars ??
+          PagePaginator.charCountOf(
+              _cache.peek(index)?.paragraphList ?? const <String>[]);
+      if (total <= 0) return 0;
+      return (_chapterPos.clamp(0.0, 1.0) * total).round().clamp(0, total);
+    }
     final PagedScrollerState? scroller = _scroller;
     if (scroller != null && pag != null) {
       final ScrollSample? sample = scroller.sampleNow();
@@ -1595,10 +1623,14 @@ class _ReaderPageState extends State<ReaderPage> {
     final List<int> desired = _computeWindow(_currentIndex);
     final PaginationConfig? cfg = _pageConfig;
     final PagedScrollerState? scroller = _scroller;
+    // 尾部补章按「现场 offset + 视口」探可达性；翻页模式滚动体停在旧位
+    // （探针输入不作数），只收 ±1 章窗口、不做尾探——真滚动时
+    // `_onPagedScrollUpdate` 会按需尾追加。
     if (cfg != null &&
         scroller != null &&
         scroller.scrollController.hasClients &&
-        _viewportHeight > 0) {
+        _viewportHeight > 0 &&
+        !_pageTurnModeAsTurn) {
       final double offset = scroller.scrollController.offset;
       while (desired.last < chapters.length - 1) {
         final PagedLayout probe = PagedLayout.build(
@@ -1788,15 +1820,36 @@ class _ReaderPageState extends State<ReaderPage> {
         SchedulerPhase.persistentCallbacks) {
       return;
     }
+    // 翻页模式：同 [_samplePagedNow] 口径——语义直写不回采。
+    if (_pageTurnModeAsTurn) {
+      _samplePagedNow();
+      return;
+    }
     _applyPagedSample(sample, save: true);
   }
 
   /// 同步语义身份（不落盘；停稳流程① / reprime 前对齐现场用）。
-  void _syncPagedIdentity() =>
-      _applyPagedSample(_scroller?.sampleNow(), save: false);
+  ///
+  /// 翻页模式（`T05-d`）：语义坐标由 commit / 跳转**直写**为真值，滚动体
+  /// 采样（拖拽期停在旧位）不作数 → 整体跳过。
+  void _syncPagedIdentity() {
+    if (_pageTurnModeAsTurn) return;
+    _applyPagedSample(_scroller?.sampleNow(), save: false);
+  }
 
   /// 立即采样并落盘（postFrame 落位确认后 / 停稳⑨）。
-  void _samplePagedNow() => _applyPagedSample(_scroller?.sampleNow(), save: true);
+  ///
+  /// 翻页模式：不读滚动体采样（防陈旧样本回写覆盖直写语义），只做
+  /// 「确认已采样 + 落盘」——`_chapterPos` 已是真值。
+  void _samplePagedNow() {
+    if (_pageTurnModeAsTurn) {
+      if (_pendingLand != null) return;
+      _positionSampled = true;
+      unawaited(_saveProgress());
+      return;
+    }
+    _applyPagedSample(_scroller?.sampleNow(), save: true);
+  }
 
   /// 把采样写进语义坐标：有页采样 → 章 + 章内位置（RC1 闸门内可写）；
   /// 无页采样（占位章盖顶）→ 只更章身份、`_positionSampled = false`（RC3）。
@@ -1964,12 +2017,16 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   /// 分页滚动体（[_buildBody] LayoutBuilder 内、视图就绪后上屏）。
+  ///
+  /// 结构恒定（`M-PAGE T05-d` 方案 A）：`Stack[Offstage(scroller), PageTurnBody?]`
+  /// ——scroll ↔ turn 切换只翻 `Offstage` 与叠层的有无，滚动体**从不重挂**
+  /// （GlobalKey / ScrollController / 布局表全保留）。
   Widget _buildPagedBody() {
     final PaginationConfig? cfg = _pageConfig;
     if (cfg == null || _pageViews.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
-    return PagedScroller(
+    final Widget scroller = PagedScroller(
       key: _scrollerKey,
       chapters: _pageViews,
       config: cfg,
@@ -1979,6 +2036,195 @@ class _ReaderPageState extends State<ReaderPage> {
       onLinkTap: _onLinkTapped,
       highlightQuery: _searchHighlight.isEmpty ? null : _searchHighlight,
     );
+    final ({int viewIndex, int pageIndex})? pos =
+        _pageTurnModeAsTurn ? _turnPosition() : null;
+    if (pos == null) {
+      // 滚动模式 / 翻页态瞬时解析失败（窗口不含当前章）→ 回落滚动渲染，
+      // 不出空白。
+      return Stack(
+        fit: StackFit.passthrough,
+        children: <Widget>[Offstage(offstage: false, child: scroller)],
+      );
+    }
+    final PagedChapterView cur = _pageViews[pos.viewIndex];
+    return Stack(
+      fit: StackFit.passthrough,
+      children: <Widget>[
+        Offstage(offstage: true, child: scroller),
+        Positioned.fill(
+          child: PageTurnBody(
+            mode: _turnControllerMode,
+            current: _turnPageWidget(cur, pos.pageIndex),
+            buildIncoming: _buildTurnIncoming,
+            canTurn: _canTurn,
+            onGestureActive: _onTurnGesture,
+            onCommit: _onTurnCommitted,
+            scheduler: _scheduler,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── T05-d 翻页接线（语义坐标 ↔ 页图层）────────────────────────────────
+
+  /// 翻页方式 → 翻页体控制器模式（`scroll` 不进翻页体，占位映射无副作用）。
+  PageTurnMode get _turnControllerMode => switch (_pageTurnMode) {
+        ReaderPageMode.slide => PageTurnMode.slide,
+        ReaderPageMode.cover => PageTurnMode.cover,
+        ReaderPageMode.none => PageTurnMode.none,
+        ReaderPageMode.scroll => PageTurnMode.slide,
+      };
+
+  /// 语义坐标（`_currentIndex` + `_chapterPos`）→ 当前页在视图表中的位置。
+  /// `pageIndex == -1` = 占位章（页表空）；视图表不含当前章 → `null`。
+  ({int viewIndex, int pageIndex})? _turnPosition() {
+    if (_pageViews.isEmpty) return null;
+    final String href = _hrefAt(_currentIndex);
+    if (href.isEmpty) return null;
+    final int v = _pageViews.indexWhere((PagedChapterView w) => w.href == href);
+    if (v < 0) return null;
+    final List<PageSlice> pages = _pageViews[v].pages;
+    if (pages.isEmpty) return (viewIndex: v, pageIndex: -1);
+    // `_chapterPos` 与 `totalChars` 同源（`charCountOf(paragraphs)`）——
+    // 比例 × 总字数还原字符偏移，与保存 / 落位口径一致。
+    final int total = PagePaginator.charCountOf(_pageViews[v].paragraphs);
+    if (total <= 0) return (viewIndex: v, pageIndex: 0);
+    final int charOffset =
+        (_chapterPos.clamp(0.0, 1.0) * total).round().clamp(0, total);
+    int p = PageBreaker.findPageByCharOffset(pages, charOffset);
+    if (p < 0) p = 0;
+    if (p >= pages.length) p = pages.length - 1;
+    return (viewIndex: v, pageIndex: p);
+  }
+
+  /// 方向 → 目标（书内章下标 + 章内页码）；书边 / 占位邻章阻塞返回 `null`。
+  ///
+  /// 同章翻页按页表边界判定；跨章须邻视图**有页表**（占位章 = 阻塞——
+  /// 这是 `canTurn` 的语义判定，翻页不进「载入中」占位块）。
+  ({int book, int page})? _turnTarget(TurnDirection dir) {
+    final ({int viewIndex, int pageIndex})? pos = _turnPosition();
+    if (pos == null) return null;
+    final List<PageSlice> cur = _pageViews[pos.viewIndex].pages;
+    if (dir == TurnDirection.next) {
+      if (pos.pageIndex >= 0 && pos.pageIndex + 1 < cur.length) {
+        return (book: _currentIndex, page: pos.pageIndex + 1);
+      }
+      final int book = _currentIndex + 1;
+      final List<Chapter>? chapters = _chapters;
+      if (chapters == null || book >= chapters.length) return null;
+      final List<PageSlice>? pages = _turnNeighborPages(_hrefAt(book));
+      if (pages == null || pages.isEmpty) return null;
+      return (book: book, page: 0);
+    }
+    if (pos.pageIndex > 0) return (book: _currentIndex, page: pos.pageIndex - 1);
+    final int book = _currentIndex - 1;
+    if (book < 0) return null;
+    final List<PageSlice>? pages = _turnNeighborPages(_hrefAt(book));
+    if (pages == null || pages.isEmpty) return null;
+    return (book: book, page: pages.length - 1); // 章末 = 邻章末页
+  }
+
+  /// 邻章视图的页表（不在视图表 / href 无效 → `null`）。
+  List<PageSlice>? _turnNeighborPages(String href) {
+    if (href.isEmpty) return null;
+    final int v = _pageViews.indexWhere((PagedChapterView w) => w.href == href);
+    return v < 0 ? null : _pageViews[v].pages;
+  }
+
+  /// 方向可翻判定（翻页体 `canTurn`）：与 [_turnTarget] 同一判据——
+  /// 解析得出目标即可翻，杜绝两处口径漂移。
+  bool _canTurn(TurnDirection dir) => _turnTarget(dir) != null;
+
+  /// 单页图层 widget（页 0 含章标题区；占位章 = 整页高占位块）。
+  Widget _turnPageWidget(PagedChapterView view, int pageIndex) {
+    final PaginationConfig? cfg = _pageConfig;
+    if (cfg == null) return const SizedBox.shrink();
+    if (view.pages.isEmpty || pageIndex < 0) {
+      return Align(
+        alignment: Alignment.topCenter,
+        child: SizedBox(
+          width: cfg.pageWidth,
+          height: view.headingHeight,
+          child: view.heading,
+        ),
+      );
+    }
+    final int p = pageIndex.clamp(0, view.pages.length - 1);
+    final PageSlice page = view.pages[p];
+    final List<Widget> children = <Widget>[];
+    if (p == 0 && view.heading != null && view.headingHeight > 0) {
+      children.add(Align(
+        alignment: Alignment.topCenter,
+        child: SizedBox(
+          width: cfg.pageWidth,
+          height: view.headingHeight,
+          child: view.heading,
+        ),
+      ));
+    }
+    children.add(Align(
+      alignment: Alignment.topCenter,
+      child: PageContent(
+        paragraphs: view.paragraphs,
+        lines: view.lines,
+        page: page,
+        config: cfg,
+        resolveImage: _resolveImage,
+        onLinkTap: _onLinkTapped,
+        highlightQuery: _searchHighlight.isEmpty ? null : _searchHighlight,
+        clipHeight: page.height,
+      ),
+    ));
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
+  }
+
+  /// 目标页惰性构建（翻页体起手判定成功后调用一次）。
+  Widget _buildTurnIncoming(TurnDirection dir) {
+    final ({int book, int page})? target = _turnTarget(dir);
+    if (target == null) return const SizedBox.shrink();
+    final int v = _pageViews
+        .indexWhere((PagedChapterView w) => w.href == _hrefAt(target.book));
+    if (v < 0) return const SizedBox.shrink();
+    return _turnPageWidget(_pageViews[v], target.page);
+  }
+
+  /// 手势会话起止（`T05-d` 三重闸）：true = 作废在途停稳序列 + 清挂起落位
+  /// + 挡 reprime；false = 解闸，待办 reprime 立即补跑。
+  void _onTurnGesture(bool active) {
+    if (active) {
+      _pagedStopSeq++;
+      _pendingLand = null;
+      _turnGestureActive = true;
+      return;
+    }
+    _turnGestureActive = false;
+    if (_reprimeRequested) _kickReprime();
+  }
+
+  /// 翻页 commit：语义坐标**直写**（滚动体 Offstage 下不回采）→ 停稳流
+  /// 收尾（①身份同步在翻页态空跳、⑤ prime 把滚动体 re-land 到新语义位、
+  /// ⑨ 确认 + 落盘）。
+  void _onTurnCommitted(TurnDirection dir) {
+    final ({int book, int page})? target = _turnTarget(dir);
+    if (target == null) return;
+    final int v = _pageViews
+        .indexWhere((PagedChapterView w) => w.href == _hrefAt(target.book));
+    if (v < 0) return;
+    final List<PageSlice> pages = _pageViews[v].pages;
+    if (pages.isEmpty) return;
+    final int page = target.page.clamp(0, pages.length - 1);
+    final int total = PagePaginator.charCountOf(_pageViews[v].paragraphs);
+    final double pos =
+        total > 0 ? (pages[page].start / total).clamp(0.0, 1.0) : 0.0;
+    setState(() {
+      _currentIndex = target.book;
+      _chapterPos = pos;
+      _liveIndex = target.book;
+      _livePos = pos;
+    });
+    _positionSampled = true;
+    unawaited(_onPagedStopped());
   }
 
   /// 跳到第 [index] 章章首（目录点击 / 上下一章按钮）。
@@ -2398,6 +2644,7 @@ class _ReaderPageState extends State<ReaderPage> {
             settings: _settings,
             brightness: _brightness,
             background: _background,
+            pageMode: _pageTurnMode,
           ),
           onChanged: _onPrefsChanged,
         ),
@@ -2461,6 +2708,7 @@ class _ReaderPageState extends State<ReaderPage> {
         settings: _settings,
         brightness: _brightness,
         background: _background,
+        pageMode: _pageTurnMode,
       ));
     } catch (_) {
       // 保存失败不影响阅读。
@@ -2512,15 +2760,36 @@ class _ReaderPageState extends State<ReaderPage> {
   /// 外观面板回调（`TYP-07` / `TYP-08`）：排版变化走位置锚定，亮度 / 背景只重绘。
   void _onPrefsChanged(ReadingPrefs next) {
     final bool typesetChanged = next.settings != _settings;
+    final bool modeChanged = next.pageMode != _pageTurnMode;
+    // 模式切换前先按**旧模式**口径取锚点（turn 分支读语义、scroll 分支读
+    // 现场采样——两者在停稳时等价），postFrame 再按新口径 re-land。
+    final int anchor = modeChanged ? _currentCharOffset() : 0;
     setState(() {
       _brightness = next.brightness;
       _background = next.background;
+      _pageTurnMode = next.pageMode;
     });
     if (typesetChanged) {
       // 字号 / 行距 / 字体族会重排 → 与控制条同款「锚定 → setState → 校正」。
       _applySettings(next.settings);
     }
+    if (modeChanged) _relandForPageMode(anchor);
     _persistPrefs();
+  }
+
+  /// 翻页方式切换后的滚动体重落位（`M-PAGE T05-d`）：Offstage 下滚动体始终
+  /// 挂载，但 turn ↔ scroll 两侧的语义口径不同（turn 直写 / scroll 现场采样）——
+  /// 按切换前捕获的 [anchor] 单跳对齐，保证两种模式看到同一位置。
+  void _relandForPageMode(int anchor) {
+    if (!_pagedMode) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _disposed) return;
+      final PagedScrollerState? scroller = _scroller;
+      if (scroller == null) return;
+      final String href = _hrefAt(_currentIndex);
+      if (href.isEmpty) return;
+      scroller.jumpToCharOffset(href, anchor);
+    });
   }
 
   @override
