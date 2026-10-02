@@ -22,6 +22,7 @@ import 'settings/perf_prefs_store.dart';
 import 'settings/settings_store.dart';
 import 'settings/shelf_layout_store.dart';
 import 'settings/shelf_prefs_store.dart';
+import 'stats/stats_service.dart';
 import 'ui/glass_runtime.dart';
 import 'ui/home_shell.dart';
 
@@ -94,6 +95,10 @@ Future<void> main() async {
   // M1-T04：阅读进度持久化（`RD-04`），注入书架 → 阅读页。
   final ProgressStore progressStore = ProgressStore(appPaths);
 
+  // M3-T10：统计服务（`STAT-03` 数据侧——进程内唯一实例，注入 HomeShell →
+  // 统计页；首次载入由统计页 initState 触发，不占冷启动串行等待）。
+  final StatsService statsService = StatsService(appPaths);
+
   // `UI-01` ②：`brightnessResolver: Theme.maybeBrightnessOf` 让玻璃控件跟随
   // **应用 ThemeMode**（light / dark / system），而非仅系统亮度。
   // 包裹位置在 `MReaderApp` **之外**，`app.dart` 里 builder 的透明 Material 地基一字不动。
@@ -112,6 +117,7 @@ Future<void> main() async {
           shelfPrefs: shelfPrefs,
           shelfLayout: shelfLayout,
           settings: settings,
+          statsService: statsService,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,

@@ -83,6 +83,30 @@ class SessionStore {
   /// 加载全部分片并建立 `day_key` / `book_id` 双索引（`STAT-02` 聚合入口）。
   Future<StatsIndex> loadIndex() async => StatsIndex.of(await loadAll());
 
+  /// 清空全部会话分片（`STAT-03` ④「清空统计数据」的存储侧）。
+  ///
+  /// 删除所有 `sessions-` 前缀文件（主文件 + `.bak` / `.corrupt` / `.tmp` 兄弟）；
+  /// **不动**同目录其它文件（如起始日期配置 `stats-config.json`），也**不涉及**
+  /// 书架 / 进度 / 书签 / 笔记（那些各有其存储与清理链）。单文件删除失败静默
+  /// （清理语义，best-effort）。
+  Future<void> clearAll() async {
+    final Directory dir = await _paths.subDir(dirName);
+    await for (final FileSystemEntity entity in dir.list()) {
+      if (entity is! File) {
+        continue;
+      }
+      final String name = entity.path.split(Platform.pathSeparator).last;
+      if (!name.startsWith(filePrefix)) {
+        continue;
+      }
+      try {
+        await entity.delete();
+      } catch (_) {
+        // 删不掉的分片留给下次 clearAll 重试；不阻断本次清空流程。
+      }
+    }
+  }
+
   /// 单分片合并：`_decodeShard` 先把坏条目 / 禁写条目滤掉、同 id 归并，
   /// 再按并集规则合入 [incoming]；**无变化则不落盘**（幂等）。
   Future<void> _mergeShard(

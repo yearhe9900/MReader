@@ -37,6 +37,7 @@ import '../settings/perf_prefs_store.dart';
 import '../settings/settings_store.dart';
 import '../settings/shelf_layout_store.dart';
 import '../settings/shelf_prefs_store.dart';
+import '../stats/stats_service.dart';
 import 'ai_page.dart';
 import 'glass_kit.dart';
 import 'notes_page.dart';
@@ -67,6 +68,7 @@ class HomeShell extends StatefulWidget {
     required this.shelfPrefs,
     required this.shelfLayout,
     required this.settings,
+    required this.statsService,
   });
 
   /// 书库仓库（书架页）。
@@ -90,6 +92,9 @@ class HomeShell extends StatefulWidget {
   /// 设置服务（设置页「外观」组的主题三态；同一实例已注入 `MReaderApp`，
   /// 在此**透传**给设置页——写入即由 `app.dart` 重建 `MaterialApp` 换色）。
   final SettingsStore settings;
+
+  /// 统计服务（统计页；`M3-T10`——组合根创建的进程内唯一实例，注入各页共享）。
+  final StatsService statsService;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -140,7 +145,7 @@ class _HomeShellState extends State<HomeShell> {
           shelfPrefs: widget.shelfPrefs,
           shelfLayout: widget.shelfLayout,
         ),
-        const StatsPage(),
+        StatsPage(service: widget.statsService),
         const AiPage(),
         const NotesPage(),
         SettingsPage(perfPrefs: widget.perfPrefs, settings: widget.settings),
