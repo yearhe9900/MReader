@@ -34,6 +34,7 @@ import 'package:flutter/material.dart';
 
 import '../ai/ai_client.dart';
 import '../ai/provider_store.dart';
+import '../ai/rag.dart';
 import '../ai/summary_cache.dart';
 import '../ai/vocab_store.dart';
 import '../library/library_repository.dart';
@@ -80,6 +81,7 @@ class HomeShell extends StatefulWidget {
     required this.aiClient,
     this.vocabStore,
     this.summaryCache,
+    this.ragStore,
   });
 
   /// 书库仓库（书架页）。
@@ -122,6 +124,11 @@ class HomeShell extends StatefulWidget {
   ///
   /// `null` = 未接线：阅读页摘要入口隐藏（同款降级口径）。
   final SummaryCache? summaryCache;
+
+  /// 问答索引存储（阅读页跟书问答，`AI-06`；`M3-T04`）。
+  ///
+  /// `null` = 未接线：阅读页问答入口隐藏（同款降级口径）。
+  final RagIndexStore? ragStore;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -176,6 +183,7 @@ class _HomeShellState extends State<HomeShell> {
           aiClient: widget.aiClient,
           vocabStore: widget.vocabStore,
           summaryCache: widget.summaryCache,
+          ragStore: widget.ragStore,
         ),
         StatsPage(service: widget.statsService, repository: widget.repository),
         const AiPage(),
@@ -209,6 +217,7 @@ class _HomeShellState extends State<HomeShell> {
           aiClient: widget.aiClient,
           statsService: widget.statsService,
           summaryCache: widget.summaryCache,
+          ragStore: widget.ragStore,
         ),
       ),
     );

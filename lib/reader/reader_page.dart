@@ -86,6 +86,7 @@ import 'package:flutter/scheduler.dart';
 
 import '../ai/ai_client.dart';
 import '../ai/provider_store.dart';
+import '../ai/rag.dart';
 import '../ai/recap.dart';
 import '../ai/summary_cache.dart';
 import '../ai/vocab_store.dart';
@@ -100,6 +101,7 @@ import '../typography/anchor.dart';
 import '../typography/reader_settings.dart';
 import '../typography/text_style_resolver.dart';
 import '../typography/typeset.dart';
+import '../ui/ask_panel.dart';
 import '../ui/glass_kit.dart';
 import '../ui/search_sheet.dart';
 import 'bookmark.dart';
@@ -153,6 +155,7 @@ class ReaderPage extends StatefulWidget {
     this.aiClient,
     this.vocabStore,
     this.summaryCache,
+    this.ragStore,
     this.initialJump,
   });
 
@@ -202,6 +205,11 @@ class ReaderPage extends StatefulWidget {
   ///
   /// `null` = 未接线：摘要入口整体隐藏（与划词同款降级口径）。
   final SummaryCache? summaryCache;
+
+  /// 跟书问答索引存储（`AI-06`，`M3-T04`），组合根透传。
+  ///
+  /// `null` = 未接线：问答入口整体隐藏（与摘要同款降级口径）。
+  final RagIndexStore? ragStore;
 
   /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度，
   /// 段落级对齐。`null` = 按存档进度恢复（正常开书）。
@@ -3057,6 +3065,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                         ? () => _openSummarySheet(SummaryMode.chapter)
                         : null,
                   ),
+                // `AI-06`：跟书问答（BM25 检索 + 引用跳转，`M3-T04`）。
+                if (_askEnabled)
+                  IconButton(
+                    key: const Key('reader-ask'),
+                    tooltip: 'AI 问答',
+                    icon: const Icon(Icons.question_mark),
+                    onPressed: ready ? _openAskSheet : null,
+                  ),
                 IconButton(
                   key: const Key('reader-appearance'),
                   tooltip: '外观',
@@ -3183,6 +3199,63 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       chapters: chapters,
       currentIndex: _currentIndex.clamp(0, chapters.length - 1),
       loadText: _summaryTextAt,
+    ));
+  }
+
+  /// 跟书问答可用性（`AI-06`）：AI 配置 + 客户端 + 索引存储三参齐 +
+  /// `AI-09` ② 全局开关开启（任一为 null → 问答入口整体隐藏）。
+  ///
+  /// 注意与摘要不同：**不因 selectionOnly 隐藏入口**——`AI-09` ③ 要求
+  /// 「明确标注为受限」，受限状态由面板内展示（`ask-scope` 行）。
+  bool get _askEnabled {
+    final ProviderStore? store = widget.aiStore;
+    return store != null &&
+        widget.aiClient != null &&
+        widget.ragStore != null &&
+        store.prefs.aiEnabled;
+  }
+
+  /// 取（或构建）本书的问答索引（注入面板的 [showAskSheet.ensureIndex]）。
+  ///
+  /// 构建按章取文走 `_summaryTextAt`（纯文本 + LRU 未命中才回源，
+  /// `PERF-02` 口径与摘要共用）；落盘 / 命中由 [RagIndexStore] 收口。
+  Future<RagIndex> _ensureRagIndex() {
+    final RagIndexStore? store = widget.ragStore;
+    final List<Chapter>? chapters = _chapters;
+    if (store == null || chapters == null) {
+      return Future<RagIndex>.error(StateError('问答索引未就绪'));
+    }
+    return store.ensure(
+      bookId: widget.record.bookId,
+      titles: <String>[for (final Chapter c in chapters) c.title],
+      loadText: _summaryTextAt,
+    );
+  }
+
+  /// 打开问答面板（`AI-06` / F5：输入 → 检索 → 流式 → 引用跳转）。
+  void _openAskSheet() {
+    final ProviderStore? store = widget.aiStore;
+    final AiClient? client = widget.aiClient;
+    final List<Chapter>? chapters = _chapters;
+    if (!_askEnabled ||
+        store == null ||
+        client == null ||
+        chapters == null ||
+        chapters.isEmpty) {
+      return;
+    }
+    unawaited(showAskSheet(
+      context,
+      aiStore: store,
+      aiClient: client,
+      ensureIndex: _ensureRagIndex,
+      loadText: _summaryTextAt,
+      // 与 [SearchSheet] 同契约：调用方关弹窗 + 跳转（跳转链路复用
+      // `_jumpToSearchHit` 的段落级对齐）。
+      onJump: (SearchHit hit, String query) {
+        Navigator.of(context).pop();
+        unawaited(_jumpToSearchHit(hit, query));
+      },
     ));
   }
 

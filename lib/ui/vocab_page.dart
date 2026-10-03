@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 
 import '../ai/ai_client.dart';
 import '../ai/provider_store.dart';
+import '../ai/rag.dart';
 import '../ai/summary_cache.dart';
 import '../ai/vocab_store.dart';
 import '../format/book_registry.dart';
@@ -41,6 +42,7 @@ class VocabPage extends StatefulWidget {
     this.aiClient,
     this.statsService,
     this.summaryCache,
+    this.ragStore,
   });
 
   /// 书库仓库（查记录 / 读字节 / 结构缓存）。
@@ -61,6 +63,9 @@ class VocabPage extends StatefulWidget {
 
   /// 摘要缓存（透传阅读页，跳回后摘要入口不丢；`AI-04`/`AI-05`）。
   final SummaryCache? summaryCache;
+
+  /// 问答索引存储（透传阅读页，跳回后问答入口不丢；`AI-06`）。
+  final RagIndexStore? ragStore;
 
   @override
   State<VocabPage> createState() => _VocabPageState();
@@ -261,6 +266,7 @@ class _VocabPageState extends State<VocabPage> {
           aiClient: widget.aiClient,
           vocabStore: widget.vocabStore,
           summaryCache: widget.summaryCache,
+          ragStore: widget.ragStore,
           // `AI-03` ③：段落级跳回（不压返回栈——恢复链路消费一次即忘）。
           initialJump: (href: entry.chapterHref, paraIndex: entry.paraIndex),
         ),

@@ -10,6 +10,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'ai/ai_client.dart';
 import 'ai/provider_store.dart';
+import 'ai/rag.dart';
 import 'ai/secure_key_store.dart';
 import 'ai/summary_cache.dart';
 import 'ai/vocab_store.dart';
@@ -81,6 +82,11 @@ Future<void> main() async {
   // （全量备份按目录整体收；WebDAV 同步默认关，本地缓存是验收硬要求）。
   final SummaryCache summaryCache =
       SummaryCache(await appPaths.subDir('aiCache'));
+  // M3-T04：跟书问答索引（`AI-06`，PRD §8.3「索引本地持久化」）——与摘要缓存
+  // 同目录 `aiCache/`（全量备份按目录整体收）；按书惰性构建 + 分文件缓存，
+  // 无全局 load；删书连带清理在书架侧（`shelf_page`）。
+  final RagIndexStore ragIndexStore =
+      RagIndexStore(await appPaths.subDir('aiCache'));
   await Future.wait(<Future<void>>[
     _warmUpGlassShaders(),
     settings.load(),
@@ -146,6 +152,7 @@ Future<void> main() async {
           aiClient: aiClient,
           vocabStore: vocabStore,
           summaryCache: summaryCache,
+          ragStore: ragIndexStore,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,
