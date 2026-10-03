@@ -35,6 +35,7 @@ import 'package:flutter/services.dart';
 
 import '../ai/ai_client.dart';
 import '../ai/provider_store.dart';
+import '../ai/summary_cache.dart';
 import '../ai/vocab_store.dart';
 import '../diagnostics/perf_log.dart';
 import '../format/book_registry.dart';
@@ -67,6 +68,7 @@ class ShelfPage extends StatefulWidget {
     this.aiStore,
     this.aiClient,
     this.vocabStore,
+    this.summaryCache,
   });
 
   /// 书库仓库。
@@ -95,6 +97,11 @@ class ShelfPage extends StatefulWidget {
   final ProviderStore? aiStore;
   final AiClient? aiClient;
   final VocabStore? vocabStore;
+
+  /// 摘要缓存（阅读页 `AI-04`/`AI-05`，`M3-T03`）；删书时连带清理。
+  ///
+  /// `null` = 未接线：阅读页摘要入口隐藏（同款降级口径）。
+  final SummaryCache? summaryCache;
 
   @override
   State<ShelfPage> createState() => _ShelfPageState();
@@ -320,6 +327,8 @@ class _ShelfPageState extends State<ShelfPage> {
       await widget.repository.deleteBook(record);
       // `LIB-06` 连带清理：删除该书阅读进度文件（缺失时静默成功）。
       await widget.progressStore.remove(record.bookId);
+      // `M3-T03` 连带清理：该书的章级 / 合并级摘要缓存。
+      await widget.summaryCache?.removeBook(record.bookId);
       await _loadBooks();
     }
   }
@@ -437,6 +446,7 @@ class _ShelfPageState extends State<ShelfPage> {
           aiStore: widget.aiStore,
           aiClient: widget.aiClient,
           vocabStore: widget.vocabStore,
+          summaryCache: widget.summaryCache,
         ),
       );
       // 不 await push 的 Future（它要等路由 pop 才返回）——push 一发起（路由已

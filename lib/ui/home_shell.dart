@@ -34,6 +34,7 @@ import 'package:flutter/material.dart';
 
 import '../ai/ai_client.dart';
 import '../ai/provider_store.dart';
+import '../ai/summary_cache.dart';
 import '../ai/vocab_store.dart';
 import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
@@ -78,6 +79,7 @@ class HomeShell extends StatefulWidget {
     required this.aiStore,
     required this.aiClient,
     this.vocabStore,
+    this.summaryCache,
   });
 
   /// 书库仓库（书架页）。
@@ -115,6 +117,11 @@ class HomeShell extends StatefulWidget {
   ///
   /// `null` = 未接线：笔记页回退占位骨架、书架划词禁用（降级口径不变）。
   final VocabStore? vocabStore;
+
+  /// 摘要缓存（阅读页章节/全书摘要与前情回顾，`AI-04`/`AI-05`；`M3-T03`）。
+  ///
+  /// `null` = 未接线：阅读页摘要入口隐藏（同款降级口径）。
+  final SummaryCache? summaryCache;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -168,6 +175,7 @@ class _HomeShellState extends State<HomeShell> {
           aiStore: widget.aiStore,
           aiClient: widget.aiClient,
           vocabStore: widget.vocabStore,
+          summaryCache: widget.summaryCache,
         ),
         StatsPage(service: widget.statsService, repository: widget.repository),
         const AiPage(),
@@ -200,6 +208,7 @@ class _HomeShellState extends State<HomeShell> {
           aiStore: widget.aiStore,
           aiClient: widget.aiClient,
           statsService: widget.statsService,
+          summaryCache: widget.summaryCache,
         ),
       ),
     );

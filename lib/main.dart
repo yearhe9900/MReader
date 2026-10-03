@@ -11,6 +11,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'ai/ai_client.dart';
 import 'ai/provider_store.dart';
 import 'ai/secure_key_store.dart';
+import 'ai/summary_cache.dart';
 import 'ai/vocab_store.dart';
 import 'app.dart';
 import 'highperf/high_perf_registry.dart';
@@ -76,6 +77,10 @@ Future<void> main() async {
   // M3-T02：生词本（`AI-03` ②③）——进程内唯一实例，笔记页 / 生词本页 / 阅读页
   // 释义面板共用；词条数很小，加载并入下面的并行等待（不占冷启动串行）。
   final VocabStore vocabStore = VocabStore(dataDir);
+  // M3-T03：摘要缓存（`AI-04`/`AI-05`）——目录 = PRD §10.3 `aiCache/`
+  // （全量备份按目录整体收；WebDAV 同步默认关，本地缓存是验收硬要求）。
+  final SummaryCache summaryCache =
+      SummaryCache(await appPaths.subDir('aiCache'));
   await Future.wait(<Future<void>>[
     _warmUpGlassShaders(),
     settings.load(),
@@ -84,6 +89,7 @@ Future<void> main() async {
     shelfLayout.load(),
     aiStore.load(),
     vocabStore.load(),
+    summaryCache.load(),
     highPerf.warmUp(),
   ]);
 
@@ -139,6 +145,7 @@ Future<void> main() async {
           aiStore: aiStore,
           aiClient: aiClient,
           vocabStore: vocabStore,
+          summaryCache: summaryCache,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,

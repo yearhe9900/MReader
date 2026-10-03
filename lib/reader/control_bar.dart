@@ -21,6 +21,7 @@ class ReaderControlBar extends StatelessWidget {
     required this.canGoNext,
     required this.onPrevChapter,
     required this.onNextChapter,
+    this.onAi,
   });
 
   /// 当前排版设置（字号 / 行距）。
@@ -50,6 +51,11 @@ class ReaderControlBar extends StatelessWidget {
   /// 去下一章。
   final VoidCallback onNextChapter;
 
+  /// AI 摘要入口（`TYP-05` 控制条含 AI 入口；`AI-04`/`AI-05`）。
+  ///
+  /// `null` = 摘要未启用（依赖未齐 / 全局开关关）→ 按钮不渲染。
+  final VoidCallback? onAi;
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -76,6 +82,13 @@ class ReaderControlBar extends StatelessWidget {
                     icon: const Icon(Icons.skip_next),
                     onPressed: canGoNext ? onNextChapter : null,
                   ),
+                  if (onAi != null)
+                    IconButton(
+                      key: const Key('reader-control-ai'),
+                      tooltip: 'AI 摘要',
+                      icon: const Icon(Icons.auto_awesome),
+                      onPressed: onAi,
+                    ),
                   const Spacer(),
                   Padding(
                     padding: const EdgeInsets.only(right: 16),

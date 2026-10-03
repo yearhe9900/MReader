@@ -86,6 +86,8 @@ import 'package:flutter/scheduler.dart';
 
 import '../ai/ai_client.dart';
 import '../ai/provider_store.dart';
+import '../ai/recap.dart';
+import '../ai/summary_cache.dart';
 import '../ai/vocab_store.dart';
 import '../diagnostics/perf_log.dart';
 import '../format/book_source.dart';
@@ -127,6 +129,7 @@ import 'reading_prefs_store.dart';
 import 'reading_progress.dart';
 import 'selection_ai_sheet.dart';
 import 'selection_overlay.dart';
+import 'summary_sheet.dart';
 import 'toc_sheet.dart';
 
 /// 恢复滚动时的最大校正帧数（`RD-04`：估算后迭代收敛；`RC2`：≤8 帧）。
@@ -149,6 +152,7 @@ class ReaderPage extends StatefulWidget {
     this.aiStore,
     this.aiClient,
     this.vocabStore,
+    this.summaryCache,
     this.initialJump,
   });
 
@@ -194,6 +198,11 @@ class ReaderPage extends StatefulWidget {
   /// 生词本存储（释义面板「存生词本」入口）。
   final VocabStore? vocabStore;
 
+  /// 摘要缓存（章节摘要 / 全书摘要 / 前情回顾，`AI-04`/`AI-05`），组合根透传。
+  ///
+  /// `null` = 未接线：摘要入口整体隐藏（与划词同款降级口径）。
+  final SummaryCache? summaryCache;
+
   /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度，
   /// 段落级对齐。`null` = 按存档进度恢复（正常开书）。
   ///
@@ -237,6 +246,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 本页是否已释放（用于停止后台补齐循环、避免用已释放的 source）。
   bool _disposed = false;
+
+  /// 是否显示「前情回顾」入口（`AI-05` ②：开书时按上次进度时间判定，
+  /// 会话内保留；本次阅读会刷新 `progress.updatedAt`，下次开书自然消失）。
+  bool _showRecapEntrance = false;
 
   /// 当前章索引。
   int _currentIndex = 0;
@@ -608,6 +621,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         _restoreIndex = index;
         _restorePos = pos;
         _localHint = progress?.localHint;
+        // `AI-05` ②：停读 ≥7 天开书出「前情回顾」入口（进度刚读出、还没被
+        // 本次会话刷新，updatedAt 仍是上次的时间）。
+        _showRecapEntrance = _summaryEnabled &&
+            shouldShowRecapEntrance(
+              lastReadAtMs: progress?.updatedAt,
+              nowMs: DateTime.now().millisecondsSinceEpoch,
+            );
         // backlog① 方案 B：恢复目标非书首时，校正全程遮罩（从头开书首帧即到位，不遮）。
         _restoreMask = index != 0 || pos > 0;
         for (int i = 0; i < chapters.length; i++) {
@@ -3017,6 +3037,26 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   icon: const Icon(Icons.bookmark),
                   onPressed: ready ? _openBookmarks : null,
                 ),
+                // `AI-05` ②：停读 ≥7 天开书出现的前情回顾入口（会话内一次性）。
+                if (_showRecapEntrance && _summaryEnabled)
+                  IconButton(
+                    key: const Key('reader-recap'),
+                    tooltip: '前情回顾',
+                    icon: const Icon(Icons.history),
+                    onPressed: ready
+                        ? () => _openSummarySheet(SummaryMode.recap)
+                        : null,
+                  ),
+                // `AI-04`/`AI-05`：章节摘要 / 全书摘要 / 前情回顾统一入口。
+                if (_summaryEnabled)
+                  IconButton(
+                    key: const Key('reader-summary'),
+                    tooltip: 'AI 摘要',
+                    icon: const Icon(Icons.auto_awesome),
+                    onPressed: ready
+                        ? () => _openSummarySheet(SummaryMode.chapter)
+                        : null,
+                  ),
                 IconButton(
                   key: const Key('reader-appearance'),
                   tooltip: '外观',
@@ -3047,6 +3087,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               canGoNext: _currentIndex < chapters.length - 1,
               onPrevChapter: () => unawaited(_goToChapter(_currentIndex - 1)),
               onNextChapter: () => unawaited(_goToChapter(_currentIndex + 1)),
+              onAi: _summaryEnabled
+                  ? () => _openSummarySheet(SummaryMode.chapter)
+                  : null,
             )
           : null,
       // CNT-04c 验收②：链接返回栈非空时显示「返回」按钮，弹栈恢复原位置；
@@ -3092,6 +3135,55 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         widget.aiClient != null &&
         widget.vocabStore != null &&
         store.prefs.aiEnabled;
+  }
+
+  /// 摘要可用性（`AI-04`/`AI-05`）：AI 配置 + 客户端 + 摘要缓存三参齐 +
+  /// `AI-09` ② 全局开关开启（任一为 null → 摘要入口整体隐藏）。
+  bool get _summaryEnabled {
+    final ProviderStore? store = widget.aiStore;
+    return store != null &&
+        widget.aiClient != null &&
+        widget.summaryCache != null &&
+        store.prefs.aiEnabled;
+  }
+
+  /// 递进生成的章文本加载器（`PERF-02`：LRU 未命中才回源，不假设全书常驻）。
+  Future<String> _summaryTextAt(int index) async {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || index < 0 || index >= chapters.length) return '';
+    final ChapterContent? cached = _cache.peek(index);
+    final ChapterContent content = cached ?? await _contentAt(index);
+    return content.paragraphList.map(plainParagraphText).join('\n');
+  }
+
+  /// 弹出摘要面板（`AI-04` 默认章摘要 / `AI-05` 前情回顾入口复用）。
+  void _openSummarySheet(SummaryMode mode) {
+    final ProviderStore? store = widget.aiStore;
+    final AiClient? client = widget.aiClient;
+    final SummaryCache? cache = widget.summaryCache;
+    final List<Chapter>? chapters = _chapters;
+    if (!_summaryEnabled ||
+        store == null ||
+        client == null ||
+        cache == null ||
+        chapters == null ||
+        chapters.isEmpty) {
+      return;
+    }
+    if (mode == SummaryMode.recap) {
+      setState(() => _showRecapEntrance = false); // 已进入，本会话不再提示
+    }
+    unawaited(showSummarySheet(
+      context,
+      initialMode: mode,
+      aiStore: store,
+      aiClient: client,
+      summaryCache: cache,
+      bookId: widget.record.bookId,
+      chapters: chapters,
+      currentIndex: _currentIndex.clamp(0, chapters.length - 1),
+      loadText: _summaryTextAt,
+    ));
   }
 
   /// 渲染文本空间的纯文本（偏移与 [RenderParagraph] 位置对齐：
