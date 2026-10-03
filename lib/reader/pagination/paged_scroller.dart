@@ -305,6 +305,7 @@ class PagedScroller extends StatefulWidget {
     this.onLinkTap,
     this.highlightQuery,
     this.selection,
+    this.speaking,
     this.sampleDebounce = kScrollSampleDebounce,
   });
 
@@ -332,6 +333,10 @@ class PagedScroller extends StatefulWidget {
   /// 划词选区（`AI-02`/`AI-03`）：只对 [ParaSelection.chapterHref] 命中的章
   /// 生效（跨章滚动时其它章不受影响）；null = 无选区。
   final ParaSelection? selection;
+
+  /// 当前朗读段（`TTS-02` 高亮跟随）：按 href 过滤后把段下标传给
+  /// [PageContent]；null = 未在朗读。
+  final ({String href, int paraIndex})? speaking;
 
   /// 采样防抖时长（默认 [kScrollSampleDebounce]；测试可注入短值）。
   final Duration sampleDebounce;
@@ -611,6 +616,10 @@ class PagedScrollerState extends State<PagedScroller> {
             chapterHref: chapter.href,
             selection: sel != null && sel.chapterHref == chapter.href
                 ? (paraIndex: sel.paraIndex, start: sel.start, end: sel.end)
+                : null,
+            speakingPara: widget.speaking != null &&
+                    widget.speaking!.href == chapter.href
+                ? widget.speaking!.paraIndex
                 : null,
             clipHeight: e.height,
           ),

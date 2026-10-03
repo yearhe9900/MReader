@@ -97,6 +97,9 @@ import '../library/library_repository.dart';
 import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
 import '../task/search_session.dart';
+import '../tts/system_tts.dart';
+import '../tts/tts_controller.dart';
+import '../tts/tts_engine.dart';
 import '../typography/anchor.dart';
 import '../typography/reader_settings.dart';
 import '../typography/text_style_resolver.dart';
@@ -112,6 +115,7 @@ import 'chapter_cache.dart';
 import 'control_bar.dart';
 import 'image_cache.dart';
 import 'image_dimensions.dart';
+import 'highlight_follow.dart';
 import 'link_navigator.dart';
 import 'pagination/incremental_paginator.dart';
 import 'pagination/page_breaker.dart';
@@ -157,6 +161,7 @@ class ReaderPage extends StatefulWidget {
     this.vocabStore,
     this.summaryCache,
     this.ragStore,
+    this.ttsEngine,
     this.initialJump,
   });
 
@@ -211,6 +216,12 @@ class ReaderPage extends StatefulWidget {
   ///
   /// `null` = 未接线：问答入口整体隐藏（与摘要同款降级口径）。
   final RagIndexStore? ragStore;
+
+  /// 系统 TTS 引擎注入（`TTS-01`，`M3-T06`）。
+  ///
+  /// `null` = 用 [SystemTts] 默认实例（生产接线）；测试注入假引擎。
+  /// 与 [aiStore] 同款可空降级形制。
+  final TtsEngine? ttsEngine;
 
   /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度，
   /// 段落级对齐。`null` = 按存档进度恢复（正常开书）。
@@ -380,6 +391,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 起手词范围（拖拽扩展的锚：新范围 = 两者 min/max 合并）。
   ({int start, int end})? _selAnchor;
 
+  // ── 段落朗读（`TTS-01`/`TTS-02`，M3-T06）────────────────────────────
+
+  /// 朗读控制器（懒建：首次点朗读按钮时 [_ensureTts]）。
+  TtsController? _tts;
+
+  /// 当前朗读段（`TTS-02` ① 高亮身份；null = 未在朗读）。
+  ({int chapterIndex, int paraIndex})? _speaking;
+
+  /// 自动跟随策略（`TTS-02` ③：手动滚动暂停跟随；开读时复位）。
+  final HighlightFollow _ttsFollow = HighlightFollow();
+
   /// [ReaderPage.initialJump] 的段落下标：[_open] 解析写入，
   /// [_ensureController] 消费一次（融入恢复链路，不新增跳转竞态）。
   int _jumpPara = -1;
@@ -515,6 +537,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // [_lastLocalHint]（见 [_buildLocalHint]），**不会用 null 覆盖已存快照**。
     WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
+    // 停朗读（回调经 _disposed 闸不 setState；引擎 stop 为 unawaited 清场）。
+    final TtsController? tts = _tts;
+    _tts = null;
+    if (tts != null) unawaited(tts.stop());
     _finishSession(); // 退出阅读页：停止计时并落库（`STAT-01`；写库只在此与切后台）
     unawaited(_saveProgress());
     _imageCache.dispose();
@@ -1107,6 +1133,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 滚动中实时刷新进度显示（返回 false 表示不拦截通知）。
   bool _onScrollUpdate(ScrollUpdateNotification notification) {
+    if (notification.dragDetails != null) {
+      _ttsFollow.noteManualScroll(); // `TTS-02` ③ 手动滚动暂停自动跟随
+    }
     _clearSelection(); // 滚动起手清选区（无选区时空转）
     _updateLiveProgress();
     return false;
@@ -1903,6 +1932,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       return false; // didUpdateWidget 收缩跳派发于 build 期：禁 setState
     }
     _clearSelection(); // 滚动起手清选区（无选区时空转；build 期已由上行跳过）
+    if (notification.dragDetails != null) {
+      _ttsFollow.noteManualScroll(); // `TTS-02` ③ 手动滚动暂停自动跟随
+    }
     if (!_pagedMode || _inPagedOp || _jumpInFlight) return false;
     final PagedScrollerState? scroller = _scroller;
     if (scroller == null || !scroller.scrollController.hasClients) {
@@ -2223,6 +2255,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       onLinkTap: _onLinkTapped,
       highlightQuery: _searchHighlight.isEmpty ? null : _searchHighlight,
       selection: _selection,
+      speaking: _speaking == null
+          ? null
+          : (
+              href: _hrefAt(_speaking!.chapterIndex),
+              paraIndex: _speaking!.paraIndex
+            ),
     );
     final ({int viewIndex, int pageIndex})? pos =
         _pageTurnModeAsTurn ? _turnPosition() : null;
@@ -2364,9 +2402,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         clipHeight: page.height,
         chapterHref: view.href,
         selection: _pageSelection(view.href),
+        speakingPara: _pageSpeaking(view.href),
       ),
     ));
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
+  }
+
+  /// 当前朗读段在 [href] 章上的段下标投影（非该章 / 未朗读 → null）。
+  int? _pageSpeaking(String href) {
+    final ({int chapterIndex, int paraIndex})? speaking = _speaking;
+    if (speaking == null || _hrefAt(speaking.chapterIndex) != href) return null;
+    return speaking.paraIndex;
   }
 
   /// 当前选区在 [href] 章上的段落投影（非该章 / 无选区 → null）。
@@ -2399,6 +2445,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   void _onTurnGesture(bool active) {
     if (active) {
       _noteReading(); // 翻页手势起手 = 交互（含未提交就取消的滑动）
+      _ttsFollow.noteManualScroll(); // `TTS-02` ③ 手动翻页同样暂停跟随
       _clearSelection(); // 翻页起手清选区（视口要动了）
       _pagedStopSeq++;
       _pendingLand = null;
@@ -3115,6 +3162,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               onAi: _summaryEnabled
                   ? () => _openSummarySheet(SummaryMode.chapter)
                   : null,
+              onTts: _toggleTts,
+              ttsActive: _tts?.isRunning ?? false,
             )
           : null,
       // CNT-04c 验收②：链接返回栈非空时显示「返回」按钮，弹栈恢复原位置；
@@ -3266,6 +3315,168 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         unawaited(_jumpToSearchHit(hit, query));
       },
     ));
+  }
+
+  // ── 段落朗读（`TTS-01`/`TTS-02`，M3-T06）──────────────────────────────
+
+  /// 取（或首次创建）朗读控制器：引擎注入优先，缺省 [SystemTts]。
+  TtsController _ensureTts() {
+    final TtsController? existing = _tts;
+    if (existing != null) return existing;
+    final TtsController created = TtsController(
+      widget.ttsEngine ?? SystemTts(),
+      _ttsLoadChapter,
+      _chapters?.length ?? 0,
+      onActive: _onTtsActive,
+      onError: _onTtsError,
+      onChanged: _onTtsChanged,
+    );
+    _tts = created;
+    return created;
+  }
+
+  /// 朗读推进取章段落：缓存命中直接回，未命中走增量加载（渲染侧同源入
+  /// 缓存——跟随滚动要的几何由同一次加载带上）；loader 缺席才直接回源。
+  Future<List<String>?> _ttsLoadChapter(int index) async {
+    if (_disposed) return null;
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || index < 0 || index >= chapters.length) return null;
+    final ChapterContent? cached = _cache.peek(index);
+    if (cached != null) return cached.paragraphList;
+    await _loader?.loadFirstBatch(index);
+    if (_disposed) return null;
+    final ChapterContent? loaded = _cache.peek(index);
+    if (loaded != null) return loaded.paragraphList;
+    return (await _contentAt(index)).paragraphList;
+  }
+
+  /// 朗读按钮（`TTS-01` ①：从当前段起读；朗读中再点 = 停止）。
+  Future<void> _toggleTts() async {
+    final TtsController tts = _ensureTts();
+    if (tts.isRunning) {
+      unawaited(tts.stop());
+      return;
+    }
+    final ({int chapterIndex, int paraIndex}) from = _ttsStartPoint();
+    _ttsFollow.reset(); // 重新开读 → 恢复自动跟随（`TTS-02` ③ 复位侧）
+    final bool ok = await tts.start(from.chapterIndex, from.paraIndex);
+    if (!ok && mounted && !_disposed) {
+      // PRD §15.3：无语音引擎（Linux 等）必须中文提示，不得静默失败。
+      GlassOverlays.showToast(
+        context: context,
+        message: '本机未安装语音引擎',
+        type: GlassToastType.error,
+      );
+    }
+  }
+
+  /// 朗读起点（`TTS-01` ①「从当前段开始」）：视口**中心**命中的段落
+  /// （中心 50% / 25% / 75% 三探，标题 / 图片 / 空白上落空再降级），
+  /// 全部落空 → 当前章第 0 段。
+  ({int chapterIndex, int paraIndex}) _ttsStartPoint() {
+    final RenderBox? viewport = _viewportBox();
+    final List<Chapter>? chapters = _chapters;
+    if (viewport != null && viewport.hasSize && chapters != null) {
+      final double h = viewport.size.height;
+      final Offset top = viewport.localToGlobal(Offset.zero);
+      for (final double ratio in const <double>[0.5, 0.25, 0.75]) {
+        final ParagraphHit? hit =
+            findParagraphAt(context, top + Offset(0, h * ratio));
+        if (hit == null) continue;
+        final int index =
+            chapters.indexWhere((Chapter c) => c.href == hit.href);
+        if (index >= 0) {
+          return (chapterIndex: index, paraIndex: hit.paraIndex);
+        }
+      }
+    }
+    return (chapterIndex: _liveIndex, paraIndex: 0);
+  }
+
+  /// 当前朗读段变化：刷高亮 +（跟随开着且段落不够可见时）滚入可视区。
+  void _onTtsActive(int chapterIndex, int paraIndex) {
+    if (!mounted || _disposed) return;
+    setState(() {
+      _speaking = (chapterIndex: chapterIndex, paraIndex: paraIndex);
+    });
+    // `TTS-02` ②：可见就不滚（避免短段逐段抖动）；③ 跟随被手动滚动暂停则不滚。
+    if (!_ttsFollow.shouldFollow) return;
+    if (_speakingVisible(chapterIndex, paraIndex)) return;
+    if (_pagedMode) {
+      unawaited(_followSpeakingPaged(chapterIndex, paraIndex));
+    } else {
+      _followSpeakingList(chapterIndex, paraIndex);
+    }
+  }
+
+  /// 朗读段是否已足够可见（`TTS-02` ② 的几何面）。
+  ///
+  /// 按段落 key 找渲染盒（[findParagraphBox]：懒构建未上屏 → null = 不可见；
+  /// 翻页态 Offstage 下仍布局，照常可测），与视口做 [isParagraphVisible] 判定。
+  bool _speakingVisible(int chapterIndex, int paraIndex) {
+    final String href = _hrefAt(chapterIndex);
+    if (href.isEmpty) return false;
+    final RenderBox? viewport = _viewportBox();
+    if (viewport == null || !viewport.hasSize) return true; // 测不了就不动
+    final RenderBox? box = findParagraphBox(context, href, paraIndex);
+    if (box == null) return false;
+    final Rect paraRect = box.localToGlobal(Offset.zero) & box.size;
+    final Rect viewRect =
+        viewport.localToGlobal(Offset.zero) & viewport.size;
+    return isParagraphVisible(paraRect, viewRect);
+  }
+
+  /// ListView 路径跟随滚动：复用 `CNT-04c` 的段落级「估算 + 校正」底座，
+  /// **不压返回栈**（跟随是朗读的内部移动，不是导航历史）。
+  void _followSpeakingList(int chapterIndex, int paraIndex) {
+    final ScrollController? controller = _controller;
+    if (controller == null || !controller.hasClients) return;
+    _paraKeys['$chapterIndex:$paraIndex'] ??= GlobalKey();
+    final double roughPos = math.min(1.0, (paraIndex + 1) / 12.0);
+    _beginScrollTo(chapterIndex, roughPos, paraIndex: paraIndex);
+  }
+
+  /// 分页路径跟随滚动：段首字符偏移一次落位（与 `CNT-04c` 分页分支同
+  /// 算法，**不压返回栈**；`_pagedJumpTo` 内部自带互斥与语义坐标直写）。
+  Future<void> _followSpeakingPaged(int chapterIndex, int paraIndex) async {
+    if (!mounted || _disposed || !_pagedMode) return;
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return;
+    final int target = chapterIndex.clamp(0, chapters.length - 1);
+    if (_cache.peek(target) == null) {
+      await _loader?.loadFirstBatch(target);
+      if (!mounted || _disposed) return;
+    }
+    final List<String> paragraphs =
+        _cache.peek(target)?.paragraphList ?? const <String>[];
+    int charOffset = 0;
+    for (int p = 0; p < paraIndex && p < paragraphs.length; p++) {
+      charOffset += paragraphs[p].length;
+    }
+    final int total = PagePaginator.charCountOf(paragraphs);
+    await _pagedJumpTo(
+      target,
+      pos: total > 0 ? charOffset / total : 0.0,
+      charOffset: charOffset,
+    );
+  }
+
+  /// 朗读引擎致命错误 → 中文 toast（按钮随 onChanged 复位）。
+  void _onTtsError(String message) {
+    if (!mounted || _disposed) return;
+    GlassOverlays.showToast(
+      context: context,
+      message: message,
+      type: GlassToastType.error,
+    );
+  }
+
+  /// 朗读运行态变化 → 刷按钮；彻底停止时撤高亮。
+  void _onTtsChanged() {
+    if (!mounted || _disposed) return;
+    setState(() {
+      if (!(_tts?.isRunning ?? false)) _speaking = null;
+    });
   }
 
   /// 人物梳理可用性（`AI-07`）：依赖与摘要同组（配置 + 客户端 + 摘要缓存，
@@ -3815,18 +4026,23 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               padding: const EdgeInsets.only(bottom: 16),
               // TYP-04：首行缩进 + `<b>`/`<i>` 内联样式（白名单）+ `<img>` 图片（CNT-01）。
               // CNT-04c：`onLinkTap` 接链接跳转（同步 tear-off，跨帧相等防 recognizer 重建）。
-              child: InlineParagraph(
-                // `AI-02`/`AI-03`：段落 key 供 findParagraphAt 命中（划词起点），
-                // selection 叠选区底色（与分页 PageContent 同款投影）。
-                key: paragraphKey(chapter.href, p),
-                text: withFirstLineIndent(paragraphs[p]),
-                style: bodyStyle,
-                resolveImage: _resolveImage,
-                onLinkTap: _onLinkTapped,
-                // CNT-06 验收②：搜索跳转后关键词高亮（空 = 不高亮）。
-                highlightQuery:
-                    _searchHighlight.isEmpty ? null : _searchHighlight,
-                selection: _paraSelection(chapter.href, p),
+              child: SpeakingHighlight(
+                // `TTS-02` ①：朗读段底色（恒定包装，翻转零重建）。
+                active: _speaking?.chapterIndex == index &&
+                    _speaking?.paraIndex == p,
+                child: InlineParagraph(
+                  // `AI-02`/`AI-03`：段落 key 供 findParagraphAt 命中（划词起点），
+                  // selection 叠选区底色（与分页 PageContent 同款投影）。
+                  key: paragraphKey(chapter.href, p),
+                  text: withFirstLineIndent(paragraphs[p]),
+                  style: bodyStyle,
+                  resolveImage: _resolveImage,
+                  onLinkTap: _onLinkTapped,
+                  // CNT-06 验收②：搜索跳转后关键词高亮（空 = 不高亮）。
+                  highlightQuery:
+                      _searchHighlight.isEmpty ? null : _searchHighlight,
+                  selection: _paraSelection(chapter.href, p),
+                ),
               ),
             ),
         ],

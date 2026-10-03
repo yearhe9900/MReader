@@ -53,6 +53,12 @@ dependencies:
   # 全仓唯一直接 import pdfrx 的文件 = `lib/platform/pdfrx_pdf_engine.dart`。
   # 已知约束（Q4 拍板③接受）：Windows 构建需开启 Developer Mode（构建机一次性）。
   pdfrx: 2.6.5
+  # 系统 TTS（TTS-01/02 段落朗读；M3-T06）。仅 `lib/tts/system_tts.dart` 直接引用。
+  # **精确锁定 4.2.5（不带 ^）**：版本锁定纪律（同 archive/crypto/pdfrx）。
+  # 包无 linux/ 实现 → Linux 上 invokeMethod 抛 MissingPluginException →
+  # `init()` 返回 false → UI 层中文提示「本机未安装语音引擎」（PRD §15.3 不静默失败）。
+  # 缓存在手（`D:\pub_cache`），`flutter pub get --offline` 可解析。
+  flutter_tts: 4.2.5
 
 dev_dependencies:
   flutter_test:

@@ -23,6 +23,7 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 
 import '../../typography/typeset.dart';
+import '../highlight_follow.dart';
 import '../selection_overlay.dart';
 import 'page_breaker.dart';
 import 'page_paginator.dart';
@@ -56,6 +57,7 @@ class PageContent extends StatelessWidget {
     this.highlightQuery,
     this.chapterHref,
     this.selection,
+    this.speakingPara,
     this.clipHeight,
   });
 
@@ -87,6 +89,9 @@ class PageContent extends StatelessWidget {
   /// 划词选区（已按本章过滤）：[ParaSelection.paraIndex] 命中的段落着色。
   final ({int paraIndex, int start, int end})? selection;
 
+  /// 当前朗读段下标（本章内；`TTS-02` 高亮跟随）；null = 本章无朗读段。
+  final int? speakingPara;
+
   /// 页框高（默认 [PaginationConfig.pageHeight]；页 0 传
   /// `pageHeight − headingHeight`——标题占高由视图层另行渲染）。
   final double? clipHeight;
@@ -110,14 +115,17 @@ class PageContent extends StatelessWidget {
       }
       final ({int paraIndex, int start, int end})? sel =
           selection != null && selection!.paraIndex == p ? selection : null;
-      children.add(InlineParagraph(
-        key: chapterHref == null ? null : paragraphKey(chapterHref!, p),
-        text: withFirstLineIndent(paragraphs[p]),
-        style: config.textStyle,
-        resolveImage: resolveImage,
-        onLinkTap: onLinkTap,
-        highlightQuery: highlightQuery,
-        selection: sel == null ? null : (start: sel.start, end: sel.end),
+      children.add(SpeakingHighlight(
+        active: speakingPara == p,
+        child: InlineParagraph(
+          key: chapterHref == null ? null : paragraphKey(chapterHref!, p),
+          text: withFirstLineIndent(paragraphs[p]),
+          style: config.textStyle,
+          resolveImage: resolveImage,
+          onLinkTap: onLinkTap,
+          highlightQuery: highlightQuery,
+          selection: sel == null ? null : (start: sel.start, end: sel.end),
+        ),
       ));
     }
 

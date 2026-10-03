@@ -35,6 +35,11 @@ const Color kSearchHighlightColor = Color(0x66FFC107);
 /// 选区着色在搜索高亮**之后**应用（选中段的底色以选区为准）。
 const Color kSelectionHighlightColor = Color(0x6642A5F5);
 
+/// 朗读段高亮底色（`TTS-01`/`TTS-02` 段落朗读；同款半透明适配亮 / 暗主题）。
+///
+/// 绿色与搜索琥珀 / 选区蓝区分；只叠底色不改文字颜色语义（同上两色范式）。
+const Color kSpeakingHighlightColor = Color(0x6666BB6A);
+
 /// 白名单：只保留 `<b>` 和 `<i>` 的开闭标签，其它标签在上游已剥离。
 final RegExp _inlineTagPattern = RegExp(r'<(/?)([bi])>');
 

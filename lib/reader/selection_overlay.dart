@@ -119,6 +119,37 @@ ParagraphHit? _searchParagraph(Element element, Offset global) {
   return hit;
 }
 
+/// 从 [root] 子树里按段落 key 精确找渲染盒（`TTS-02` 可视性判定用）。
+///
+/// 与 [findParagraphAt] 同款 DFS，但按 key 匹配而非几何命中——「段落 X 现在
+/// 渲染在哪」是跟随滚动要回答的问题（几何探测需要先知道点在哪，拿不到）。
+/// 未构建（懒构建列表滚出窗外）→ null（调用方按不可见处理）；`Offstage`
+/// 下仍照常 layout（RenderOffstage 只不绘制），翻页态照样可测。
+/// 分页同段双实例取**先命中**的一份——两份几何对齐（渲染契约），任一份
+/// 都能给出正确的可见性结论。
+RenderBox? findParagraphBox(
+  BuildContext root,
+  String chapterHref,
+  int paraIndex,
+) {
+  if (root is! Element) return null;
+  return _searchBox(root, paragraphKey(chapterHref, paraIndex));
+}
+
+RenderBox? _searchBox(Element element, ValueKey<String> target) {
+  if (element.widget.key == target) {
+    final RenderObject? render = element.renderObject;
+    if (render is RenderBox && render.hasSize) return render;
+    return null;
+  }
+  RenderBox? found;
+  element.visitChildren((Element child) {
+    if (found != null) return;
+    found = _searchBox(child, target);
+  });
+  return found;
+}
+
 /// 词边界归一（纯函数，可单测）：把 `getWordBoundary` 的结果修整成
 /// 「不含首尾空白、ASCII 词整体、CJK 至少一个字」的可用选区。
 ///

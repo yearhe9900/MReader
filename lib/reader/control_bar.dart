@@ -22,6 +22,8 @@ class ReaderControlBar extends StatelessWidget {
     required this.onPrevChapter,
     required this.onNextChapter,
     this.onAi,
+    this.onTts,
+    this.ttsActive = false,
   });
 
   /// 当前排版设置（字号 / 行距）。
@@ -56,6 +58,12 @@ class ReaderControlBar extends StatelessWidget {
   /// `null` = 摘要未启用（依赖未齐 / 全局开关关）→ 按钮不渲染。
   final VoidCallback? onAi;
 
+  /// 朗读开关（`TTS-01`，M3-T06）：点一次从当前段开读，再点停止。
+  final VoidCallback? onTts;
+
+  /// 朗读进行中（按钮显示「停止」形态）。
+  final bool ttsActive;
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -88,6 +96,13 @@ class ReaderControlBar extends StatelessWidget {
                       tooltip: 'AI 摘要',
                       icon: const Icon(Icons.auto_awesome),
                       onPressed: onAi,
+                    ),
+                  if (onTts != null)
+                    IconButton(
+                      key: const Key('reader-control-tts'),
+                      tooltip: ttsActive ? '停止朗读' : '朗读',
+                      icon: Icon(ttsActive ? Icons.stop : Icons.play_arrow),
+                      onPressed: onTts,
                     ),
                   const Spacer(),
                   Padding(
