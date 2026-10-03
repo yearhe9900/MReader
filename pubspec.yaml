@@ -59,6 +59,26 @@ dependencies:
   # `init()` 返回 false → UI 层中文提示「本机未安装语音引擎」（PRD §15.3 不静默失败）。
   # 缓存在手（`D:\pub_cache`），`flutter pub get --offline` 可解析。
   flutter_tts: 4.2.5
+  # 后台播放与系统集成（`TTS-03`；M3-T07）：通知栏 / 锁屏 / 耳机媒体键 /
+  # Android 前台服务（mediaPlayback）。Android 侧只需宿主清单声明 + Activity
+  # 继承 `AudioServiceActivity`；Dart 侧经 `lib/platform/audio_service.dart`
+  # 的注入缝接入（桌面平台不实例化，降级「仅前台朗读」，PRD §15.3 v2.6 拍板）。
+  # 精确锁定 0.18.19（不带 ^）：版本锁定纪律；缓存在手可 `--offline` 解析。
+  audio_service: 0.18.19
+  # 音频会话 / 音频焦点（`TTS-03` ④ 来电暂停、挂断恢复）：flutter_tts 的焦点
+  # listener 为空（源码 `FlutterTtsPlugin.kt` requestAudioFocus 注释即「不监控
+  # 焦点变化」），焦点事件必须在宿主侧自取——audio_session 的
+  # `AudioSessionConfiguration.speech()` 正是语音朗读配方
+  # （`willPauseWhenDucked: true` → 通知声等 duck 场景也走暂停-恢复）。
+  # 精确锁定 0.2.4（不带 ^）；audio_service 约束 `>=0.1.25 <0.3.0` 兼容。
+  audio_session: 0.2.4
+  # audio_service 的 `init` 要求注入 artwork 缓存管理器（`BaseCacheManager`）；
+  # 本应用 MediaItem 恒不带 artUri（锁屏从不加载封面），默认的
+  # DefaultCacheManager 构造即触发 path_provider 异步 IO（白建临时目录、
+  # 测试环境 MissingPluginException）→ `lib/platform/audio_service.dart`
+  # 注入 noSuchMethod 空 stub。因直接 import 其类型，提为直接依赖（版本即
+  # audio_service 的解析结果，精确锁定不带 ^）。
+  flutter_cache_manager: 3.4.5
 
 dev_dependencies:
   flutter_test:

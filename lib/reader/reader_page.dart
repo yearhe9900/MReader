@@ -97,6 +97,7 @@ import '../library/library_repository.dart';
 import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
 import '../task/search_session.dart';
+import '../tts/audio_session.dart';
 import '../tts/system_tts.dart';
 import '../tts/tts_controller.dart';
 import '../tts/tts_engine.dart';
@@ -402,6 +403,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 自动跟随策略（`TTS-02` ③：手动滚动暂停跟随；开读时复位）。
   final HighlightFollow _ttsFollow = HighlightFollow();
 
+  /// 后台播放会话（`TTS-03`，懒建于 [_ensureTts]；编排见 `tts/audio_session.dart`，
+  /// 桌面平台 open 失败 → 恒为降级态「仅前台朗读」）。
+  TtsAudioSession? _ttsAudio;
+
+  /// 换章重启保护（`TTS-03` ②）：[TtsController.start] 内部先 stop 再开，
+  /// 会经 [_onTtsChanged] 闪现「未朗读」——期间不得 end 掉系统会话。
+  bool _ttsRestarting = false;
+
+  /// 通知栏 / 锁屏元数据当前章（防同章重复上屏）。
+  int _ttsMediaChapter = -1;
+
   /// [ReaderPage.initialJump] 的段落下标：[_open] 解析写入，
   /// [_ensureController] 消费一次（融入恢复链路，不新增跳转竞态）。
   int _jumpPara = -1;
@@ -541,6 +553,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final TtsController? tts = _tts;
     _tts = null;
     if (tts != null) unawaited(tts.stop());
+    // 撤系统会话（`TTS-03`）：_disposed 闸会拦下 onChanged 里的 end，故在此显式收。
+    final TtsAudioSession? ttsAudio = _ttsAudio;
+    _ttsAudio = null;
+    if (ttsAudio != null) unawaited(ttsAudio.end());
     _finishSession(); // 退出阅读页：停止计时并落库（`STAT-01`；写库只在此与切后台）
     unawaited(_saveProgress());
     _imageCache.dispose();
@@ -3320,9 +3336,18 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   // ── 段落朗读（`TTS-01`/`TTS-02`，M3-T06）──────────────────────────────
 
   /// 取（或首次创建）朗读控制器：引擎注入优先，缺省 [SystemTts]。
+  /// 同时懒建系统会话（`TTS-03`）并注入播控回调（通知栏 / 耳机 / 焦点入站口）。
   TtsController _ensureTts() {
     final TtsController? existing = _tts;
     if (existing != null) return existing;
+    // 注：cascade 赋值里的箭头闭包必须再包一层括号——否则 `=> expr..next`
+    // 会被解析成「在 expr 上开级联」（`Future<void>` 上找不到 setter）。
+    _ttsAudio ??= (TtsAudioSession()
+      ..onPlay = _ttsResumeOrStart
+      ..onPause = _ttsPauseFromSystem
+      ..onStop = _ttsStopFromSystem
+      ..onSkipToPrevious = (() => _ttsSkipChapter(-1))
+      ..onSkipToNext = (() => _ttsSkipChapter(1)));
     final TtsController created = TtsController(
       widget.ttsEngine ?? SystemTts(),
       _ttsLoadChapter,
@@ -3333,6 +3358,63 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
     _tts = created;
     return created;
+  }
+
+  /// 系统侧「播放」（通知栏 / 耳机键 / 焦点恢复）：暂停中续读；
+  /// 未在读（竞态残留）则从当前段开读。换章重启窗口内忽略。
+  void _ttsResumeOrStart() {
+    final TtsController? tts = _tts;
+    if (tts == null || _ttsRestarting) return;
+    if (tts.isRunning) {
+      if (tts.isPaused) unawaited(tts.resume());
+      return;
+    }
+    unawaited(_toggleTts());
+  }
+
+  /// 系统侧「暂停」（通知栏 / 耳机键 / 焦点丢失 / 耳机拔出）：仅在播时生效。
+  void _ttsPauseFromSystem() {
+    final TtsController? tts = _tts;
+    if (tts == null || !tts.isActive) return;
+    unawaited(tts.pause());
+  }
+
+  /// 系统侧「停止」：停朗读（[_onTtsChanged] 随之 end 撤通知）。
+  void _ttsStopFromSystem() {
+    final TtsController? tts = _tts;
+    if (tts == null || !tts.isRunning) return;
+    unawaited(tts.stop());
+  }
+
+  /// 通知栏上一章 / 下一章（`TTS-03` ②）：朗读中 = 换章续读（新章起点）；
+  /// 未朗读（竞态残留）= 只跳视图。首/末章越界处原地不动。
+  Future<void> _ttsSkipChapter(int delta) async {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return;
+    final TtsController? tts = _tts;
+    if (tts == null || !tts.isRunning) {
+      final int target = (_liveIndex + delta).clamp(0, chapters.length - 1);
+      if (target != _liveIndex) await _jumpToLink(target, 0);
+      return;
+    }
+    final int cur = tts.current?.chapterIndex ?? _liveIndex;
+    final int target = (cur + delta).clamp(0, chapters.length - 1);
+    if (target == cur) return;
+    _ttsFollow.reset(); // 换章 = 恢复自动跟随（同开读侧语义）
+    _ttsRestarting = true;
+    try {
+      await tts.start(target, 0); // start 自带先 stop 再开
+    } finally {
+      _ttsRestarting = false;
+    }
+  }
+
+  /// 通知栏 / 锁屏用章节名：章标题空则回落「第N章」（同副标题口径）。
+  String _ttsChapterTitle(int index) {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || index < 0 || index >= chapters.length) return '';
+    final String title = chapters[index].title;
+    return title.isNotEmpty ? title : '第${index + 1}章';
   }
 
   /// 朗读推进取章段落：缓存命中直接回，未命中走增量加载（渲染侧同源入
@@ -3360,13 +3442,28 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final ({int chapterIndex, int paraIndex}) from = _ttsStartPoint();
     _ttsFollow.reset(); // 重新开读 → 恢复自动跟随（`TTS-02` ③ 复位侧）
     final bool ok = await tts.start(from.chapterIndex, from.paraIndex);
-    if (!ok && mounted && !_disposed) {
-      // PRD §15.3：无语音引擎（Linux 等）必须中文提示，不得静默失败。
-      GlassOverlays.showToast(
-        context: context,
-        message: '本机未安装语音引擎',
-        type: GlassToastType.error,
-      );
+    if (!ok) {
+      if (mounted && !_disposed) {
+        // PRD §15.3：无语音引擎（Linux 等）必须中文提示，不得静默失败。
+        GlassOverlays.showToast(
+          context: context,
+          message: '本机未安装语音引擎',
+          type: GlassToastType.error,
+        );
+      }
+      return;
+    }
+    // `TTS-03`：开系统会话（通知栏 / 锁屏 / 媒体键 / 焦点）。降级档或
+    // 插件初始化失败 → begin 回 false，朗读照常仅前台、不提示（§15.3 拍板）。
+    if (!mounted || _disposed) return;
+    _ttsMediaChapter = from.chapterIndex;
+    final TtsAudioSession? audio = _ttsAudio;
+    if (audio != null) {
+      unawaited(audio.begin(
+        bookId: widget.record.bookId,
+        bookTitle: _title,
+        chapterTitle: _ttsChapterTitle(from.chapterIndex),
+      ));
     }
   }
 
@@ -3399,6 +3496,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     setState(() {
       _speaking = (chapterIndex: chapterIndex, paraIndex: paraIndex);
     });
+    // `TTS-03`：跨章续读时通知栏 / 锁屏副标题跟着换章（同章不重复上屏）。
+    if (chapterIndex != _ttsMediaChapter) {
+      _ttsMediaChapter = chapterIndex;
+      _ttsAudio?.updateChapter(_ttsChapterTitle(chapterIndex));
+    }
     // `TTS-02` ②：可见就不滚（避免短段逐段抖动）；③ 跟随被手动滚动暂停则不滚。
     if (!_ttsFollow.shouldFollow) return;
     if (_speakingVisible(chapterIndex, paraIndex)) return;
@@ -3472,11 +3574,20 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   /// 朗读运行态变化 → 刷按钮；彻底停止时撤高亮。
+  /// 同步刷系统会话（`TTS-03`）：在播 ↔ 暂停映射通知栏按钮，停止即撤通知。
   void _onTtsChanged() {
     if (!mounted || _disposed) return;
+    final TtsController? tts = _tts;
     setState(() {
-      if (!(_tts?.isRunning ?? false)) _speaking = null;
+      if (!(tts?.isRunning ?? false)) _speaking = null;
     });
+    if (tts == null) return;
+    if (_ttsRestarting) return; // 换章重启的过渡态：会话保持不动
+    if (tts.isRunning) {
+      _ttsAudio?.setPlaying(tts.isActive);
+    } else {
+      unawaited(_ttsAudio?.end());
+    }
   }
 
   /// 人物梳理可用性（`AI-07`）：依赖与摘要同组（配置 + 客户端 + 摘要缓存，
