@@ -102,6 +102,7 @@ import '../typography/reader_settings.dart';
 import '../typography/text_style_resolver.dart';
 import '../typography/typeset.dart';
 import '../ui/ask_panel.dart';
+import '../ui/entity_page.dart';
 import '../ui/glass_kit.dart';
 import '../ui/search_sheet.dart';
 import 'bookmark.dart';
@@ -3073,6 +3074,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     icon: const Icon(Icons.question_mark),
                     onPressed: ready ? _openAskSheet : null,
                   ),
+                // `AI-07`：人物关系与设定梳理（`M3-T05`）。
+                if (_entitiesEnabled)
+                  IconButton(
+                    key: const Key('reader-entities'),
+                    tooltip: '人物与设定',
+                    icon: const Icon(Icons.people_alt_outlined),
+                    onPressed: ready ? _openEntityPage : null,
+                  ),
                 IconButton(
                   key: const Key('reader-appearance'),
                   tooltip: '外观',
@@ -3256,6 +3265,54 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         Navigator.of(context).pop();
         unawaited(_jumpToSearchHit(hit, query));
       },
+    ));
+  }
+
+  /// 人物梳理可用性（`AI-07`）：依赖与摘要同组（配置 + 客户端 + 摘要缓存，
+  /// 成品复用 `aiCache/` 合并级条目）+ `AI-09` ② 全局开关。
+  ///
+  /// 与问答不同，不涉及 `AI-09` ③ 受限标注（PRD 原文该项为问答专属）——
+  /// 发送范围由页面内「仅已读 / 全书」自选，范围行照常可见。
+  bool get _entitiesEnabled {
+    final ProviderStore? store = widget.aiStore;
+    return store != null &&
+        widget.aiClient != null &&
+        widget.summaryCache != null &&
+        store.prefs.aiEnabled;
+  }
+
+  /// 打开人物与设定梳理页（`AI-07`：范围可切「仅已读」，点出场章节
+  /// 引用关本页并跳回原文）。
+  void _openEntityPage() {
+    final ProviderStore? store = widget.aiStore;
+    final AiClient? client = widget.aiClient;
+    final SummaryCache? cache = widget.summaryCache;
+    final List<Chapter>? chapters = _chapters;
+    if (!_entitiesEnabled ||
+        store == null ||
+        client == null ||
+        cache == null ||
+        chapters == null ||
+        chapters.isEmpty) {
+      return;
+    }
+    unawaited(Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (BuildContext ctx) => EntityPage(
+          aiStore: store,
+          aiClient: client,
+          summaryCache: cache,
+          bookId: widget.record.bookId,
+          chapters: chapters,
+          // 「仅已读」上界 = 滚动实时章（`RD-04` `chapterIndex` 的显示口径）。
+          readUptoIndex: _liveIndex,
+          loadText: _summaryTextAt,
+          onJump: (int index) {
+            Navigator.of(ctx).pop();
+            unawaited(_goToChapter(index));
+          },
+        ),
+      ),
     ));
   }
 

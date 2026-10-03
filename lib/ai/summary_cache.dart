@@ -114,7 +114,8 @@ class BookSummaryEntry {
   final String bookId;
   final String model;
 
-  /// `book` = 全书摘要；`recap` = 前情回顾。
+  /// `book` = 全书摘要；`recap` = 前情回顾；`entities` = 人物梳理成品
+  /// （M3-T05，text 存 `encodeEntities` 的 JSON；键同样含范围起止 + inputHash）。
   final String kind;
 
   /// 范围起止章（闭区间；全书 = 0..upto，前情回顾 = 近 N 章窗口）。
@@ -150,7 +151,7 @@ class BookSummaryEntry {
         bookId.isEmpty ||
         model is! String ||
         model.isEmpty ||
-        (kind != 'book' && kind != 'recap') ||
+        (kind != 'book' && kind != 'recap' && kind != 'entities') ||
         inputHash is! String ||
         text is! String ||
         text.isEmpty) {
