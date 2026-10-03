@@ -29,6 +29,12 @@ String withFirstLineIndent(String text) => '$kFirstLineIndentPrefix$text';
 /// 叠在任意正文色上都保可读，且不覆盖文字本身的颜色语义（粗体 / 链接下划线）。
 const Color kSearchHighlightColor = Color(0x66FFC107);
 
+/// 划词选区高亮底色（`AI-02`/`AI-03`；同为半透明以适配亮 / 暗主题与各背景色板）。
+///
+/// 与搜索高亮同范式：只叠 `backgroundColor`，不改文字颜色语义。
+/// 选区着色在搜索高亮**之后**应用（选中段的底色以选区为准）。
+const Color kSelectionHighlightColor = Color(0x6642A5F5);
+
 /// 白名单：只保留 `<b>` 和 `<i>` 的开闭标签，其它标签在上游已剥离。
 final RegExp _inlineTagPattern = RegExp(r'<(/?)([bi])>');
 
@@ -266,6 +272,68 @@ List<InlineSpan> highlightSpans(
   return any ? out : spans;
 }
 
+/// 对已解析的 span 列表做**选区**着色后处理（`AI-02`/`AI-03` 划词高亮）。
+///
+/// 按渲染文本空间偏移 `[start, end)` 切分：命中片段叠 [color] 背景，原样式
+/// （颜色 / 粗斜体 / 下划线）与 [TextSpan.recognizer] 全保留——与
+/// [highlightSpans] 同范式。[WidgetSpan]（图片）按 1 个替换字符计入偏移、
+/// 自身不切分。无交集时返回原列表（不产生无谓 rebuild）。
+///
+/// 为什么在 span 内着色而非 overlay：分页模式相邻页同段双实例各自被
+/// ClipRect 裁切，翻页 Transform 动画期间 overlay 会与文字错位，span 内
+/// 着色随页图层一起走，天然同步。
+List<InlineSpan> selectionSpans(
+  List<InlineSpan> spans,
+  int start,
+  int end, {
+  Color color = kSelectionHighlightColor,
+}) {
+  if (end <= start || start < 0) return spans;
+  final List<InlineSpan> out = <InlineSpan>[];
+  int cursor = 0;
+  bool any = false;
+  for (final InlineSpan span in spans) {
+    final String? text = span is TextSpan ? span.text : null;
+    if (text == null) {
+      out.add(span);
+      cursor += 1; // WidgetSpan 占 1 个替换字符（toPlainText 同口径）。
+      continue;
+    }
+    final int spanEnd = cursor + text.length;
+    if (spanEnd <= start || cursor >= end) {
+      out.add(span);
+      cursor = spanEnd;
+      continue;
+    }
+    any = true;
+    final TextSpan textSpan = span as TextSpan;
+    final int from = start > cursor ? start - cursor : 0;
+    final int to = end < spanEnd ? end - cursor : text.length;
+    if (from > 0) {
+      out.add(TextSpan(
+        text: text.substring(0, from),
+        style: textSpan.style,
+        recognizer: textSpan.recognizer,
+      ));
+    }
+    out.add(TextSpan(
+      text: text.substring(from, to),
+      style: (textSpan.style ?? const TextStyle())
+          .copyWith(backgroundColor: color),
+      recognizer: textSpan.recognizer,
+    ));
+    if (to < text.length) {
+      out.add(TextSpan(
+        text: text.substring(to),
+        style: textSpan.style,
+        recognizer: textSpan.recognizer,
+      ));
+    }
+    cursor = spanEnd;
+  }
+  return any ? out : spans;
+}
+
 /// 整段可点链接的段落 widget（`CNT-04b`）：管理 recognizer 生命周期。
 ///
 /// [parseContentSpans] 创建的 [TapGestureRecognizer] 必须 `dispose`：
@@ -281,6 +349,7 @@ class InlineParagraph extends StatefulWidget {
     required this.resolveImage,
     this.onLinkTap,
     this.highlightQuery,
+    this.selection,
   });
 
   /// 含标记的段落文本（`section_extractor` 抽取产物）。
@@ -299,6 +368,11 @@ class InlineParagraph extends StatefulWidget {
   /// （[highlightSpans] 后处理，快路径与标记路径都覆盖）；
   /// `null` / 空串 = 不高亮。
   final String? highlightQuery;
+
+  /// 划词选区（`AI-02`/`AI-03`）：渲染文本空间 `[start, end)` 非空时该段
+  /// 对应片段叠选区底色（[selectionSpans] 后处理，在搜索高亮之后）；
+  /// `null` = 无选区。
+  final ({int start, int end})? selection;
 
   @override
   State<InlineParagraph> createState() => _InlineParagraphState();
@@ -320,7 +394,8 @@ class _InlineParagraphState extends State<InlineParagraph> {
     if (oldWidget.text != widget.text ||
         oldWidget.style != widget.style ||
         oldWidget.onLinkTap != widget.onLinkTap ||
-        oldWidget.highlightQuery != widget.highlightQuery) {
+        oldWidget.highlightQuery != widget.highlightQuery ||
+        oldWidget.selection != widget.selection) {
       final List<TapGestureRecognizer> stale = _recognizers;
       _buildSpans();
       // 旧批延后到帧结束释放：当前帧渲染树仍引用旧 span 的 recognizer。
@@ -345,6 +420,11 @@ class _InlineParagraphState extends State<InlineParagraph> {
     final String? query = widget.highlightQuery;
     if (query != null && query.isNotEmpty) {
       spans = highlightSpans(spans, query);
+    }
+    // `AI-02`/`AI-03`：选区着色在搜索高亮之后（选中段底色以选区为准）。
+    final ({int start, int end})? selection = widget.selection;
+    if (selection != null && selection.end > selection.start) {
+      spans = selectionSpans(spans, selection.start, selection.end);
     }
     _spans = spans;
     _recognizers = sink;

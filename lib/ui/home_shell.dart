@@ -28,10 +28,13 @@
 // 与 anx-reader 的选择一致，不额外造玻璃侧栏。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../ai/ai_client.dart';
 import '../ai/provider_store.dart';
+import '../ai/vocab_store.dart';
 import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
 import '../reader/progress_store.dart';
@@ -46,6 +49,7 @@ import 'notes_page.dart';
 import 'settings_page.dart';
 import 'shelf_page.dart';
 import 'stats_page.dart';
+import 'vocab_page.dart';
 
 /// 浮动底栏为各页内容预留的底部空白。
 ///
@@ -73,6 +77,7 @@ class HomeShell extends StatefulWidget {
     required this.statsService,
     required this.aiStore,
     required this.aiClient,
+    this.vocabStore,
   });
 
   /// 书库仓库（书架页）。
@@ -105,6 +110,11 @@ class HomeShell extends StatefulWidget {
 
   /// AI 客户端（AI 设置页的测试连接）。
   final AiClient aiClient;
+
+  /// 生词本存储（笔记页入口计数 + 生词本页；`M3-T02`）。
+  ///
+  /// `null` = 未接线：笔记页回退占位骨架、书架划词禁用（降级口径不变）。
+  final VocabStore? vocabStore;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -155,10 +165,20 @@ class _HomeShellState extends State<HomeShell> {
           shelfPrefs: widget.shelfPrefs,
           shelfLayout: widget.shelfLayout,
           statsService: widget.statsService,
+          aiStore: widget.aiStore,
+          aiClient: widget.aiClient,
+          vocabStore: widget.vocabStore,
         ),
         StatsPage(service: widget.statsService, repository: widget.repository),
         const AiPage(),
-        const NotesPage(),
+        NotesPage(
+          vocabStore: widget.vocabStore,
+          // 生词本页依赖全在壳层（仓库 / 进度 / AI / 统计），由回调就地组装——
+          // 笔记页只留「计数 + 入口」两个字段，不背开书管道的依赖。
+          onOpenVocab: widget.vocabStore == null
+              ? null
+              : () => unawaited(_openVocabPage()),
+        ),
         SettingsPage(
           perfPrefs: widget.perfPrefs,
           settings: widget.settings,
@@ -166,6 +186,24 @@ class _HomeShellState extends State<HomeShell> {
           aiClient: widget.aiClient,
         ),
       ];
+
+  /// push 生词本页（词条点击跳回原文的开书依赖在此组装）。
+  Future<void> _openVocabPage() {
+    final VocabStore? vocab = widget.vocabStore;
+    if (vocab == null) return Future<void>.value();
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => VocabPage(
+          repository: widget.repository,
+          progressStore: widget.progressStore,
+          vocabStore: vocab,
+          aiStore: widget.aiStore,
+          aiClient: widget.aiClient,
+          statsService: widget.statsService,
+        ),
+      ),
+    );
+  }
 
   void _select(int index) {
     if (index == _index) return;

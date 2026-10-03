@@ -11,6 +11,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'ai/ai_client.dart';
 import 'ai/provider_store.dart';
 import 'ai/secure_key_store.dart';
+import 'ai/vocab_store.dart';
 import 'app.dart';
 import 'highperf/high_perf_registry.dart';
 import 'library/library_repository.dart';
@@ -72,6 +73,9 @@ Future<void> main() async {
     AiKeyVault(FileSecureStore(directory: dataDir)),
   );
   final AiClient aiClient = AiClient();
+  // M3-T02：生词本（`AI-03` ②③）——进程内唯一实例，笔记页 / 生词本页 / 阅读页
+  // 释义面板共用；词条数很小，加载并入下面的并行等待（不占冷启动串行）。
+  final VocabStore vocabStore = VocabStore(dataDir);
   await Future.wait(<Future<void>>[
     _warmUpGlassShaders(),
     settings.load(),
@@ -79,6 +83,7 @@ Future<void> main() async {
     shelfPrefs.load(),
     shelfLayout.load(),
     aiStore.load(),
+    vocabStore.load(),
     highPerf.warmUp(),
   ]);
 
@@ -133,6 +138,7 @@ Future<void> main() async {
           statsService: statsService,
           aiStore: aiStore,
           aiClient: aiClient,
+          vocabStore: vocabStore,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,

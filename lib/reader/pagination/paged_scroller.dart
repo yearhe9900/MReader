@@ -26,6 +26,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 
+import '../selection_overlay.dart';
 import 'page_breaker.dart';
 import 'page_paginator.dart';
 import 'page_renderer.dart';
@@ -303,6 +304,7 @@ class PagedScroller extends StatefulWidget {
     this.onSampled,
     this.onLinkTap,
     this.highlightQuery,
+    this.selection,
     this.sampleDebounce = kScrollSampleDebounce,
   });
 
@@ -326,6 +328,10 @@ class PagedScroller extends StatefulWidget {
 
   /// 搜索高亮关键词；null / 空 = 不高亮。
   final String? highlightQuery;
+
+  /// 划词选区（`AI-02`/`AI-03`）：只对 [ParaSelection.chapterHref] 命中的章
+  /// 生效（跨章滚动时其它章不受影响）；null = 无选区。
+  final ParaSelection? selection;
 
   /// 采样防抖时长（默认 [kScrollSampleDebounce]；测试可注入短值）。
   final Duration sampleDebounce;
@@ -586,6 +592,7 @@ class PagedScrollerState extends State<PagedScroller> {
     for (int i = range.first; i <= range.last; i++) {
       final FlatPage e = _layout.flatPages[i];
       final PagedChapterView chapter = widget.chapters[e.chapterIndex];
+      final ParaSelection? sel = widget.selection;
       out.add(Positioned(
         top: e.top,
         left: 0,
@@ -601,6 +608,10 @@ class PagedScrollerState extends State<PagedScroller> {
             resolveImage: widget.resolveImage,
             onLinkTap: widget.onLinkTap,
             highlightQuery: widget.highlightQuery,
+            chapterHref: chapter.href,
+            selection: sel != null && sel.chapterHref == chapter.href
+                ? (paraIndex: sel.paraIndex, start: sel.start, end: sel.end)
+                : null,
             clipHeight: e.height,
           ),
         ),

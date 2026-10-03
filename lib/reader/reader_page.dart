@@ -84,6 +84,9 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../ai/ai_client.dart';
+import '../ai/provider_store.dart';
+import '../ai/vocab_store.dart';
 import '../diagnostics/perf_log.dart';
 import '../format/book_source.dart';
 import '../library/book_record.dart';
@@ -122,6 +125,8 @@ import 'reading_background.dart';
 import 'reading_prefs.dart';
 import 'reading_prefs_store.dart';
 import 'reading_progress.dart';
+import 'selection_ai_sheet.dart';
+import 'selection_overlay.dart';
 import 'toc_sheet.dart';
 
 /// 恢复滚动时的最大校正帧数（`RD-04`：估算后迭代收敛；`RC2`：≤8 帧）。
@@ -141,6 +146,10 @@ class ReaderPage extends StatefulWidget {
     this.bookmarkStore,
     this.readingPrefsStore,
     this.statsService,
+    this.aiStore,
+    this.aiClient,
+    this.vocabStore,
+    this.initialJump,
   });
 
   /// 书籍内容来源（`BookSource` 抽象，EPUB / TXT 通用）。
@@ -172,6 +181,25 @@ class ReaderPage extends StatefulWidget {
   ///
   /// `null` = 尚未接线：不计时、不写库（与 [bookmarkStore] 同款降级口径）。
   final StatsService? statsService;
+
+  /// AI 配置存储（划词翻译 / 释义，`AI-02`/`AI-03`），由组合根透传。
+  ///
+  /// **三个 AI 参数任一为 null → 划词功能整体禁用**（长按不选词、不出操作条，
+  /// 与 [statsService] 同款降级口径；`AI-09` ② 全局开关另由 prefs.aiEnabled 控制）。
+  final ProviderStore? aiStore;
+
+  /// AI 客户端（流式调用，组合根进程内唯一实例）。
+  final AiClient? aiClient;
+
+  /// 生词本存储（释义面板「存生词本」入口）。
+  final VocabStore? vocabStore;
+
+  /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度，
+  /// 段落级对齐。`null` = 按存档进度恢复（正常开书）。
+  ///
+  /// 融入既有恢复链路（ListView `_beginScrollTo(paraIndex:)` / 分页
+  /// `_pagedJumpTo(charOffset:)`），**不压返回栈**（跳回不是导航历史）。
+  final ({String href, int paraIndex})? initialJump;
 
   @override
   State<ReaderPage> createState() => _ReaderPageState();
@@ -315,6 +343,24 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 链接返回栈（`CNT-04c` 验收②）：跳转前压入原位置快照，「返回」按钮弹栈恢复。
   final LinkBackStack _linkStack = LinkBackStack();
+
+  /// 划词选区（`AI-02`/`AI-03`；null = 无选区）。滚动与翻页起手时清空——
+  /// 选区是「某一屏的瞬态」，动了视口就没有继续高亮的理由。
+  ParaSelection? _selection;
+
+  /// 选区相对视口（`_viewportKey` Stack）的绘制矩形（操作条定位用；
+  /// [_selection] 为 null 时无意义）。
+  Rect? _selectionRect;
+
+  /// 长按起手命中的段落（拖拽扩展期间固定在起手段落上）。
+  ParagraphHit? _selHit;
+
+  /// 起手词范围（拖拽扩展的锚：新范围 = 两者 min/max 合并）。
+  ({int start, int end})? _selAnchor;
+
+  /// [ReaderPage.initialJump] 的段落下标：[_open] 解析写入，
+  /// [_ensureController] 消费一次（融入恢复链路，不新增跳转竞态）。
+  int _jumpPara = -1;
 
   /// 应用内亮度 `0.2 ~ 1.0`（`TYP-08`；1.0 = 不加遮罩）。
   double _brightness = ReadingPrefs.maxBrightness;
@@ -526,8 +572,24 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       if (!mounted) return;
 
       // 定位：先按 href（稳定身份）匹配，匹配不到退回 index 并 clamp。
-      final int index = _resolveIndex(chapters, progress);
-      final double pos = progress?.chapterPos ?? 0.0;
+      int index = _resolveIndex(chapters, progress);
+      double pos = progress?.chapterPos ?? 0.0;
+      // `AI-03` ③ 生词跳回：[ReaderPage.initialJump] 覆盖存档进度（href 匹配
+      // 不到则忽略、照常按进度恢复）；段落级落点由 [_ensureController] 消费
+      // [_jumpPara]——融入既有恢复链路，不新增并行跳转（无竞态）。
+      final ({String href, int paraIndex})? jump = widget.initialJump;
+      if (jump != null) {
+        final int jumpIndex =
+            chapters.indexWhere((Chapter c) => c.href == jump.href);
+        if (jumpIndex >= 0) {
+          index = jumpIndex;
+          // 段落粗估（与 _jumpToLink 同式）：ListView 分支随后按段落 box 精校，
+          // 分页分支直接走 charOffset 精确落位。
+          pos = math.min(1.0, (jump.paraIndex + 1) / 12.0);
+          _jumpPara = jump.paraIndex;
+          _paraKeys['$jumpIndex:${jump.paraIndex}'] = GlobalKey();
+        }
+      }
 
       setState(() {
         if (prefs != null) {
@@ -675,6 +737,20 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       final PaginationConfig? cfg = _pageConfig;
       final List<Chapter>? chapters = _chapters;
       if (cfg == null || chapters == null || chapters.isEmpty) return;
+      // `AI-03` ③ 生词跳回：段落 → 章内字符偏移（与 _jumpToLink 同式），
+      // 交给 _pagedJumpTo 精确一次落位；消费一次（正常开书 jumpPara 恒 -1）。
+      final int jumpPara = _jumpPara;
+      _jumpPara = -1;
+      int? jumpChar;
+      if (jumpPara >= 0) {
+        final List<String> paras =
+            _cache.peek(_restoreIndex)?.paragraphList ?? const <String>[];
+        int offset = 0;
+        for (int p = 0; p < jumpPara && p < paras.length; p++) {
+          offset += paras[p].length;
+        }
+        jumpChar = offset;
+      }
       _window = _computeWindow(_restoreIndex);
       _pageViews = _buildPageViews(_window, cfg);
       _viewsSignature = _computeSignature(_window);
@@ -688,10 +764,19 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       final double restorePos = _restorePos;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || _disposed) return;
-        unawaited(_pagedJumpTo(restoreIndex, pos: restorePos, saveOld: false));
+        unawaited(_pagedJumpTo(
+          restoreIndex,
+          pos: restorePos,
+          charOffset: jumpChar,
+          saveOld: false,
+        ));
       });
       return;
     }
+    // ListView：同款消费 initialJump 段落（融进恢复参数，[_restoreStep] 按
+    // 段落 box 精校；正常开书 jumpPara 恒 -1，行为一字不变）。
+    final int jumpPara = _jumpPara;
+    _jumpPara = -1;
     final LocalLayoutHint? hint = _localHint;
     final bool sameLayout = hint != null &&
         _viewportWidth > 0 &&
@@ -710,7 +795,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       _cache.touch(_restoreIndex);
       PerfLog.mark('reader.seed',
           'branch=exact seed=${hint.scrollOffset.toStringAsFixed(1)}');
-      _beginScrollTo(_restoreIndex, _restorePos);
+      _beginScrollTo(_restoreIndex, _restorePos, paraIndex: jumpPara);
       return;
     }
     // 回退分支（backlog① 方案 A）：同版面时 seed，否则 0。
@@ -718,7 +803,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _controller = ScrollController(initialScrollOffset: seed);
     PerfLog.mark('reader.seed',
         'branch=${sameLayout ? 'fallback-seed' : 'zero'} seed=${seed.toStringAsFixed(1)}');
-    _beginScrollTo(_restoreIndex, _restorePos);
+    _beginScrollTo(_restoreIndex, _restorePos, paraIndex: jumpPara);
   }
 
   /// 开始一次程序化「滚动到第 [index] 章的 [pos] 位置」（估算 + 校正）。默认恢复路径。
@@ -993,6 +1078,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 滚动中实时刷新进度显示（返回 false 表示不拦截通知）。
   bool _onScrollUpdate(ScrollUpdateNotification notification) {
+    _clearSelection(); // 滚动起手清选区（无选区时空转）
     _updateLiveProgress();
     return false;
   }
@@ -1787,6 +1873,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         SchedulerPhase.persistentCallbacks) {
       return false; // didUpdateWidget 收缩跳派发于 build 期：禁 setState
     }
+    _clearSelection(); // 滚动起手清选区（无选区时空转；build 期已由上行跳过）
     if (!_pagedMode || _inPagedOp || _jumpInFlight) return false;
     final PagedScrollerState? scroller = _scroller;
     if (scroller == null || !scroller.scrollController.hasClients) {
@@ -2106,6 +2193,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       onSampled: _onPagedDebounced,
       onLinkTap: _onLinkTapped,
       highlightQuery: _searchHighlight.isEmpty ? null : _searchHighlight,
+      selection: _selection,
     );
     final ({int viewIndex, int pageIndex})? pos =
         _pageTurnModeAsTurn ? _turnPosition() : null;
@@ -2245,9 +2333,26 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         onLinkTap: _onLinkTapped,
         highlightQuery: _searchHighlight.isEmpty ? null : _searchHighlight,
         clipHeight: page.height,
+        chapterHref: view.href,
+        selection: _pageSelection(view.href),
       ),
     ));
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
+  }
+
+  /// 当前选区在 [href] 章上的段落投影（非该章 / 无选区 → null）。
+  ({int paraIndex, int start, int end})? _pageSelection(String href) {
+    final ParaSelection? sel = _selection;
+    if (sel == null || sel.isEmpty || sel.chapterHref != href) return null;
+    return (paraIndex: sel.paraIndex, start: sel.start, end: sel.end);
+  }
+
+  /// 单段选区投影（ListView 形态的 InlineParagraph 用）：章与段都对上才给。
+  ({int start, int end})? _paraSelection(String href, int paraIndex) {
+    final ParaSelection? sel = _selection;
+    if (sel == null || sel.isEmpty) return null;
+    if (sel.chapterHref != href || sel.paraIndex != paraIndex) return null;
+    return (start: sel.start, end: sel.end);
   }
 
   /// 目标页惰性构建（翻页体起手判定成功后调用一次）。
@@ -2265,6 +2370,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   void _onTurnGesture(bool active) {
     if (active) {
       _noteReading(); // 翻页手势起手 = 交互（含未提交就取消的滑动）
+      _clearSelection(); // 翻页起手清选区（视口要动了）
       _pagedStopSeq++;
       _pendingLand = null;
       _turnGestureActive = true;
@@ -2976,6 +3082,201 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return '第${_liveIndex + 1}章 · $_livePercent%';
   }
 
+  // ── 划词选区（`AI-02`/`AI-03`；命中与值对象见 selection_overlay.dart）──
+
+  /// 划词可用性：三个 AI 依赖齐备 + `AI-09` ② 全局开关开启
+  /// （任一为 null → 整体禁用，与 [statsService] 同款降级口径）。
+  bool get _selectionEnabled {
+    final ProviderStore? store = widget.aiStore;
+    return store != null &&
+        widget.aiClient != null &&
+        widget.vocabStore != null &&
+        store.prefs.aiEnabled;
+  }
+
+  /// 渲染文本空间的纯文本（偏移与 [RenderParagraph] 位置对齐：
+  /// placeholder 计 1、不吞语义标签）。
+  String _renderTextOf(ParagraphHit hit) =>
+      hit.render.text.toPlainText(includeSemanticsLabels: false);
+
+  /// 长按起手：命中段落 → 词级选区 + 操作条；点在空白 / 标题上清选区。
+  void _onSelectionStart(Offset global) {
+    final ParagraphHit? hit = findParagraphAt(context, global);
+    if (hit == null) {
+      _clearSelection();
+      return;
+    }
+    final TextPosition pos =
+        hit.render.getPositionForOffset(hit.render.globalToLocal(global));
+    final TextRange range = hit.render.getWordBoundary(pos);
+    final String text = _renderTextOf(hit);
+    final ({int start, int end}) word = normalizeWordRange(
+      text,
+      range.start,
+      range.end,
+      pos.offset,
+    );
+    if (word.start >= word.end) {
+      _clearSelection();
+      return;
+    }
+    _selHit = hit;
+    _selAnchor = word;
+    _applySelRange(hit, word);
+  }
+
+  /// 拖拽扩展：以起手词为锚，向指针处的词边界取 min/max 合并。
+  void _onSelectionMove(Offset global) {
+    final ParagraphHit? hit = _selHit;
+    final ({int start, int end})? anchor = _selAnchor;
+    if (hit == null || anchor == null || !hit.render.attached) return;
+    final TextPosition pos =
+        hit.render.getPositionForOffset(hit.render.globalToLocal(global));
+    final TextRange range = hit.render.getWordBoundary(pos);
+    final String text = _renderTextOf(hit);
+    final ({int start, int end}) word = normalizeWordRange(
+      text,
+      range.start,
+      range.end,
+      pos.offset,
+    );
+    final int start = math.min(anchor.start, word.start);
+    final int end = math.max(anchor.end, word.end);
+    if (start >= end) return;
+    _applySelRange(hit, (start: start, end: end));
+  }
+
+  /// 起手结束：保留选区与操作条（没选上则收尾清场）。
+  void _onSelectionEnd() {
+    _selHit = null;
+    _selAnchor = null;
+    if (_selection == null) _clearSelection();
+  }
+
+  /// 把 [range] 写入选区状态（范围未变则不 rebuild——拖拽逐帧移动只在
+  /// 跨词 / 跨字时才标脏）。
+  void _applySelRange(ParagraphHit hit, ({int start, int end}) range) {
+    final ParaSelection? cur = _selection;
+    if (cur != null &&
+        cur.chapterHref == hit.href &&
+        cur.paraIndex == hit.paraIndex &&
+        cur.start == range.start &&
+        cur.end == range.end) {
+      return;
+    }
+    final Rect? rect = _selRectFor(hit, range);
+    if (rect == null) return;
+    final String snapshot = _renderTextOf(hit)
+        .substring(range.start, range.end)
+        .replaceAll('\uFFFC', '')
+        .trim();
+    if (snapshot.isEmpty) return;
+    setState(() {
+      _selection = ParaSelection(
+        chapterHref: hit.href,
+        paraIndex: hit.paraIndex,
+        start: range.start,
+        end: range.end,
+        text: snapshot,
+      );
+      _selectionRect = rect;
+    });
+  }
+
+  /// 选区盒 → 视口 Stack 局部坐标（操作条钉位用；多行取包围盒）。
+  Rect? _selRectFor(ParagraphHit hit, ({int start, int end}) range) {
+    final List<TextBox> boxes = hit.render.getBoxesForSelection(
+      TextSelection(baseOffset: range.start, extentOffset: range.end),
+    );
+    if (boxes.isEmpty) return null;
+    Rect rect = boxes.first.toRect();
+    for (final TextBox box in boxes.skip(1)) {
+      rect = rect.expandToInclude(box.toRect());
+    }
+    final RenderBox? stack = _viewportBox();
+    if (stack == null) return null;
+    final Offset local =
+        stack.globalToLocal(hit.render.localToGlobal(rect.topLeft));
+    return local & rect.size;
+  }
+
+  /// 清选区（起手点空 / 关闭按钮 / 滚动与翻页起手；无选区时零开销）。
+  void _clearSelection() {
+    _selHit = null;
+    _selAnchor = null;
+    if (_selection == null && _selectionRect == null) return;
+    setState(() {
+      _selection = null;
+      _selectionRect = null;
+    });
+  }
+
+  /// 选区操作条（[_selection] 非空时钉在选区上方；顶到边则落到下方）。
+  Widget _buildSelectionBar() {
+    final Rect rect = _selectionRect ?? Rect.zero;
+    const double barW = 200;
+    const double barH = 44;
+    double left = rect.center.dx - barW / 2;
+    final double viewW = _viewportWidth;
+    if (viewW > 0) {
+      left = left.clamp(8.0, math.max(8.0, viewW - barW - 8));
+    } else if (left < 8) {
+      left = 8;
+    }
+    double top = rect.top - barH - 8;
+    if (top < 8) top = rect.bottom + 8;
+    return Positioned(
+      left: left,
+      top: top,
+      child: SelectionActionBar(
+        onTranslate: () => _openSelectionSheet(SelectionAiMode.translate),
+        onExplain: () => _openSelectionSheet(SelectionAiMode.explain),
+        onClear: _clearSelection,
+      ),
+    );
+  }
+
+  /// 打开划词面板（`AI-09`：最保守模式只发选文，否则带前后段落上下文）。
+  void _openSelectionSheet(SelectionAiMode mode) {
+    final ParaSelection? sel = _selection;
+    final ProviderStore? store = widget.aiStore;
+    final AiClient? client = widget.aiClient;
+    final VocabStore? vocab = widget.vocabStore;
+    if (sel == null || store == null || client == null || vocab == null) {
+      return;
+    }
+    String? before;
+    String? after;
+    if (!store.prefs.selectionOnly) {
+      final List<Chapter>? chapters = _chapters;
+      final int ci =
+          chapters?.indexWhere((Chapter c) => c.href == sel.chapterHref) ?? -1;
+      if (ci >= 0) {
+        final List<String>? paras = _cache.peek(ci)?.paragraphList;
+        if (paras != null) {
+          if (sel.paraIndex > 0 && sel.paraIndex - 1 < paras.length) {
+            before = plainParagraphText(paras[sel.paraIndex - 1]);
+          }
+          if (sel.paraIndex + 1 < paras.length) {
+            after = plainParagraphText(paras[sel.paraIndex + 1]);
+          }
+        }
+      }
+    }
+    unawaited(showSelectionAiSheet(
+      context,
+      mode: mode,
+      selection: sel,
+      aiStore: store,
+      aiClient: client,
+      vocabStore: vocab,
+      bookId: widget.record.bookId,
+      bookTitle: widget.record.title,
+      before: before,
+      after: after,
+    ));
+  }
+
   Widget _buildBody(ThemeData theme) {
     final Object? error = _error;
     if (error != null) {
@@ -3049,6 +3350,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           textScaleFactor: MediaQuery.textScalerOf(context).scale(1.0),
         ));
         _ensureController();
+        // 划词操作条（选区非空时钉在选区上方——构建期算好，按层序插入）。
+        final Widget? selBar =
+            _selection != null ? _buildSelectionBar() : null;
         return SizedBox.expand(
           key: _viewportKey,
           child: Stack(
@@ -3076,6 +3380,24 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   ),
                 ),
               ),
+              // `AI-02`/`AI-03`：划词手势层——只注册长按族（不拦 tap /
+              // 滚动拖拽 / 翻页横滑，arena 竞争照常）；translucent 让下方
+              // 滚动体与链接照常参与命中。恢复遮罩盖在其上（恢复期不选词）。
+              if (_selectionEnabled)
+                Positioned.fill(
+                  child: GestureDetector(
+                    key: const Key('reader-selection-gesture'),
+                    behavior: HitTestBehavior.translucent,
+                    onLongPressStart: (LongPressStartDetails d) =>
+                        _onSelectionStart(d.globalPosition),
+                    onLongPressMoveUpdate: (LongPressMoveUpdateDetails d) =>
+                        _onSelectionMove(d.globalPosition),
+                    onLongPressEnd: (LongPressEndDetails d) =>
+                        _onSelectionEnd(),
+                    // 无子则代理盒零尺寸、永不命中——铺满当命中面。
+                    child: const SizedBox.expand(),
+                  ),
+                ),
               // backlog① 方案 B：开书首跳校正全程遮罩——中间跳转不可见，
               // [_finishRestore] 撤除。opaque 手势层顺带吞掉恢复期间的拖动，
               // 防止用户滚动与 `jumpTo` 校正互相打架。
@@ -3094,6 +3416,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
+              // `AI-02`/`AI-03`：选区操作条（层序：恢复遮罩之上、亮度遮罩之下）。
+              ?selBar,
               // `TYP-08` 验收①：应用内亮度遮罩——黑色叠加层，不透明度
               // `1 - brightness`；拖动即生效（实时），由外观面板持久化（保留）。
               if (_brightness < ReadingPrefs.maxBrightness)
@@ -3270,6 +3594,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               // TYP-04：首行缩进 + `<b>`/`<i>` 内联样式（白名单）+ `<img>` 图片（CNT-01）。
               // CNT-04c：`onLinkTap` 接链接跳转（同步 tear-off，跨帧相等防 recognizer 重建）。
               child: InlineParagraph(
+                // `AI-02`/`AI-03`：段落 key 供 findParagraphAt 命中（划词起点），
+                // selection 叠选区底色（与分页 PageContent 同款投影）。
+                key: paragraphKey(chapter.href, p),
                 text: withFirstLineIndent(paragraphs[p]),
                 style: bodyStyle,
                 resolveImage: _resolveImage,
@@ -3277,6 +3604,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                 // CNT-06 验收②：搜索跳转后关键词高亮（空 = 不高亮）。
                 highlightQuery:
                     _searchHighlight.isEmpty ? null : _searchHighlight,
+                selection: _paraSelection(chapter.href, p),
               ),
             ),
         ],

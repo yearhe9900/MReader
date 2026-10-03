@@ -33,6 +33,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../ai/ai_client.dart';
+import '../ai/provider_store.dart';
+import '../ai/vocab_store.dart';
 import '../diagnostics/perf_log.dart';
 import '../format/book_registry.dart';
 import '../format/book_source.dart';
@@ -61,6 +64,9 @@ class ShelfPage extends StatefulWidget {
     required this.shelfPrefs,
     required this.shelfLayout,
     this.statsService,
+    this.aiStore,
+    this.aiClient,
+    this.vocabStore,
   });
 
   /// 书库仓库。
@@ -82,6 +88,13 @@ class ShelfPage extends StatefulWidget {
   ///
   /// `null` = 尚未接线：阅读页不采集（与其它可选注入同款降级口径）。
   final StatsService? statsService;
+
+  /// AI 配置 / 客户端 / 生词本（划词翻译释义，`AI-02`/`AI-03`），透传阅读页。
+  ///
+  /// 三者任一为 null → 阅读页划词整体禁用（与 [statsService] 同款降级口径）。
+  final ProviderStore? aiStore;
+  final AiClient? aiClient;
+  final VocabStore? vocabStore;
 
   @override
   State<ShelfPage> createState() => _ShelfPageState();
@@ -421,6 +434,9 @@ class _ShelfPageState extends State<ShelfPage> {
           progressStore: widget.progressStore,
           repository: widget.repository,
           statsService: widget.statsService,
+          aiStore: widget.aiStore,
+          aiClient: widget.aiClient,
+          vocabStore: widget.vocabStore,
         ),
       );
       // 不 await push 的 Future（它要等路由 pop 才返回）——push 一发起（路由已

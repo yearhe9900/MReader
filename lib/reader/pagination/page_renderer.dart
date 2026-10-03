@@ -23,6 +23,7 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 
 import '../../typography/typeset.dart';
+import '../selection_overlay.dart';
 import 'page_breaker.dart';
 import 'page_paginator.dart';
 
@@ -53,6 +54,8 @@ class PageContent extends StatelessWidget {
     required this.resolveImage,
     this.onLinkTap,
     this.highlightQuery,
+    this.chapterHref,
+    this.selection,
     this.clipHeight,
   });
 
@@ -77,6 +80,13 @@ class PageContent extends StatelessWidget {
   /// 搜索高亮关键词；null / 空 = 不高亮。
   final String? highlightQuery;
 
+  /// 所在章 href（`AI-02`/`AI-03` 划词定位）：非空时每段挂
+  /// [paragraphKey]，供长按命中（`findParagraphAt`）；null = 不挂 key。
+  final String? chapterHref;
+
+  /// 划词选区（已按本章过滤）：[ParaSelection.paraIndex] 命中的段落着色。
+  final ({int paraIndex, int start, int end})? selection;
+
   /// 页框高（默认 [PaginationConfig.pageHeight]；页 0 传
   /// `pageHeight − headingHeight`——标题占高由视图层另行渲染）。
   final double? clipHeight;
@@ -98,12 +108,16 @@ class PageContent extends StatelessWidget {
       if (p > pStart) {
         children.add(SizedBox(height: config.paragraphSpacing));
       }
+      final ({int paraIndex, int start, int end})? sel =
+          selection != null && selection!.paraIndex == p ? selection : null;
       children.add(InlineParagraph(
+        key: chapterHref == null ? null : paragraphKey(chapterHref!, p),
         text: withFirstLineIndent(paragraphs[p]),
         style: config.textStyle,
         resolveImage: resolveImage,
         onLinkTap: onLinkTap,
         highlightQuery: highlightQuery,
+        selection: sel == null ? null : (start: sel.start, end: sel.end),
       ));
     }
 
