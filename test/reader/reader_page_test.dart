@@ -622,16 +622,29 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 几何断言：落点在第 2 章中部——章标题明显滚出视口顶（≥300px），
-      // 且第 1 章已卸载、副标题切到「第2章」。
+      // 页区间断言（`T07` 迁移：几何契约 → 页区间契约，原「章标题滚出
+      // 视口 ≥300px」像素断言改判）：落点在第 2 章中部——视口顶采样落在
+      // h2 且章内字符比例 ≈0.5；且第 1 章已卸载、副标题切到「第2章」。
       expect(find.text('第二章'), findsOneWidget);
       expect(find.text('第一章'), findsNothing);
       expect(find.textContaining('第2章'), findsWidgets);
-      final double titleTop = tester.getTopLeft(find.text('第二章')).dy;
-      final double viewportTop =
-          tester.getTopLeft(find.byType(PagedScroller)).dy;
-      expect(titleTop - viewportTop, lessThan(-300),
-          reason: '应落在章中部而非章首（chapterPos≈0.5 已生效）');
+      // 章标题在视口外（`hitTestable` 视口语义，同 `search_jump` 口径；
+      // 分页窗口下「在树上」≠「在视口内」）。
+      expect(find.text('第二章').hitTestable(), findsNothing,
+          reason: '落点在章中部 → 章标题应在视口上方（视口外）');
+      final PagedScrollerState state =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+      final ScrollSample? sample = state.sampleNow();
+      expect(sample, isNotNull, reason: '页表就绪后视口顶应可采样');
+      expect(sample!.href, 'h2', reason: '视口顶所在章应为第 2 章');
+      final int total = state.widget.chapters
+          .firstWhere((PagedChapterView v) => v.href == 'h2')
+          .pages
+          .last
+          .end;
+      expect(sample.charOffset / total, inInclusiveRange(0.3, 0.7),
+          reason: '应落在章中部而非章首（chapterPos≈0.5 已生效），'
+              '实测 ${(sample.charOffset / total).toStringAsFixed(3)}');
 
       // 关书回读：语义坐标仍在 (1, 0.5±0.1)。
       await tester.pumpWidget(const SizedBox());
