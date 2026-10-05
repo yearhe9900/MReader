@@ -18,6 +18,25 @@ enum TtsSpeakResult {
   error,
 }
 
+/// 一枚系统音色（`getVoices` 的 `{name, locale}`；`TTS-04`②）。
+class TtsVoice {
+  /// 创建音色标识。
+  const TtsVoice({required this.name, required this.locale});
+
+  /// 音色名（`setVoice` 的 `name`）。
+  final String name;
+
+  /// 语言标签（如 `zh-CN`）。
+  final String locale;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TtsVoice && other.name == name && other.locale == locale;
+
+  @override
+  int get hashCode => Object.hash(name, locale);
+}
+
 /// 系统 / 测试假引擎共用的最小契约（`TTS-01`）。
 abstract class TtsEngine {
   /// 初始化并探测引擎可用性；`false` = 本机无可用语音引擎。
@@ -33,8 +52,15 @@ abstract class TtsEngine {
   /// 停止当前朗读；在途 [speak] 以 [TtsSpeakResult.cancelled] 完结。
   Future<void> stop();
 
-  /// 语速 `0.0 ~ 1.0`（系统引擎口径；M3-T08 语速面板接线）。
+  /// 语速 `0.0 ~ 1.5`（flutter_tts 口径，0.5 = 正常速；`TTS-04`①）。
   Future<void> setRate(double rate);
+
+  /// 当前可用音色；无实现平台 / 查询失败返回**空列表**（不抛）。
+  Future<List<TtsVoice>> getVoices();
+
+  /// 选音色；`null` = 回到系统默认音色。平台不支持时静默容错
+  /// （音色失败不打断朗读，同 [setRate] 口径）。
+  Future<void> setVoice(TtsVoice? voice);
 }
 
 /// 段落是否值得朗读（`TTS-01` ③：纯标点 / 空白段被跳过）。

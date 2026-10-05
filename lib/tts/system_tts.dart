@@ -83,6 +83,44 @@ class SystemTts implements TtsEngine {
     }
   }
 
+  @override
+  Future<List<TtsVoice>> getVoices() async {
+    try {
+      final dynamic raw = await _tts.getVoices;
+      if (raw is! List) return const <TtsVoice>[];
+      final List<TtsVoice> voices = <TtsVoice>[];
+      for (final dynamic item in raw) {
+        if (item is! Map) continue;
+        final Object? name = item['name'];
+        final Object? locale = item['locale'];
+        if (name is! String || name.isEmpty) continue;
+        voices.add(
+          TtsVoice(name: name, locale: locale is String ? locale : ''),
+        );
+      }
+      return voices;
+    } catch (_) {
+      // 无实现平台（Linux）/ 查询失败：空列表 = 无音色可选，UI 隐藏该项。
+      return const <TtsVoice>[];
+    }
+  }
+
+  @override
+  Future<void> setVoice(TtsVoice? voice) async {
+    try {
+      if (voice == null) {
+        await _tts.clearVoice();
+      } else {
+        await _tts.setVoice(<String, String>{
+          'name': voice.name,
+          'locale': voice.locale,
+        });
+      }
+    } catch (_) {
+      // 音色切换失败不打断朗读（沿用当前音色）。
+    }
+  }
+
   void _finish(TtsSpeakResult result) {
     final Completer<TtsSpeakResult>? completer = _pending;
     _pending = null;

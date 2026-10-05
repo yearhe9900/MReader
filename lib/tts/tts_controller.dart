@@ -115,8 +115,14 @@ class TtsController {
     unawaited(_run(_gen));
   }
 
-  /// 设置语速（透传引擎；M3-T08 语速面板接线）。
+  /// 设置语速（透传引擎；`TTS-04`① 语速面板接线）。
   Future<void> setRate(double rate) => _engine.setRate(rate);
+
+  /// 当前可用音色（透传引擎；`TTS-04`② 音色面板接线）。
+  Future<List<TtsVoice>> getVoices() => _engine.getVoices();
+
+  /// 选音色（透传引擎；`null` = 系统默认）。
+  Future<void> setVoice(TtsVoice? voice) => _engine.setVoice(voice);
 
   Future<void> _run(int gen) async {
     while (_running && gen == _gen) {

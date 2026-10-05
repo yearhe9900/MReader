@@ -98,7 +98,9 @@ import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
 import '../task/search_session.dart';
 import '../tts/audio_session.dart';
+import '../tts/sleep_timer.dart';
 import '../tts/system_tts.dart';
+import '../tts/tts_settings.dart';
 import '../tts/tts_controller.dart';
 import '../tts/tts_engine.dart';
 import '../typography/anchor.dart';
@@ -139,6 +141,7 @@ import 'selection_ai_sheet.dart';
 import 'selection_overlay.dart';
 import 'summary_sheet.dart';
 import 'toc_sheet.dart';
+import 'tts_settings_sheet.dart';
 
 /// 恢复滚动时的最大校正帧数（`RD-04`：估算后迭代收敛；`RC2`：≤8 帧）。
 const int _kMaxRestoreFrames = 8;
@@ -163,6 +166,7 @@ class ReaderPage extends StatefulWidget {
     this.summaryCache,
     this.ragStore,
     this.ttsEngine,
+    this.ttsSettings,
     this.initialJump,
   });
 
@@ -223,6 +227,12 @@ class ReaderPage extends StatefulWidget {
   /// `null` = 用 [SystemTts] 默认实例（生产接线）；测试注入假引擎。
   /// 与 [aiStore] 同款可空降级形制。
   final TtsEngine? ttsEngine;
+
+  /// 朗读设置存储（语速 / 音色 / 定时停止，`TTS-04`/`TTS-05`；`M3-T08`），
+  /// 组合根透传。
+  ///
+  /// `null` = 未接线：朗读设置入口隐藏、按默认值运行（同款降级口径）。
+  final TtsSettingsStore? ttsSettings;
 
   /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度，
   /// 段落级对齐。`null` = 按存档进度恢复（正常开书）。
@@ -414,6 +424,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 通知栏 / 锁屏元数据当前章（防同章重复上屏）。
   int _ttsMediaChapter = -1;
 
+  /// `TTS-06` 朗读进度直写坐标：每段朗读推进时记下的**朗读语义真值**。
+  ///
+  /// 视口可能落后于朗读（跟随被手动滚动暂停）——[_saveProgress]（含
+  /// dispose 收尾）优先取它，防陈旧视口坐标覆盖朗读落点；用户重新接管
+  /// 视口（手动滚动 / 翻页起手）或程序化改位（[_beginScrollTo] /
+  /// [_pagedJumpTo]）即清空，让位回视口语义值。
+  ({int chapterIndex, double chapterPos})? _ttsProgress;
+
+  /// `TTS-05` 定时停止计时器（懒建于首次开读；到点停朗读 + 提示）。
+  SleepTimer? _sleepTimer;
+
   /// [ReaderPage.initialJump] 的段落下标：[_open] 解析写入，
   /// [_ensureController] 消费一次（融入恢复链路，不新增跳转竞态）。
   int _jumpPara = -1;
@@ -549,6 +570,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // [_lastLocalHint]（见 [_buildLocalHint]），**不会用 null 覆盖已存快照**。
     WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
+    _sleepTimer?.cancel(); // `TTS-05`：关页撤定时（回调防呆双保险）
+    _sleepTimer = null;
     // 停朗读（回调经 _disposed 闸不 setState；引擎 stop 为 unawaited 清场）。
     final TtsController? tts = _tts;
     _tts = null;
@@ -888,6 +911,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _restoreParaIndex = paraIndex >= 0 ? paraIndex : null;
     _restoreFrames = 0;
     _restoring = true;
+    _ttsProgress = null; // `TTS-06`：程序化改位 → 朗读坐标让位给新落点
     _positionConverged = false; // `RC1`：程序化移动开始 → 先关写盘闸门
     PerfLog.mark('restore.begin',
         'index=$_restoreIndex pos=${_restorePos.toStringAsFixed(3)} para=$paraIndex');
@@ -1151,6 +1175,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   bool _onScrollUpdate(ScrollUpdateNotification notification) {
     if (notification.dragDetails != null) {
       _ttsFollow.noteManualScroll(); // `TTS-02` ③ 手动滚动暂停自动跟随
+      _ttsProgress = null; // `TTS-06`：视口被用户接管 → 朗读坐标让位
     }
     _clearSelection(); // 滚动起手清选区（无选区时空转）
     _updateLiveProgress();
@@ -1950,6 +1975,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _clearSelection(); // 滚动起手清选区（无选区时空转；build 期已由上行跳过）
     if (notification.dragDetails != null) {
       _ttsFollow.noteManualScroll(); // `TTS-02` ③ 手动滚动暂停自动跟随
+      _ttsProgress = null; // `TTS-06`：视口被用户接管 → 朗读坐标让位
     }
     if (!_pagedMode || _inPagedOp || _jumpInFlight) return false;
     final PagedScrollerState? scroller = _scroller;
@@ -2184,6 +2210,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         _restorePos = ratio;
         _window = win;
         _pendingLand = null;
+        _ttsProgress = null; // `TTS-06`：程序化改位 → 朗读坐标让位给新落点
         _positionConverged = false; // `RC1`：落位确认前不写盘
         _positionSampled = false;
       });
@@ -2462,6 +2489,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (active) {
       _noteReading(); // 翻页手势起手 = 交互（含未提交就取消的滑动）
       _ttsFollow.noteManualScroll(); // `TTS-02` ③ 手动翻页同样暂停跟随
+      _ttsProgress = null; // `TTS-06`：视口被用户接管 → 朗读坐标让位
       _clearSelection(); // 翻页起手清选区（视口要动了）
       _pagedStopSeq++;
       _pendingLand = null;
@@ -2686,14 +2714,19 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (_restoring || !_positionConverged || !_positionSampled) return;
     final List<Chapter>? chapters = _chapters;
     if (chapters == null || chapters.isEmpty) return;
-    final int index = _currentIndex.clamp(0, chapters.length - 1);
+    // `TTS-06`：朗读直写坐标在场时优先（视口可能落后于朗读——手动滚动
+    // 暂停跟随后，陈旧视口值不得覆盖「停止后接着听」的落点）。
+    final ({int chapterIndex, double chapterPos})? tts = _ttsProgress;
+    final int index =
+        (tts?.chapterIndex ?? _currentIndex).clamp(0, chapters.length - 1);
+    final double pos = tts?.chapterPos ?? _chapterPos;
     final Chapter chapter = chapters[index];
     final int now = DateTime.now().millisecondsSinceEpoch;
     final ReadingProgress progress = ReadingProgress(
       bookId: widget.record.bookId,
       chapterHref: chapter.href,
       chapterIndex: index,
-      chapterPos: _chapterPos,
+      chapterPos: pos,
       updatedAt: now,
       // 现场测不到（关书时控制器已 detach）→ 回退本会话最后可信快照：
       // **绝不用 null 覆盖已存快照**，否则「开→关」每循环一次就丢一次像素落点。
@@ -2704,7 +2737,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       await widget.repository.markRead(
         widget.record.bookId,
         lastReadAt: now,
-        readProgress: _overallProgress(index, _chapterPos),
+        readProgress: _overallProgress(index, pos),
       );
     } catch (_) {
       // 保存失败不影响阅读；下次保存重试。
@@ -2923,6 +2956,45 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  /// 打开朗读设置面板（`TTS-04` 语速 / 音色，`TTS-05` 定时停止）。
+  ///
+  /// 音色列表要问引擎：顺带懒建控制器（未开读过时）再取一次可用音色；
+  /// 引擎侧无实现平台（Linux 等）回空列表 → 面板隐藏音色区（诚实降级）。
+  Future<void> _openTtsSettings() async {
+    final TtsSettingsStore? store = widget.ttsSettings;
+    if (store == null || !mounted || _disposed) return;
+    final List<TtsVoice> voices = await _ensureTts().getVoices();
+    if (!mounted || _disposed) return;
+    await GlassOverlays.showSheet<void>(
+      context: context,
+      builder: (BuildContext sheetContext) => OpaqueContentSurface(
+        child: TtsSettingsSheet(
+          settings: store.value,
+          voices: voices,
+          onChanged: _onTtsSettingsChanged,
+        ),
+      ),
+    );
+  }
+
+  /// 面板回传（整份值对象）：逐项 setter 落盘（store 内部等值短路）；
+  /// 语速 / 音色**立即应用**引擎（`TTS-04`①），定时随设定重设（`TTS-05`）。
+  void _onTtsSettingsChanged(TtsSettings next) {
+    final TtsSettingsStore? store = widget.ttsSettings;
+    if (store == null) return;
+    final TtsSettings prev = store.value;
+    final bool engineChanged = next.rate != prev.rate ||
+        next.followSystemRate != prev.followSystemRate ||
+        next.voiceName != prev.voiceName ||
+        next.voiceLocale != prev.voiceLocale;
+    unawaited(store.setRate(next.rate));
+    unawaited(store.setFollowSystemRate(next.followSystemRate));
+    unawaited(store.setVoice(name: next.voiceName, locale: next.voiceLocale));
+    unawaited(store.setSleepMinutes(next.sleepMinutes));
+    if (next.sleepMinutes != prev.sleepMinutes) _syncSleepTimer();
+    if (engineChanged) unawaited(_applyTtsSettings());
   }
 
   /// 抓「当前位置」创建书签并入列 + 落盘（`TYP-06`）；返回 `null` = 书未就绪。
@@ -3180,6 +3252,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   : null,
               onTts: _toggleTts,
               ttsActive: _tts?.isRunning ?? false,
+              onTtsSettings: widget.ttsSettings == null
+                  ? null
+                  : () => unawaited(_openTtsSettings()),
             )
           : null,
       // CNT-04c 验收②：链接返回栈非空时显示「返回」按钮，弹栈恢复原位置；
@@ -3441,6 +3516,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     final ({int chapterIndex, int paraIndex}) from = _ttsStartPoint();
     _ttsFollow.reset(); // 重新开读 → 恢复自动跟随（`TTS-02` ③ 复位侧）
+    await _applyTtsSettings(); // `TTS-04`：开读前把存储的语速 / 音色备好
     final bool ok = await tts.start(from.chapterIndex, from.paraIndex);
     if (!ok) {
       if (mounted && !_disposed) {
@@ -3457,6 +3533,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // 插件初始化失败 → begin 回 false，朗读照常仅前台、不提示（§15.3 拍板）。
     if (!mounted || _disposed) return;
     _ttsMediaChapter = from.chapterIndex;
+    _syncSleepTimer(); // `TTS-05`：按设定启动定时（0 = 关闭不计时）
     final TtsAudioSession? audio = _ttsAudio;
     if (audio != null) {
       unawaited(audio.begin(
@@ -3465,6 +3542,46 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         chapterTitle: _ttsChapterTitle(from.chapterIndex),
       ));
     }
+  }
+
+  /// `TTS-04`：把存储的语速 / 音色应用到引擎（开读前与面板调整时调用）。
+  ///
+  /// 「跟随系统语速」开 → 写回默认 0.5（flutter_tts 初始语速即系统正常速，
+  /// Android 侧 `rate × 2 = 1.0`）——保证开关切换**立即**回到正常速。
+  Future<void> _applyTtsSettings() async {
+    final TtsController? tts = _tts;
+    if (tts == null || _disposed) return;
+    final TtsSettings s = widget.ttsSettings?.value ?? const TtsSettings();
+    await tts.setRate(s.followSystemRate ? TtsSettings.defaultRate : s.rate);
+    final String? name = s.voiceName;
+    await tts.setVoice(name == null || name.isEmpty
+        ? null
+        : TtsVoice(name: name, locale: s.voiceLocale ?? ''));
+  }
+
+  /// `TTS-05`：按当前设定重设定时（开读成功后与设定变更时调用）。
+  ///
+  /// 未在读不动计时（开读时再启）；设定为 0 = 关闭并取消既有计时。
+  void _syncSleepTimer() {
+    final TtsSettings s = widget.ttsSettings?.value ?? const TtsSettings();
+    if (s.sleepMinutes <= 0) {
+      _sleepTimer?.cancel();
+      return;
+    }
+    if (!(_tts?.isRunning ?? false)) return;
+    final SleepTimer timer = _sleepTimer ??= SleepTimer(onFire: _onSleepFire);
+    timer.startMinutes(s.sleepMinutes);
+  }
+
+  /// `TTS-05` 到点：停朗读（`_onTtsChanged` 随之撤通知 / 高亮 / 落盘）+ 轻提示。
+  void _onSleepFire() {
+    final TtsController? tts = _tts;
+    if (tts != null && tts.isRunning) unawaited(tts.stop());
+    if (!mounted || _disposed) return;
+    GlassOverlays.showToast(
+      context: context,
+      message: '定时到了，朗读已停止',
+    );
   }
 
   /// 朗读起点（`TTS-01` ①「从当前段开始」）：视口**中心**命中的段落
@@ -3496,6 +3613,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     setState(() {
       _speaking = (chapterIndex: chapterIndex, paraIndex: paraIndex);
     });
+    // `TTS-06`：每段推进即写朗读进度（F6「每段读完写入进度」——书架百分比
+    // 与「停止后接着听」的落点都以朗读坐标为准，不走 `RC1` 视口闸门）。
+    unawaited(_writeTtsProgress(chapterIndex, paraIndex));
     // `TTS-03`：跨章续读时通知栏 / 锁屏副标题跟着换章（同章不重复上屏）。
     if (chapterIndex != _ttsMediaChapter) {
       _ttsMediaChapter = chapterIndex;
@@ -3560,7 +3680,58 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       target,
       pos: total > 0 ? charOffset / total : 0.0,
       charOffset: charOffset,
+      // `TTS-06`：直写已在本段入场时同异步落盘（坐标与 saveOld 逐位相同），
+      // 且 saveOld 与直写共挤同路径写队列会拖过跟随落位窗口、被下一段
+      // `++_primeSeq` 作废 → 跟随跳不 saveOld。
+      saveOld: false,
     );
+  }
+
+  /// `TTS-06` 进度直写：把朗读坐标写入阅读进度 + 回写书架百分比
+  /// （F6「每段读完写入进度」；TTS-06 ①② 的数据面）。
+  ///
+  /// 不走 [_saveProgress] 的 `RC1` 闸门——朗读坐标来自段落下标（真值不依赖
+  /// 视口几何，闸门防的「几何误差当真值」在此不存在）；字数换算与
+  /// [_followSpeakingPaged] 同源（段落前缀和 / 全章字数）。
+  ///
+  /// 同时记入 [_ttsProgress]：视口可能落后于朗读（跟随被手动滚动暂停），
+  /// [_saveProgress]（含 dispose 收尾）优先取它防陈旧视口坐标覆盖。
+  /// 失败静默：下一段推进重试，不影响朗读。
+  Future<void> _writeTtsProgress(int chapterIndex, int paraIndex) async {
+    if (_disposed) return;
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return;
+    final int index = chapterIndex.clamp(0, chapters.length - 1);
+    final List<String> paragraphs =
+        _cache.peek(index)?.paragraphList ?? const <String>[];
+    int charOffset = 0;
+    for (int p = 0; p < paraIndex && p < paragraphs.length; p++) {
+      charOffset += paragraphs[p].length;
+    }
+    final int total = PagePaginator.charCountOf(paragraphs);
+    final double pos = total > 0 ? charOffset / total : 0.0;
+    _ttsProgress = (chapterIndex: index, chapterPos: pos);
+    // 恢复中途不重测版面（mid-flight offset 不进快照），其余时间取现场。
+    final LocalLayoutHint? hint =
+        _restoring ? _lastLocalHint : _buildLocalHint() ?? _lastLocalHint;
+    final int now = DateTime.now().millisecondsSinceEpoch;
+    try {
+      await widget.progressStore.save(ReadingProgress(
+        bookId: widget.record.bookId,
+        chapterHref: chapters[index].href,
+        chapterIndex: index,
+        chapterPos: pos,
+        updatedAt: now,
+        localHint: hint,
+      ));
+      await widget.repository.markRead(
+        widget.record.bookId,
+        lastReadAt: now,
+        readProgress: _overallProgress(index, pos),
+      );
+    } catch (_) {
+      // 保存失败不影响朗读；下一段推进重试。
+    }
   }
 
   /// 朗读引擎致命错误 → 中文 toast（按钮随 onChanged 复位）。
@@ -3578,6 +3749,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   void _onTtsChanged() {
     if (!mounted || _disposed) return;
     final TtsController? tts = _tts;
+    final ({int chapterIndex, int paraIndex})? speaking = _speaking;
     setState(() {
       if (!(tts?.isRunning ?? false)) _speaking = null;
     });
@@ -3585,8 +3757,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (_ttsRestarting) return; // 换章重启的过渡态：会话保持不动
     if (tts.isRunning) {
       _ttsAudio?.setPlaying(tts.isActive);
+      if (!tts.isActive && speaking != null) {
+        // `TTS-06`（F6）：暂停也落盘——停在哪段就记哪段（接着听的落点）。
+        unawaited(_writeTtsProgress(speaking.chapterIndex, speaking.paraIndex));
+      }
     } else {
       unawaited(_ttsAudio?.end());
+      _sleepTimer?.cancel(); // `TTS-05`：停读撤定时（下次开读按设定重启）
+      if (speaking != null) {
+        // `TTS-06`（F6）：停止 → 落盘当前朗读段（重开接着听的落点）。
+        unawaited(_writeTtsProgress(speaking.chapterIndex, speaking.paraIndex));
+      }
     }
   }
 

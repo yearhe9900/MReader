@@ -28,6 +28,7 @@ import '../library/library_repository.dart';
 import '../reader/progress_store.dart';
 import '../reader/reader_page.dart';
 import '../stats/stats_service.dart';
+import '../tts/tts_settings.dart';
 import 'glass_kit.dart';
 
 /// 生词本页。
@@ -43,6 +44,7 @@ class VocabPage extends StatefulWidget {
     this.statsService,
     this.summaryCache,
     this.ragStore,
+    this.ttsSettings,
   });
 
   /// 书库仓库（查记录 / 读字节 / 结构缓存）。
@@ -66,6 +68,9 @@ class VocabPage extends StatefulWidget {
 
   /// 问答索引存储（透传阅读页，跳回后问答入口不丢；`AI-06`）。
   final RagIndexStore? ragStore;
+
+  /// 朗读设置存储（透传阅读页，跳回后朗读设置入口不丢；`TTS-04`/`TTS-05`）。
+  final TtsSettingsStore? ttsSettings;
 
   @override
   State<VocabPage> createState() => _VocabPageState();
@@ -267,6 +272,7 @@ class _VocabPageState extends State<VocabPage> {
           vocabStore: widget.vocabStore,
           summaryCache: widget.summaryCache,
           ragStore: widget.ragStore,
+          ttsSettings: widget.ttsSettings,
           // `AI-03` ③：段落级跳回（不压返回栈——恢复链路消费一次即忘）。
           initialJump: (href: entry.chapterHref, paraIndex: entry.paraIndex),
         ),

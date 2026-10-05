@@ -45,6 +45,7 @@ import '../settings/settings_store.dart';
 import '../settings/shelf_layout_store.dart';
 import '../settings/shelf_prefs_store.dart';
 import '../stats/stats_service.dart';
+import '../tts/tts_settings.dart';
 import 'ai_page.dart';
 import 'glass_kit.dart';
 import 'notes_page.dart';
@@ -82,6 +83,7 @@ class HomeShell extends StatefulWidget {
     this.vocabStore,
     this.summaryCache,
     this.ragStore,
+    this.ttsSettings,
   });
 
   /// 书库仓库（书架页）。
@@ -129,6 +131,11 @@ class HomeShell extends StatefulWidget {
   ///
   /// `null` = 未接线：阅读页问答入口隐藏（同款降级口径）。
   final RagIndexStore? ragStore;
+
+  /// 朗读设置存储（阅读页 `TTS-04`/`TTS-05`；`M3-T08`）。
+  ///
+  /// `null` = 未接线：阅读页朗读设置入口隐藏（同款降级口径）。
+  final TtsSettingsStore? ttsSettings;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -184,6 +191,7 @@ class _HomeShellState extends State<HomeShell> {
           vocabStore: widget.vocabStore,
           summaryCache: widget.summaryCache,
           ragStore: widget.ragStore,
+          ttsSettings: widget.ttsSettings,
         ),
         StatsPage(service: widget.statsService, repository: widget.repository),
         const AiPage(),
@@ -218,6 +226,7 @@ class _HomeShellState extends State<HomeShell> {
           statsService: widget.statsService,
           summaryCache: widget.summaryCache,
           ragStore: widget.ragStore,
+          ttsSettings: widget.ttsSettings,
         ),
       ),
     );

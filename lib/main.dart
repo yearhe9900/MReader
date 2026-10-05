@@ -30,6 +30,7 @@ import 'settings/settings_store.dart';
 import 'settings/shelf_layout_store.dart';
 import 'settings/shelf_prefs_store.dart';
 import 'stats/stats_service.dart';
+import 'tts/tts_settings.dart';
 import 'ui/glass_runtime.dart';
 import 'ui/home_shell.dart';
 
@@ -87,6 +88,9 @@ Future<void> main() async {
   // 无全局 load；删书连带清理在书架侧（`shelf_page`）。
   final RagIndexStore ragIndexStore =
       RagIndexStore(await appPaths.subDir('aiCache'));
+  // M3-T08：朗读设置（`TTS-04`/`TTS-05`）——与偏好同一形制（`JsonStore` →
+  // `AtomicFile`）、独立文件 `tts_settings.json`；注入书架 → 阅读页。
+  final TtsSettingsStore ttsSettings = TtsSettingsStore(dataDir);
   await Future.wait(<Future<void>>[
     _warmUpGlassShaders(),
     settings.load(),
@@ -96,6 +100,7 @@ Future<void> main() async {
     aiStore.load(),
     vocabStore.load(),
     summaryCache.load(),
+    ttsSettings.load(),
     highPerf.warmUp(),
   ]);
 
@@ -153,6 +158,7 @@ Future<void> main() async {
           vocabStore: vocabStore,
           summaryCache: summaryCache,
           ragStore: ragIndexStore,
+          ttsSettings: ttsSettings,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,
