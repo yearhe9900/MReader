@@ -47,3 +47,13 @@ deliverables/
 
 # 开发期真实书籍样本（多格式测试用，不入库）
 /tmp_book/
+
+# Rust（M3.5-T03，架构 §G.4）
+rust/target/
+rust_builder/**/build/
+**/*.so
+**/*.dylib
+**/*.dll
+# 显式反排除：FRB 生成物必须入库（RUST-08 ③）——未来若有人加 *.so 类通配，
+# 不会误伤 lib/src/rust/**（防御性写法，与 test/generated_files_committed_test 配套）。
+!lib/src/rust/**

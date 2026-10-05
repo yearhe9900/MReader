@@ -7,6 +7,10 @@ plugins {
 android {
     namespace = "com.mreader.app"
     compileSdk = flutter.compileSdkVersion
+    // M3.5-T03（架构 §G.3 ①）ndkVersion 校准记录：规格候选值 27.0.12077973 的
+    // 前提是「FRB 在 Flutter ≥3.32 下需 NDK ≥27」；本机 Flutter 3.47.5 默认
+    // flutter.ndkVersion = 28.2.13676358 ≥ 27，**满足前提 → 维持默认、不硬编码**，
+    // 免去额外安装 NDK 27。真机构建验证（gate ①）若报 NDK 缺失/不匹配再在此改值。
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

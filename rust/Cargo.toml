@@ -1,0 +1,31 @@
+[package]
+name = "rust_lib_mreader"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+# 与 Dart 侧 `flutter_rust_bridge` 运行时**严格同版本**（RUST-08；codegen 也须 2.13.0）。
+flutter_rust_bridge = "=2.13.0"
+thiserror = "2"
+
+# `RUST-04` / 架构 §D.2：panic 必须显式 unwind——`catch_unwind` 在 abort 下失效，
+# panic 会直接终止进程。两处显式写死，让「改成 abort」变成一次显眼的 diff
+# （机械护栏：test/rust_profile_guard_test.dart）。
+[profile.dev]
+panic = "unwind"
+opt-level = 1
+debug = true
+
+[profile.release]
+panic = "unwind"
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

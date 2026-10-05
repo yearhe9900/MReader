@@ -1,0 +1,8 @@
+disallowed-methods = [
+  { path = "std::fs::write",        reason = "NF-D8：Rust 只读，写盘一律回 Dart（原子写入）" },
+  { path = "std::fs::File::create", reason = "NF-D8：同上" },
+  { path = "std::fs::remove_file",  reason = "NF-D8：同上" },
+  { path = "std::fs::rename",       reason = "NF-D8：同上（原子写入是 Dart 的职责）" },
+  { path = "std::fs::create_dir",   reason = "NF-D8：同上" },
+  { path = "std::fs::create_dir_all", reason = "NF-D8：同上" },
+]

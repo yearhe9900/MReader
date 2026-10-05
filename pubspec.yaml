@@ -84,6 +84,14 @@ dependencies:
   # Windows / Linux 实现，五平台同包（iOS/macOS/Android 原生）。
   # 精确锁定 6.8.1（不带 ^）：版本锁定纪律；仅 `lib/tts/online_tts.dart` 引用。
   audioplayers: 6.8.1
+  # M3.5-T03（RUST-08）：FRB 运行时与 rust 侧 crate、codegen **三处严格同版本**
+  # （=2.13.0，精确锁定不带 ^）；本机 codegen 需先 `cargo install
+  # flutter_rust_bridge_codegen --version 2.13.0` 再 generate。
+  flutter_rust_bridge: 2.13.0
+  # Cargokit glue 包（M3.5-T03）：五平台把 cargo 编译挂进各自构建链；
+  # 无 cargo 时跳过 Rust 编译，运行期探测失败 → 纯 Dart 回落（RUST-07）。
+  rust_lib_mreader:
+    path: rust_builder
 
 dev_dependencies:
   flutter_test:
@@ -91,6 +99,9 @@ dev_dependencies:
   # flutter create 默认生成的 analysis_options.yaml 依赖它。
   # 注意：flutter_lints 的规则文件名是 flutter.yaml（不是 flutter_lints.yaml）。
   flutter_lints: ^6.0.0
+  # FRB 模板建议（M3.5-T03 最小通路验证用；probe 集成测试在 codegen 后接入）。
+  integration_test:
+    sdk: flutter
 
 flutter:
   uses-material-design: true
