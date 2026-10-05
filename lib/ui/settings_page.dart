@@ -39,12 +39,15 @@ import '../ai/ai_client.dart';
 import '../ai/provider_store.dart';
 import '../settings/perf_prefs_store.dart';
 import '../settings/settings_store.dart';
+import '../sync/sync_config_store.dart';
+import '../sync/webdav_client.dart';
 import '../theme/app_theme.dart';
 import 'ai_settings_page.dart';
 import 'glass_kit.dart';
 import 'glass_settings_section.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'settings_kit.dart';
+import 'sync_settings_page.dart';
 
 /// 页面内容的左右留白（卡片与搜索占位对齐同一左边缘）。
 const double _kPageInset = 16;
@@ -58,6 +61,8 @@ class SettingsPage extends StatefulWidget {
     required this.settings,
     required this.aiStore,
     required this.aiClient,
+    this.syncStore,
+    this.syncClient,
   });
 
   /// 性能偏好服务（玻璃质量档位 / 降低视觉特效开关的持久化）。
@@ -71,6 +76,15 @@ class SettingsPage extends StatefulWidget {
 
   /// AI 客户端（注入 AI 设置页的测试连接）。
   final AiClient aiClient;
+
+  /// 同步配置存储（`M4-T01` `SYNC-01`，「同步备份」组入口）。
+  ///
+  /// `null` = 未接线 → 本页同步组整体隐藏（与 `vocabStore` 等可选依赖
+  /// 同款降级口径）。
+  final SyncConfigStore? syncStore;
+
+  /// WebDAV 客户端（注入同步设置页的测试连接）；与 [syncStore] 同进同退。
+  final WebdavClient? syncClient;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -89,12 +103,15 @@ class _SettingsPageState extends State<SettingsPage> {
     super.initState();
     widget.perfPrefs.addListener(_onDepsChanged);
     widget.settings.addListener(_onDepsChanged);
+    // 同步配置可选（`SYNC-01`）：订阅配置增删，「已配置 / 未配置」值不陈旧。
+    widget.syncStore?.addListener(_onDepsChanged);
   }
 
   @override
   void dispose() {
     widget.perfPrefs.removeListener(_onDepsChanged);
     widget.settings.removeListener(_onDepsChanged);
+    widget.syncStore?.removeListener(_onDepsChanged);
     _titleController.dispose();
     super.dispose();
   }
@@ -180,7 +197,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     _buildAppearanceGroup(),
                     _buildAiGroup(),
                     GlassSettingsSection(perfPrefs: widget.perfPrefs),
-                    // 后续分组（同步备份 / RUST-10 加速参数…）在此追加。
+                    _buildSyncGroup(),
+                    // 后续分组（RUST-10 加速参数…）在此追加。
                   ],
                 ),
               ),
@@ -224,6 +242,38 @@ class _SettingsPageState extends State<SettingsPage> {
               builder: (_) => AiSettingsPage(
                 store: widget.aiStore,
                 client: widget.aiClient,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 「同步备份」组（`M4-T01` `SYNC-01`）：进同步设置页（连接配置 / 测试连接）。
+  ///
+  /// [SettingsPage.syncStore] / [SettingsPage.syncClient] 任一为 `null`
+  /// = 未接线 → 本组整体隐藏（既定降级口径，同 `vocabStore`）。
+  Widget _buildSyncGroup() {
+    final SyncConfigStore? syncStore = widget.syncStore;
+    final WebdavClient? syncClient = widget.syncClient;
+    if (syncStore == null || syncClient == null) {
+      return const SizedBox.shrink();
+    }
+    return SettingsGroupCard(
+      header: '同步备份',
+      children: <Widget>[
+        SettingsTile(
+          icon: Icons.sync_outlined,
+          accent: SettingsAccents.blue,
+          title: 'WebDAV 同步',
+          subtitle: '服务器地址 / 账号 / 测试连接',
+          value: syncStore.isConfigured ? '已配置' : '未配置',
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute<void>(
+              builder: (_) => SyncSettingsPage(
+                store: syncStore,
+                client: syncClient,
               ),
             ),
           ),

@@ -22,6 +22,7 @@ import 'platform/app_paths.dart';
 import 'platform/path_provider_app_paths.dart';
 import 'platform/pdf_engine.dart';
 import 'platform/pdfrx_pdf_engine.dart';
+import 'platform/secure_store.dart';
 import 'platform/secure_store_io.dart';
 import 'reader/progress_store.dart';
 import 'settings/perf_frame_monitor.dart';
@@ -30,6 +31,8 @@ import 'settings/settings_store.dart';
 import 'settings/shelf_layout_store.dart';
 import 'settings/shelf_prefs_store.dart';
 import 'stats/stats_service.dart';
+import 'sync/sync_config_store.dart';
+import 'sync/webdav_client.dart';
 import 'tts/online_tts.dart';
 import 'tts/tts_settings.dart';
 import 'ui/glass_runtime.dart';
@@ -72,11 +75,17 @@ Future<void> main() async {
   // M3-T01：AI 底座（`AI-01`/`AI-08`/`AI-09`）——SecureStore（`DATA-02` 明文降级
   // 实现，M4 接系统密钥库）→ 密钥门面 → 配置存储；AiClient 是全 AI 功能共用的
   // 流式 / 取消 / 并发闸出口。三者均为进程内唯一实例。
-  final ProviderStore aiStore = ProviderStore(
-    dataDir,
-    AiKeyVault(FileSecureStore(directory: dataDir)),
-  );
+  // 同一 SecureStore 实例同时供 AI Key（`ai.key.`）与 WebDAV 密码（`sync.password.`）
+  // 两个命名空间使用（`DATA-02`：凭据统一走安全存储，不散落多份实现）。
+  final SecureStore secureStore = FileSecureStore(directory: dataDir);
+  final ProviderStore aiStore = ProviderStore(dataDir, AiKeyVault(secureStore));
   final AiClient aiClient = AiClient();
+  // M4-T01：WebDAV 同步通道（`SYNC-01`/`SYNC-07`）——配置存储（密码经同一
+  // SecureStore 的 `sync.password.` 键）+ 纯 dart:io 客户端；进程内唯一实例，
+  // 测试连接与后续 T02~T06 同步任务复用同一个 client（通道只做一遍）。
+  final SyncConfigStore syncStore =
+      SyncConfigStore(dataDir, SyncPasswordVault(secureStore));
+  final WebdavClient webdavClient = WebdavClient();
   // M3-T02：生词本（`AI-03` ②③）——进程内唯一实例，笔记页 / 生词本页 / 阅读页
   // 释义面板共用；词条数很小，加载并入下面的并行等待（不占冷启动串行）。
   final VocabStore vocabStore = VocabStore(dataDir);
@@ -102,6 +111,7 @@ Future<void> main() async {
     shelfPrefs.load(),
     shelfLayout.load(),
     aiStore.load(),
+    syncStore.load(),
     vocabStore.load(),
     summaryCache.load(),
     ttsSettings.load(),
@@ -165,6 +175,8 @@ Future<void> main() async {
           ragStore: ragIndexStore,
           ttsSettings: ttsSettings,
           onlineTts: onlineTts,
+          syncStore: syncStore,
+          syncClient: webdavClient,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,

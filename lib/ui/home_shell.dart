@@ -45,6 +45,8 @@ import '../settings/settings_store.dart';
 import '../settings/shelf_layout_store.dart';
 import '../settings/shelf_prefs_store.dart';
 import '../stats/stats_service.dart';
+import '../sync/sync_config_store.dart';
+import '../sync/webdav_client.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
 import 'ai_page.dart';
@@ -86,6 +88,8 @@ class HomeShell extends StatefulWidget {
     this.ragStore,
     this.ttsSettings,
     this.onlineTts,
+    this.syncStore,
+    this.syncClient,
   });
 
   /// 书库仓库（书架页）。
@@ -143,6 +147,16 @@ class HomeShell extends StatefulWidget {
   ///
   /// `null` = 未接线：朗读设置面板引擎选择区隐藏、只用系统引擎（同款降级口径）。
   final OnlineTtsStore? onlineTts;
+
+  /// 同步配置存储（设置页「同步备份」组；`M4-T01` `SYNC-01`）。
+  ///
+  /// `null` = 未接线：设置页同步组整体隐藏（同款降级口径）。
+  final SyncConfigStore? syncStore;
+
+  /// WebDAV 客户端（同步设置页测试连接；`M4-T01`）。
+  ///
+  /// `null` = 未接线（与 [syncStore] 同进同退）。
+  final WebdavClient? syncClient;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -216,6 +230,8 @@ class _HomeShellState extends State<HomeShell> {
           settings: widget.settings,
           aiStore: widget.aiStore,
           aiClient: widget.aiClient,
+          syncStore: widget.syncStore,
+          syncClient: widget.syncClient,
         ),
       ];
 
