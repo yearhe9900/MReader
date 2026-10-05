@@ -98,6 +98,7 @@ import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
 import '../task/search_session.dart';
 import '../tts/audio_session.dart';
+import '../tts/online_tts.dart';
 import '../tts/sleep_timer.dart';
 import '../tts/system_tts.dart';
 import '../tts/tts_settings.dart';
@@ -167,6 +168,7 @@ class ReaderPage extends StatefulWidget {
     this.ragStore,
     this.ttsEngine,
     this.ttsSettings,
+    this.onlineTts,
     this.initialJump,
   });
 
@@ -233,6 +235,12 @@ class ReaderPage extends StatefulWidget {
   ///
   /// `null` = 未接线：朗读设置入口隐藏、按默认值运行（同款降级口径）。
   final TtsSettingsStore? ttsSettings;
+
+  /// 在线 TTS 配置存储（URL 模板 / OpenAI 兼容，`TTS-07`；`M3-T09`），
+  /// 组合根透传。
+  ///
+  /// `null` = 未接线：引擎选择区整体隐藏、只用系统引擎（同款降级口径）。
+  final OnlineTtsStore? onlineTts;
 
   /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度，
   /// 段落级对齐。`null` = 按存档进度恢复（正常开书）。
@@ -407,6 +415,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 朗读控制器（懒建：首次点朗读按钮时 [_ensureTts]）。
   TtsController? _tts;
 
+  /// 当前控制器持有的在线引擎实现（引擎切换 / 失败时释放）。
+  OnlineTts? _onlineTtsImpl;
+
+  /// 当前控制器建在在线引擎上（失败提示分流 + 重建判定）。
+  bool _ttsEngineOnline = false;
+
   /// 当前朗读段（`TTS-02` ① 高亮身份；null = 未在朗读）。
   ({int chapterIndex, int paraIndex})? _speaking;
 
@@ -576,6 +590,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final TtsController? tts = _tts;
     _tts = null;
     if (tts != null) unawaited(tts.stop());
+    // 释放在线引擎（`TTS-07`）：HttpClient / 播放器随页收（unawaited 清场）。
+    final OnlineTts? onlineImpl = _onlineTtsImpl;
+    _onlineTtsImpl = null;
+    if (onlineImpl != null) unawaited(onlineImpl.dispose());
     // 撤系统会话（`TTS-03`）：_disposed 闸会拦下 onChanged 里的 end，故在此显式收。
     final TtsAudioSession? ttsAudio = _ttsAudio;
     _ttsAudio = null;
@@ -2974,6 +2992,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           settings: store.value,
           voices: voices,
           onChanged: _onTtsSettingsChanged,
+          onlineTts: widget.onlineTts,
+          aiStore: widget.aiStore,
         ),
       ),
     );
@@ -2985,6 +3005,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final TtsSettingsStore? store = widget.ttsSettings;
     if (store == null) return;
     final TtsSettings prev = store.value;
+    // `TTS-07` 引擎切换：先落盘 + 停掉旧朗读、丢弃控制器——下次开读
+    // [_ensureTts] 按新引擎重建（在线引擎的配置修改同理走重建路径）。
+    if (next.engine != prev.engine) {
+      unawaited(store.setEngine(next.engine));
+      unawaited(_dropTtsController(stopFirst: true));
+    }
     final bool engineChanged = next.rate != prev.rate ||
         next.followSystemRate != prev.followSystemRate ||
         next.voiceName != prev.voiceName ||
@@ -3410,7 +3436,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   // ── 段落朗读（`TTS-01`/`TTS-02`，M3-T06）──────────────────────────────
 
-  /// 取（或首次创建）朗读控制器：引擎注入优先，缺省 [SystemTts]。
+  /// 取（或首次创建）朗读控制器：引擎注入优先，缺省按设置选
+  /// [SystemTts] / [OnlineTts]（`TTS-07`，`M3-T09`）。
   /// 同时懒建系统会话（`TTS-03`）并注入播控回调（通知栏 / 耳机 / 焦点入站口）。
   TtsController _ensureTts() {
     final TtsController? existing = _tts;
@@ -3423,16 +3450,50 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       ..onStop = _ttsStopFromSystem
       ..onSkipToPrevious = (() => _ttsSkipChapter(-1))
       ..onSkipToNext = (() => _ttsSkipChapter(1)));
+    final TtsEngine engine = widget.ttsEngine ?? _buildTtsEngine();
     final TtsController created = TtsController(
-      widget.ttsEngine ?? SystemTts(),
+      engine,
       _ttsLoadChapter,
       _chapters?.length ?? 0,
       onActive: _onTtsActive,
       onError: _onTtsError,
       onChanged: _onTtsChanged,
+      // `TTS-07` ③：在线引擎下载失败 → 暂停留位 + 中文提示（系统引擎保持
+      // 原「停止」语义，开关只在在线分支打开）。
+      pauseOnError: engine is OnlineTts,
     );
     _tts = created;
     return created;
+  }
+
+  /// 按当前设置建引擎实例（`TTS-07`）：设置为在线且配置已接线 → 建
+  /// [OnlineTts] 并记入 [_onlineTtsImpl]（dispose 释放）；否则系统引擎。
+  TtsEngine _buildTtsEngine() {
+    final OnlineTtsStore? onlineStore = widget.onlineTts;
+    final bool useOnline =
+        onlineStore != null &&
+        widget.ttsSettings?.value.engine == TtsEngineKind.online;
+    if (!useOnline) {
+      _ttsEngineOnline = false;
+      return SystemTts();
+    }
+    final OnlineTts impl = OnlineTts(onlineStore);
+    unawaited(_onlineTtsImpl?.dispose()); // 防御：重建前收上一份（正常不会在场）
+    _onlineTtsImpl = impl;
+    _ttsEngineOnline = true;
+    return impl;
+  }
+
+  /// 丢弃当前控制器（引擎切换 / 在线启动失败）：先按需 stop，再释放
+  /// 在线引擎实现——下次 [_ensureTts] 按新设置重建、重跑 init 探测。
+  Future<void> _dropTtsController({bool stopFirst = false}) async {
+    final TtsController? tts = _tts;
+    _tts = null;
+    if (tts != null && stopFirst) await tts.stop();
+    final OnlineTts? impl = _onlineTtsImpl;
+    _onlineTtsImpl = null;
+    if (impl != null) await impl.dispose();
+    _ttsEngineOnline = false;
   }
 
   /// 系统侧「播放」（通知栏 / 耳机键 / 焦点恢复）：暂停中续读；
@@ -3520,13 +3581,16 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final bool ok = await tts.start(from.chapterIndex, from.paraIndex);
     if (!ok) {
       if (mounted && !_disposed) {
-        // PRD §15.3：无语音引擎（Linux 等）必须中文提示，不得静默失败。
+        // PRD §15.3：无语音引擎（Linux 等）必须中文提示，不得静默失败；
+        // `TTS-07` ①：在线引擎失败（未配置 / validate 不过 / init 失败）
+        // 换一条对应文案，并丢弃控制器——下次开读按新配置重建重探测。
         GlassOverlays.showToast(
           context: context,
-          message: '本机未安装语音引擎',
+          message: _ttsEngineOnline ? '在线 TTS 未配置或配置无效' : '本机未安装语音引擎',
           type: GlassToastType.error,
         );
       }
+      if (_ttsEngineOnline) unawaited(_dropTtsController());
       return;
     }
     // `TTS-03`：开系统会话（通知栏 / 锁屏 / 媒体键 / 焦点）。降级档或

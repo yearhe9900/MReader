@@ -50,6 +50,7 @@ import '../reader/reader_page.dart';
 import '../settings/shelf_layout_store.dart';
 import '../settings/shelf_prefs_store.dart';
 import '../stats/stats_service.dart';
+import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
@@ -73,6 +74,7 @@ class ShelfPage extends StatefulWidget {
     this.summaryCache,
     this.ragStore,
     this.ttsSettings,
+    this.onlineTts,
   });
 
   /// 书库仓库。
@@ -116,6 +118,11 @@ class ShelfPage extends StatefulWidget {
   ///
   /// `null` = 未接线：阅读页朗读设置入口隐藏（同款降级口径）。
   final TtsSettingsStore? ttsSettings;
+
+  /// 在线 TTS 配置存储（透传阅读页，`TTS-07`；`M3-T09`）。
+  ///
+  /// `null` = 未接线：面板引擎选择区隐藏、只用系统引擎（同款降级口径）。
+  final OnlineTtsStore? onlineTts;
 
   @override
   State<ShelfPage> createState() => _ShelfPageState();
@@ -465,6 +472,7 @@ class _ShelfPageState extends State<ShelfPage> {
           summaryCache: widget.summaryCache,
           ragStore: widget.ragStore,
           ttsSettings: widget.ttsSettings,
+          onlineTts: widget.onlineTts,
         ),
       );
       // 不 await push 的 Future（它要等路由 pop 才返回）——push 一发起（路由已

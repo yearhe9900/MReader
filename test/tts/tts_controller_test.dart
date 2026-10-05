@@ -189,4 +189,54 @@ void main() {
       expect(engine.spoken, isEmpty);
     });
   });
+
+  group('pauseOnError（TTS-07 ③ 自动暂停）', () {
+    test('开：报错挂起留位当前段 + 中文提示，resume 重读本段', () async {
+      final FakeTtsEngine engine = FakeTtsEngine();
+      final List<String> errors = <String>[];
+      final TtsController tts = TtsController(
+        engine,
+        (int i) async => <String>['甲', '乙'],
+        1,
+        onError: errors.add,
+        pauseOnError: true,
+      );
+
+      expect(await tts.start(0, 0), isTrue);
+      await pumpEventQueue();
+      engine.failCurrent();
+      await pumpEventQueue();
+
+      expect(errors, <String>['朗读出错，已暂停']);
+      expect(tts.isRunning, isTrue); // 会话不收
+      expect(tts.isPaused, isTrue); // 挂起等 resume
+      expect(tts.current, (chapterIndex: 0, paraIndex: 0)); // 留位本段
+      expect(engine.spoken, hasLength(1)); // 未推进「乙」
+
+      await tts.resume();
+      await pumpEventQueue();
+      expect(engine.spoken, <String>['甲', '甲']); // 段首重读
+      await tts.stop();
+    });
+
+    test('关（系统引擎默认语义）：报错即停止（M3-T08 行为不回潮）', () async {
+      final FakeTtsEngine engine = FakeTtsEngine();
+      final List<String> errors = <String>[];
+      final TtsController tts = TtsController(
+        engine,
+        (int i) async => <String>['甲'],
+        1,
+        onError: errors.add,
+      );
+
+      expect(await tts.start(0, 0), isTrue);
+      await pumpEventQueue();
+      engine.failCurrent();
+      await pumpEventQueue();
+
+      expect(errors, <String>['朗读出错，已停止']);
+      expect(tts.isRunning, isFalse);
+      expect(tts.isPaused, isFalse);
+    });
+  });
 }

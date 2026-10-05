@@ -27,6 +27,7 @@ class TtsController {
     this.onDone,
     this.onError,
     this.onChanged,
+    this.pauseOnError = false,
   });
 
   final TtsEngine _engine;
@@ -44,6 +45,10 @@ class TtsController {
 
   /// 运行态任何变化（start / stop / pause / resume / 完结）——UI 刷新按钮。
   final void Function()? onChanged;
+
+  /// 引擎报错时**自动暂停**而非停止（`TTS-07` ③ 在线 TTS：网络失败挂起
+  /// 会话留位当前段，修复后 resume 原地续读；系统引擎保持停止语义）。
+  final bool pauseOnError;
 
   bool _running = false;
   bool _paused = false;
@@ -167,6 +172,14 @@ class TtsController {
           onChanged?.call();
           return;
         case TtsSpeakResult.error:
+          if (pauseOnError) {
+            // `TTS-07` ③：留位当前段挂起（resume 会重读本段），按钮随
+            // onChanged 回「已朗读但暂停」态；提示由 UI 层 toast。
+            _paused = true;
+            onChanged?.call();
+            onError?.call('朗读出错，已暂停');
+            return;
+          }
           _fail('朗读出错，已停止');
           return;
       }

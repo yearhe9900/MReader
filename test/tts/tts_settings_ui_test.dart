@@ -19,10 +19,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
+import 'package:mreader/reader/tts_settings_sheet.dart';
 import 'package:mreader/settings/perf_prefs_store.dart';
+import 'package:mreader/tts/online_tts.dart';
+import 'package:mreader/tts/tts_engine.dart';
 import 'package:mreader/tts/tts_settings.dart';
 import 'package:mreader/ui/glass_runtime.dart';
 import 'package:mreader/ui/glass_scope.dart';
+import 'package:mreader/ui/tts_settings_page.dart';
 
 import '../reader/reader_harness.dart';
 import '../test_config.dart';
@@ -151,6 +155,87 @@ void main() {
       expect(reopened.value.followSystemRate, isTrue);
 
       await closeBook(tester);
+    });
+  });
+
+  group('TTS-07 引擎选择区（面板）', () {
+    late Directory tempDir;
+    late OnlineTtsStore onlineTts;
+
+    setUp(() async {
+      tempDir = Directory.systemTemp.createTempSync('mreader_tts_engine_');
+      onlineTts = OnlineTtsStore(tempDir);
+      await onlineTts.load();
+    });
+
+    tearDown(() {
+      if (tempDir.existsSync()) {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    /// 直接泵面板（Scaffold 给 ChoiceChip 一个 Material 祖先）。
+    Widget sheet({
+      OnlineTtsStore? online,
+      required ValueChanged<TtsSettings> onChanged,
+    }) =>
+        MaterialApp(
+          home: Scaffold(
+            body: TtsSettingsSheet(
+              settings: const TtsSettings(),
+              voices: const <TtsVoice>[],
+              onChanged: onChanged,
+              onlineTts: online,
+            ),
+          ),
+        );
+
+    testWidgets('store 缺席 → 引擎区与配置入口整体隐藏', (tester) async {
+      TtsSettings? got;
+      await tester.pumpWidget(sheet(onChanged: (TtsSettings s) => got = s));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('tts-engine-system')), findsNothing);
+      expect(find.byKey(const Key('tts-engine-online')), findsNothing);
+      expect(find.byKey(const Key('tts-online-config')), findsNothing);
+      expect(find.text('引擎'), findsNothing);
+      expect(got, isNull);
+    });
+
+    testWidgets('chip 切在线引擎回传 engine + 配置入口推进配置页', (tester) async {
+      TtsSettings? got;
+      await tester.pumpWidget(
+        sheet(online: onlineTts, onChanged: (TtsSettings s) => got = s),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('引擎'), findsOneWidget);
+      expect(find.byKey(const Key('tts-engine-system')), findsOneWidget);
+      expect(find.byKey(const Key('tts-engine-online')), findsOneWidget);
+      expect(
+        tester
+            .widget<ChoiceChip>(find.byKey(const Key('tts-engine-system')))
+            .selected,
+        isTrue, // 默认系统引擎
+      );
+
+      await tester.tap(find.byKey(const Key('tts-engine-online')));
+      await tester.pumpAndSettle();
+      expect(got?.engine, TtsEngineKind.online);
+      expect(
+        tester
+            .widget<ChoiceChip>(find.byKey(const Key('tts-engine-online')))
+            .selected,
+        isTrue,
+      );
+
+      // 配置入口 → 在线 TTS 配置页（TTS-07 的「怎么连」表单）。
+      await tester.tap(find.byKey(const Key('tts-online-config')));
+      await tester.pumpAndSettle();
+      await settle(tester, rounds: 10); // initState 读密钥（真 IO）
+      await tester.pumpAndSettle();
+      expect(find.byType(TtsSettingsPage), findsOneWidget);
+      expect(find.text('模式'), findsOneWidget);
     });
   });
 }

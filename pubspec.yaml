@@ -79,6 +79,11 @@ dependencies:
   # 注入 noSuchMethod 空 stub。因直接 import 其类型，提为直接依赖（版本即
   # audio_service 的解析结果，精确锁定不带 ^）。
   flutter_cache_manager: 3.4.5
+  # 在线 TTS 音频播放（`TTS-07`；M3-T09）：播放本地缓存文件 + 播完回调
+  # （引擎据以推进下一段，语义同 flutter_tts 的 completion）。官方自带
+  # Windows / Linux 实现，五平台同包（iOS/macOS/Android 原生）。
+  # 精确锁定 6.8.1（不带 ^）：版本锁定纪律；仅 `lib/tts/online_tts.dart` 引用。
+  audioplayers: 6.8.1
 
 dev_dependencies:
   flutter_test:

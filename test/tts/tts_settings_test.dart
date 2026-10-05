@@ -97,6 +97,44 @@ void main() {
       );
       expect(TtsSettings.fromJson(value.toJson()), value);
     });
+
+    test('engine（TTS-07 双引擎）：默认省略、在线落盘、未知值回系统', () {
+      expect(
+        const TtsSettings().toJson(),
+        <String, Object?>{},
+      );
+      expect(
+        const TtsSettings(engine: TtsEngineKind.online).toJson(),
+        <String, Object?>{'engine': 'online'},
+      );
+      expect(
+        TtsSettings.fromJson(const <String, Object?>{'engine': 'online'}).engine,
+        TtsEngineKind.online,
+      );
+      expect(
+        TtsSettings.fromJson(const <String, Object?>{'engine': 'nope'}).engine,
+        TtsEngineKind.system,
+      );
+      expect(
+        TtsSettings.fromJson(<String, Object?>{'engine': 42}).engine,
+        TtsEngineKind.system,
+      );
+      // copyWith 保留 / 覆盖 engine。
+      expect(
+        const TtsSettings(engine: TtsEngineKind.online).copyWith(rate: 1.0).engine,
+        TtsEngineKind.online,
+      );
+      expect(
+        const TtsSettings().copyWith(engine: TtsEngineKind.online).engine,
+        TtsEngineKind.online,
+      );
+      // roundtrip 含 engine。
+      const TtsSettings withEngine = TtsSettings(
+        engine: TtsEngineKind.online,
+        rate: 0.8,
+      );
+      expect(TtsSettings.fromJson(withEngine.toJson()), withEngine);
+    });
   });
 
   group('TtsSettingsStore 持久化', () {
@@ -171,6 +209,30 @@ void main() {
       store.removeListener(listener);
       await store.setSleepMinutes(60);
       expect(notified, 2);
+    });
+
+    test('setEngine 落盘回读；setVoice 不重置 engine（TTS-07）', () async {
+      final TtsSettingsStore store = TtsSettingsStore(tempDir);
+      await store.load();
+      await store.setEngine(TtsEngineKind.online);
+      expect(store.value.engine, TtsEngineKind.online);
+
+      // 换音色的手构路径不得把 engine 打回 system。
+      await store.setVoice(name: 'zh-fake', locale: 'zh-CN');
+      expect(store.value.engine, TtsEngineKind.online);
+      // 清音色同理。
+      await store.setVoice();
+      expect(store.value.engine, TtsEngineKind.online);
+
+      final TtsSettingsStore reopened = TtsSettingsStore(tempDir);
+      await reopened.load();
+      expect(reopened.value.engine, TtsEngineKind.online);
+
+      await reopened.setEngine(TtsEngineKind.system);
+      expect(reopened.value.engine, TtsEngineKind.system);
+      final TtsSettingsStore again = TtsSettingsStore(tempDir);
+      await again.load();
+      expect(again.value.engine, TtsEngineKind.system);
     });
   });
 }

@@ -13,16 +13,42 @@ import 'dart:io';
 import '../storage/atomic_file.dart';
 import '../storage/json_store.dart';
 
+/// 朗读引擎选择（`TTS-07` 双引擎，PRD §9.1）。
+enum TtsEngineKind {
+  /// 系统 TTS（默认，零配置离线可用）。
+  system('系统 TTS'),
+
+  /// 在线 TTS（配置见 `OnlineTtsStore`；声音不满意时的补救）。
+  online('在线 TTS');
+
+  const TtsEngineKind(this.label);
+
+  /// 中文展示名。
+  final String label;
+
+  /// 由持久化解析；未知值回落系统引擎。
+  static TtsEngineKind tryParse(String? name) {
+    for (final TtsEngineKind k in TtsEngineKind.values) {
+      if (k.name == name) return k;
+    }
+    return TtsEngineKind.system;
+  }
+}
+
 /// 朗读设置值对象（不可变）。
 class TtsSettings {
   /// 创建朗读设置。
   const TtsSettings({
+    this.engine = TtsEngineKind.system,
     this.rate = defaultRate,
     this.followSystemRate = false,
     this.voiceName,
     this.voiceLocale,
     this.sleepMinutes = 0,
   });
+
+  /// 朗读引擎（`TTS-07`；默认系统 TTS）。
+  final TtsEngineKind engine;
 
   /// 语速，flutter_tts 口径 0~1.5（0.5 = 系统正常速；Android 插件
   /// `setSpeechRate(rate * 2)`，故 0.5 → Android 1.0）。越界回退/夹紧。
@@ -65,6 +91,7 @@ class TtsSettings {
   /// （`null` = 不修改）；回到默认音色走 [TtsSettingsStore.setVoice]
   /// 传 `null`，它直接构造新值对象。
   TtsSettings copyWith({
+    TtsEngineKind? engine,
     double? rate,
     bool? followSystemRate,
     String? voiceName,
@@ -72,6 +99,7 @@ class TtsSettings {
     int? sleepMinutes,
   }) {
     return TtsSettings(
+      engine: engine ?? this.engine,
       rate: rate ?? this.rate,
       followSystemRate: followSystemRate ?? this.followSystemRate,
       voiceName: voiceName ?? this.voiceName,
@@ -82,6 +110,7 @@ class TtsSettings {
 
   /// 序列化；等于默认值的键**省略**，保持文件最小形态。
   Map<String, Object?> toJson() => <String, Object?>{
+        if (engine != TtsEngineKind.system) 'engine': engine.name,
         if (rate != defaultRate) 'rate': rate,
         if (followSystemRate) 'followSystemRate': followSystemRate,
         if (voiceName != null) 'voiceName': voiceName,
@@ -94,12 +123,14 @@ class TtsSettings {
     if (json is! Map) {
       return const TtsSettings();
     }
+    final Object? rawEngine = json['engine'];
     final Object? rawRate = json['rate'];
     final Object? rawSleep = json['sleepMinutes'];
     final Object? rawName = json['voiceName'];
     final Object? rawLocale = json['voiceLocale'];
     final Object? rawFollow = json['followSystemRate'];
     return TtsSettings(
+      engine: TtsEngineKind.tryParse(rawEngine is String ? rawEngine : null),
       rate: rawRate is num ? clampRate(rawRate.toDouble()) : defaultRate,
       followSystemRate: rawFollow is bool ? rawFollow : false,
       voiceName: rawName is String && rawName.isNotEmpty ? rawName : null,
@@ -134,6 +165,7 @@ class TtsSettings {
   @override
   bool operator ==(Object other) =>
       other is TtsSettings &&
+      other.engine == engine &&
       other.rate == rate &&
       other.followSystemRate == followSystemRate &&
       other.voiceName == voiceName &&
@@ -142,7 +174,7 @@ class TtsSettings {
 
   @override
   int get hashCode =>
-      Object.hash(rate, followSystemRate, voiceName, voiceLocale, sleepMinutes);
+      Object.hash(engine, rate, followSystemRate, voiceName, voiceLocale, sleepMinutes);
 }
 
 /// 朗读设置持久化服务（进程内共享，显式注入）。
@@ -175,6 +207,14 @@ class TtsSettingsStore {
     _notify();
   }
 
+  /// 设朗读引擎（`TTS-07`：系统 / 在线）。
+  Future<void> setEngine(TtsEngineKind engine) {
+    if (_value.engine == engine) {
+      return Future<void>.value();
+    }
+    return _update(_value.copyWith(engine: engine));
+  }
+
   /// 设语速（自动夹到合法区间）。
   Future<void> setRate(double rate) {
     return _update(_value.copyWith(rate: TtsSettings.clampRate(rate)));
@@ -198,6 +238,7 @@ class TtsSettingsStore {
       }
       return _update(
         TtsSettings(
+          engine: _value.engine,
           rate: _value.rate,
           followSystemRate: _value.followSystemRate,
           voiceName: null,

@@ -30,6 +30,7 @@ import 'settings/settings_store.dart';
 import 'settings/shelf_layout_store.dart';
 import 'settings/shelf_prefs_store.dart';
 import 'stats/stats_service.dart';
+import 'tts/online_tts.dart';
 import 'tts/tts_settings.dart';
 import 'ui/glass_runtime.dart';
 import 'ui/home_shell.dart';
@@ -91,6 +92,9 @@ Future<void> main() async {
   // M3-T08：朗读设置（`TTS-04`/`TTS-05`）——与偏好同一形制（`JsonStore` →
   // `AtomicFile`）、独立文件 `tts_settings.json`；注入书架 → 阅读页。
   final TtsSettingsStore ttsSettings = TtsSettingsStore(dataDir);
+  // M3-T09：在线 TTS 配置（`TTS-07`）——URL 模板 / OpenAI 兼容 + 音频缓存
+  // （`<dataDir>/tts_audio`）；注入书架 → 阅读页，配置页在朗读设置面板内。
+  final OnlineTtsStore onlineTts = OnlineTtsStore(dataDir);
   await Future.wait(<Future<void>>[
     _warmUpGlassShaders(),
     settings.load(),
@@ -101,6 +105,7 @@ Future<void> main() async {
     vocabStore.load(),
     summaryCache.load(),
     ttsSettings.load(),
+    onlineTts.load(),
     highPerf.warmUp(),
   ]);
 
@@ -159,6 +164,7 @@ Future<void> main() async {
           summaryCache: summaryCache,
           ragStore: ragIndexStore,
           ttsSettings: ttsSettings,
+          onlineTts: onlineTts,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,
