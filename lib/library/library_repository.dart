@@ -137,6 +137,18 @@ class LibraryRepository {
     return file.readAsBytes();
   }
 
+  /// 书籍副本文件句柄（**不要求存在**——`SYNC-05` 下载补齐时按同一路径落盘）。
+  ///
+  /// 命名与 [readBookBytes] / [deleteBook] 同一路径口径：`library/{filePath}`。
+  /// 上传与下载以 `filePath` 的 basename 为远端名（引擎内净化），两台设备
+  /// 导入同一文件时同名 → 跨设备可对上（同内容不同文件名时以先传者为准）。
+  Future<File> bookFile(BookRecord record) async {
+    final Directory libDir = await _paths.subDir('library');
+    return File(
+      '${libDir.path}${Platform.pathSeparator}${record.filePath}',
+    );
+  }
+
   /// 取某本书的结构缓存判据（M-PAGE `T06`：`bookId` + library 副本 mtime/size）。
   ///
   /// 副本文件缺失 → `null`（调用方按「不启用缓存」处理）。

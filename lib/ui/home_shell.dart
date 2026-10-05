@@ -39,13 +39,16 @@ import '../ai/summary_cache.dart';
 import '../ai/vocab_store.dart';
 import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
+import '../reader/bookmark_store.dart';
 import '../reader/progress_store.dart';
+import '../reader/reading_prefs_store.dart';
 import '../settings/perf_prefs_store.dart';
 import '../settings/settings_store.dart';
 import '../settings/shelf_layout_store.dart';
 import '../settings/shelf_prefs_store.dart';
 import '../stats/stats_service.dart';
 import '../sync/sync_config_store.dart';
+import '../sync/sync_trigger.dart';
 import '../sync/webdav_client.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
@@ -90,6 +93,9 @@ class HomeShell extends StatefulWidget {
     this.onlineTts,
     this.syncStore,
     this.syncClient,
+    this.bookmarkStore,
+    this.readingPrefsStore,
+    this.syncTrigger,
   });
 
   /// 书库仓库（书架页）。
@@ -158,13 +164,56 @@ class HomeShell extends StatefulWidget {
   /// `null` = 未接线（与 [syncStore] 同进同退）。
   final WebdavClient? syncClient;
 
+  /// 书签存储（阅读页；`M2b-T06` 引入、`M4-T05` 才接上生产链路）。
+  ///
+  /// `null` = 未接线：书签不落库（同款降级口径）。
+  final BookmarkStore? bookmarkStore;
+
+  /// 阅读偏好存储（字号/行距等；同 [bookmarkStore] 接线时点）。
+  final ReadingPrefsStore? readingPrefsStore;
+
+  /// 同步触发器（`M4-T05` `SYNC-06/07`）：启动拉进度、退页/退出上报 +
+  /// 设置页「同步状态与备份」入口。
+  ///
+  /// `null` = 未接线：无自动触发，状态页入口隐藏。
+  final SyncTrigger? syncTrigger;
+
   @override
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   /// 当前底栏下标。
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // `SYNC-06`：App 启动 → 仅拉进度（条目/书籍不拉，PRD §10.4）。
+    final SyncTrigger? trigger = widget.syncTrigger;
+    if (trigger != null) {
+      unawaited(trigger.onAppStart());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // `SYNC-06`：退到后台/退出 → 上报全部变更 + 备份间隔判定。
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      final SyncTrigger? trigger = widget.syncTrigger;
+      if (trigger != null) {
+        unawaited(trigger.onAppExit());
+      }
+    }
+  }
 
   /// 底栏标签（顺序即下标语义，**勿任意重排**）。
   static const List<GlassTab> _tabs = <GlassTab>[
@@ -214,6 +263,9 @@ class _HomeShellState extends State<HomeShell> {
           ragStore: widget.ragStore,
           ttsSettings: widget.ttsSettings,
           onlineTts: widget.onlineTts,
+          bookmarkStore: widget.bookmarkStore,
+          readingPrefsStore: widget.readingPrefsStore,
+          syncTrigger: widget.syncTrigger,
         ),
         StatsPage(service: widget.statsService, repository: widget.repository),
         const AiPage(),
@@ -232,6 +284,7 @@ class _HomeShellState extends State<HomeShell> {
           aiClient: widget.aiClient,
           syncStore: widget.syncStore,
           syncClient: widget.syncClient,
+          syncTrigger: widget.syncTrigger,
         ),
       ];
 
@@ -252,6 +305,9 @@ class _HomeShellState extends State<HomeShell> {
           ragStore: widget.ragStore,
           ttsSettings: widget.ttsSettings,
           onlineTts: widget.onlineTts,
+          bookmarkStore: widget.bookmarkStore,
+          readingPrefsStore: widget.readingPrefsStore,
+          syncTrigger: widget.syncTrigger,
         ),
       ),
     );

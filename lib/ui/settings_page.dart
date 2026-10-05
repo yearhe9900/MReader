@@ -40,6 +40,7 @@ import '../ai/provider_store.dart';
 import '../settings/perf_prefs_store.dart';
 import '../settings/settings_store.dart';
 import '../sync/sync_config_store.dart';
+import '../sync/sync_trigger.dart';
 import '../sync/webdav_client.dart';
 import '../theme/app_theme.dart';
 import 'ai_settings_page.dart';
@@ -48,6 +49,7 @@ import 'glass_settings_section.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'settings_kit.dart';
 import 'sync_settings_page.dart';
+import 'sync_status_page.dart';
 
 /// 页面内容的左右留白（卡片与搜索占位对齐同一左边缘）。
 const double _kPageInset = 16;
@@ -63,6 +65,7 @@ class SettingsPage extends StatefulWidget {
     required this.aiClient,
     this.syncStore,
     this.syncClient,
+    this.syncTrigger,
   });
 
   /// 性能偏好服务（玻璃质量档位 / 降低视觉特效开关的持久化）。
@@ -85,6 +88,11 @@ class SettingsPage extends StatefulWidget {
 
   /// WebDAV 客户端（注入同步设置页的测试连接）；与 [syncStore] 同进同退。
   final WebdavClient? syncClient;
+
+  /// 同步触发器（`M4-T05` `SYNC-06/07`）：「同步状态与备份」页入口。
+  ///
+  /// `null` = 未接线 → 该入口不渲染（同步组其余入口不受影响）。
+  final SyncTrigger? syncTrigger;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -257,6 +265,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget _buildSyncGroup() {
     final SyncConfigStore? syncStore = widget.syncStore;
     final WebdavClient? syncClient = widget.syncClient;
+    final SyncTrigger? syncTrigger = widget.syncTrigger;
     if (syncStore == null || syncClient == null) {
       return const SizedBox.shrink();
     }
@@ -278,6 +287,20 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
         ),
+        // 「同步状态与备份」（`M4-T05`）：手动同步/备份/恢复 + 失败清单（`SYNC-07`）。
+        if (syncTrigger != null)
+          SettingsTile(
+            icon: Icons.cloud_sync_outlined,
+            accent: SettingsAccents.blue,
+            title: '同步状态与备份',
+            subtitle: '立即同步 / 备份 / 从云端恢复',
+            value: syncTrigger.isRunning ? '同步中' : '查看',
+            onTap: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => SyncStatusPage(trigger: syncTrigger),
+              ),
+            ),
+          ),
       ],
     );
   }

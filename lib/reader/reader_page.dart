@@ -96,6 +96,7 @@ import '../library/book_record.dart';
 import '../library/library_repository.dart';
 import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
+import '../sync/sync_trigger.dart';
 import '../task/search_session.dart';
 import '../tts/audio_session.dart';
 import '../tts/online_tts.dart';
@@ -169,6 +170,7 @@ class ReaderPage extends StatefulWidget {
     this.ttsEngine,
     this.ttsSettings,
     this.onlineTts,
+    this.syncTrigger,
     this.initialJump,
   });
 
@@ -241,6 +243,11 @@ class ReaderPage extends StatefulWidget {
   ///
   /// `null` = 未接线：引擎选择区整体隐藏、只用系统引擎（同款降级口径）。
   final OnlineTtsStore? onlineTts;
+
+  /// 同步触发器（`M4-T05` `SYNC-06`）：退出阅读页时上报本书进度。
+  ///
+  /// `null` = 未接线：关页只落本地盘（同款降级口径）。
+  final SyncTrigger? syncTrigger;
 
   /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度，
   /// 段落级对齐。`null` = 按存档进度恢复（正常开书）。
@@ -599,7 +606,16 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _ttsAudio = null;
     if (ttsAudio != null) unawaited(ttsAudio.end());
     _finishSession(); // 退出阅读页：停止计时并落库（`STAT-01`；写库只在此与切后台）
-    unawaited(_saveProgress());
+    // 先落盘再上报（`SYNC-06`）：进度写完才触发同步，避免云端拿到旧值。
+    final SyncTrigger? trigger = widget.syncTrigger;
+    final Future<void> saved = _saveProgress();
+    if (trigger == null) {
+      unawaited(saved);
+    } else {
+      unawaited(
+        saved.whenComplete(() => trigger.onReaderClosed(widget.record)),
+      );
+    }
     _imageCache.dispose();
     _controller?.dispose();
     unawaited(widget.source.dispose());
@@ -614,6 +630,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       _finishSession();
+      // 切后台也落一次进度（`SYNC-06` 退出 App 上报的真值别停在上次关页）。
+      unawaited(_saveProgress());
     } else if (state == AppLifecycleState.resumed &&
         _tracker == null &&
         !_disposed) {

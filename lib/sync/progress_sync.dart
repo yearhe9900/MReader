@@ -49,17 +49,18 @@ String _safeSegment(String raw) {
   return cleaned.isEmpty ? '未知' : cleaned;
 }
 
-/// 本地「同步时间」总账——`SYNC-02` 步骤① 闸门的本地事实源。
+/// 本地「同步时间 / 备份时间」总账——`SYNC-02` 步骤① 闸门的本地事实源，
+/// 兼 `SYNC-06` 「距上次全量备份 N 天」的间隔账（`M4-T05`）。
 ///
 /// 落盘 `<dataDir>/sync_state.json`（形制同 `SyncConfigStore`：
 /// [JsonStore] → [AtomicFile]，`DATA-01` 原子写入），结构：
 /// ```json
-/// { "progress": { "<bookId>": <Unix 毫秒> } }
+/// { "progress": { "<bookId>": <Unix 毫秒> }, "lastBackupAt": <Unix 毫秒> }
 /// ```
-/// 顶层留扩展位（`M4-T05` 的「上次全量备份时间」等并列新键即可，勿改形制）。
+/// 顶层键并列扩展（`lastBackupAt` 从未备份时不落该键，旧文件读取兼容）。
 ///
-/// 语义：该 bookId 上次**与远端完成一次同步交互**（上传 / 下载 / 判同）
-/// 的时刻；从未同步为 0。跳过（远端更旧）**不更新**——否则闸门会把
+/// progress 语义：该 bookId 上次**与远端完成一次同步交互**（上传 / 下载 /
+/// 判同）的时刻；从未同步为 0。跳过（远端更旧）**不更新**——否则闸门会把
 /// 「远端之后的新版本」也一并跳过。
 class ProgressSyncState {
   /// 用数据目录构造（组合根注入，见 `lib/main.dart`）。
@@ -74,6 +75,9 @@ class ProgressSyncState {
 
   /// bookId → 上次同步时间（Unix 毫秒）。
   final Map<String, int> _syncedAt = <String, int>{};
+
+  /// 上次**成功**全量备份时间（Unix 毫秒）；0 = 从未备份（立即到期）。
+  int _lastBackupAt = 0;
 
   bool _loaded = false;
 
@@ -91,19 +95,39 @@ class ProgressSyncState {
         }
       }
     }
+    if (json is Map && json['lastBackupAt'] is num) {
+      _lastBackupAt = (json['lastBackupAt'] as num).toInt();
+    }
     _loaded = true;
   }
 
   /// 某本书的上次同步时间；从未同步返 `0`。
   int syncedAt(String bookId) => _syncedAt[bookId] ?? 0;
 
+  /// 上次成功全量备份时间（Unix 毫秒）；从未备份返 `0`。
+  ///
+  /// 调用前先 [load]（触发编排在到期判定处统一加载，`M4-T05`）。
+  int get lastBackupAt => _lastBackupAt;
+
   /// 记录 [bookId] 刚完成一次同步（[atMs] = Unix 毫秒）并落盘。
   Future<void> markSynced(String bookId, int atMs) async {
     _syncedAt[bookId] = atMs;
-    await _store.write(<String, Object?>{
-      'progress': <String, Object?>{..._syncedAt},
-    });
+    await _flush();
   }
+
+  /// 记录刚完成一次**成功**的全量备份（[atMs] = Unix 毫秒）并落盘。
+  ///
+  /// 失败的备份**不记账**——下一次触发立即重试（`SYNC-06` ③ 只约束成功间隔）。
+  Future<void> markBackup(int atMs) async {
+    _lastBackupAt = atMs;
+    await _flush();
+  }
+
+  /// 全量写回（两个顶层键同写：任一更新都不丢另一键的现值）。
+  Future<void> _flush() => _store.write(<String, Object?>{
+        'progress': <String, Object?>{..._syncedAt},
+        if (_lastBackupAt > 0) 'lastBackupAt': _lastBackupAt,
+      });
 }
 
 /// 单本书的同步动作（`SYNC-02` 双向收敛的结果分类）。
