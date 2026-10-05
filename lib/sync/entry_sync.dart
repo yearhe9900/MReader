@@ -5,12 +5,13 @@
 //   · [mergeById]：通用并集合并（纯函数，零 IO）；
 //   · [byContent]：同 key 冲突的对称裁决器；
 //   · [IndexSync]：书库索引 `library/index.json` 的同步（本机制的首个消费者；
-//     `M4-T06` 统计并集将复用 [mergeById]，`M4-T05` 触发编排调各引擎入口）；
-//   · [requireWebdav] / [RemoteDirCache]：三个同步引擎共用的连接与目录确保件。
+//     `M4-T06` 统计并集已复用 [mergeById]，`M4-T05` 触发编排调各引擎入口）；
+//   · [requireWebdav] / [RemoteDirCache]：各同步引擎共用的连接与目录确保件。
 //
 // 远端路径约定（PRD §10.3 只点名 `bookProgress/`，本批补齐其余，命名贴本地布局）：
 //   · 书签 `bookmarks/{bookId}.json`（每本一文件，与本地 `bookmarks/` 同构）；
-//   · 设置 `settings/reading_prefs.json`；索引 `library/index.json`（单文件）。
+//   · 设置 `settings/reading_prefs.json`；索引 `library/index.json`（单文件）；
+//   · 统计 `stats/sessions-YYYY-MM.json`（按月分片，`M4-T06` 镜像本地布局）。
 //
 // 范围注记（诚实降级，`NF-C8`）：「笔记」当前只有占位页、无存储，待落地后
 // 并入 [mergeById] 同机制；书签**删除不跨设备传播**（并集语义下无墓碑，PRD
@@ -202,7 +203,7 @@ class EntrySyncOutcome {
   });
 
   /// 集合标识（远端路径：`bookmarks/<bookId>` / `settings/reading_prefs` /
-  /// `library/index`）。
+  /// `library/index` / `stats`）。
   final String collection;
 
   /// 本地是否发生写入。

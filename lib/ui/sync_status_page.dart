@@ -10,6 +10,8 @@
 //     手动重试成功）；未配置 / 未运行给引导文案；
 //   · 「手动操作」：立即同步 / 立即备份 / 从云端恢复（PRD §10.4 手动行），
 //     卡片脚注说明三个自动触发时机与备份间隔；
+//   · 「统计数据」：同步阅读统计开关（`STAT-08` ③ 默认开，落
+//     `stats_sync.json`；关闭 = 零请求，不影响其余同步项）；
 //   · 「书籍文件」：上传开关（`SYNC-05` ① 默认关，落 `book_upload.json`）+
 //     上传全部书籍 / 下载缺失书籍（`SYNC-05` ②③：进行中显示逐本进度与字节
 //     进度，可取消）。
@@ -79,7 +81,10 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
 
   /// 异步预取（initState 不能 await；完成后补一帧）。
   void _loadPrefsQuietly() {
-    widget.trigger.uploadPrefs.load().then((void _) {
+    Future.wait(<Future<void>>[
+      widget.trigger.uploadPrefs.load(),
+      widget.trigger.statsPrefs.load(),
+    ]).then((_) {
       if (mounted) setState(() {});
     });
   }
@@ -230,6 +235,13 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
     if (mounted) setState(() {});
   }
 
+  /// 切换统计同步开关（`STAT-08` ③：默认开，落 `stats_sync.json`；关闭判定
+  /// 在引擎入口先于一切请求 = 零请求，且不影响其余同步项）。
+  Future<void> _toggleStats(bool value) async {
+    await widget.trigger.statsPrefs.setEnabled(value);
+    if (mounted) setState(() {});
+  }
+
   /// 上传全部书籍。
   Future<void> _runUpload() => _runBooks(upload: true);
 
@@ -368,6 +380,7 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
           children: <Widget>[
             _buildStatusGroup(),
             _buildManualGroup(),
+            _buildStatsGroup(),
             _buildBooksGroup(),
           ],
         ),
@@ -494,6 +507,27 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
                 )
               : null,
           onTap: busy ? null : _restoreFlow,
+        ),
+      ],
+    );
+  }
+
+  /// 「统计数据」组（`STAT-08` ③：默认开、可单独关闭；关闭 = 零请求）。
+  Widget _buildStatsGroup() {
+    final bool enabled = widget.trigger.statsPrefs.enabled;
+    return SettingsGroupCard(
+      header: '统计数据',
+      footer: '阅读时长按会话并集合并到云端（同一条会话取较大时长），默认开启。'
+          '关闭后统计不再同步到云端，进度、书签、设置与备份的同步不受影响。',
+      children: <Widget>[
+        SettingsTile(
+          icon: Icons.timer_outlined,
+          accent: SettingsAccents.orange,
+          title: '同步阅读统计',
+          subtitle:
+              enabled ? '已开启：阅读时长记录会与云端合并' : '已关闭：阅读统计仅保留在本机',
+          trailing: Switch(value: enabled, onChanged: _toggleStats),
+          onTap: () => _toggleStats(!enabled),
         ),
       ],
     );

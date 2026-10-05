@@ -1,5 +1,6 @@
-// `M4-T05`：同步状态与手动操作页 widget 测试（`SYNC-07` 失败可见 + 重试 /
-// §10.4 手动三行 / `SYNC-05` 开关默认关且落盘 / 设置页入口接线）。
+// `M4-T05`/`M4-T06`：同步状态与手动操作页 widget 测试（`SYNC-07` 失败可见 +
+// 重试 / §10.4 手动三行 / `STAT-08` ③ 统计开关默认开且落盘 / `SYNC-05` 开关
+// 默认关且落盘 / 设置页入口接线）。
 //
 // 三条口径（同 `sync_settings_page_test`）：
 //   ① 宿主钉「关」档（玻璃浮层在软件光栅下开销大）；
@@ -23,6 +24,8 @@ import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reading_prefs_store.dart';
 import 'package:mreader/settings/perf_prefs_store.dart';
 import 'package:mreader/settings/settings_store.dart';
+import 'package:mreader/stats/session_store.dart';
+import 'package:mreader/stats/stats_sync.dart';
 import 'package:mreader/sync/backup.dart';
 import 'package:mreader/sync/book_upload.dart';
 import 'package:mreader/sync/bookmark_sync.dart';
@@ -36,6 +39,7 @@ import 'package:mreader/sync/sync_trigger.dart';
 import 'package:mreader/sync/webdav_client.dart';
 import 'package:mreader/ui/glass_runtime.dart';
 import 'package:mreader/ui/glass_scope.dart';
+import 'package:mreader/ui/settings_kit.dart';
 import 'package:mreader/ui/settings_page.dart';
 import 'package:mreader/ui/sync_status_page.dart';
 
@@ -137,6 +141,7 @@ void main() {
   late SyncConfigStore configStore;
   late _FakeDav fake;
   late BookUploadPrefsStore uploadPrefs;
+  late StatsSyncPrefsStore statsPrefs;
   late SyncTrigger trigger;
 
   setUp(() async {
@@ -151,6 +156,8 @@ void main() {
     fake = _FakeDav();
     uploadPrefs = BookUploadPrefsStore(dir);
     await uploadPrefs.load();
+    statsPrefs = StatsSyncPrefsStore(dir);
+    await statsPrefs.load();
     final ProgressSyncState state = ProgressSyncState(dir);
     trigger = SyncTrigger(
       progressEngine: ProgressSyncEngine(
@@ -174,6 +181,12 @@ void main() {
         prefsStore: ReadingPrefsStore(paths),
         configStore: configStore,
       ),
+      statsEngine: StatsSync(
+        client: fake,
+        sessionStore: SessionStore(paths),
+        configStore: configStore,
+        prefs: statsPrefs,
+      ),
       backupEngine: BackupEngine(
         paths: paths,
         client: fake,
@@ -190,6 +203,7 @@ void main() {
         configStore: configStore,
       ),
       uploadPrefsStore: uploadPrefs,
+      statsPrefsStore: statsPrefs,
       syncState: state,
       syncConfig: configStore,
       booksLoader: () async => <BookRecord>[_book],
@@ -222,6 +236,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 10));
     }
   }
+
+  /// 按行标题定位该行内的 Switch（页面有多个开关后 `find.byType` 不唯一）。
+  Finder switchOf(String title) => find.descendant(
+        of: find.ancestor(
+          of: find.text(title),
+          matching: find.byType(SettingsTile),
+        ),
+        matching: find.byType(Switch),
+      );
 
   Widget buildApp() => host(GlassQualityTier.off, SyncStatusPage(trigger: trigger));
 
@@ -306,19 +329,19 @@ void main() {
       expect(find.textContaining('默认关闭（不传书籍本体）'), findsOneWidget);
       expect(uploadPrefs.enabled, isFalse);
       expect(
-        tester.widget<Switch>(find.byType(Switch)).value,
+        tester.widget<Switch>(switchOf('上传书籍文件')).value,
         isFalse,
         reason: '开关默认关',
       );
 
-      await tester.tap(find.byType(Switch));
+      await tester.tap(switchOf('上传书籍文件'));
       // 落盘链（exists → write flush → rename ×2）在 fake zone 里逐步推进，
       // 每步要占一个 runAsync 窗口 → 用默认 40 轮排空后再断言。
       await settleReal(tester);
 
       expect(uploadPrefs.enabled, isTrue);
       expect(
-        tester.widget<Switch>(find.byType(Switch)).value,
+        tester.widget<Switch>(switchOf('上传书籍文件')).value,
         isTrue,
         reason: 'UI 已重建（setState 落到帧上）',
       );
@@ -327,6 +350,38 @@ void main() {
       final BookUploadPrefsStore reopened = BookUploadPrefsStore(dir);
       await tester.runAsync(() => reopened.load());
       expect(reopened.enabled, isTrue, reason: '开关持久化');
+    });
+  });
+
+  group('统计数据组（`STAT-08` ③ 默认开 + 落盘）', () {
+    testWidgets('初始开启；关闭 → 已关闭并持久化到 stats_sync.json',
+        (WidgetTester tester) async {
+      tall(tester);
+      await tester.pumpWidget(buildApp());
+      await settleReal(tester, rounds: 6);
+
+      expect(find.text('统计数据'), findsOneWidget);
+      expect(statsPrefs.enabled, isTrue, reason: '默认开启（缺失即 true）');
+      expect(
+        tester.widget<Switch>(switchOf('同步阅读统计')).value,
+        isTrue,
+        reason: '开关默认开',
+      );
+
+      await tester.tap(switchOf('同步阅读统计'));
+      await settleReal(tester);
+
+      expect(statsPrefs.enabled, isFalse);
+      expect(
+        tester.widget<Switch>(switchOf('同步阅读统计')).value,
+        isFalse,
+        reason: 'UI 已重建',
+      );
+      expect(find.text('已关闭：阅读统计仅保留在本机'), findsOneWidget);
+      // 新实例读盘验证真的落了 stats_sync.json。
+      final StatsSyncPrefsStore reopened = StatsSyncPrefsStore(dir);
+      await tester.runAsync(() => reopened.load());
+      expect(reopened.enabled, isFalse, reason: '开关持久化');
     });
   });
 

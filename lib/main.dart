@@ -33,7 +33,9 @@ import 'settings/perf_prefs_store.dart';
 import 'settings/settings_store.dart';
 import 'settings/shelf_layout_store.dart';
 import 'settings/shelf_prefs_store.dart';
+import 'stats/session_store.dart';
 import 'stats/stats_service.dart';
+import 'stats/stats_sync.dart';
 import 'sync/backup.dart';
 import 'sync/book_upload.dart';
 import 'sync/bookmark_sync.dart';
@@ -118,6 +120,9 @@ Future<void> main() async {
   // M4-T05：书籍上传开关（`SYNC-05` ① 默认关）——与其余偏好同一形制，
   // 独立文件 `book_upload.json`；加载并入下面的并行等待。
   final BookUploadPrefsStore bookUploadPrefs = BookUploadPrefsStore(dataDir);
+  // M4-T06：阅读统计同步开关（`STAT-08` ③ 默认开）——同一形制、独立文件
+  // `stats_sync.json`（缺失即开，fail-open）；加载并入下面的并行等待。
+  final StatsSyncPrefsStore statsSyncPrefs = StatsSyncPrefsStore(dataDir);
   await Future.wait(<Future<void>>[
     _warmUpGlassShaders(),
     settings.load(),
@@ -131,6 +136,7 @@ Future<void> main() async {
     ttsSettings.load(),
     onlineTts.load(),
     bookUploadPrefs.load(),
+    statsSyncPrefs.load(),
     highPerf.warmUp(),
   ]);
 
@@ -165,7 +171,7 @@ Future<void> main() async {
   final StatsService statsService = StatsService(appPaths);
 
   // M4-T05（`SYNC-06`/`SYNC-07`）：同步编排链——书签 / 阅读偏好存储先落
-  // （阅读页与条目同步共用同一实例），五个引擎 + 触发器全部由组合根构造，
+  // （阅读页与条目同步共用同一实例），六个引擎 + 触发器全部由组合根构造，
   // 进程内唯一实例。触发器挂在 HomeShell 生命周期上（启动拉进度、退页 /
   // 退 App 上报），入口页是设置页「同步状态与备份」。
   final BookmarkStore bookmarkStore = BookmarkStore(appPaths);
@@ -193,6 +199,14 @@ Future<void> main() async {
     prefsStore: readingPrefsStore,
     configStore: syncStore,
   );
+  // M4-T06（`STAT-08`）：阅读统计跨设备并集同步——远端 `stats/` 按月分片镜像
+  // 本地 SessionStore；开关默认开（缺失即 true），判定先于一切网络请求。
+  final StatsSync statsSync = StatsSync(
+    client: webdavClient,
+    sessionStore: SessionStore(appPaths),
+    configStore: syncStore,
+    prefs: statsSyncPrefs,
+  );
   final BackupEngine backupEngine = BackupEngine(
     paths: appPaths,
     client: webdavClient,
@@ -213,10 +227,12 @@ Future<void> main() async {
     indexEngine: indexSync,
     bookmarkEngine: bookmarkSync,
     settingsEngine: settingsSync,
+    statsEngine: statsSync,
     backupEngine: backupEngine,
     restoreEngine: restoreEngine,
     bookUploadEngine: bookUploadEngine,
     uploadPrefsStore: bookUploadPrefs,
+    statsPrefsStore: statsSyncPrefs,
     syncState: progressSyncState,
     syncConfig: syncStore,
     booksLoader: repository.loadBooks,

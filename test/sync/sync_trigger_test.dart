@@ -17,6 +17,8 @@ import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reading_prefs.dart';
 import 'package:mreader/reader/reading_prefs_store.dart';
 import 'package:mreader/reader/reading_progress.dart';
+import 'package:mreader/stats/session_store.dart';
+import 'package:mreader/stats/stats_sync.dart';
 import 'package:mreader/sync/backup.dart';
 import 'package:mreader/sync/book_upload.dart';
 import 'package:mreader/sync/bookmark_sync.dart';
@@ -65,6 +67,7 @@ void main() {
   late BookmarkStore bookmarkStore;
   late ReadingPrefsStore prefsStore;
   late BookUploadPrefsStore uploadPrefs;
+  late StatsSyncPrefsStore statsPrefs;
   late SyncTrigger trigger;
   late DateTime now;
   late Future<List<BookRecord>> Function() loader;
@@ -92,6 +95,8 @@ void main() {
     prefsStore = ReadingPrefsStore(paths);
     uploadPrefs = BookUploadPrefsStore(tempDir);
     await uploadPrefs.load();
+    statsPrefs = StatsSyncPrefsStore(tempDir);
+    await statsPrefs.load();
     now = DateTime(2026, 10, 5, 12);
     loader = () async => <BookRecord>[_book];
     trigger = SyncTrigger(
@@ -116,6 +121,12 @@ void main() {
         prefsStore: prefsStore,
         configStore: configStore,
       ),
+      statsEngine: StatsSync(
+        client: client,
+        sessionStore: SessionStore(paths),
+        configStore: configStore,
+        prefs: statsPrefs,
+      ),
       backupEngine: BackupEngine(
         paths: paths,
         client: client,
@@ -132,6 +143,7 @@ void main() {
         configStore: configStore,
       ),
       uploadPrefsStore: uploadPrefs,
+      statsPrefsStore: statsPrefs,
       syncState: state,
       syncConfig: configStore,
       booksLoader: () => loader(),
@@ -254,7 +266,7 @@ void main() {
 
       expect(report.scope, SyncRunReport.scopeAppExit);
       expect(report.ok, isTrue, reason: '全部成功');
-      expect(report.entries, hasLength(3), reason: '索引 + 设置 + 1 本书签');
+      expect(report.entries, hasLength(4), reason: '索引 + 设置 + 1 本书签 + 统计');
       expect(
         dav.calls.where((String c) => c.startsWith('PUT /mreader/bookProgress')),
         hasLength(1),
@@ -340,7 +352,7 @@ void main() {
       final SyncRunReport manual = await trigger.syncNow();
       expect(manual.scope, SyncRunReport.scopeManual);
       expect(manual.ok, isTrue);
-      expect(manual.entries, hasLength(3), reason: '索引 + 设置 + 本书书签');
+      expect(manual.entries, hasLength(4), reason: '索引 + 设置 + 本书书签 + 统计');
       expect(manual.backup, isNull, reason: '「立即同步」不含备份');
 
       final BackupOutcome backup = await trigger.backupNow();

@@ -3,7 +3,7 @@
 // 触发时机（PRD §10.4）：
 //   · App 启动     → 拉取进度（**仅进度**，不拉条目与书籍）；
 //   · 退出阅读页   → 上报当前书进度 + 全量备份到期判定；
-//   · 退出 App     → 上报全部变更（进度 + 索引 / 书签 / 设置）+ 备份到期判定；
+//   · 退出 App     → 上报全部变更（进度 + 索引 / 书签 / 设置 / 统计）+ 备份到期判定；
 //   · 手动（状态页）→ [syncNow] / [backupNow] / [listBackups] + [restoreFrom]、
 //                     [uploadBooks] / [downloadMissingBooks]（`SYNC-05` 手动入口）。
 //
@@ -27,6 +27,7 @@
 import 'dart:io';
 
 import '../library/book_record.dart';
+import '../stats/stats_sync.dart';
 import 'backup.dart';
 import 'bookmark_sync.dart';
 import 'book_upload.dart';
@@ -90,7 +91,7 @@ class SyncRunReport {
   /// 进度同步汇总（本范围含进度同步时非空）。
   final ProgressSyncReport? progress;
 
-  /// 条目同步结果（索引 / 书签 / 设置；启动范围为空——仅拉进度）。
+  /// 条目同步结果（索引 / 书签 / 设置 / 统计；启动范围为空——仅拉进度）。
   final List<EntrySyncOutcome> entries;
 
   /// 本范围内的全量备份结果（未到期为 `null` 且 [backupSkipped] = true）。
@@ -158,10 +159,12 @@ class SyncTrigger {
     required IndexSync indexEngine,
     required BookmarkSync bookmarkEngine,
     required SettingsSync settingsEngine,
+    required StatsSync statsEngine,
     required BackupEngine backupEngine,
     required RestoreEngine restoreEngine,
     required BookUploadEngine bookUploadEngine,
     required BookUploadPrefsStore uploadPrefsStore,
+    required StatsSyncPrefsStore statsPrefsStore,
     required ProgressSyncState syncState,
     required SyncConfigStore syncConfig,
     required Future<List<BookRecord>> Function() booksLoader,
@@ -172,10 +175,12 @@ class SyncTrigger {
         _index = indexEngine,
         _bookmarks = bookmarkEngine,
         _settings = settingsEngine,
+        _stats = statsEngine,
         _backup = backupEngine,
         _restore = restoreEngine,
         _bookUpload = bookUploadEngine,
         _uploadPrefs = uploadPrefsStore,
+        _statsPrefs = statsPrefsStore,
         _state = syncState,
         _configStore = syncConfig,
         _loadBooks = booksLoader,
@@ -187,10 +192,12 @@ class SyncTrigger {
   final IndexSync _index;
   final BookmarkSync _bookmarks;
   final SettingsSync _settings;
+  final StatsSync _stats;
   final BackupEngine _backup;
   final RestoreEngine _restore;
   final BookUploadEngine _bookUpload;
   final BookUploadPrefsStore _uploadPrefs;
+  final StatsSyncPrefsStore _statsPrefs;
   final ProgressSyncState _state;
   final SyncConfigStore _configStore;
   final Future<List<BookRecord>> Function() _loadBooks;
@@ -221,6 +228,9 @@ class SyncTrigger {
 
   /// 书籍上传开关存储（`SYNC-05` ① 的「单独开关」，状态页直接读写）。
   BookUploadPrefsStore get uploadPrefs => _uploadPrefs;
+
+  /// 统计同步开关存储（`STAT-08` ③ 的「单独开关」，状态页直接读写）。
+  StatsSyncPrefsStore get statsPrefs => _statsPrefs;
 
   /// 自动全量备份间隔（状态页说明文案用）。
   Duration get backupInterval => _interval;
@@ -290,8 +300,8 @@ class SyncTrigger {
     }
   }
 
-  /// 退出 App（`SYNC-06` ②）：上报全部变更（进度 + 索引 / 书签 / 设置）+
-  /// 备份到期判定。
+  /// 退出 App（`SYNC-06` ②）：上报全部变更（进度 + 索引 / 书签 / 设置 /
+  /// 统计）+ 备份到期判定。
   Future<SyncRunReport> onAppExit() async {
     final SyncRunReport? blocked = _blocked(SyncRunReport.scopeAppExit);
     if (blocked != null) {
@@ -525,7 +535,7 @@ class SyncTrigger {
     }
   }
 
-  /// 条目三件套（索引 / 设置 / 书签；启动范围**不**调用——仅拉进度）。
+  /// 条目 + 统计（索引 / 设置 / 书签 / 统计；启动范围**不**调用——仅拉进度）。
   Future<List<EntrySyncOutcome>> _syncEntries(
     List<BookRecord> books,
   ) async {
@@ -534,7 +544,8 @@ class SyncTrigger {
     final EntrySyncReport bookmarks = await _bookmarks.syncAll(
       bookIds: <String>[for (final BookRecord b in books) b.bookId],
     );
-    return <EntrySyncOutcome>[index, settings, ...bookmarks.outcomes];
+    final EntrySyncOutcome stats = await _stats.sync();
+    return <EntrySyncOutcome>[index, settings, ...bookmarks.outcomes, stats];
   }
 
   /// 备份到期判定（`SYNC-06` ③）：未到期返 `null`；到期执行并记账。

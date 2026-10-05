@@ -16,6 +16,9 @@
 //
 // 聚合：[loadIndex] 一次性加载全部分片并建立 `day_key` / `book_id` 两组内存
 // 索引（[StatsIndex]，单遍扫描）——4 万条量级下毫秒级，实测见 `tool/stats_bench.dart`。
+//
+// `M4-T06`：[shardKeyOf] / [isShardName] / [byStart] 为公开静态——统计同步
+// （`stats/stats_sync.dart`）复用同一套分片命名与排序口径（单一事实源）。
 import 'dart:io';
 
 import '../platform/app_paths.dart';
@@ -42,6 +45,10 @@ class SessionStore {
   /// / `.tmp` 兄弟文件与无关文件）。
   static final RegExp _shardName = RegExp(r'^sessions-\d{4}-\d{2}\.json$');
 
+  /// [name] 是否为合法分片文件名（`M4-T06` 远端 `stats/` 列举过滤复用——
+  /// 本地与远端同一条白名单）。
+  static bool isShardName(String name) => _shardName.hasMatch(name);
+
   /// 合并写入（按 id 并集、幂等，`STAT-08`）。
   ///
   /// `duration <= 0` 的记录**直接丢弃**（`STAT-02` ② 禁止落盘）；
@@ -53,7 +60,7 @@ class SessionStore {
         continue;
       }
       byShard
-          .putIfAbsent(_shardKey(s.startedAt), () => <ReadingSession>[])
+          .putIfAbsent(shardKeyOf(s.startedAt), () => <ReadingSession>[])
           .add(s);
     }
     for (final MapEntry<String, List<ReadingSession>> entry in byShard.entries) {
@@ -76,7 +83,7 @@ class SessionStore {
       final JsonStore store = JsonStore(AtomicFile(entity.path));
       out.addAll(_decodeShard(await store.read()).values);
     }
-    out.sort(_byStart);
+    out.sort(byStart);
     return out;
   }
 
@@ -126,7 +133,7 @@ class SessionStore {
     if (!changed) {
       return;
     }
-    final List<ReadingSession> list = merged.values.toList()..sort(_byStart);
+    final List<ReadingSession> list = merged.values.toList()..sort(byStart);
     await store.write(<String, Object?>{
       'sessions': list.map((ReadingSession s) => s.toJson()).toList(),
     });
@@ -156,8 +163,9 @@ class SessionStore {
     return out;
   }
 
-  /// 分片键：`startedAt` 的本地 `YYYY-MM`。
-  String _shardKey(int startedAtMs) {
+  /// 分片键：`startedAt` 的本地 `YYYY-MM`（`M4-T06` 统计同步按同一键
+  /// 分组本地记录、拼远端路径）。
+  static String shardKeyOf(int startedAtMs) {
     final DateTime d = DateTime.fromMillisecondsSinceEpoch(startedAtMs);
     return '${d.year.toString().padLeft(4, '0')}-'
         '${d.month.toString().padLeft(2, '0')}';
@@ -171,7 +179,9 @@ class SessionStore {
     ));
   }
 
-  static int _byStart(ReadingSession a, ReadingSession b) {
+  /// 会话排序（`startedAt` 升序、同刻按 `id`；`M4-T06` 上传分片对齐本地
+  /// 落盘序——同内容恒同字节）。
+  static int byStart(ReadingSession a, ReadingSession b) {
     final int byTime = a.startedAt.compareTo(b.startedAt);
     return byTime != 0 ? byTime : a.id.compareTo(b.id);
   }
