@@ -4,8 +4,9 @@
 // - [TestAppPaths]：临时目录实现 `AppPaths`（与 `test/reader/progress_store_test.dart`
 //   同款）；
 // - [MemorySecureStore]：内存版 `SecureStore`（密码不落盘，仅测试用）；
-// - [MockDav]：内存版 WebDAV 服务端（PROPFIND / GET / PUT / MKCOL 四方法 +
-//   `failStatus` 注错 + `seed` / `textOf`），纯 `test()` 真 socket 直连。
+// - [MockDav]：内存版 WebDAV 服务端（PROPFIND Depth 0/1 目录列举 / GET /
+//   PUT / MKCOL 四方法 + `failStatus` 注错 + `seed` / `seedBytes` / `textOf`
+//   / `bytesOf`），纯 `test()` 真 socket 直连。
 import 'dart:convert';
 import 'dart:io';
 
@@ -106,14 +107,24 @@ class MockDav {
   /// 播种远端文件（[under] 为已解码相对路径，如 `bookProgress/三体_刘慈欣.json`）。
   ///
   /// [mtime] 为 `null` 时 PROPFIND 不带 `getlastmodified`（测「时间戳缺失」分支）。
-  void seed(String under, String content, DateTime? mtime) {
-    _files[_key(under)] = _DavFile(utf8.encode(content), mtime);
+  void seed(String under, String content, DateTime? mtime) =>
+      seedBytes(under, utf8.encode(content), mtime);
+
+  /// 播种远端**二进制**文件（zip 备份包等；[content] 原字节存储）。
+  void seedBytes(String under, List<int> content, DateTime? mtime) {
+    _files[_key(under)] = _DavFile(List<int>.of(content), mtime);
   }
 
   /// 读远端文件内容（未播种 / 已被 PUT 覆盖后的现值）。
   String? textOf(String under) {
+    final List<int>? bytes = bytesOf(under);
+    return bytes == null ? null : utf8.decode(bytes);
+  }
+
+  /// 读远端文件**原字节**（二进制内容用；未播种返 `null`）。
+  List<int>? bytesOf(String under) {
     final _DavFile? file = _files[_key(under)];
-    return file == null ? null : utf8.decode(file.body);
+    return file == null ? null : List<int>.of(file.body);
   }
 
   /// 解码相对路径 → 与客户端同口径的 percent-encoded 键。
@@ -135,19 +146,16 @@ class MockDav {
       switch (request.method) {
         case 'PROPFIND':
           final _DavFile? file = _files[path];
-          if (file == null) {
-            request.response.statusCode = 404;
+          if (file != null) {
+            // 文件资源：Depth 0/1 都只回自身（非集合无子项）。
+            _writeSingle(request.response, path, file.mtime, collection: false);
+          } else if (request.headers.value('Depth') == '1') {
+            // 目录列举（`listBackups` 用）：无任何后代 → 404（目录不存在）。
+            if (!_writeListing(request.response, path)) {
+              request.response.statusCode = 404;
+            }
           } else {
-            request.response.statusCode = 207;
-            final DateTime? mtime = file.mtime;
-            request.response.write(
-              '<?xml version="1.0" encoding="utf-8"?>'
-              '<d:multistatus xmlns:d="DAV:"><d:response>'
-              '<d:href>$path</d:href><d:propstat><d:prop>'
-              '${mtime == null ? '' : '<d:getlastmodified>${HttpDate.format(mtime)}</d:getlastmodified>'}'
-              '<d:resourcetype/>'
-              '</d:prop></d:propstat></d:response></d:multistatus>',
-            );
+            request.response.statusCode = 404;
           }
         case 'GET':
           final _DavFile? file = _files[path];
@@ -155,6 +163,8 @@ class MockDav {
             request.response.statusCode = 404;
           } else {
             request.response.statusCode = 200;
+            // 定长响应：客户端 `response.contentLength` 才非 -1（进度断言用）。
+            request.response.contentLength = file.body.length;
             request.response.add(file.body);
           }
         case 'PUT':
@@ -175,4 +185,65 @@ class MockDav {
       // 测试内主动关服 / 断言抛出导致的写失败：忽略。
     }
   }
+
+  /// 写单条目 207 响应（文件 / 目录自身共用）。
+  void _writeSingle(
+    HttpResponse response,
+    String href,
+    DateTime? mtime, {
+    required bool collection,
+  }) {
+    response.statusCode = 207;
+    response.write(
+      '<?xml version="1.0" encoding="utf-8"?>'
+      '<d:multistatus xmlns:d="DAV:">'
+      '${_respXml(href, mtime, collection: collection)}'
+      '</d:multistatus>',
+    );
+  }
+
+  /// Depth 1 目录列举：目录自身 + 直接子文件 + 虚拟子目录（有后代的段）。
+  ///
+  /// 返回 `false` = 该目录不存在（无任何后代）→ 调用方回 404。
+  bool _writeListing(HttpResponse response, String path) {
+    final String prefix =
+        path.length > 1 && path.endsWith('/') ? path.substring(0, path.length - 1) : path;
+    final List<String> items = <String>[];
+    final Set<String> seenDirs = <String>{};
+    for (final MapEntry<String, _DavFile> entry in _files.entries) {
+      if (!entry.key.startsWith('$prefix/') ||
+          entry.key.length <= prefix.length + 1) {
+        continue;
+      }
+      final String rest = entry.key.substring(prefix.length + 1);
+      final int slash = rest.indexOf('/');
+      if (slash < 0) {
+        items.add(_respXml(entry.key, entry.value.mtime, collection: false));
+      } else {
+        final String dirHref = '$prefix/${rest.substring(0, slash)}/';
+        if (seenDirs.add(dirHref)) {
+          items.add(_respXml(dirHref, null, collection: true));
+        }
+      }
+    }
+    if (items.isEmpty) {
+      return false;
+    }
+    response.statusCode = 207;
+    response.write(
+      '<?xml version="1.0" encoding="utf-8"?>'
+      '<d:multistatus xmlns:d="DAV:">'
+      '${_respXml('$prefix/', null, collection: true)}'
+      '${items.join()}'
+      '</d:multistatus>',
+    );
+    return true;
+  }
+
+  /// 单条 `<d:response>`（href 已是 percent-encoded 的请求行路径）。
+  String _respXml(String href, DateTime? mtime, {required bool collection}) =>
+      '<d:response><d:href>$href</d:href><d:propstat><d:prop>'
+      '${mtime == null ? '' : '<d:getlastmodified>${HttpDate.format(mtime)}</d:getlastmodified>'}'
+      '${collection ? '<d:resourcetype><d:collection/></d:resourcetype>' : '<d:resourcetype/>'}'
+      '</d:prop></d:propstat></d:response>';
 }

@@ -42,6 +42,9 @@ enum SyncErrorKind {
   /// 连接或响应超时（可重试）。
   timeout,
 
+  /// 用户主动取消（`SYNC-05` ③；不可重试——重试违背取消意图）。
+  cancelled,
+
   /// 其余未归类（不可重试）。
   unknown,
 }
@@ -74,6 +77,7 @@ class SyncException implements Exception {
       SyncErrorKind.server => '服务端错误（${status ?? 500}）',
       SyncErrorKind.network => '网络不可达，请检查网络连接',
       SyncErrorKind.timeout => '连接超时',
+      SyncErrorKind.cancelled => '已取消',
       SyncErrorKind.unknown => '同步失败',
     };
   }
@@ -99,6 +103,21 @@ class WebdavEntry {
 
   /// 是否为目录（`resourcetype` 含 `collection`）。
   final bool isCollection;
+}
+
+/// 大文件传输的取消控制（`SYNC-05` ③；调用方创建并持有，显式传入）。
+///
+/// 取消是**协作式**的：[WebdavClient.uploadStream] 在分块间、
+/// [WebdavClient.downloadToFile] 在事件间检查 [cancelled]，命中即中止并抛
+/// `SyncErrorKind.cancelled`（不可重试——重试违背取消意图）。
+class TransferControl {
+  /// 是否已被取消。
+  bool get cancelled => _cancelled;
+
+  /// 请求取消（幂等）。
+  void cancel() => _cancelled = true;
+
+  bool _cancelled = false;
 }
 
 /// WebDAV 客户端（进程内共享，显式注入；`main()` 组合根构造）。
@@ -219,7 +238,7 @@ class WebdavClient {
     return resp.body;
   }
 
-  /// 上传文件（PUT，整包——大文件分块 / 取消属 T04 扩展）；
+  /// 上传文件（PUT，整包字节）；大文件 / 取消 / 进度走 [uploadStream]；
   /// 507 → `diskFull` 可读错误（`SYNC-07` 磁盘满）。
   Future<void> upload(
     SyncConfig config,
@@ -253,6 +272,173 @@ class WebdavClient {
       return;
     }
     _ensureOk(resp.status, resp.body);
+  }
+
+  /// 流式上传（PUT 定长 + 取消 + 进度；`SYNC-05` ③：大文件可取消且有进度）。
+  ///
+  /// 与 [upload]（整包字节）互补：书籍文件等大对象走本方法——[source] 分块
+  /// 写入请求体，每块前检查 [control] 取消、写后回调 [onProgress]（[sent]
+  /// 为已写字节、第二参为 [contentLength] 总长）。取消 / 源出错经 `abort`
+  /// 断连（不留半截 PUT），抛出的 [SyncException] 原样上抛。
+  Future<void> uploadStream(
+    SyncConfig config,
+    String password,
+    String under,
+    Stream<List<int>> source, {
+    required int contentLength,
+    TransferControl? control,
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    final Uri uri = _uri(config, under);
+    final Duration limit = Duration(seconds: timeoutSeconds);
+    try {
+      final HttpClientRequest request =
+          await _http.openUrl('PUT', uri).timeout(limit);
+      request.followRedirects = false;
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Basic ${base64Encode(utf8.encode('${config.account}:$password'))}',
+      );
+      request.headers.contentType =
+          ContentType.parse('application/octet-stream');
+      request.contentLength = contentLength;
+      int sent = 0;
+      final Stream<List<int>> watched = source.map((List<int> chunk) {
+        if (control?.cancelled ?? false) {
+          throw SyncException(SyncErrorKind.cancelled);
+        }
+        sent += chunk.length;
+        onProgress?.call(sent, contentLength);
+        return chunk;
+      });
+      try {
+        // 不加 .timeout：传输时长随文件大小增长，进度回调即活动看门狗。
+        await request.addStream(watched);
+      } catch (error, st) {
+        // 源出错 / 取消：请求未收尾——挂空 `done` 吞掉异步错误后再断连
+        //（否则 `abort` 让 `done` 以异常 complete，会成为 unhandled error）。
+        request.done.ignore();
+        request.abort(error, st);
+        rethrow;
+      }
+      if (control?.cancelled ?? false) {
+        // 取消发生在**最后一个分块**的回调里：body 已写完但不发 close，仍中断。
+        final SyncException cancelled = SyncException(SyncErrorKind.cancelled);
+        request.done.ignore();
+        request.abort(cancelled, StackTrace.current);
+        throw cancelled;
+      }
+      final HttpClientResponse response = await request.close().timeout(limit);
+      final List<int> body = await response
+          .fold<List<int>>(<int>[], (List<int> acc, List<int> chunk) {
+        acc.addAll(chunk);
+        return acc;
+      }).timeout(limit);
+      _ensureOk(response.statusCode, body);
+    } on SyncException {
+      rethrow;
+    } on TimeoutException {
+      throw SyncException(SyncErrorKind.timeout);
+    } on IOException {
+      throw SyncException(SyncErrorKind.network);
+    } catch (_) {
+      throw SyncException(SyncErrorKind.unknown);
+    }
+  }
+
+  /// 下载到文件（GET → 同目录 `.part` 临时文件 → 完整后原子替换 [target]）。
+  ///
+  /// `SYNC-05` ③：[onProgress] 按已收字节回调（第二参 = `Content-Length`，
+  /// 未知为 -1）；[control] 取消即中止，半截 `.part` 一并清理、**目标文件
+  /// 保持原样**。非 2xx 先读完响应体再按状态抛可读错误（带服务端细节）。
+  Future<void> downloadToFile(
+    SyncConfig config,
+    String password,
+    String under,
+    File target, {
+    TransferControl? control,
+    void Function(int received, int total)? onProgress,
+  }) async {
+    final Uri uri = _uri(config, under);
+    final Duration limit = Duration(seconds: timeoutSeconds);
+    final File part = File('${target.path}.part');
+    try {
+      final HttpClientRequest request =
+          await _http.openUrl('GET', uri).timeout(limit);
+      request.followRedirects = false;
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Basic ${base64Encode(utf8.encode('${config.account}:$password'))}',
+      );
+      final HttpClientResponse response = await request.close().timeout(limit);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final List<int> body = await response.fold<List<int>>(
+          <int>[],
+          (List<int> acc, List<int> chunk) {
+            acc.addAll(chunk);
+            return acc;
+          },
+        ).timeout(limit);
+        throw _statusError(response.statusCode, body);
+      }
+      final int total = response.contentLength;
+      final Directory parent = part.parent;
+      if (!await parent.exists()) {
+        await parent.create(recursive: true);
+      }
+      int received = 0;
+      final IOSink sink = part.openWrite();
+      try {
+        // Stream.timeout 是**事件间**空闲超时：大文件慢速下载不受总时长限制。
+        await for (final List<int> chunk in response.timeout(limit)) {
+          if (control?.cancelled ?? false) {
+            throw SyncException(SyncErrorKind.cancelled);
+          }
+          sink.add(chunk);
+          received += chunk.length;
+          onProgress?.call(received, total);
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+      // 完整才动目标：先删旧（Windows `rename` 不覆盖已存在目标）再改名到位。
+      final File existing = File(target.path);
+      if (await existing.exists()) {
+        await existing.delete();
+      }
+      await part.rename(target.path);
+    } on SyncException {
+      await _deleteQuiet(part);
+      rethrow;
+    } on TimeoutException {
+      await _deleteQuiet(part);
+      throw SyncException(SyncErrorKind.timeout);
+    } on FileSystemException {
+      // 磁盘满 / 无权限 / 路径非法——与网络失败分开报（`SYNC-07` 可读原因）。
+      await _deleteQuiet(part);
+      throw SyncException(
+        SyncErrorKind.unknown,
+        message: '保存下载文件失败，请检查磁盘空间',
+      );
+    } on IOException {
+      await _deleteQuiet(part);
+      throw SyncException(SyncErrorKind.network);
+    } catch (_) {
+      await _deleteQuiet(part);
+      throw SyncException(SyncErrorKind.unknown);
+    }
+  }
+
+  /// 静默删除临时文件（best-effort：不存在 / 被占用都不覆盖主结果）。
+  Future<void> _deleteQuiet(File file) async {
+    try {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {
+      // 清理失败不覆盖主错误；半截 .part 下次写入会被整文件截断重写。
+    }
   }
 
   // ───────────────────────────────────────────────────────────────────────────
