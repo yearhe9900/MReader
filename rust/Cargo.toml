@@ -11,6 +11,9 @@ crate-type = ["cdylib", "staticlib"]
 # 与 Dart 侧 `flutter_rust_bridge` 运行时**严格同版本**（RUST-08；codegen 也须 2.13.0）。
 flutter_rust_bridge = "=2.13.0"
 thiserror = "2"
+# `M35-T03` ③：KF8 最小验证对象（PRD `Q25`；测试 rust/tests/kf8_gate.rs）。
+# 结论未出前不进任何业务链路——只被该 gate 测试引用。
+mobi = "0.8"
 
 # `RUST-04` / 架构 §D.2：panic 必须显式 unwind——`catch_unwind` 在 abort 下失效，
 # panic 会直接终止进程。两处显式写死，让「改成 abort」变成一次显眼的 diff
