@@ -99,10 +99,14 @@ void main() {
       await settle(tester); // 跳转：loadFirstBatch + 「估算 + 校正」收敛。
       await tester.pumpAndSettle();
 
-      // 跳到第 2 章：章标题可见、第 1 章滚出视口（每章 20 段远高于视口）。
-      expect(find.text('第二章'), findsOneWidget);
-      expect(find.text('第一章'), findsNothing);
+      // 跳到第 2 章：第 1 章滚出视口、**目标段落**落在视口内。
+      // 分页模式下 `_window` 把三章页面整棵构建在树上，`find.text` 的
+      // 「在树上」不再等于「在视口内」→ 视口语义一律用 hitTestable
+      // （视口外页面被裁剪、不参与命中）；章标题只作「目标章已载入」的存在性
+      // 断言——段落级对齐会把章题滚到视口上方，本就不该要求它在视口内。
       expect(find.textContaining('第2章'), findsWidgets);
+      expect(find.text('第一章').hitTestable(), findsNothing);
+      expect(find.textContaining('第2章正文3').hitTestable(), findsWidgets);
 
       // 关键词高亮：视口内正文的 '正文' 片段全部带高亮底色。
       // （highlightQuery 对整章生效——所有可见段落里的 '正文' 都高亮。）
