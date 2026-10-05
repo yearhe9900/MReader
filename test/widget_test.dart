@@ -48,8 +48,8 @@ Uint8List _zip(Map<String, String> entries) {
     final List<int> bytes = utf8.encode(entry.value);
     archive.addFile(ArchiveFile(entry.key, bytes.length, bytes));
   }
-  final List<int>? encoded = ZipEncoder().encode(archive);
-  return Uint8List.fromList(encoded ?? const <int>[]);
+  final List<int> encoded = ZipEncoder().encode(archive);
+  return Uint8List.fromList(encoded);
 }
 
 /// 一本结构完整的最小 EPUB：2 个 chapter，第二个标了 `linear="no"`

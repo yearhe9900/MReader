@@ -354,8 +354,8 @@ Uint8List lz77Decompress(Uint8List data) {
   return Uint8List.fromList(out);
 }
 
-class _CdicEntry {
-  _CdicEntry(this.data, this.decompressed);
+class CdicEntry {
+  CdicEntry(this.data, this.decompressed);
   Uint8List data;
   bool decompressed;
 }
@@ -405,7 +405,7 @@ class HuffCdic {
         final bool done = (x & 0x8000) != 0;
         if (length + off + 2 + len > rec.length) break;
         dictionary.add(
-            _CdicEntry(rec.sublist(length + off + 2, length + off + 2 + len), done));
+            CdicEntry(rec.sublist(length + off + 2, length + off + 2 + len), done));
       }
     }
     dictCount = dictionary.length;
@@ -416,7 +416,7 @@ class HuffCdic {
   late final List<int> table1;
   final List<int> mincodeTable = List<int>.filled(33, 0);
   final List<int> maxcodeTable = List<int>.filled(33, 0);
-  final List<_CdicEntry> dictionary = <_CdicEntry>[];
+  final List<CdicEntry> dictionary = <CdicEntry>[];
   late final int dictCount;
 
   /// 直译 readUIntX：最多 maxlen 字节大端拼整数，不足时高位对齐。
@@ -464,7 +464,7 @@ class HuffCdic {
       if (bitsleft < 0) break;
       final int index = (maxcode - code) >> (32 - codelen);
       if (index < 0 || index >= dictionary.length) break; // 异常输入保护
-      final _CdicEntry entry = dictionary[index];
+      final CdicEntry entry = dictionary[index];
       if (!entry.decompressed) {
         entry.data = decompress(entry.data);
         entry.decompressed = true;
@@ -485,7 +485,7 @@ void probeFile(File file) {
   final String path = file.path;
   final int size = file.lengthSync();
   stdout.writeln('');
-  stdout.writeln('======== $path (${size} bytes) ========');
+  stdout.writeln('======== $path ($size bytes) ========');
 
   // -- 读文件 --
   final Stopwatch sw = Stopwatch()..start();

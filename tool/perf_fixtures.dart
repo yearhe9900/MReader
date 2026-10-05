@@ -97,8 +97,8 @@ Uint8List buildEpub({
     }
   }
 
-  final List<int>? encoded = ZipEncoder().encode(archive);
-  return Uint8List.fromList(encoded ?? const <int>[]);
+  final List<int> encoded = ZipEncoder().encode(archive);
+  return Uint8List.fromList(encoded);
 }
 
 /// 造一本「单章超长」的 EPUB（`PERF-03`：正文必须**逐段**取出，而不是一条巨型文本）。
@@ -152,8 +152,8 @@ Uint8List buildLongChapterEpub({
     ),
   );
 
-  final List<int>? encoded = ZipEncoder().encode(archive);
-  return Uint8List.fromList(encoded ?? const <int>[]);
+  final List<int> encoded = ZipEncoder().encode(archive);
+  return Uint8List.fromList(encoded);
 }
 
 /// 造一本「**章节正文很大**」的 EPUB，用于验证 `PERF-02` ① 的**稳态**口径：
@@ -222,8 +222,8 @@ Uint8List buildLargeBodyEpub({
     );
   }
 
-  final List<int>? encoded = ZipEncoder().encode(archive);
-  return Uint8List.fromList(encoded ?? const <int>[]);
+  final List<int> encoded = ZipEncoder().encode(archive);
+  return Uint8List.fromList(encoded);
 }
 
 /// 造一段大 TXT（`>= chapters` 章；体量由段落数撑起，默认约 20MB+）。

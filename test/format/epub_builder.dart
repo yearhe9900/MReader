@@ -35,8 +35,8 @@ Uint8List zipEntries(List<EpubEntry> entries) {
   for (final EpubEntry entry in ordered) {
     archive.addFile(ArchiveFile(entry.name, entry.bytes.length, entry.bytes));
   }
-  final List<int>? encoded = ZipEncoder().encode(archive);
-  return Uint8List.fromList(encoded ?? const <int>[]);
+  final List<int> encoded = ZipEncoder().encode(archive);
+  return Uint8List.fromList(encoded);
 }
 
 /// `META-INF/container.xml`。
