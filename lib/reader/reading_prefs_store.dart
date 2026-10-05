@@ -45,6 +45,13 @@ class ReadingPrefsStore {
     await store.write(prefs.toJson());
   }
 
+  /// 偏好文件本身（`SYNC-03` 设置同步取「最近修改」用：比较本地文件 mtime
+  /// 与远端 mtime——不给 `ReadingPrefs` 加时间字段，不动数据模型）。
+  Future<File> file() async {
+    final JsonStore store = await _store();
+    return File(store.atomicFile.path);
+  }
+
   /// 偏好文件对应的 [JsonStore]。
   Future<JsonStore> _store() async {
     final Directory dir = await _paths.subDir(dirName);
