@@ -2445,3 +2445,54 @@ EdgeInsets shelfGridPadding(double topInset) =>
 
 **边界（如实登记）**：① 未真机复跑（`flutter run` 归负责人手动跑），上述数字均为 widget 测试环境的 `physicalSize` 阶梯，非真机 dp；② AI 四入口的**入口位置**从「顶栏第 3~6 个图标」变为「顶栏单个分组 → 面板行」，文案/回调/Key 全部逐条保持原样，但严格说是入口路径变化；③ 文字组标题只在 ≥420dp 出现，手机横屏与平板可见、竖屏手机只见盒子与分隔线；④ `CHANGELOG` 记 1 条（用户可见的顶栏按钮收纳）。
 
+
+### 2.69 开书链路端到端追踪（点书卡 → 看到书，2026-10-06）
+
+| 项 | 值 |
+|---|---|
+| 触发 | 负责人要求「从书架点击图书到阅读页看到书籍，加上耗时日志，看看哪里耗时，导致观感上的卡顿」 |
+| 模块 | `lib/diagnostics/open_trace.dart`（新）+ 书架 / 阅读页各 4 处接入 |
+| 一句话 | 补上既有 [PerfLog] 的**两头缺口**：计时原点（用户按下）与终点（首帧真正上屏） |
+
+**既有埋点的两个缺口（本批的诊断依据）**：
+
+| 缺口 | 现象 | 后果 |
+|---|---|---|
+| **缺头**：无计时原点 | 书架侧只有 `open.readBytes` / `open.sniff` 两个孤立点，没有「用户按下那一瞬」 | 算不出「点下到第一帧多久」；`readBytes` 的耗时也没法和后面的解析耗时放在同一把尺子上比 |
+| **缺尾**：`reader.ready` ≠ 看到书 | `reader.ready` 打在 `_ready = true` 的 `setState` **之后立刻**（`reader_page.dart`），此刻正文**尚未 build / layout / paint** | 「ready 很快」会被误读成「打开很快」。**分页模式下首帧要做 measure + reprime，这段渲染成本完全没被测量**——而它正是「解析 20ms 却等 1.5s」这类现象的藏身处 |
+
+**本批新增的链路段落**（一条 `open.*` 前缀，按时序）：
+
+| 段落 | 打点位置 | 含义 |
+|---|---|---|
+| `open.begin` | 书架 `_openBook` 首行（**先于任何 await**） | 计时原点 = 用户按下书卡 |
+| `open.readBytes` / `open.sniff` | 书架（`step`，带权威段耗时） | 读字节 / 嗅探格式 |
+| `open.pushed` | 书架 `Navigator.push` 之后 | 路由已发起 |
+| `open.routeInit` | 阅读页 `initState` | 页面 State 建立 |
+| `open.ready` | 阅读页 `_ready = true` 之后 | 数据就绪、**可渲染**（≠ 上屏） |
+| `open.firstFrame` | 首帧探针（`addTimingsCallback` + `addPostFrameCallback` 兜底） | **正文第一次真正上屏**，带首帧 `build` / `raster` / `totalSpan` 与 `over16ms` |
+| `open.restoreEnd` | `_finishRestore` | 内容停在目标段落（「打开后还在跳」的观感指标） |
+
+**两条汇总行**（幂等，各只打一次）：
+
+| 行 | 口径 | 读法 |
+|---|---|---|
+| `open.total` | **按下 → 首帧上屏** | 用户点开书时的真实等待；含 `render=`（= firstFrame − ready，纯渲染段） |
+| `open.chain` | 按下 → **位置落定**（含恢复校正） | 比 `total` 多一段 `settle=`（上屏后再花多久才停在目标段落） |
+
+**关键判断依据**：`total` 与 `chain` **分开打**才有诊断价值——`chain ≫ total` ⇒ 打开后位置在漂（校正慢）；两者接近 ⇒ 首帧之后的校正很快，问题就在前半段。再看 `total` 里的 `render=`：它大就是渲染/排版慢，小就是解析慢（此时该去看 `reader.load` / `reader.chapters`）。
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| **`step` 用权威段耗时，`mark` 才反推** | 防关键段被丢 | `OpenTrace._segments` | 若统一用累计 `at` 反推差值，多段落在同一毫秒时算出 0ms；而 `_deltas` 过滤 0ms → **恰好丢掉最该看的 `readBytes`**（本批测试实测抓到）。故 `step(phase, ms)` 记自己的 `ms` |
+| **`total` 显式排除 `settle`** | 口径不被污染 | `_emitSummary(includeSettle:)` | `report()` 在首帧时就打，`restoreEnd` 通常还没发生；但若首帧很慢、校正已先完成，`total` 会把校正耗时算进去 ⇒ 口径漂移。故按调用方标志位**显式**取舍，不依赖「时序恰好」 |
+| **首帧探针双保险** | 防链路断在尾段 | `attachFirstFrameProbe()` | 主路 `addTimingsCallback`（含 GPU 段）；备路 `addPostFrameCallback` 里检测到时序未达就以 `timings=none` 兜底出 `firstFrame` + `total`，否则**这条链路会静默断在最关键处** |
+| **`openTrace` 可空降级** | 不改既有测试 | `ReaderPage.openTrace` | `null`（直接进页的测试 / 深链）时本页照常打既有 `PerfLog` 分段点，只是不产出 `open.*` 汇总——「降级不等于丢观测」 |
+| **`openTrace` 显式透传而非全局单例** | 避免跨书串账 | 书架 → `ReaderPage(openTrace:)` | 用全局单例会遇到「上一本残留的 trace 被误打点」；显式参数让生命周期跟着 widget 走 |
+| **不打点字体/图标尺寸** | 遵守既有纪律 | — | 逐处记参数会漂，改为统一走 `ReaderControlIconButton` 那种「构造即保证」的路子（见 §2.68） |
+
+**测试**：新建 `test/diagnostics/open_trace_test.dart` **6 条**（原点 / `total` 含 render 段 / 幂等 / `chain` 含 settle 且 `total` 不含 / 首帧探针时序 / 探针幂等）+ `test/diagnostics/open_trace_wiring_test.dart` **2 条**（未透传时降级不丢既有分段点 / `ready → firstFrame → total` 时序契约）。`dart analyze lib/ test/` 零问题。
+
+**回归**：`test/reader test/tts test/search test/ui test/diagnostics` 全量——失败 6 条，**与改前基线同一集合**（`CNT-04c 验收②`、`STAT-01 ⑤`、`ShelfPage 回归②`、`TTS-04/05`、`settings_page_test 玻璃效果`（已知并行 flake，串行复跑同样红 ⇒ 基线已红）、以及 `test/settings` 路径不存在导致的 load 报错）。零新增失败。
+
+**边界（如实登记）**：① **未真机复跑**（`flutter run` 归负责人手动跑）——本批只交付埋点，**尚未拿到真实耗时数字**，下一轮需负责人跑一次 `flutter run` + `adb logcat -s flutter | grep "open\."` 回填；② 首帧时序在 debug 档数值不可信（`product=false`，见 `perf_log.dart` 头注），判瓶颈须看 **profile/release**；③ `open.firstFrame` 的 `raster` 在 widget 测试环境常为空（有 `timings=none` 兜底），真机才有值；④ 未覆盖「从书库搜索页选中结果开书」这条入口（`library_search_page.dart` 另走一路），如需一并观测可复用同一 `OpenTrace`。

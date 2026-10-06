@@ -90,6 +90,7 @@ import '../ai/rag.dart';
 import '../ai/recap.dart';
 import '../ai/summary_cache.dart';
 import '../ai/vocab_store.dart';
+import '../diagnostics/open_trace.dart';
 import '../diagnostics/perf_log.dart';
 import '../format/book_source.dart';
 import '../library/book_record.dart';
@@ -173,6 +174,7 @@ class ReaderPage extends StatefulWidget {
     this.ttsSettings,
     this.onlineTts,
     this.syncTrigger,
+    this.openTrace,
     this.initialJump,
   });
 
@@ -250,6 +252,14 @@ class ReaderPage extends StatefulWidget {
   ///
   /// `null` = 未接线：关页只落本地盘（同款降级口径）。
   final SyncTrigger? syncTrigger;
+
+  /// 开书链路追踪（`OpenTrace`）：由书架在「用户按下书卡」时创建并透传，
+  /// 本页负责补齐**阅读侧**的段落（`routeInit` / `ready` / `firstFrame` /
+  /// `restoreEnd`）并输出 `open.total`（按下→首帧上屏）。
+  ///
+  /// `null` = 未接线（直接进本页的测试 / 深链）：本页照常打既有 [PerfLog]
+  /// 分段点，只是不产出端到端的 `open.total`（同款降级口径）。
+  final OpenTrace? openTrace;
 
   /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度，
   /// 段落级对齐。`null` = 按存档进度恢复（正常开书）。
@@ -577,6 +587,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    // 链路点「页面构造」：路由已入栈、本页 State 建立。此点到 `ready` 之间是
+    // 纯数据解析段，与渲染段（ready→firstFrame）分开记，避免把两者混为一谈。
+    widget.openTrace?.mark('routeInit');
     WidgetsBinding.instance.addObserver(this);
     if (widget.statsService != null) {
       _tracker = SessionTracker(bookId: widget.record.bookId);
@@ -778,6 +791,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 开书到「首帧可渲染」的总时长（用户感知的等待上限；恢复校正另计 restore.*）。
       PerfLog.step('reader.ready', openClock.elapsedMilliseconds,
           'target=$index pos=${pos.toStringAsFixed(3)} chapters=${chapters.length} paged=$paged');
+      // 链路点「数据就绪」+ **立刻挂首帧探针**：
+      // 上面的 `reader.ready` 打在 setState 之后、正文尚未 build/layout/paint，
+      // 用户屏幕上仍是空白。探针量到的那一帧才是「看到书」，两者之差即渲染段。
+      widget.openTrace?.mark('ready', 'paged=$paged chapters=${chapters.length}');
+      widget.openTrace?.attachFirstFrameProbe();
       if (!paged) _scheduleEstimateRefresh(); // 估高只服务 ListView
       // **不在此处启动后台补齐**（`PERF-02` 时序修正 2026-09-28）：补齐会逐批
       // 「占位→真实」合入、改动总高，而此刻控制器还没建、首次恢复校正也还没跑
@@ -1037,6 +1055,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _positionSampled = _detectCurrentChapter();
     PerfLog.mark('restore.end',
         'frames=$_restoreFrames converged=$converged sampled=$_positionSampled');
+    // 链路点「位置落定」：首帧早已上屏，但内容可能还停在估算位置；到这一行
+    // 才真正停在目标段落。它不进 `open.total`（那量的是「看到书」），
+    // 只作为「打开后是否还在跳」的观感指标。
+    widget.openTrace?.mark('restoreEnd',
+        'frames=$_restoreFrames converged=$converged');
+    // 首帧早已上报 `open.total`；这里补一条 `open.chain`，把「上屏之后又花了
+    // 多久才停在目标段落」也纳入账——`chain` 与 `total` 的差即位置漂移耗时。
+    widget.openTrace?.reportChain();
     _cache.touch(_currentIndex);
     setState(() {});
     _ensureAutoFill();

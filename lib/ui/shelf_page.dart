@@ -38,6 +38,7 @@ import '../ai/provider_store.dart';
 import '../ai/rag.dart';
 import '../ai/summary_cache.dart';
 import '../ai/vocab_store.dart';
+import '../diagnostics/open_trace.dart';
 import '../diagnostics/perf_log.dart';
 import '../format/book_registry.dart';
 import '../format/book_source.dart';
@@ -442,12 +443,20 @@ class _ShelfPageState extends State<ShelfPage> {
   Future<void> _openBook(BookRecord record) async {
     if (_opening) return; // 准备期防双击重复开书
     _opening = true;
+    // 「用户按下书卡」是整条链路的计时原点——必须**先于任何 await**打点，
+    // 否则读字节 / 嗅探的耗时会算不进「点下→看到书」的总账里。
+    final OpenTrace trace = OpenTrace.begin(
+      bookId: record.bookId,
+      title: record.title,
+    );
     setState(() => _openingBookId = record.bookId); // 该卡显示 loading 覆盖层
     try {
       final PerfWatch readWatch = PerfLog.watch('open.readBytes');
       final Uint8List? bytes = await widget.repository.readBookBytes(record);
       readWatch.done(
           'book=${record.title} sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
+      trace.step('readBytes', readWatch.elapsedMs,
+          'sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
       if (bytes == null || bytes.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -469,6 +478,7 @@ class _ShelfPageState extends State<ShelfPage> {
         cacheKey: cacheKey,
       );
       sniffWatch.done('impl=${source.implId}');
+      trace.step('sniff', sniffWatch.elapsedMs, 'impl=${source.implId}');
       // 不在导航前 eager 解析：全量 load() 在主 isolate 同步执行会冻结 UI，
       // 导致首击「无响应」、用户补点第二次（PERF）。解析与 loading 交给
       // ReaderPage._open() 承担（其自带 spinner + 错误态，RD-05 仍满足）。
@@ -491,11 +501,13 @@ class _ShelfPageState extends State<ShelfPage> {
           bookmarkStore: widget.bookmarkStore,
           readingPrefsStore: widget.readingPrefsStore,
           syncTrigger: widget.syncTrigger,
+          openTrace: trace,
         ),
       );
       // 不 await push 的 Future（它要等路由 pop 才返回）——push 一发起（路由已
       // 入栈）就往下走，finally 立即释放守卫。关书刷新走 route.popped，不占守卫。
       unawaited(Navigator.of(context).push(route));
+      trace.mark('pushed');
       unawaited(route.popped.then((_) {
         // 阅读页关闭后刷新（lastReadAt / readProgress 已在 M1-T04 更新）。
         if (mounted) unawaited(_loadBooks());
