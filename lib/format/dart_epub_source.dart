@@ -41,6 +41,7 @@ class DartEpubSource implements BookSource {
     this.runner = const IsolateRunner(),
     this.structureCache,
     this.cacheKey,
+    this.prefetchFlatTitles = true,
   });
 
   /// 原始文件名（书名缺失时兜底显示；错误细节里也用）。
@@ -61,6 +62,14 @@ class DartEpubSource implements BookSource {
 
   /// 缓存判据（`bookId + 副本 mtime/size`）；与 [structureCache] 成对提供。
   final StructureCacheKey? cacheKey;
+
+  /// 是否做无目录书的 `flatTitles` 标题预取（挂账 #6）。默认 `true` = 既有行为；
+  /// 搜索后台重建路径（`search_session.dart`）传 `false`：跳过全书预解压，命中章
+  /// 标题由 [search] 扫描循环里已有的 `extractSection` 结果零成本满足。
+  ///
+  /// ⚠️ `false` 时无目录书的 [chapters] 标题是「第 N 章」占位（预取表全 `''`）——
+  /// 仅供**不消费章节表标题**的搜索路径使用；阅读页开书一律走默认 `true`。
+  final bool prefetchFlatTitles;
 
   EpubParseResult? _parsed;
   Future<EpubParseResult>? _loading;
@@ -124,7 +133,11 @@ class DartEpubSource implements BookSource {
     final EpubParseOutcome outcome =
         await runner.runWithFallback<EpubParseRequest, EpubParseOutcome>(
       parseEpubStructureTask,
-      EpubParseRequest(bytes, fileName: fileName),
+      EpubParseRequest(
+        bytes,
+        fileName: fileName,
+        prefetchFlatTitles: prefetchFlatTitles,
+      ),
       debugLabel: 'mreader-epub-parse',
     );
     final MReaderFormatException? error = outcome.error;
@@ -135,7 +148,10 @@ class DartEpubSource implements BookSource {
       throw const MReaderFormatException(FormatErrorCode.corruptFile);
     }
     final EpubParseResult result = _bindStructure(structure);
-    if (cache != null && key != null) {
+    // 占位结构（prefetchFlatTitles=false 时 flatTitles 全是 `''`）**绝不写回**：
+    // 阅读页若命中该缓存会把「第 N 章」占位当真标题（挂账 #6 防污染守卫）。
+    // 缓存读不受限：真标题结构对搜索同样有效（还更优）。
+    if (cache != null && key != null && prefetchFlatTitles) {
       // 写回失败静默：缓存是加速层不是数据，绝不因此让开书失败。
       try {
         await cache.write(key, structure);
@@ -348,8 +364,24 @@ class DartEpubSource implements BookSource {
       if (cancel.isCancelled || _disposed) return;
       final Chapter chapter = chapterList[i];
       final EpubSection? section = _sectionFor(book, chapter, i);
+      final ExtractedSection? extracted =
+          section == null ? null : extractSection(section.rawBytes);
       final List<String> paragraphs =
-          section == null ? const <String>[] : extractSection(section.rawBytes).paragraphs;
+          extracted?.paragraphs ?? const <String>[];
+
+      // 命中章标题：有 toc 沿用目录标题（既有语义）；无 toc 从本次 extractSection
+      // 结果**零成本**构造（与 `chapters()` 的平坦目录同源同值——预取表存的正是
+      // 同一字节流的同一 h1）——搜索重建路径因此可关掉全书标题预取
+      // （`prefetchFlatTitles: false`，挂账 #6）：标题需求与预取解耦。
+      final String hitTitle =
+          book.toc.isEmpty && section != null && extracted != null
+              ? _flatChapter(
+                  section,
+                  i,
+                  nonLinear: !section.linear,
+                  title: extracted.title,
+                ).title
+              : chapter.title;
 
       int offset = 0;
       for (final String paragraph in paragraphs) {
@@ -359,7 +391,7 @@ class DartEpubSource implements BookSource {
           if (at < 0) break;
           yield SearchEvent.hit(SearchHit(
             chapterIndex: i,
-            chapterTitle: chapter.title,
+            chapterTitle: hitTitle,
             offset: offset + at,
             context: paragraph,
           ));

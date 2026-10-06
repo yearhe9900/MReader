@@ -20,6 +20,10 @@
 //    `lazyEntryLoader`），非章节资源（图 / 字 / CSS）在与正文无关的路径上永不读取。
 //    **唯一有界例外**（[_parse] 第 8 步）：无目录书的 `flatTitles` 预取——逐章非缓存
 //    解压取标题后**字节即弃**，不驻留任何解压结果（只留 `href -> 标题` 字符串）。
+//    该预取可经 [EpubParseRequest.prefetchFlatTitles] 关掉（挂账 #6：搜索后台重建
+//    路径不吃这次全书预解压——`search()` 循环本来就逐章 `extractSection`，命中章
+//    标题从该结果零成本取得）；关掉时 [_parse] 填 `href -> ''` **全占位**，键集与
+//    预取完全一致（防消费方 miss 回退现场解压）。
 //
 // 章节正文的 XHTML -> 文本转换在 section_extractor.dart 里按需调用。
 //
@@ -155,6 +159,10 @@ class EpubStructure {
   /// （`DartEpubSource.chapters()`）现场逐章「解压 + HTML 解析」会冻结主 isolate，
   /// 故在解析 isolate（[_parse]）一次取好、**字节即弃**只留字符串。值为空串 = 已预取
   /// 但无标题；查不到键 = 未预取，消费方回退现场取（见 `EpubBook.flatTitles`）。
+  ///
+  /// `prefetchFlatTitles: false`（挂账 #6，搜索路径）：全部存**空串占位**——键集
+  /// 与真预取一致但零解压，消费方不会 miss 回退；代价是 `chapters()` 拿不到真标题
+  /// （得「第 N 章」），故该开关**仅供不消费章节表标题的搜索路径**使用。
   final Map<String, String> flatTitles;
 
   /// 封面候选 href 列表（`coverCandidates` 的 href 投影，便于只看路径的调用方）。
@@ -237,8 +245,9 @@ Future<EpubBook> parseEpub(Uint8List bytes, {String fileName = ''}) async {
 Future<EpubStructure> parseEpubStructure(
   Uint8List bytes, {
   String fileName = '',
+  bool prefetchFlatTitles = true,
 }) async =>
-    _parse(bytes, fileName).structure;
+    _parse(bytes, fileName, prefetchFlatTitles: prefetchFlatTitles).structure;
 
 /// 与 [parseEpub] 相同，但额外返回 [OpfView]（供 `lib/meta/epub_meta.dart` 消费）。
 ///
@@ -264,13 +273,26 @@ Future<EpubParseResult> parseEpubResult(
 
 /// [parseEpubStructureTask] 的入参（纯数据，可跨 isolate）。
 class EpubParseRequest {
-  const EpubParseRequest(this.bytes, {this.fileName = ''});
+  const EpubParseRequest(
+    this.bytes, {
+    this.fileName = '',
+    this.prefetchFlatTitles = true,
+  });
 
   /// EPUB 的完整字节。
   final Uint8List bytes;
 
   /// 原始文件名（书名缺失时兜底显示）。
   final String fileName;
+
+  /// 是否做无目录书的 `flatTitles` 标题预取（默认 `true` = 既有行为）。
+  ///
+  /// 搜索后台重建路径传 `false`（挂账 #6）：预取的标题表对搜索是**纯前置成本**
+  /// ——`search()` 循环本来就逐章 `extractSection`，命中章标题从该结果零成本取得。
+  /// 关掉时 [_parse] 对无目录书填 `href -> ''` **全占位**（键集与预取完全一致，
+  /// 防消费方 miss 回退现场解压）。消费方须知：此时 `chapters()` 的无目录书标题
+  /// 是「第 N 章」占位——仅供**不消费章节表标题**的搜索路径使用，阅读页勿传。
+  final bool prefetchFlatTitles;
 }
 
 /// [parseEpubStructureTask] 的返回信封（纯数据，可跨 isolate）。
@@ -301,8 +323,11 @@ Future<EpubParseOutcome> parseEpubStructureTask(
 ) async {
   final Stopwatch clock = Stopwatch()..start();
   try {
-    final EpubStructure structure =
-        await parseEpubStructure(request.bytes, fileName: request.fileName);
+    final EpubStructure structure = await parseEpubStructure(
+      request.bytes,
+      fileName: request.fileName,
+      prefetchFlatTitles: request.prefetchFlatTitles,
+    );
     // 耗时日志（后台 isolate 内打印同样落 stdout）：结构解析总时长 +
     // 章节数 / 目录数（无目录书 flatTitles 的分账见 _parse 第 8 步）。
     PerfLog.step('epub.parse', clock.elapsedMilliseconds,
@@ -368,7 +393,11 @@ class _ParsedEpub {
 }
 
 /// 核心解析（同步）：产出 [EpubStructure] + 本 isolate 的归档句柄。
-_ParsedEpub _parse(Uint8List bytes, String fileName) {
+_ParsedEpub _parse(
+  Uint8List bytes,
+  String fileName, {
+  bool prefetchFlatTitles = true,
+}) {
   if (bytes.isEmpty) {
     throw const MReaderFormatException(FormatErrorCode.emptyFile);
   }
@@ -522,18 +551,33 @@ _ParsedEpub _parse(Uint8List bytes, String fileName) {
   //    （不走 ArchiveFile.content——它一次解压即永久缓存，会让整本驻留），只留字符串。
   //    空标题也存（= 已预取但无标题）；缺文件的章跳过（与绑定期 _bindBook 过滤一致，
   //    键用 href 不用索引，天然不错位）。
+  //
+  //    `prefetchFlatTitles: false`（挂账 #6）：搜索后台重建路径**不吃**这次全书
+  //    预解压——`search()` 扫描循环本来就逐章 `extractSection`，命中章标题从该结果
+  //    零成本取得。跳过时不是留空 map，而是填 `href -> ''` **全占位**：键在 =
+  //    「已预取」语义，防 `chapters()` miss 回退现场解压（那会把预取消掉的解压
+  //    挪到消费方，等于没省）。占位值会让 `chapters()` 得「第 N 章」——该路径的
+  //    消费方（搜索）不消费章节表标题，详见 `EpubParseRequest.prefetchFlatTitles`。
   final Map<String, String> flatTitles = <String, String>{};
   if (toc.isEmpty) {
     // 耗时日志：无目录书的标题预取是「打开」的已知大户（逐章解压 + XHTML 解析），
     // 单独分账——真机若在此处出现秒级耗时即命中该路径（挂账 #6）。
     final Stopwatch flatClock = Stopwatch()..start();
-    for (final EpubSectionRef ref in sectionRefs) {
-      final ArchiveFile? file = _resolveFile(byName, lowerIndex, ref.href);
-      if (file == null) continue;
-      flatTitles[ref.href] = extractSection(lazyEntryLoader(file)()).title;
+    if (prefetchFlatTitles) {
+      for (final EpubSectionRef ref in sectionRefs) {
+        final ArchiveFile? file = _resolveFile(byName, lowerIndex, ref.href);
+        if (file == null) continue;
+        flatTitles[ref.href] = extractSection(lazyEntryLoader(file)()).title;
+      }
+    } else {
+      for (final EpubSectionRef ref in sectionRefs) {
+        final ArchiveFile? file = _resolveFile(byName, lowerIndex, ref.href);
+        if (file == null) continue; // 与预取路径同键集（缺文件章绑定期也不存在）
+        flatTitles[ref.href] = '';
+      }
     }
     PerfLog.step('epub.flatTitles', flatClock.elapsedMilliseconds,
-        'sections=${sectionRefs.length}');
+        'sections=${sectionRefs.length} prefetch=${prefetchFlatTitles ? 1 : 0}');
   }
 
   final EpubStructure structure = EpubStructure(

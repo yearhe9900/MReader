@@ -342,6 +342,43 @@ void main() {
       await source.dispose();
       await bare.dispose();
     });
+
+    test('T06 skip 预取（prefetchFlatTitles=false）→ 占位结构绝不写回（挂账 #6 防污染）',
+        () async {
+      final _FakeStore fake = _FakeStore();
+      final _RecordingRunner runner = _RecordingRunner();
+      final DartEpubSource source = DartEpubSource(
+        fileName: 'mini.epub',
+        bytes: _miniEpub(),
+        runner: runner,
+        structureCache: fake,
+        cacheKey: _key,
+        prefetchFlatTitles: false,
+      );
+      final BookMeta meta = await source.load();
+      expect(meta.title, '缓存测试书');
+      expect(runner.messages.length, 1, reason: '照常派发解析');
+      // 派发的请求携带 skip 开关（纯数据透传到解析层）。
+      final Object? request = runner.messages.single;
+      expect(request, isA<EpubParseRequest>());
+      expect((request as EpubParseRequest).prefetchFlatTitles, isFalse);
+      expect(fake.reads, 1, reason: '缓存读照常（真标题结构对搜索同样有效）');
+      expect(fake.writes, 0,
+          reason: 'flatTitles 全占位的结构写回会污染阅读页缓存（第 N 章当真标题）');
+      await source.dispose();
+
+      // 对照：默认 prefetch=true 写回照常。
+      final _FakeStore normal = _FakeStore();
+      final DartEpubSource withPrefetch = DartEpubSource(
+        fileName: 'mini.epub',
+        bytes: _miniEpub(),
+        structureCache: normal,
+        cacheKey: _key,
+      );
+      await withPrefetch.load();
+      expect(normal.writes, 1, reason: '预取模式写回回归（既有行为不变）');
+      await withPrefetch.dispose();
+    });
   });
 
   group('FileStructureCacheStore（磁盘）', () {

@@ -148,6 +148,23 @@ void main() {
       expect(none.firstHitElapsed, isNull, reason: '零命中无「首屏结果」');
     });
 
+    test('#6 skip 预取：spec 后台重建的命中章标题仍是真实 h1（非「第 N 章」占位）',
+        () async {
+      // 搜索重建 openBook(prefetchFlatTitles: false)——无 toc 书的章节表标题
+      // 在重建侧是占位，但命中标题必须从 search() 扫描循环的 extractSection
+      // 取真值，且与预取模式（默认开书）同源同值。
+      final SearchSession session =
+          SearchSession.start(query: 'alpha', spec: _spec());
+      final List<String> titles = (await _collect(session))
+          .map((SearchEvent e) => e.hit)
+          .nonNulls
+          .map((SearchHit h) => h.chapterTitle)
+          .toList();
+      expect(titles, <String>['第一章', '第一章', '第二章'],
+          reason: 'skip 预取不得把「第 N 章」占位泄漏进命中标题（挂账 #6）');
+      await session.done;
+    });
+
     test('spec 路径与本 isolate 直搜命中集合一致（RUST-02 等价精神）', () async {
       final SearchSession viaIsolate =
           SearchSession.start(query: 'alpha', spec: _spec());

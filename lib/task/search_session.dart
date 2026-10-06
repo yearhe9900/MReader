@@ -7,6 +7,8 @@
 //     把 spec（fileName + bytes）发进长驻搜索 isolate，在那边 `openBook()` 重建源
 //     并跑 `search()`，事件逐条回传。解压 / HTML 解析 / 扫描全部离开主 isolate，
 //     是 `CNT-06`「后台 isolate 执行、UI 不卡死」与阈值 4「单帧 ≤ 16ms」的正面落点。
+//     重建一律 `prefetchFlatTitles: false`（挂账 #6）：搜索不吃无目录书的全书标题
+//     预取（该预取是搜索首屏的已知大户），命中章标题由 `search()` 扫描循环自取。
 //   · **本 isolate 流式**（给 [BookSource] 实例）：`PdfSource` 这类**持有不可序列化
 //     句柄**的源（`PdfEngineDocument` 绑着原生引擎）——直接在本 isolate 流式执行。
 //     PDF 的 `pageText` 是原生侧异步抽取、Dart 侧只做逐页 `indexOf`，逐页 `await`
@@ -199,7 +201,12 @@ void _searchIsolateMain(_SearchBootstrap boot) async {
 
   BookSource? source;
   try {
-    source = await openBook(fileName: boot.spec.fileName, bytes: boot.spec.bytes);
+    // 挂账 #6：搜索不吃全书标题预取（命中章标题由 search() 扫描循环自取）。
+    source = await openBook(
+      fileName: boot.spec.fileName,
+      bytes: boot.spec.bytes,
+      prefetchFlatTitles: false,
+    );
     await for (final SearchEvent event
         in source.search(boot.query, cancel: token)) {
       if (token.isCancelled) break;
@@ -363,7 +370,12 @@ class _LocalRun implements _SearchRun {
       if (held != null) {
         effective = held;
       } else if (spec != null) {
-        opened = await openBook(fileName: spec.fileName, bytes: spec.bytes);
+        // 与后台路径同口径：跳过全书标题预取（挂账 #6）。
+        opened = await openBook(
+          fileName: spec.fileName,
+          bytes: spec.bytes,
+          prefetchFlatTitles: false,
+        );
         effective = opened;
       } else {
         sink.done();

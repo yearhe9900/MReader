@@ -201,6 +201,24 @@ Uint8List _epubNoTocNoHeading() => zipEntries(<EpubEntry>[
           'OEBPS/text/ch1.xhtml', xhtmlDoc(paragraphs: <String>['无标题正文。'])),
     ]);
 
+/// 无目录 + `linear="no"` 非主线章（验 skip 预取模式下命中标题的「（非主线）」后缀）。
+Uint8List _epubNoTocNonLinear() => zipEntries(<EpubEntry>[
+      textEntry('META-INF/container.xml', containerXml('OEBPS/content.opf')),
+      textEntry(
+        'OEBPS/content.opf',
+        opfXml(
+          title: '非主线',
+          manifest: itemXml('c1', 'text/ch1.xhtml', 'application/xhtml+xml') +
+              itemXml('c2', 'text/ch2.xhtml', 'application/xhtml+xml'),
+          spine: itemrefXml('c1') + itemrefXml('c2', linear: 'no'),
+        ),
+      ),
+      textEntry('OEBPS/text/ch1.xhtml',
+          xhtmlDoc(title: '一', heading: '主线章', paragraphs: <String>['主线内容。'])),
+      textEntry('OEBPS/text/ch2.xhtml',
+          xhtmlDoc(title: '二', heading: '附录章', paragraphs: <String>['附录内容。'])),
+    ]);
+
 /// nav 的 href 带 `#frag`，且锚点在章节中部。
 Uint8List _epubWithFragment() => zipEntries(<EpubEntry>[
       textEntry('META-INF/container.xml', containerXml('OEBPS/content.opf')),
@@ -1169,6 +1187,96 @@ void main() {
       final List<Chapter> chapters = await source.chapters();
       expect(chapters.single.title, '第一章',
           reason: 'miss -> 现场解压回退，与预取路径同值');
+      await source.dispose();
+    });
+
+    // ----------------------------------------------------------------
+    // 挂账 #6：prefetchFlatTitles=false（搜索路径跳过全书标题预取）
+    // ----------------------------------------------------------------
+    test('#6 skip 预取：无目录书 flatTitles 全占位（键在值空，不解压）', () async {
+      final EpubStructure structure = await parseEpubStructure(
+        _epubNoToc(),
+        fileName: 'noToc.epub',
+        prefetchFlatTitles: false,
+      );
+      expect(
+        structure.flatTitles,
+        <String, String>{'OEBPS/text/ch1.xhtml': ''},
+        reason: '占位而非空 map：键在 = 已预取语义，防消费方 miss 回退现场解压',
+      );
+
+      // 键集必须与真预取完全一致（缺文件章两边都跳过）。
+      final EpubStructure prefetched =
+          await parseEpubStructure(_epubNoToc(), fileName: 'noToc.epub');
+      expect(structure.flatTitles.keys.toSet(),
+          prefetched.flatTitles.keys.toSet(),
+          reason: '占位与真预取同键集（绑定期过滤一致）');
+      expect(prefetched.flatTitles['OEBPS/text/ch1.xhtml'], '第一章',
+          reason: '对照：真预取取 h1');
+    });
+
+    test('#6 skip 预取：chapters() 命中占位不回退现场解压（得「第 1 章」占位）', () async {
+      final DartEpubSource source = DartEpubSource(
+        fileName: 'noToc.epub',
+        bytes: _epubNoToc(),
+        prefetchFlatTitles: false,
+      );
+      expect((await source.chapters()).single.title, '第 1 章',
+          reason: '占位空串命中：不得现场解压（现场解压会得「第一章」）——'
+              '该路径只服务搜索，不消费章节表标题');
+      await source.dispose();
+    });
+
+    test('#6 skip 预取：search() 命中标题仍是真实 h1，与预取模式同值', () async {
+      Future<String?> firstHitTitle({required bool prefetch}) async {
+        final DartEpubSource source = DartEpubSource(
+          fileName: 'noToc.epub',
+          bytes: _epubNoToc(),
+          prefetchFlatTitles: prefetch,
+        );
+        String? title;
+        await for (final SearchEvent event
+            in source.search('正文', cancel: CancelToken())) {
+          title = event.hit?.chapterTitle ?? title;
+        }
+        await source.dispose();
+        return title;
+      }
+
+      expect(await firstHitTitle(prefetch: false), '第一章',
+          reason: 'skip 模式：标题从 search() 扫描循环的 extractSection 零成本取');
+      expect(await firstHitTitle(prefetch: true), '第一章',
+          reason: '预取模式回归：两路同源同值（预取存的就是同一 h1）');
+    });
+
+    test('#6 skip 预取：非主线章命中标题保留「（非主线）」后缀', () async {
+      final DartEpubSource source = DartEpubSource(
+        fileName: 'nl.epub',
+        bytes: _epubNoTocNonLinear(),
+        prefetchFlatTitles: false,
+      );
+      final List<SearchEvent> events =
+          await source.search('附录内容', cancel: CancelToken()).toList();
+      final List<SearchHit> hits =
+          events.map((SearchEvent e) => e.hit).nonNulls.toList();
+      expect(hits, hasLength(1));
+      expect(hits.single.chapterTitle, '附录章（非主线）',
+          reason: '与 chapters() 的平坦目录同源同值（CNT-05 后缀不丢）');
+      await source.dispose();
+    });
+
+    test('#6 skip 预取：有目录书 search 标题仍取自 toc（不受开关影响）', () async {
+      final DartEpubSource source = DartEpubSource(
+        fileName: 'ncx2.epub',
+        bytes: _epub2WithNcx(),
+        prefetchFlatTitles: false,
+      );
+      final List<SearchEvent> events =
+          await source.search('上。', cancel: CancelToken()).toList();
+      final List<SearchHit> hits =
+          events.map((SearchEvent e) => e.hit).nonNulls.toList();
+      expect(hits.single.chapterTitle, '上部',
+          reason: '有 toc：命中标题取目录项，与预取开关无关（既有语义回归）');
       await source.dispose();
     });
   });

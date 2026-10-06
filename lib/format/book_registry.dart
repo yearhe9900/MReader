@@ -104,6 +104,12 @@ class BookRegistry {
   /// 见 `lib/format/structure_cache.dart`）；缺一即不启用，其余格式忽略这两参。
   /// 签名兼容：两参皆带默认值 `null`，既有调用点一字不动。
   ///
+  /// ## 标题预取开关（挂账 #6）
+  ///
+  /// [prefetchFlatTitles] 同样只透传给 [DartEpubSource]（默认 `true` = 既有行为，
+  /// 其余格式忽略）：搜索后台重建路径传 `false` 跳过无目录书的全书标题预取，
+  /// 见 `DartEpubSource.prefetchFlatTitles`。
+  ///
   /// ## 加速层择实现的位置（**当前状态如实写明，别当成已接完**）
   ///
   /// 架构 §A.1 的目标形态是：`epub` / `txt` 两路按
@@ -121,6 +127,7 @@ class BookRegistry {
     required Uint8List bytes,
     StructureCacheStore? structureCache,
     StructureCacheKey? cacheKey,
+    bool prefetchFlatTitles = true,
   }) async {
     switch (sniffFormat(fileName: fileName, bytes: bytes)) {
       case FormatKind.epub:
@@ -129,6 +136,7 @@ class BookRegistry {
           bytes: bytes,
           structureCache: structureCache,
           cacheKey: cacheKey,
+          prefetchFlatTitles: prefetchFlatTitles,
         );
       case FormatKind.txt:
         return DartTxtSource(fileName: fileName, bytes: bytes);
@@ -152,6 +160,9 @@ class BookRegistry {
 /// [structureCache] + [cacheKey]：M-PAGE `T06` 结构缓存透传，**成对**才有意义
 /// （缺一即不启用），见 [BookRegistry.open]。
 ///
+/// [prefetchFlatTitles]：挂账 #6 标题预取开关（默认 `true` = 既有行为），
+/// 搜索后台重建路径传 `false`，见 [BookRegistry.open]。
+///
 /// 三种取值别混用：
 ///   · 不给 [registry]（或给 `const BookRegistry()`）→ **走组合根注入点**
 ///     （生产路径：`main()` 已在 `runApp` 前 `warmUp()` 并写入
@@ -165,12 +176,14 @@ Future<BookSource> openBook({
   BookRegistry registry = const BookRegistry(),
   StructureCacheStore? structureCache,
   StructureCacheKey? cacheKey,
+  bool prefetchFlatTitles = true,
 }) =>
     registry.open(
       fileName: fileName,
       bytes: bytes,
       structureCache: structureCache,
       cacheKey: cacheKey,
+      prefetchFlatTitles: prefetchFlatTitles,
     );
 
 /// 一级（扩展名）+ 二级（魔数）分发（PRD §7.3 二级判定；`FMT-06` 魔数纠偏，
