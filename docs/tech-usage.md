@@ -2347,3 +2347,33 @@ EdgeInsets shelfGridPadding(double topInset) =>
 **lint 三连（同型坑）**：① `prefer_initializing_formals` 触发条件 = 字段名恰为 `'_'+参数名`（`_client=client` 触发、`_progress=progressStore` 不触发）→ 命名初始化形参**不能**写 `this._x` → 行尾 `// ignore:` + 两行理由（先例 `high_perf_registry.dart:72`）；② `SyncRunReport` 静态工厂与实例字段**不可同名**（`conflicting_static_and_instance`）→ 字段改 `wasSkipped`；③ `GlassOverlays.showToast` 返回 **`VoidCallback`**（dismiss 回调）非 Future → `await` 触 `await_only_futures`。
 
 > **未做 / 范围注记（如实登记）**：① 笔记无存储待落地后并入；② **书签删除不跨设备传播**（并集无墓碑，PRD 未定义）；③ `progressRemotePath` 净化 `/\.?`→`_` 防被客户端拆目录、作者空→`未知`；④ M4-T07（MOBI）受 gate 阻塞、T08/T09 属验收批。
+
+### 2.66 挂账 #6 — 无 toc 大书搜索首屏优化（阈值 4 纯 Dart 路径，2026-10-06）
+
+| 项 | 值 |
+|---|---|
+| 挂账 | 进度表挂账 #6 / 阈值 4（PRD §15.6）：48M 字符无 toc EPUB 搜索首屏 4.2s（2.8× over），根因 `flatTitles` 全书预取是搜索的纯前置成本 |
+| 提交 | `aba22eb`（docs 本文档随后提交） |
+| 日期 | 2026-10-06 |
+| 一句话方案 | **搜索的标题需求与全书标题预取解耦**：搜索路径跳过预取（`prefetchFlatTitles: false`），命中章标题从扫描循环已有的 `extractSection` 结果零成本取得 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| **开关透传链** | 纯数据跨 isolate 的条件预取 | `EpubParseRequest.prefetchFlatTitles`（默认 `true`）→ `parseEpubStructureTask` → `parseEpubStructure` → `_parse` 第 8 步 | 默认 `true` ⇒ 所有既有调用点一字不动；`_parse` 无 toc 分支分两支：真预取（原样）/ 占位 |
+| **占位而非空 map** | 防消费方 miss 回退现场解压 | `_parse` skip 支填 `{ref.href: ''}` | 空 map = 「未预取」→ `_flatChapter` 现场逐章解压 = 把预取消掉的解压挪到消费方（等于没省）；`''` = 「已预取无标题」→ 「第 N 章」占位**不再解压**。键集与真预取一致（缺文件章两边同跳过） |
+| **命中标题零额外成本** | 解耦的核心 | `DartEpubSource.search()`：`extractSection(section.rawBytes)` 的结果同时供 `paragraphs` 与**标题** | 无 toc 时 hit 标题 = `_flatChapter(section, i, nonLinear: !section.linear, title: extracted.title).title`（保留「（非主线）」后缀、与 `chapters()` 同源同值——预取存的就是同一字节流的同一 h1）；**有 toc 时保持 `chapter.title` 不变**（否则 toc 标题被 h1 顶掉） |
+| **占位结构禁写缓存** | 防污染阅读页 | `_parseOffloaded` 写回条件加 `&& prefetchFlatTitles` | skip 模式解析出的 `flatTitles` 全是 `''`，写回后阅读页命中缓存会把「第 N 章」占位当真标题；缓存**读**不受限（真标题结构对搜索同样有效且更优） |
+| 两处调用点同口径 | 后台与回落路径一致 | `search_session.dart` `_searchIsolateMain:202` 与 `_LocalRun._run:366` | 均传 `prefetchFlatTitles: false`；`book_registry.dart` `open`/`openBook` 加同名透传参数（默认 `true`，其余格式忽略） |
+| PerfLog 分账扩展 | 观测 skip 是否生效 | `epub.flatTitles` 行尾 `prefetch=0/1` | 原格式仅 `sections=`；无工具解析该行（grep 全仓实证），可安全扩展 |
+
+**测试（4 新增 + 回归，`flutter test test/format test/search test/epub test/meta test/task` 全绿 483 条）**：
+① skip 形状断言（占位 map + 键集与真预取一致）；② `chapters()` 占位命中不回退（得「第 1 章」）；
+③ **skip 与 prefetch 两模式 search 命中标题同值（真实 h1）**；④ 非主线后缀保留 + 有 toc 标题回归；
+⑤ 缓存写回 guard（skip → `writes==0`，默认 → `writes==1` 对照）；⑥ `search_session` 端到端
+（spec 后台重建命中标题 = `['第一章','第一章','第二章']`，占位不泄漏）。
+既有 `search_session_test:93`「命中标题 == chapters() 同源」断言自动覆盖跨模式同值。
+
+**效果与边界（如实登记）**：跳过的成本 = 无 toc 书全书逐章「解压 + XHTML 抽标题」
+（48M 字符样本 ≈145MB inflate），即 4.2s 根因链的 ①；**开发机复测与 Android 正式判定待回填**
+（`search.md` §6）。残余成本 = 每次搜索的 zip 重扫 + 章节按需解压扫描（本底，无 toc 亦然）。
+
