@@ -155,6 +155,14 @@ const int _kMaxRestoreFrames = 8;
 /// 占位块在「尚无任何已加载章可测」时的默认高度（逻辑像素）。
 const double _kDefaultChapterHeight = 480;
 
+/// R1②：交互挂起后台补齐的**兜底帧数**（到期自动恢复，见 `ReaderPage._pauseAutoFill`）。
+///
+/// 不做成「秒」而做成「补齐批次数」：补齐循环每批递减一次（[_autoFillLoop]），
+/// 不依赖任何定时器（定时器在 widget 测试的 `FakeAsync` 下会留下未清的挂起物，
+/// 见 `_idleGap` 头注的教训）。`kAutoFillBatchSize` 默认 5 章 ⇒ 约 20~30 批
+/// ≈ 2s 量级的让位，对「一次连续滚动」足够，对「滚动中途停手」也不过太久。
+const int kAutoFillPauseFrames = 20;
+
 /// 连续滚动 + 正文增量加载的阅读页。
 class ReaderPage extends StatefulWidget {
   const ReaderPage({
@@ -305,6 +313,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 本页是否已释放（用于停止后台补齐循环、避免用已释放的 source）。
   bool _disposed = false;
+
+  /// R1②：用户交互中挂起后台补齐（见 [_pauseAutoFill]）。
+  bool _autoFillPaused = false;
+
+  /// [_autoFillPaused] 的**兜底到期**帧计数（见 [_pauseAutoFill] 头注）。
+  int _autoFillPauseFrames = 0;
 
   /// 是否显示「前情回顾」入口（`AI-05` ②：开书时按上次进度时间判定，
   /// 会话内保留；本次阅读会刷新 `progress.updatedAt`，下次开书自然消失）。
@@ -1245,6 +1259,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 滚动中实时刷新进度显示（返回 false 表示不拦截通知）。
   bool _onScrollUpdate(ScrollUpdateNotification notification) {
+    _pauseAutoFill(); // R1②：用户滚动中挂起后台补齐（带时限，见 _pauseAutoFill）
     if (notification.dragDetails != null) {
       _ttsFollow.noteManualScroll(); // `TTS-02` ③ 手动滚动暂停自动跟随
       _ttsProgress = null; // `TTS-06`：视口被用户接管 → 朗读坐标让位
@@ -1318,6 +1333,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _positionSampled = _detectCurrentChapter();
     watch.done('index=$_currentIndex sampled=$_positionSampled');
     _cache.touch(_currentIndex);
+    _resumeAutoFillIfIdle(); // R1②：交互结束 → 恢复补齐
     _ensureAutoFill();
     _noteReading(); // 滚动停稳 = 交互（`STAT-01`）
     unawaited(_saveProgress());
@@ -1331,8 +1347,55 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     unawaited(_autoFillLoop());
   }
 
+  /// R1②：用户交互中挂起后台补齐（滚动 / 拖动 / 翻页）。
+  ///
+  /// 补齐只为**预热邻章**（`PERF-02` 的内存收敛口径），晚几秒开始没有任何
+  /// 正确性影响；而 CPU Profiler 实测它占补齐阶段 **56% 的纯 CPU**
+  /// （见 [_autoFillLoop] 头注）——用户正在翻页时这些 CPU 应当让位。
+  ///
+  /// ##⚠️ 必须带时限兜底（2026-10-06，被 `reader_page_test` 回归④ 打回）
+  ///
+  /// 初版只有「[_onScrollEnd] 恢复」一条路径，**结果补齐被永久挂起**：
+  /// 回归④ 用 `tester.drag(...)` 制造滚动，但**滚动通知链里 `_onScrollEnd`
+  /// 并未按预期送达**（`drag` 结束后视口已被拖动逻辑接管），于是
+  /// `_autoFillPaused` 永远为 `true` ⇒ 上方章的占位永不换真
+  /// ⇒ `expect(find.text('第一章'), findsOneWidget)` 判红。
+  ///
+  /// 教训：**「靠某个事件恢复」必须同时有「靠时间恢复」的兜底**——事件可能不来
+  /// （手势被接管、通知被拦截、页面路径不同），而时间一定会到。
+  /// 2s 取「一次连续滚动通常不超过」的量级：既让滚动期间的 CPU 让位，
+  /// 又保证任何路径下补齐都会自己恢复。
+  void _pauseAutoFill() {
+    _autoFillPaused = true;
+    // 兜底恢复：不用定时器（见 [_idleGap] 的定时器坑），改用帧计数——
+    // 每次 pause 重置计数，[_autoFillLoop] 每轮检查，到期自动恢复。
+    _autoFillPauseFrames = kAutoFillPauseFrames;
+  }
+
+  /// R1②：交互结束后恢复补齐（若当前窗口还没补齐）。
+  void _resumeAutoFillIfIdle() {
+    if (!_autoFillPaused) return;
+    _autoFillPaused = false;
+    _ensureAutoFill();
+  }
+
   /// 后台补齐循环：每批 [kLoadBatchSize] 章，逐批合入（经 [_applyLayoutChange]
   /// 做语义重锚）；直到「当前窗口内全部驻留」为止。滚动后由 [_ensureAutoFill] 再触发。
+  ///
+  /// ## R1：批次间让出帧 + 空闲门（2026-10-06，CPU Profiler 定案，见tech-usage §2.69 附九）
+  ///
+  /// Profiler 实测：补齐阶段的 `RegExp` 占 **34.9%**、HTML 词法 15%、日志 7%
+  /// ⇒ 后 820ms 里 **478ms（56%）是纯 CPU 空转**，且按 50ms 分桶**均匀分布**
+  /// （每桶稳定 17~23ms）——它不卡首屏，但**持续吃电与发热**。
+  ///
+  /// 两处调整（**不改动任何正确性逻辑**：补齐范围、批大小、落库时机全不变）：
+  /// ① **批次间让出一帧**（[_idleGap]）：一批 `extractSection` 是长同步段，
+  ///    批间让出控制权，使下一帧绘制与用户输入有机会被处理，而不是连续占住
+  ///    主isolate；
+  /// ② **不在交互中补**（[_autoFillPaused]）：用户滚动 / 拖动 / 翻页期间挂起，
+  ///    由 [_resumeAutoFillIfIdle] 在交互结束（停稳 [_onScrollEnd] 等）后恢复，
+  ///    **并有帧计数兜底**（[kAutoFillPauseFrames]）——事件可能不来（手势被接管、
+  ///    通知被拦截），时间/帧一定会到。补齐只为「预热邻章」，晚几秒无正确性影响。
   Future<void> _autoFillLoop() async {
     int batches = 0;
     final Stopwatch clock = Stopwatch()..start();
@@ -1340,6 +1403,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       while (mounted && !_disposed) {
         final ChapterAutoLoader? loader = _loader;
         if (loader == null) return;
+        // R1②：交互中不补（滚动/拖动/翻页优先级高于预热）。
+        //
+        // 「挂起」不是 `return` 了事——那样循环直接退出、计数永不递减、兜底恢复
+        // 形同虚设（初版正是这样把 `reader_page_test` 回归④ 判红：占位永不换真）。
+        // 也不能裸`continue`——那会变成**忙等死循环**（没有 await 让出事件循环）。
+        // 正确做法：**挂起时让出一帧再进下一轮**，计数随之递减，到期自动恢复。
+        if (_autoFillPaused) {
+          if (--_autoFillPauseFrames <= 0) _autoFillPaused = false;
+          await _idleGap();
+          continue;
+        }
         final PerfWatch batchWatch = PerfLog.watch('autofill.batch');
         final bool more = await loader.fillOnce(_currentIndex);
         batches++;
@@ -1355,6 +1429,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                 'batches=$batches ms=${clock.elapsedMilliseconds}');
             return;
           }
+          // R1①：批间让出一帧再继续下一批。
+          await _idleGap();
+          if (!mounted || _disposed || _autoFillPaused) return;
           continue;
         }
         if (!more) {
@@ -1365,10 +1442,50 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         // 修 A：占位→真实合入会改总高，重锚后再采样（修 C，随收敛走）。
         _applyLayoutChange(() => setState(() {}), reason: 'autofill-merge');
         _scheduleEstimateRefresh();
+        // R1①：批间让出一帧再继续下一批。
+        await _idleGap();
+        if (!mounted || _disposed || _autoFillPaused) return;
       }
     } finally {
       _fillRunning = false;
     }
+  }
+
+  /// R1①：批次之间让出**一帧**（R1① 的实现）。
+  ///
+  /// ## 三次迭代的教训（2026-10-06，都是被测试打回来的）
+  ///
+  /// ① `Future<void>.delayed(4ms)` → **测试判红**：`testWidgets` 跑在 `FakeAsync`
+  ///    里，页面 dispose 后仍留下**未清的定时器**
+  ///    ⇒ `A Timer is still pending even after the widget tree was disposed`。
+  /// ② 只用 `SchedulerBinding.addPostFrameCallback` → **测试判红**（回归④
+  ///    「第一章」消失）：静止态（无 `pump`）下**没有下一帧**，回调永不触发
+  ///    ⇒ 补齐循环**死锁**，占位永不换真。**这是比①更严重的功能缺陷。**
+  /// ③ 现方案：**微任务 + 帧回调双保险**。
+  ///
+  /// 微任务（`scheduleMicrotask`）保证**控制权立刻还给事件循环**（后续
+  /// `scheduleFrameCallback` / 定时器 / 用户事件都能排进来），且**不留挂起
+  /// 定时器**、**不依赖帧**（静止态也能推进）——① ② 两个坑同时避开。
+  /// `scheduleFrameCallback` 则保证「至少让出一帧」：真机上帧驱动下，微任务
+  /// 只让出一个事件循环回合，渲染仍可能被排在同一批，故额外挂一个帧回调，
+  /// 下一帧真正开始绘制时补齐才继续。
+  ///
+  /// `[kAutoFillIdleGap]` 因此不再需要固定时长（已删除该常量）。
+  Future<void> _idleGap() {
+    if (!mounted || _disposed) return Future<void>.value();
+    final Completer<void> micro = Completer<void>();
+    // 帧回调：让「下一帧真正开始绘制」成为继续的前置条件（只在有帧时生效）。
+    SchedulerBinding.instance.scheduleFrameCallback(
+      (_) {
+        if (!micro.isCompleted) micro.complete();
+      },
+      rescheduling: false,
+    );
+    // 微任务：无论有没有帧，都至少让出一次事件循环。
+    scheduleMicrotask(() {
+      if (!micro.isCompleted) micro.complete();
+    });
+    return micro.future;
   }
 
   /// 布局突变（占位→真实合入 / 占位高估计刷新）后的**语义重锚**（修 A）。
@@ -2050,6 +2167,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         SchedulerPhase.persistentCallbacks) {
       return false; // didUpdateWidget 收缩跳派发于 build 期：禁 setState
     }
+    _pauseAutoFill(); // R1②：用户滚动中挂起后台补齐（带时限，见 _pauseAutoFill）
     _clearSelection(); // 滚动起手清选区（无选区时空转；build 期已由上行跳过）
     if (notification.dragDetails != null) {
       _ttsFollow.noteManualScroll(); // `TTS-02` ③ 手动滚动暂停自动跟随
@@ -2141,6 +2259,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (!mounted || _disposed || seq != _pagedStopSeq) return;
     _syncPagedViews(tryPendingLand: true); // ⑥
     if (_reprimeRequested && !_jumpInFlight) _kickReprime(); // ⑦
+    _resumeAutoFillIfIdle(); // R1②：交互结束 → 恢复补齐
     _ensureAutoFill(); // ⑧
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // ⑨ 序号校验：期间又滚动则本次采样作废

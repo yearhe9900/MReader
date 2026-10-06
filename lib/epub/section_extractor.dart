@@ -152,7 +152,7 @@ const Set<String> _preservedInlineTags = <String>{'b', 'i'};
 void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir) {
   // 入口节点本身是 <table>（fragment 定位路径可能直接给出表/表后继节点）
   // 时同样走按行退化，避免锚点定位退回「每单元格一段」的旧切法。
-  if (node is dom.Element && (node.localName?.toLowerCase() ?? '') == 'table') {
+  if (node is dom.Element && _tagName(node) == 'table') {
     _flush(buffer, out);
     _walkTable(node, out, baseDir);
     return;
@@ -165,7 +165,7 @@ void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir)
     }
     if (child is! dom.Element) continue;
 
-    final String tag = child.localName?.toLowerCase() ?? '';
+    final String tag = _tagName(child);
     if (_skipTags.contains(tag)) continue;
 
     // <br>：行内换行（`CNT-02`）——写入 '\n' 不切段，诗歌等逐行内容
@@ -274,6 +274,38 @@ final RegExp _kWhitespaceRun = RegExp(r'\s+');
 /// 兜底去标签用的「任意标签」模式（仅 [_stripTags] 一处用，构造次数可忽略）。
 final RegExp _kAnyTag = RegExp(r'<[^>]*>');
 
+/// 取标签名的**小写**形式，供 `_skipTags` / `_blockTags` 等小写集合比对。
+///
+/// ## R2：为什么不是直接 `localName.toLowerCase()`（2026-10-06，§2.69 附九）
+///
+/// CPU Profiler 实测：`_OneByteString.toLowerCase` 35ms + `contains` 33ms
+/// + `==` 6ms ≈ **开书窗口 45ms（14%）**——因为 [_walk] 对**每个元素节点**都调
+/// 一次 `toLowerCase()`（HTML 允许 `<P>`、`<BR>`，故小写化**不能删**，
+/// 14 个脏书 fixture 覆盖了大写标签）。
+///
+/// 但**绝大多数真机正文里标签本来就是小写**（XHTML 输出），此时
+/// `toLowerCase()` 仍要**完整扫描并分配一个新字符串**（`'p'.toLowerCase()`
+/// 也会走通用路径）。本函数先做「是否已小写」的廉价判定：
+///
+/// - 已小写（`true`，覆盖绝大多数节点）→ **直接返回原串，零分配零扫描**；
+/// - 含大写（脏书）→ 退回 `toLowerCase()`，**语义与原先一字不差**。
+///
+/// 判定用 `codeUnitAt` 逐字符比而非正则，同样避免分配。
+String _tagName(dom.Element element) {
+  final String? name = element.localName;
+  if (name == null || name.isEmpty) return '';
+  for (int i = 0; i < name.length; i++) {
+    final int c = name.codeUnitAt(i);
+    // 'A'(65) ~ 'Z'(90) 与 'a'(97) ~ 'z'(122) 同时出现 ⇒ 必然含大写。
+    if (c >= 65 && c <= 90 && c < 97) return name.toLowerCase();
+    if (c >= 97 && c <= 122) continue; // 小写字母：继续
+    // 非 ASCII（中文标签名等）：UTF-16 里不会有 >122 的 ASCII 大写，
+    // 但可能有中文；中文 `toLowerCase()` 是恒等，**直接返回**即可。
+    return name.toLowerCase();
+  }
+  return name; // 全小写：原样返回
+}
+
 /// 剥离全部 NUL 标记后的可见文本（渲染层吞标记，口径与之一致）。
 String _visibleText(String paragraph) =>
     paragraph.replaceAll(_kAnyMarkerPair, '').replaceAll('\x00', '').trim();
@@ -342,7 +374,7 @@ void _mergeMarkerOnlyParagraphs(List<String> paragraphs) {
 void _walkTable(dom.Element table, List<String> out, String baseDir) {
   // <caption>：表题/表说明退化为表格前的独立段落，避免内容丢失。
   for (final dom.Node child in table.nodes) {
-    if (child is dom.Element && child.localName?.toLowerCase() == 'caption') {
+    if (child is dom.Element && _tagName(child) == 'caption') {
       final List<String> caption = <String>[];
       final StringBuffer captionBuffer = StringBuffer();
       _walk(child, caption, captionBuffer, baseDir);

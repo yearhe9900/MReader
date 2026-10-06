@@ -2947,3 +2947,44 @@ Dart VM 对小对象构造有优化，**逐节点 `RegExp` 构造本身并不贵
 **性能诊断的优先级应是：①引擎侧 Profiler（能区分 Dart/引擎/后台）
 → ②真机埋点分段（能定位到函数）→ ③自造探针（只适合验证单点假设）。**
 我本该在第 1 轮就要求 CPU Profiler，而不是连写四个探针。
+
+#### §2.69 附十：R1 + R2 实施（含三次返工的教训，2026-10-06）
+
+**依据**：附九的 CPU Profiler（开书窗 RegExp 31.6% / HTML 词法 14.9% / 字符串 14% /
+排版 0.5%；后台窗 478ms = 56% 纯 CPU）。**新一份 Timeline 帧数据**（`flutterFrames`
+310 帧，单位 μs）：`build` avg 1.4ms / max 16.5ms、`raster` avg 3.7ms / max 20.8ms、
+**raster>16ms 的只有 6/310 = 2%** ⇒ **渲染不是问题**（再次印证附六）。
+
+**R1：后台补齐不再抢占**（`reader_page.dart`）
+- ①**批间让出一帧**（`_idleGap`）：一批 `extractSection` 是长同步段，让出控制权给
+  下一帧绘制与用户输入。
+- ②**交互中挂起**（`_autoFillPaused`）：滚动/拖动/翻页期间不补，
+  `_onScrollEnd` / `_onPagedScrollEnd` 恢复，**另有帧计数兜底**。
+
+**R2：热路径去字符串操作**（`section_extractor.dart`）
+- 新增 [_tagName]：`localName` 已全小写（真机XHTML 常态）时**零分配返回原串**；
+  含大写（脏书 `<P>`/`<BR>`）才退回 `toLowerCase()`，**语义一字未改**
+  （14 个脏书 fixture 全绿验证）。替换 `_walk` 入口/主循环 + `_walkTable` caption
+  共 3 处热路径；另 4 处是**冷路径**（每章/每表一次），保持原样不动。
+
+**⚠️ 三次返工（都被测试打回，如实记档）**：
+
+| # | 写法 | 判红原因 | 教训 |
+|---|---|---|---|
+| 1 | `_idleGap` = `Future.delayed(4ms)` | `A Timer is still pending even after the widget tree was disposed`（`selection_winding_test` 两条 + 回归④） | **定时器在 `FakeAsync` 里会留挂起物**；真机上也等于「页关了还有定时器」 |
+| 2 | `_idleGap` = 只用 `addPostFrameCallback` | 回归④「第一章」消失 ⇒ **补齐死锁** | 静止态（无 `pump`）**没有下一帧**，回调永不触发。比 ① 更严重——是功能缺陷 |
+| 3 | R1② 挂起只靠 `_onScrollEnd` 恢复 | 回归④ 仍红：`tester.drag` 后**滚动结束通知并未按预期送达** ⇒ 挂起**永久化** | **「靠事件恢复」必须配「靠帧/时间恢复」兜底**——事件可能不来（手势被接管/通知被拦截），帧一定会到 |
+
+最终形态：`_idleGap` = **微任务 + `scheduleFrameCallback` 双保险**（微任务保证静止态
+也能推进、且不留挂起物；帧回调保证真机上让出一帧）；R1② 兜底 = **帧计数**
+（`kAutoFillPauseFrames = 20`，挂起期间**每轮让一帧并递减**，到期自动恢复；不用定时器，
+同①的教训）。
+
+**⚠️ R2 收益的诚实登记**：变异对比（`_tagName` 退回无条件 `toLowerCase`）
+测得 **10.8 → 10.3ms/章**，即**约 5% 且接近噪声**（Profiler 里的45ms 是
+「真机长正文 + 1200 个 Text 节点」量级，探针样本小得多）。
+**方向正确、风险低、语义零差异，保留；但不宣称它显著改善首帧。**
+
+**回归**：`test/reader + tts + search + ui + diagnostics + epub + format`
+**全量零失败**（含 14 个脏书 fixture、5 个分页/翻页测试）。`dart analyze lib/ test/`
+零问题。
