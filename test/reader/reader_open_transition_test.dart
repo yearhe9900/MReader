@@ -91,6 +91,47 @@ void main() {
       expect(find.text('正文已上屏'), findsOneWidget);
     });
 
+    testWidgets('文字与进度条延迟出现：刚推入时书名不可见',
+        (WidgetTester tester) async {
+      // 若一进屏就显示书名 + 闪进度条，观感即「廉价」（第一版的 complaints 之一）。
+      await tester.pumpWidget(const _Host(
+        cover: ColoredBox(color: Color(0xFF888888)),
+      ));
+      await tester.tap(find.text('open'));
+      List<double> ops() => tester
+          .widgetList<Opacity>(find.byType(Opacity))
+          .map((Opacity o) => o.opacity)
+          .toList();
+
+      // 推入帧：遮罩刚建（首帧可能还没建出 Opacity 节点），推进几帧到遮罩成形。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      // 成形帧里必须存在一层 Opacity=0 的文字组（延迟出现，不一进屏就闪）。
+      expect(ops(), contains(0.0),
+          reason: '遮罩成形帧文字组应 Opacity=0（延迟出现）');
+
+      // 随后渐入（0<v<1）——延迟确实走完了，而非永不出现。
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(ops().any((double v) => v > 0 && v < 1), isTrue,
+          reason: '文字组应处于渐入中间态');
+
+      await tester.pumpAndSettle();
+      expect(find.text('测试书名'), findsNothing, reason: '就绪后遮罩撤除');
+    });
+
+    testWidgets('无残留定时器：撤遮罩后不留下 pending timer',
+        (WidgetTester tester) async {
+      // 回归 R1 踩过的坑（tech-usage §2.69 附十 教训①）：`Future.delayed` 在
+      // FakeAsync 下会留未清挂起物 ⇒ `A Timer is still pending` 断言。
+      // 本转场的「延迟出现」用帧回调实现，故这里必须干净通过。
+      await tester.pumpWidget(const _Host(
+        cover: ColoredBox(color: Color(0xFF888888)),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('兜底：阅读页永不发信号，转场播完也撤遮罩',
         (WidgetTester tester) async {
       // 直接构造路由但 builder 里**不发**信号（模拟解析失败等异常路径）。
