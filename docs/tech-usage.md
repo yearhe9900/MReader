@@ -2380,3 +2380,24 @@ EdgeInsets shelfGridPadding(double topInset) =>
 本底）；对照组不变量（big_320 / TXT / 四组命中计数 1/100/1/1）全部无回归。
 **Android 主力机 AOT 正式判定待随 M3.5-T02 批次复跑**；有 toc 真书 c 项复测同批。
 
+### 2.67 M3.5-T03 gate：vendored cargokit 不兼容 Gradle 9（`project.exec` 移除，2026-10-06）
+
+| 项 | 值 |
+|---|---|
+| 症状 | `flutter build apk --debug` 失败：`rust_builder/cargokit/gradle/plugin.gradle` line 68 `Could not find method exec() ... on project ':rust_lib_mreader' of type org.gradle.api.Project`（BUILD FAILED 9m16s） |
+| 提交 | 代码 + 护栏随后提交（本文档同批） |
+| 日期 | 2026-10-06 |
+| 一句话方案 | vendored cargokit 的两处 `project.exec` → 注入 `org.gradle.process.ExecOperations` 后用 `execOperations.exec`（上游 fzyzcjy/cargokit main 同款修法） |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| **Gradle 9 删 `Project.exec()`** | 根因 | Flutter 3.47 工具链 = Gradle 9.1.0 / AGP 9.0.1 / Kotlin 2.3.20 | `javap org.gradle.api.Project` 实证**无任何 exec 成员**；`org.gradle.process.ExecOperations.exec(Action<? super ExecSpec>)` 在场 ⇒ 官方替代 = 任务类 `@Inject abstract ExecOperations getExecOperations()` |
+| **全仓仅此 2 处** | 修面收敛 | `plugin.gradle` 第 72/77 行（chmod 支 + build-gradle 主支） | grep `project.exec` 全仓命中数 = 2，均在本文件；其余环境变量行原样 |
+| **注释写「同款修复」而非「逐字节相同」** | 留证诚实 | 任务类头注 | 本仓加了上游没有的 4 行警告注释，不能自称 byte-identical；注明 javap 实证与「勿回退」 |
+| **codegen 2.13.0 内嵌模板仍是坏版本** | 覆盖风险 | `flutter_rust_bridge_codegen.exe` 字符串统计 | `project.exec` ×2、`ExecOperations` ×0 ⇒ **重跑 `generate` 重写脚手架会把修复覆盖回坏版本**；已在护栏测试头注写明 |
+| **护栏测试（沿 RUST-04 纯文本先例）** | 防静默回退 | `test/rust_profile_guard_test.dart` +1 | 断言无 `project.exec(`、有 `execOperations.exec`、有 `@Inject abstract ExecOperations getExecOperations`；文件缺失环境自动跳过 |
+
+**实证链**：读 wrapper 确认 Gradle 9.1.0 → javap 查 `Project`/`ExecOperations` 签名 → WebFetch 上游 cargokit main 拿官方修法（curl raw.githubusercontent exit 56，改用 WebFetch 内容比对）→ 应用 3 处编辑（imports / `@Inject` getter / 两处调用）→ `git diff --stat` 11+/2− 无行尾漂移 → 护栏测试 + analyze 零问题 + 3 条测试绿。
+
+**边界**：① 未实跑 `flutter build apk --debug` 复验（构建命令归负责人手动跑，gate 命令链见 M3.5-T03）；② flutter_tts KGP 警告与 Flutter assets 走 storage.flutter-io.cn 属**另有提示**，非本次失败因；③ `CHANGELOG` 不记（代码/构建类，按拍板口径「只记用户可见功能变动」）。
+
