@@ -2401,3 +2401,47 @@ EdgeInsets shelfGridPadding(double topInset) =>
 
 **边界**：① 未实跑 `flutter build apk --debug` 复验（构建命令归负责人手动跑，gate 命令链见 M3.5-T03）；② flutter_tts KGP 警告与 Flutter assets 走 storage.flutter-io.cn 属**另有提示**，非本次失败因；③ `CHANGELOG` 不记（代码/构建类，按拍板口径「只记用户可见功能变动」）。
 
+### 2.68 阅读页 chrome 分组收纳（顶栏 9→6 按钮 + 控制条三组化，2026-10-06）
+
+| 项 | 值 |
+|---|---|
+| 触发 | 负责人真机截图：顶栏 9 个图标按钮把书名/副标题**完全挤掉**；底部控制条两行 11 个控件彼此贴死、行距滑块被压到不足 30dp |
+| 一句话方案 | **按用途把控件归进带标题的分组盒**（淡底圆角 + 分隔线），顶栏 4 个 AI 入口收进单个「AI 助手」面板；窄屏按实测阈值分三级降级（隐文字标题 → 隐进度读数 → 滑块换行） |
+
+**分组划分依据**（同一用途 / 同一层级归一组）：
+
+| 位置 | 分组 | 组内控件 | 依据 |
+|---|---|---|---|
+| 顶栏 | ① 检索与标记 | 搜索、书签 | `CNT-06` / `TYP-06`，页面级查找与标记 |
+| 顶栏 | ② AI 增强 | **单入口** → 面板内 4 行 | `AI-04`~`AI-07` 同属 AI 能力，平铺 4 个是拥挤主因 |
+| 顶栏 | ③ 外观与视图 | 外观、目录、全屏 | `TYP-03`/`TYP-07`/`TYP-08` + `NAV-01`（要求 AppBar 目录按钮）+ `TYP-09` |
+| 控制条①行 | 章节 | 上一章、下一章、进度读数 | 同一层级 = 位置导航；读数是「当前在哪」的组内读数 |
+| 控制条①行 | 朗读与 AI | AI 摘要、朗读、朗读设置 | 同属「听/读辅助」，按可用性出，三者全关则整组隐藏 |
+| 控制条②行 | 排版 | 字号(−/值/+) ‖ 行距(滑块) ‖ 版面(边距/主题) | `TYP-01`/`TYP-02`/`TYP-03` 同属排版参数 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| **9 × 48 > 屏宽** | 拥挤的量化根因 | `reader_page.dart` `AppBar.actions` | 9 个按钮 432dp > 393dp（小米机型）⇒ `title` 的 `maxLines:1 + ellipsis` 在 0 宽下什么都不剩，收纳到 6 个（288dp）后标题复原 |
+| **`IconButton` 的 48 幽灵** | 「统一尺寸」的假象 | `ReaderControlIconButton` | 写 `constraints: tightFor(44,44)` 实测 `getSize` 返 **48**——`tapTargetSize` 缺省 `padded` 在 constraints 外再强制 48；且它**只在 `IconButton.style` 上**（构造参数没有）。修法：`style: IconButton.styleFrom(tapTargetSize: shrinkWrap)` |
+| **`visualDensity: compact` 同样是幽灵** | 同上 | 同上 | 会把 44 缩到 **40**；紧凑效果由常量 44 本身达成，**不要加** |
+| **分组盒的横向预算** | 决定滑块生死 | `reader_settings_bar.dart` | 排版组固定内容 ≈ 322dp（字号 122 + 版面 100 + 行距图标 26 + 2 分隔线 26 + 内外边距）。实测：字号/版面/行距**各套一层内盒**时 393dp 屏滑块只剩 **27dp**；去掉内盒（分隔线已足够界定）后 393dp 有 **79dp**、可用 |
+| **嵌套 `Expanded` 触发无界断言** | 布局崩溃 | `ReaderControlGroup.expand` | `MainAxisSize.min` 的 Row 内放 `Expanded` → `RenderFlex children have non-zero flex but incoming width constraints are unbounded`。外层总分组必须 `expand: true`；另 `LayoutBuilder` 在 Row 里是**非 flex 子节点**，也须包 `Expanded` |
+| **窄屏三级降级** | 「空间不足时优先层级清晰」 | `reader_control_chrome.dart` 三个常量 | ① < 420 隐**文字**标题（盒子仍在）；② < 348 隐控制条内进度读数（同一串文字由常驻的 `ReaderProgressIndicator` 显示，`TYP-09` 保底）；③ < 340 滑块换行独占 |
+| **控制条不可长高** | 保护正文可视高度 | `kReaderControlRowPadding = 2` | 它是 `bottomNavigationBar`，长 1dp 正文少 1dp。实测一度做到 157dp 导致 `image_pages_test` 验收②「点页 → 缩放查看器」失败（整页图点击中心被压到条下）⇒ 最终 393dp 屏 107dp（改前 96dp，仅多一条分隔线 + 呼吸空间） |
+| **进度读数重复** | 顺手记账 | — | 控制条读数与 `ReaderProgressIndicator` 是**同一串文字**（两处都在屏上）；降级②即基于此，不是丢信息 |
+
+**实测基线**（`tester.view.physicalSize` 宽度阶梯，探针实测后写死进 `reader_chrome_layout_test.dart` 头注）：
+
+| 屏宽 | 控制条高 | 行距滑块宽 | 文字组标题 | 进度读数 | 溢出 |
+|---|---|---|---|---|---|
+| 800 | 107dp | 充足 | 有 | 有 | 无 |
+| 393 | 107dp | 79dp | 无 | 有 | 无 |
+| 360 | 157dp | 298dp | 无 | 有 | 无 |
+| 320 | 161dp | 258dp | 无 | 无 | 无 |
+
+**测试**：新建 `test/ui/reader_chrome_layout_test.dart` **9 条**（高度上限 / 四档屏宽无溢出 / 控件一个不少 / 滑块可用下限 60dp / 标题降级 / 读数降级 / 功能整体隐藏 / 禁用态保留 / 44×44 统一）+ `test/reader/reader_ai_panel_test.dart` **3 条**（面板四行与回调 / `onRecap` 为 null 不渲染 / 顶栏 ≤6 按钮且书名可见）。
+
+**回归**：`test/reader test/tts test/search test/ui` 全量——本次失败 9 条，**与改前基线同一集合**（基线 10 条，含 1 条 `ShelfPage 回归②` 窗口 flake 在本次反而通过）；零新增失败。`dart analyze lib/` 零问题。
+
+**边界（如实登记）**：① 未真机复跑（`flutter run` 归负责人手动跑），上述数字均为 widget 测试环境的 `physicalSize` 阶梯，非真机 dp；② AI 四入口的**入口位置**从「顶栏第 3~6 个图标」变为「顶栏单个分组 → 面板行」，文案/回调/Key 全部逐条保持原样，但严格说是入口路径变化；③ 文字组标题只在 ≥420dp 出现，手机横屏与平板可见、竖屏手机只见盒子与分隔线；④ `CHANGELOG` 记 1 条（用户可见的顶栏按钮收纳）。
+

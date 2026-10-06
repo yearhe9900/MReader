@@ -112,6 +112,7 @@ import '../typography/typeset.dart';
 import '../ui/ask_panel.dart';
 import '../ui/entity_page.dart';
 import '../ui/glass_kit.dart';
+import '../ui/reader_control_chrome.dart';
 import '../ui/search_sheet.dart';
 import 'bookmark.dart';
 import 'bookmark_sheet.dart';
@@ -122,6 +123,7 @@ import 'image_cache.dart';
 import 'image_dimensions.dart';
 import 'highlight_follow.dart';
 import 'link_navigator.dart';
+import 'reader_ai_panel.dart';
 import 'pagination/incremental_paginator.dart';
 import 'pagination/page_breaker.dart';
 import 'pagination/page_paginator.dart';
@@ -3213,70 +3215,60 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                 ],
               ),
               actions: <Widget>[
-                IconButton(
-                  key: const Key('reader-search'),
-                  tooltip: '搜索',
-                  icon: const Icon(Icons.search),
-                  onPressed: ready ? _openSearch : null,
+                // 分组① 检索与标记：书内搜索（`CNT-06`）、书签（`TYP-06`）。
+                ReaderAppBarGroup(
+                  leadingDivider: false,
+                  children: <Widget>[
+                    IconButton(
+                      key: const Key('reader-search'),
+                      tooltip: '搜索',
+                      icon: const Icon(Icons.search),
+                      onPressed: ready ? _openSearch : null,
+                    ),
+                    IconButton(
+                      key: const Key('reader-bookmarks'),
+                      tooltip: '书签',
+                      icon: const Icon(Icons.bookmark),
+                      onPressed: ready ? _openBookmarks : null,
+                    ),
+                  ],
                 ),
-                IconButton(
-                  key: const Key('reader-bookmarks'),
-                  tooltip: '书签',
-                  icon: const Icon(Icons.bookmark),
-                  onPressed: ready ? _openBookmarks : null,
-                ),
-                // `AI-05` ②：停读 ≥7 天开书出现的前情回顾入口（会话内一次性）。
-                if (_showRecapEntrance && _summaryEnabled)
-                  IconButton(
-                    key: const Key('reader-recap'),
-                    tooltip: '前情回顾',
-                    icon: const Icon(Icons.history),
-                    onPressed: ready
-                        ? () => _openSummarySheet(SummaryMode.recap)
-                        : null,
+                // 分组② AI 增强：原 4 个平铺图标（前情回顾 / 摘要 / 问答 / 人物）
+                // 收进单个入口，见 [showReaderAiPanel] 的划分依据。
+                if (_aiPanelEnabled)
+                  ReaderAppBarGroup(
+                    children: <Widget>[
+                      IconButton(
+                        key: const Key('reader-ai-panel'),
+                        tooltip: 'AI 助手',
+                        icon: const Icon(Icons.auto_awesome),
+                        onPressed: ready ? _openAiPanel : null,
+                      ),
+                    ],
                   ),
-                // `AI-04`/`AI-05`：章节摘要 / 全书摘要 / 前情回顾统一入口。
-                if (_summaryEnabled)
-                  IconButton(
-                    key: const Key('reader-summary'),
-                    tooltip: 'AI 摘要',
-                    icon: const Icon(Icons.auto_awesome),
-                    onPressed: ready
-                        ? () => _openSummarySheet(SummaryMode.chapter)
-                        : null,
-                  ),
-                // `AI-06`：跟书问答（BM25 检索 + 引用跳转，`M3-T04`）。
-                if (_askEnabled)
-                  IconButton(
-                    key: const Key('reader-ask'),
-                    tooltip: 'AI 问答',
-                    icon: const Icon(Icons.question_mark),
-                    onPressed: ready ? _openAskSheet : null,
-                  ),
-                // `AI-07`：人物关系与设定梳理（`M3-T05`）。
-                if (_entitiesEnabled)
-                  IconButton(
-                    key: const Key('reader-entities'),
-                    tooltip: '人物与设定',
-                    icon: const Icon(Icons.people_alt_outlined),
-                    onPressed: ready ? _openEntityPage : null,
-                  ),
-                IconButton(
-                  key: const Key('reader-appearance'),
-                  tooltip: '外观',
-                  icon: const Icon(Icons.tune),
-                  onPressed: ready ? _openAppearance : null,
-                ),
-                IconButton(
-                  tooltip: '目录',
-                  icon: const Icon(Icons.list),
-                  onPressed: ready ? _openToc : null,
-                ),
-                IconButton(
-                  key: const Key('reader-fullscreen-enter'),
-                  tooltip: '全屏',
-                  icon: const Icon(Icons.fullscreen),
-                  onPressed: ready ? _toggleFullscreen : null,
+                // 分组③ 外观与视图：外观面板（`TYP-03`/`TYP-07`/`TYP-08`）、
+                // 目录（`NAV-01` 要求 AppBar 目录按钮）、沉浸全屏（`TYP-09`）。
+                ReaderAppBarGroup(
+                  children: <Widget>[
+                    IconButton(
+                      key: const Key('reader-appearance'),
+                      tooltip: '外观',
+                      icon: const Icon(Icons.tune),
+                      onPressed: ready ? _openAppearance : null,
+                    ),
+                    IconButton(
+                      key: const Key('reader-toc'),
+                      tooltip: '目录',
+                      icon: const Icon(Icons.list),
+                      onPressed: ready ? _openToc : null,
+                    ),
+                    IconButton(
+                      key: const Key('reader-fullscreen-enter'),
+                      tooltip: '全屏',
+                      icon: const Icon(Icons.fullscreen),
+                      onPressed: ready ? _toggleFullscreen : null,
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -3354,6 +3346,36 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         widget.aiClient != null &&
         widget.summaryCache != null &&
         store.prefs.aiEnabled;
+  }
+
+  /// AI 分组入口是否可用：**摘要 / 问答 / 人物** 任一可用即渲染该分组按钮
+  /// （`AI-04`~`AI-07` + `AI-09` ② 全局开关；三者全关时分组整体隐藏，与改前
+  /// 「三个按钮各自隐藏」的总可见效果一致）。
+  ///
+  /// 前情回顾（`AI-05` ②）**不计入**本判定：它是会话内一次性的提醒入口
+  /// （[_showRecapEntrance]），只在面板内作为附加行出现，不单独撑起分组按钮。
+  bool get _aiPanelEnabled =>
+      _summaryEnabled || _askEnabled || _entitiesEnabled;
+
+  /// 打开 AI 助手面板（`AI-04`~`AI-07` 的分组入口）。
+  ///
+  /// 面板内每行 = 改前 AppBar 的一个按钮，回调原样传入（[_openSummarySheet] /
+  /// [_openAskSheet] / [_openEntityPage]），故功能与可用性判定完全不变。
+  void _openAiPanel() {
+    unawaited(showReaderAiPanel(
+      context: context,
+      onSummary: () => _openSummarySheet(SummaryMode.chapter),
+      onAsk: _openAskSheet,
+      onEntities: _openEntityPage,
+      // `AI-05` ②：停读 ≥7 天开书出现的前情回顾入口（会话内一次性）。
+      onRecap: _showRecapEntrance && _summaryEnabled
+          ? () {
+              // 与改前一致：进入回顾后本会话不再提示，故在**开面板前**即复位。
+              setState(() => _showRecapEntrance = false);
+              _openSummarySheet(SummaryMode.recap);
+            }
+          : null,
+    ));
   }
 
   /// 递进生成的章文本加载器（`PERF-02`：LRU 未命中才回源，不假设全书常驻）。
