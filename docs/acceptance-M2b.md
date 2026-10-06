@@ -145,7 +145,7 @@ bash tool/test.sh all        # 仅负责人明确下令「全量测试」时执�
 
 | 项 | 说明 |
 |---|---|
-| 无 toc 大书搜索首屏优化 | 阈值 4 基线实测 `search.md`：48M 字符 EPUB 首屏 4.2s 超标（flatTitles 全书预解压根因）→ **2026-10-06 代码已实施**（搜索路径跳过预取，`search.md` §6 a 项），复测待回填 |
+| 无 toc 大书搜索首屏优化 | 阈值 4 基线实测 `search.md`：48M 字符 EPUB 首屏 4.2s 超标（flatTitles 全书预解压根因）→ **2026-10-06 已闭环**（`aba22eb`，开发机复测首屏 52ms 达标，`search.md` §5/§6）；Android 正式判定随 M3.5-T02 批次 |
 | `.gitattributes`（CRLF/LF） | 待负责人拍板 |
 | `schedule.md` §6 周序回补 | 两次执行序拍板（统计先行 + M3.5 提前）后的全局日历重排 |
 | lint 7 条 | 既有 lint 存量，待统一清理 |

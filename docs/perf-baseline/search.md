@@ -20,6 +20,8 @@
 
 - **首屏（1.5s 口径）**：TXT 20.7MB **达标**（0.45s）；320 章小正文 EPUB **达标**（<0.1s）；
   **无 toc 大正文 EPUB（48M 字符）超标**（4.2s > 1.5s），根因见 §2。
+  → **2026-10-06 挂账 #6 实施后复测：52ms 达标**（同机同词 3 轮，见 §5 复跑输出；
+  优化 = 搜索路径跳过 flatTitles 预取，§6 a 项）。
 - **命中计数（验收①「与实际出现次数一致」）**：五组全部与人工推演一致
   （稀有词恰 1、常见词每章段 1 = 100 / 800）。
 - **单帧（16ms 口径）**：maxGap 本底 18~25ms——心跳法在 Windows 上**不具 16ms
@@ -70,6 +72,8 @@
 
 ## 5. 原始输出
 
+**基线（2026-09-24，优化前）**：
+
 ```
 SEARCH[bodies-rare] big_bodies.epub query=第1章第1段 hits=1 usedIsolate=true iters=3 firstHitMinMs=4179 firstHitMedianMs=4227 firstEventMs=4227 totalMinMs=8418 totalMedianMs=8496 maxGapMs=25 fileMB=0.66
 SEARCH[bodies-common] big_bodies.epub query=第1段 hits=100 usedIsolate=true iters=3 firstHitMinMs=4037 firstHitMedianMs=4204 firstEventMs=4037 totalMinMs=8190 totalMedianMs=8496 maxGapMs=23 fileMB=0.66
@@ -77,6 +81,24 @@ SEARCH[txt-rare] big_20mb.txt query=这是第1章的第1段 hits=1 usedIsolate=t
 SEARCH[txt-common] big_20mb.txt query=第1段 hits=800 usedIsolate=true iters=3 firstHitMinMs=442 firstHitMedianMs=450 firstEventMs=450 totalMinMs=514 totalMedianMs=522 maxGapMs=24 fileMB=20.73
 SEARCH[small-chapters] big_320.epub query=第1章第1段 hits=1 usedIsolate=true iters=3 firstHitMinMs=59 firstHitMedianMs=84 firstEventMs=59 totalMinMs=111 totalMedianMs=150 maxGapMs=25 fileMB=0.47
 ```
+
+**挂账 #6 实施后复跑（2026-10-06，同机同词同轮数，`aba22eb`）**：
+
+```
+SEARCH[rare] big_bodies.epub query=第1章第1段 hits=1 usedIsolate=true iters=3 firstHitMinMs=52 firstHitMedianMs=65 firstEventMs=52 totalMinMs=4286 totalMedianMs=4328 maxGapMs=24 fileMB=0.66
+SEARCH[common] big_bodies.epub query=第1段 hits=100 usedIsolate=true iters=3 firstHitMinMs=53 firstHitMedianMs=62 firstEventMs=53 totalMinMs=4322 totalMedianMs=4360 maxGapMs=22 fileMB=0.66
+SEARCH[rare] big_320.epub query=第1章第1段 hits=1 usedIsolate=true iters=3 firstHitMinMs=26 firstHitMedianMs=40 firstEventMs=26 totalMinMs=89 totalMedianMs=113 maxGapMs=20 fileMB=0.47
+SEARCH[rare] big_20mb.txt query=这是第1章的第1段 hits=1 usedIsolate=true iters=3 firstHitMinMs=430 firstHitMedianMs=440 firstEventMs=430 totalMinMs=498 totalMedianMs=508 maxGapMs=18 fileMB=20.73
+```
+
+对照结论（开发机下界口径）：
+- **无 toc 大书首屏 4179/4227ms → 52/65ms（约 80×，2.8× over → 达标）**；
+- 全书 total 8418 → 4286ms（减半：省掉预取那一遍全书解压；剩余为逐章扫描本底）；
+- 对照组不变量：big_320 59→26ms（同优化顺带受益，本底波动内）、TXT 447→430ms
+  （本就不走该路径）、**命中计数四组全部与人工推演一致**（1/100/1/1，验收①无回归）；
+- 单帧 maxGap 18~24ms：本底噪声区间不变（§3 口径，不具 16ms 区分力）。
+- **正式判定仍待 Android 主力机 AOT 复跑**（§4；阈值 4 三段式中的首屏口径已翻转，
+  单帧口径与真书 c 项复测同批）。
 
 ## 6. 对后续的规格输入
 
@@ -89,6 +111,7 @@ SEARCH[small-chapters] big_320.epub query=第1章第1段 hits=1 usedIsolate=true
       解压，占位结构**禁写回**结构缓存。详见 `tech-usage.md` §2.66；
    b) 搜索先于标题预取开始扫章（首屏结果不等全书标题）——已被 a) 取代，不再单做；
    c) 有 toc 真书复测确认免役后再定优先级——**仍待真机复测**（§4 边界不变）。
-   实施后的复测（开发机下界）与 Android 主力机正式判定**待回填**。
+   **开发机复测已回填（§5 复跑输出）：首屏 4179 → 52ms 达标**；
+   Android 主力机正式判定待与 M3.5-T02 同批复跑。
 2. UI 帧级卡顿判定须走 `FrameTiming` 真机口径（心跳法本底噪声见 §3）。
 3. 阈值 5（AI 场景）基线仍待 AI 落地后补（M3 殿后既定注记）。

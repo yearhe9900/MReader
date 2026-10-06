@@ -2374,6 +2374,9 @@ EdgeInsets shelfGridPadding(double topInset) =>
 既有 `search_session_test:93`「命中标题 == chapters() 同源」断言自动覆盖跨模式同值。
 
 **效果与边界（如实登记）**：跳过的成本 = 无 toc 书全书逐章「解压 + XHTML 抽标题」
-（48M 字符样本 ≈145MB inflate），即 4.2s 根因链的 ①；**开发机复测与 Android 正式判定待回填**
-（`search.md` §6）。残余成本 = 每次搜索的 zip 重扫 + 章节按需解压扫描（本底，无 toc 亦然）。
+（48M 字符样本 ≈145MB inflate），即 4.2s 根因链的 ①。**开发机复测已回填**
+（`search.md` §5 复跑输出，同机同词 3 轮）：**首屏 4179/4227ms → 52/65ms（约 80×，
+2.8× over → 达标）**；全书 total 8418 → 4286ms（省掉预取那一遍，剩余为逐章扫描
+本底）；对照组不变量（big_320 / TXT / 四组命中计数 1/100/1/1）全部无回归。
+**Android 主力机 AOT 正式判定待随 M3.5-T02 批次复跑**；有 toc 真书 c 项复测同批。
 
