@@ -2888,3 +2888,62 @@ WidgetsBinding.instance.addPostFrameCallback((Duration _) {
 **已知代价（如实登记）**：① 遮罩期间用户看到的是「封面 + 正在打开…」而非正文，
 若加载慢（>1s）体感是「卡在封面」；② 淡出 260ms 固定，不自适应实际剩余时间；
 ③ **未真机复跑**（`flutter run` 归负责人手动跑），动画时长与观感待真机确认。
+
+#### §2.69 附九：**CPU Profiler 实测定案**（2026-10-06 20:26，终于拿到引擎侧数据）
+
+负责人导出 DevTools **CPU Profiler**（`dart_devtools_2026-10-06_20_26_31.979.json`，
+3714 样本 × 315μs = **采样总时长 1170ms**）。这是本轮**第一次拿到引擎侧证据**。
+
+**自顶向下 self time（全部帧）**：
+
+| 帧 | self time | 占比 |
+|---|---|---|
+| `_RegExp._ExecuteMatch` | **376ms** | **32%** |
+| `_FilterImpl.processed`（`replaceAll` 扫描） | 87ms | 7% |
+| `_Logger._printString`（**日志打印**） | 82ms | 7% |
+| `_Utf8Decoder.decode16` | 69ms | 6% |
+| `_OneByteString.toLowerCase` | 35ms | 3% |
+| `_OneByteString.contains` | 33ms | 3% |
+| `HtmlInputStream.reset` / `HtmlTokenizer.moveNext` | 31ms | 3% |
+| `_RegExp._RegExp`（**构造**） | 19ms | 2% |
+
+按窗口切分（**关键**）：
+
+| 帧族 | 前 350ms（开书） | 后 820ms（后台补齐） |
+|---|---|---|
+| RegExp | 101ms（31.6%） | **296ms（34.9%）** |
+| 日志打印 | 21ms | 60ms |
+| HTML 词法(Utf8+Html) | 48ms | 122ms |
+| 排版（`_NativeParagraph._layout`） | 2ms | 29ms |
+
+**⇒ 两个决定性结论**：
+
+1. **RegExp 的 34% 是「均匀分布」而非「集中在首帧」**——按50ms 分桶看，
+   从 100ms 到 1150ms 每桶稳定 17~23ms。**这不是开书阻塞，是后台补齐在持续
+   干活**（`autofill` 逐批 `extractSection` 全书）。它吃的是**电量与 CPU，
+   不是首屏延迟**。
+2. **开书窗口内真正的构成**：RegExp 31.6% + 日志 6.7% + HTML 词法 14.9% +
+   `toLowerCase`/`contains` 等字符串操作约 12%，排版仅 0.5%。
+   ⇒ 首帧慢在**字符串处理**（逐 Text 节点的空白折叠 + 标签名小写化 + 集合查找），
+   不在排版、也不在 zip/inflate（附二~附六已先后排除）。
+
+**已实施的微优化（低风险、方向正确）**：把 `_walk` 里**逐 Text 节点现场
+构造**的 `RegExp(r'\s+')` 提成 `static final _kWhitespaceRun`（`_collapse` /
+`_stripTags` 两处同理），`_stripTags` 的 `<[^>]*>` 提成 `_kAnyTag`。
+**⚠️ 但实测收益在噪声内**（150 段章：改前 6.7ms/章 vs 改后 7.3ms/章）——
+Dart VM 对小对象构造有优化，**逐节点 `RegExp` 构造本身并不贵**。
+**保留该改动**（语义零差异、写法更规范），但**不宣称它解决首帧慢**。
+
+**尚未动手、但数据已明确指向的两条**（都需负责人拍板后实施）：
+
+| # | 目标 | 数据依据 | 预期 | 风险 |
+|---|---|---|---|---|
+| **R1** | **关掉后台补齐的 CPU 抢占**（改「空闲时才补」：滚动停稳 / 无手势 / 屏幕常亮才补；或降低 `kLoadBatchSize`） | 后台 820ms 里 RegExp+HTML+日志 = **478ms（56%）纯 CPU 空转 | 首屏不受影响，但**省电与发热显著改善**；且能让 CPU Profiler 的开书窗口更干净 | 低（改调度时机，不改正确性） |
+| **R2** | **热路径去字符串操作**：`_walk` 的 `localName?.toLowerCase()`（7 处）+ `_skipTags.contains` 逐节点 | 开书窗口 `toLowerCase` 20ms + `contains` 19ms + `==` 6ms = **45ms（14%）** | 首帧省约 30~45ms | 低（`package:html` 的 `localName` 规范已小写，可用 `==` 直接比；需跑全量回归验脏书） |
+
+**方法论教训（第 5 次，最有价值的一条）**：
+前四轮我用**自造探针**测 Dart 层，四次全错方向；而**一份 CPU Profiler 就把
+「首帧 vs 后台」「哪类帧」「什么占比」全部量化了**。
+**性能诊断的优先级应是：①引擎侧 Profiler（能区分 Dart/引擎/后台）
+→ ②真机埋点分段（能定位到函数）→ ③自造探针（只适合验证单点假设）。**
+我本该在第 1 轮就要求 CPU Profiler，而不是连写四个探针。

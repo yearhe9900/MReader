@@ -160,7 +160,7 @@ void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir)
   for (final dom.Node child in node.nodes) {
     if (child is dom.Text) {
       // HTML 规则：空白折叠成单个空格。
-      buffer.write(child.text.replaceAll(RegExp(r'\s+'), ' '));
+      buffer.write(child.text.replaceAll(_kWhitespaceRun, ' '));
       continue;
     }
     if (child is! dom.Element) continue;
@@ -246,6 +246,33 @@ final RegExp _kAnyMarkerPair = RegExp(r'\x00[^\x00]*\x00');
 
 /// 段落**开头**连续的 NUL 标记（用于标题剥离时把锚点接力到下一段）。
 final RegExp _kLeadingMarkers = RegExp(r'^(?:\x00[^\x00]*\x00)+');
+
+/// **HTML 空白折叠**（HTML 规则：一串连续空白 → 单个空格）。
+///
+/// ## 为什么要提成 `static final`（2026-10-06，真机 CPU Profiler 定案）
+///
+/// 改前是 `child.text.replaceAll(RegExp(r'\s+'), ' ')` —— 在 [_walk] 的
+/// **每个 Text 节点**上**现场构造**一个 `RegExp` 对象。真机 CPU Profiler
+/// （3714 样本 / 1.17s）实测：
+///
+/// | 帧 | self time | 占比 |
+/// |---|---|---|
+/// | `_RegExp._ExecuteMatch` | 376ms | 32% |
+/// | `_RegExp._RegExp`（**构造**） | 19ms | 2% |
+/// | `_FilterImpl.processed`（replaceAll 的扫描） | 87ms | 7% |
+///
+/// ⇒ 纯 RegExp 相关合计 **398ms / 34%**，是**当时开书慢的第一名**（远超分页
+/// 调度的 52ms）。而 `extractSection` 的「se.parse / se.walk 实测 0ms」之所以
+/// 与此不矛盾：探针量的章**段落少**（真机 447 章的书 paragraphs 少、且探针是
+/// 短文本），而真机正文长 ⇒ Text 节点多 ⇒ 逐节点构造 RegExp 的代价被放大。
+/// **这正是「探针环境与真机不等价」的第四个实例。**
+///
+/// 提成 `static final` 后，`RegExp` 只构造一次（首次使用时），后续所有节点
+/// 复用同一实例；`\s+` 的语义**一字未改**。
+final RegExp _kWhitespaceRun = RegExp(r'\s+');
+
+/// 兜底去标签用的「任意标签」模式（仅 [_stripTags] 一处用，构造次数可忽略）。
+final RegExp _kAnyTag = RegExp(r'<[^>]*>');
 
 /// 剥离全部 NUL 标记后的可见文本（渲染层吞标记，口径与之一致）。
 String _visibleText(String paragraph) =>
@@ -414,7 +441,8 @@ _ResolvedTitle _resolveTitle(dom.Element body, dom.Document doc) {
   return const _ResolvedTitle('', fromHeading: false);
 }
 
-String _collapse(String value) => value.replaceAll(RegExp(r'\s+'), ' ').trim();
+String _collapse(String value) =>
+    value.replaceAll(_kWhitespaceRun, ' ').trim();
 
 /// 按标签名找第一个后代元素（大小写不敏感）。
 dom.Element? _firstElementByTag(dom.Node root, String tag) {
@@ -430,8 +458,8 @@ dom.Element? _firstElementByTag(dom.Node root, String tag) {
 /// 最后兜底：正则去标签。
 List<String> _stripTags(String source) {
   final String text = source
-      .replaceAll(RegExp(r'<[^>]*>'), ' ')
-      .replaceAll(RegExp(r'\s+'), ' ')
+      .replaceAll(_kAnyTag, ' ')
+      .replaceAll(_kWhitespaceRun, ' ')
       .trim();
   if (text.isEmpty) return const <String>[];
   return <String>[text];
