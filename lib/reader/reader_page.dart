@@ -1901,6 +1901,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           _positionConverged = true;
           PerfLog.mark('paged.land',
               'index=${pending.index} off=${landOffset.toStringAsFixed(0)}');
+          // **分页模式的落定信号**：`paged.land` 是分页路径（`_pagedJumpTo` 一次
+          // 落位）的终点，**不经过 [_finishRestore]**（那是 ListView 路径的收口）。
+          // 故「打开后是否还在跳」这条链路指标必须挂在这里，否则分页模式下
+          // `open.chain` / `restoreEnd` 永不出现（真机日志实证：11 次开书全部缺失）。
+          widget.openTrace?.mark('restoreEnd', 'branch=paged index=${pending.index}');
+          widget.openTrace?.reportChain();
         }
       }
     }

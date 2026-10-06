@@ -150,5 +150,47 @@ void main() {
       expect(total.contains('settle='), isFalse,
           reason: 'open.total 口径是「看到书」，不含之后的落位校正');
     });
+
+    testWidgets('分页模式落定后必出 open.chain（真机 11 次开书全缺的反向护栏）',
+        (WidgetTester tester) async {
+      PerfLog.records.clear();
+      final OpenTrace trace =
+          OpenTrace.begin(bookId: 'b1', title: fakeRecord().title);
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (BuildContext context) => TextButton(
+              onPressed: () {
+                trace
+                  ..mark('ready')
+                  ..attachFirstFrameProbe();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('内容')),
+                );
+              },
+              child: const Text('go'),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('go'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // 模拟阅读页分页模式的落定信号 `paged.land`（`_pagedJumpTo` 一次落位，
+      // **不经过** `_finishRestore`——那是 ListView 路径的收口）。
+      trace
+        ..mark('restoreEnd', 'branch=paged index=42')
+        ..reportChain();
+
+      final List<String> lines = _openLines();
+      expect(lines.any((String l) => l.contains('open.restoreEnd')), isTrue,
+          reason: '分页落定信号必须补上，否则「打开后还在跳」无从观测');
+      final String chain =
+          lines.firstWhere((String l) => l.contains('open.chain'));
+      expect(chain.contains('settle='), isTrue,
+          reason: 'chain 的价值就在settle 段（首帧之后到落定的漂移耗时）');
+    });
   });
 }

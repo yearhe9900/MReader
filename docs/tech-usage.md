@@ -2496,3 +2496,43 @@ EdgeInsets shelfGridPadding(double topInset) =>
 **回归**：`test/reader test/tts test/search test/ui test/diagnostics` 全量——失败 6 条，**与改前基线同一集合**（`CNT-04c 验收②`、`STAT-01 ⑤`、`ShelfPage 回归②`、`TTS-04/05`、`settings_page_test 玻璃效果`（已知并行 flake，串行复跑同样红 ⇒ 基线已红）、以及 `test/settings` 路径不存在导致的 load 报错）。零新增失败。
 
 **边界（如实登记）**：① **未真机复跑**（`flutter run` 归负责人手动跑）——本批只交付埋点，**尚未拿到真实耗时数字**，下一轮需负责人跑一次 `flutter run` + `adb logcat -s flutter | grep "open\."` 回填；② 首帧时序在 debug 档数值不可信（`product=false`，见 `perf_log.dart` 头注），判瓶颈须看 **profile/release**；③ `open.firstFrame` 的 `raster` 在 widget 测试环境常为空（有 `timings=none` 兜底），真机才有值；④ 未覆盖「从书库搜索页选中结果开书」这条入口（`library_search_page.dart` 另走一路），如需一并观测可复用同一 `OpenTrace`。
+
+#### §2.69 附：真机首轮数据（2026-10-06 18:36~18:37，小米 25098PN5AC / Android 17）
+
+**数据源**：`flutter run --profile -d bc75b5f3`，`adb logcat -s flutter | Select-String "open\."`，连续开书 11 次。
+
+| 书 | 章数 | 大小 | `open.total` | `ready` | `render=` |
+|---|---|---|---|---|---|
+| 绘卷（epub，缓存冷） | 447 | 4.3MB | 597ms | 596ms | 1ms |
+| 绘卷（缓存热） | 447 | 4.3MB | 418ms | 418ms | 0ms |
+| 枯X（epub） | 1152 | 6.8MB | 548ms | 547ms | 1ms |
+| 绘卷 | 447 | 4.3MB | 356 / 333 / 329 / 407 / 324 / 390ms | 同 total | 0~1ms |
+| 大宋药师（**txt**） | 1078 | 7.2MB | 407ms | 404ms | 3ms |
+
+**结论（与埋点时的初始假设相反，值得记档）**：
+
+1. **渲染不是瓶颈**——`render=`（ready → 首帧上屏）**全部 ≤ 3ms**，首帧
+   `build` 0.6~6.6ms / `raster` 0.9~6.9ms，`over16ms=false` 从未出现。
+   ⇒ 我在 §2.69 开头怀疑的「分页首帧 measure+reprime 慢」**被数据否掉**。
+   此前没有 `render=` 这个分段时，这个问题**无法回答**（`reader.ready`
+   之后的一切都是黑的）——这正是本批埋点的价值。
+2. **瓶颈 100% 在 `routeInit → ready` 的数据准备段**（`ready` 占 `total`
+   的 99~100%）。该段内部有四个子点：`reader.load` / `reader.chapters` /
+   `reader.stores` / `reader.firstBatch`（`reader_page.dart:694-777`），
+   **本轮日志被 `grep "open\."` 过滤掉了**，下一轮需放开过滤才能定位到子段。
+3. **缓存对 `total` 无明显影响**：绘卷冷启 597ms vs 后续 324~418ms，首启
+   高出约 180~270ms（结构缓存写入需重解析 + 落盘）；但热启仍需 324ms 以上，
+   说明**大头不在结构缓存**，而在每次都做的首章内容读取等固定成本。
+4. **章数不是主因**：1078 章 TXT（407ms）比 447 章 epub（324ms）只多 83ms，
+   而大小 7.2MB vs 4.3MB ⇒ 与**字节量**的相关性大于与章数的相关性。
+5. **`timings=none` 出现过一次**（大宋药师 txt 开书）：`addTimingsCallback`
+   未回调，兜底路径生效（仍产出 `firstFrame` + `total`）——**双保险设计在真机
+   上确被验证必要**。
+
+**本轮同时修掉的埋点缺口（真机数据暴露）**：`open.chain` 与 `restoreEnd`
+在 11 次开书中**全部缺失**。根因：两者原挂在 `_finishRestore`，而**分页模式走
+`_pagedJumpTo` 一次落位、根本不经过 `_finishRestore`**（那是 ListView 路径的收口）
+⇒ 分页模式下这条链路指标永不触发。修法：改挂在 `paged.land`（分页路径唯一的
+落定信号，`reader_page.dart:1902`）。教训：**链路埋点挂点必须按「实际执行路径」
+选，不能只挂在某一分支的收口上**——单测环境（ListView 路径为主）测不出来，
+真机分页路径才暴露。
