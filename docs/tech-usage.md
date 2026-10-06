@@ -2203,3 +2203,147 @@ EdgeInsets shelfGridPadding(double topInset) =>
 - **可复核 → 已复核**：库 / SDK 源码行号（`glass_dialog.dart:268/271-283`、`glass_defaults.dart:154`、`glass_sheet.dart:285-313/320-332/562,569`、`cupertino/route.dart:53-56/1410-1433/1501-1502`、`material/dialog.dart:1825`）、四处反向验证实测值、`analyze` 与两组测试输出，均为本批实读 / 实跑。
 - **不可复核 → 未声称**：**真机观感未复跑**，需负责人确认：**暗色主题下确认框遮罩由 Cupertino 的 α0.478 变淡到 0.239**，模态压迫感会明显减弱 —— 若觉得「压不住背景」，**只调 `OverlayStyle.barrier` 一项**即可（四个入口会同步变重，这正是"统一"的本意）。
 - **未做（如实登记）**：① `parse` / `reader` 两组未跑（与本批零交集）；② **PRD 无条文改动**——`UI-03`（浮层玻璃化）只要求「所有确认框与选择器为玻璃样式 + 打开时背景内容被模糊折射」，**未规定遮罩色**，本批属实现口径统一，不新增 / 修改需求条目，故不加版本行。
+
+### 2.60 分页引擎里程碑 M-PAGE 收官（T01~T07，2026-09-30 ~ 10-05）
+
+| 项 | 值 |
+|---|---|
+| 任务 | 分页引擎独立里程碑（`docs/里程碑-分页引擎.md`；验收 = `docs/选型-阅读呈现引擎.md` §6 拍板六条 + 四保证） |
+| 提交 | `2c8d0dc`（T01）`62eea07`（T02）`4dc21f1`（T03）`61137d4`（T04）`1d5f747`→`128ad1d`（T05 九提交）`7d3357f`（T06）`3628036` `c899fe7`（T07） |
+| 日期 | 2026-09-30 ~ 2026-10-05 |
+| 一句话目标 | `reader_page` 由 ListView 连续滚动改为原生测量式分页引擎；**滚动模式保留**（页纵向拼接），翻页模式 slide/cover/none 随后接线 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| 字符偏移空间 §0 **一处定义** | `chapterPos` 真值改字符偏移比例而**字段 / JSON 不变** | `docs/里程碑-分页引擎.md` §0 | `paragraphs` 原文（含 `\x00` 标记与标签）**无分隔符拼接**；`chapterPos = charOffset / totalChars`；旧几何比例值宽容读取；可见文本投影（剥标记，IMG → 1 个 `U+FFFC` 槽）与 `typeset.dart` span 构建**必须一致**（契约测试钉死） |
+| 断句回拉 | 切点在段中时页尾回拉到更好的行边界 | `page_breaker.dart`（legado `paginator.dart:114-142` 直译） | 类别优先（段末/句读 > 逗顿 > 空格）、同类取最靠后、窗口 ≤50 字符、回拉后页内 ≥1 行；**行字符区间** = 行垂直中点 `getPositionForOffset` + 下一行行首（`LineMetrics` 无 startIndex/endIndex，SDK `text.dart:2865-2889` 已核） |
+| 测量-渲染同源 | 分页低估会累积溢出 | `page_renderer.dart`（R2） | 四支点：同宽（Column stretch=页宽）/ 同样式同缩进 / 同缩放（`MediaQuery` linear）/ 同 strut（`DefaultTextStyle`——不包则 strut 吃 ambient 行高漂移）；`OverflowBox(minH=0,maxH=∞)` 解耦 Column 无界高 |
+| **占位对齐 middle→bottom** | 混排行行盒实测差 3px，不改分页低估 | `d44f34c` 探针实证 | 渲染侧 `typeset.dart` WidgetSpan 用 SDK 默认 `bottom`（`placeholder_span.dart:45`），测量原用 `middle` → 混排行 48.0 vs **51.0**；测量必须与渲染同口径 |
+| 章标题高预留 | 标题字符不进偏移空间、不进 `totalCharCount`（拍板①） | `PageBreaker.paginate(firstPageHeight)` | 页 0 预算 = 页高 − 标题高；`headingHeight` **不进 `PaginationConfig`**（config 是缓存键，逐章不同会 `_acceptConfig` 全清）；调度器复用路径校验高度一致才复用 |
+| 图片真尺寸进测量 | 48×48 占位低估真实行高 | `lib/reader/image_dimensions.dart`（T05-b） | **纯 Dart 文件头解析**不解码像素（`ImageCacheLRU` value 是字节）；`fitWithinWidth` 同式 = SDK `box.dart:317`「仅宽超限才缩」；变更走 `invalidateForImageSizes()` + 原 `targetCharOffset` 重 `open` 重锚 |
+| 页即图层 | 动画期零排版零 rebuild（保证③） | `page_turn_layers` / `paged_turn_body.dart` | `RepaintBoundary` 静态页 + `Transform`/`ClipRect` 回放；commit/cancel 速度阈值判定；动画期冻结排版队列 |
+| 分页滚动容器 | 滚动模式保留（拍板①） | `paged_scroller.dart`（T05-c c2） | 三章页窗口 + `FlatPage` 绝对坐标二分；**跨页段间距**只在相邻页分属不同段时补；停手 200ms 防抖采样；`clamp(...)` 赋 `double` 须 **`.toDouble()`** |
+| 一次落位 | 跳转 ≤8 帧校正环退役（保证④） | `offsetForCharOffset` → `jumpToCharOffset` | charOffset 二分页码 → 单次 jumpTo + clamp；搜索/目录/链接跳转同源 |
+| EPUB 结构缓存 | 重开零解析（保证①） | `lib/format/structure_cache.dart`（T06） | 判据 `bookId + mtime/size`；命中跳过 isolate 直接 `bindEpubResult`；miss 走原路径成功后写回；读/写故障一律当没接缓存 |
+| 226 条几何断言审计 | 防「像素断言假红」阻塞分页迁移 | T07（`3628036` `c899fe7`） | 需改写的**仅 1 条**（回归③ 章标题滚出视口像素断言 → `hitTestable()` 视口语义 + `sampleNow()` 章内字符比例 `inInclusiveRange(0.3,0.7)`）；其余合法保留（页顶对齐落位契约 / 视口契约 / 纯函数单测输入 / 防假绿哨兵） |
+
+**§6 拍板六条核对（全满足，证据 2026-10-05.md）**：①scroll 默认（`reading_prefs.dart:73`）②字符偏移三件套单测 ③四模式 `scroll/slide/cover/none`（curl P2 未做=符合拍板）④章内分页（next→`page:0` / prev→`pages.length-1` + 三章窗口）⑤结构缓存零派发实证 ⑥独立里程碑在档。
+
+> **未做（如实登记）**：① `bash tool/test.sh all` 全量——负责人明令后跑（挂账 #3）；② `schedule.md` 插入位回补（挂账 #4）；③ curl 翻页 P2；④ 正文磁盘缓存（§6 ⑤⑵ 明确后置）。
+
+### 2.61 M3 统计页 T10~T13（STAT-03~07，2026-10-02）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M3 统计页支线 T10a/T10b/T11/T12/T13（PRD `STAT-01/03~07`） |
+| 提交 | `7f6da98` `fb60186` `6851af2` `5ad7968` `0bc7fa1` |
+| 日期 | 2026-10-02 |
+| 一句话目标 | 统计页四件套一次交付：总览三指标、周期柱状图、全时段热力图、按书排行与连续天数；**图表自绘零图表包** |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| 聚合纯函数与副作用分离 | 聚合可单测、服务可注入 | `lib/stats/aggregator.dart` | 起始日期过滤 + `duration>0` 逐秒求和 + 天/书去重 + 时长格式化边界；全部纯函数 |
+| 进程内唯一实例 | 组合根注入、监听回调 | `lib/stats/stats_service.dart` | `StatsService` 挂 main 组合根 → home_shell；起始日期配置**分文件**持久化；`clearAll` 只删会话分片（`sessions-` 前缀连带 `.bak/.corrupt/.tmp`），不动配置与其它目录 |
+| 时长采集接线 | STAT-01 生产路径 | `reader_page.dart`（T10b） | ReaderPage → `StatsService` 会话累计；`test/reader/stats_collector_test.dart` 287 行钉死 |
+| 图表不透明红线 | `UI-04`（图表卡片与列表行一律不透明） | `overview_card` / `bar_chart` / `heatmap` / `rank_list` | 玻璃壳层内正文卡片一律实心；`stats_page` = 玻璃顶栏 + 不透明正文 |
+| 自绘而非图表包 | 不引第三方图表依赖 | `lib/ui/stats/bar_chart.dart`（239 行）等 | CustomPainter 自绘；下钻求和 = 柱高（`drill_down_page`） |
+| 连续天数口径 | Q13 产品口径 | `lib/stats/streak.dart` | 「**昨天或今天**有记录不归零」——口径已写进界面文案 |
+| 热力图空白语义 | 无记录 ≠ 0 分钟 | `lib/ui/stats/heatmap.dart` | 无记录天空白格（不画最低档色）；点击下钻与 STAT-04 同页 |
+
+> **未做（如实登记，属 P2）**：单书统计 / 趋势 / 导出、阅读目标（`P2-T04`/`P2-T05`）。M4-T06 已将本批会话数据纳入跨设备并集同步（`160e2c0`）。
+
+### 2.62 M3 AI 主线 T01~T05（AI-01~09，2026-10-02 ~ 10-03）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M3 AI 主线五任务：T01 配置与底座 / T02 划词三件 / T03 摘要 / T04 跟书问答 / T05 人物梳理 |
+| 提交 | `7ce923b` `638c956` `be5ef41` `f6c4e03` `33befc8` |
+| 日期 | 2026-10-02 ~ 2026-10-03 |
+| 一句话目标 | 底座先行（流式 / 取消 / 缓存 / 并发只写一套），五个功能复用同一套交互与持久化形态 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| OpenAI 兼容配置 + 用途路由 | 四功能共用一份配置 | `provider_config.dart` / `provider_store.dart` | 四要素 + 用途枚举；`configFor(用途)` 路由（摘要优先回退 chat）；**apiKey 结构性不落盘**（`AiKeyVault` 挂 SecureStore，`DATA-02` 明文降级已标注） |
+| 自建 SSE 流式 | 可取消、错误可分类 | `lib/ai/ai_client.dart` | `dart:io HttpClient` 逐帧读；错误五分类（401/404/超时/网络/5xx + `retryable`）；**并发闸上限 2**；测试连接 |
+| 选区浮层可复用 | TTS-02 高亮同源 | `selection_overlay.dart` / `selection_ai_sheet.dart` | 选词 → 翻译/释义面板 → 生词本（`vocab_store`/`vocab_page`） |
+| 逐章递进摘要 | 可中断可续做 | `recap.dart`（SummaryJob）+ `summary_cache.dart` | 逐章缓存续做 + 协作取消；两级缓存；控制条 AI 入口（TYP-05） |
+| BM25 章级倒排 + 段级重排 | Q6 不上向量 | `lib/ai/bm25.dart` / `ask_panel.dart` | 引用点击跳回原文（F5）；**阈值 5 埋点已留**（M3.5 阈值表补齐时可测） |
+| 实体抽取的**代码侧去重** | 守验收①②（名字保真、不靠模型二次合并） | `lib/ai/entities.dart` | JSONL 流式逐行解析 + 数组/围栏/pretty-print 整段兜底；`mergeEntityItems`：名字首见保真、章节并集、描述递接；默认范围 = 仅已读（RD-04 口径） |
+| **测试铁律（本批实证）** | 防连环假红 | `test/ai/**` | ① `AiPrefs.defaultSelectionOnly = true` **默认开启**——非受限用例 setUp 必须 `setSelectionOnly(false)`；② **keep-alive 连接必须在测试体内关**（`runAsync(server.close(force:true))` + settle 排事件循环，teardown 才关会被 15s `_HttpClientConnection.startTimer` 抓到）；③ widget 测试 `HttpOverrides` 劫持全局 HttpClient（一律 400）→ mock server 须 setUp 里 `HttpOverrides.global = null`；④ dart:io 响应默认 `bufferOutput=true`——「发帧不关连接」必须在任何 write **之前**关缓冲；⑤ Clipboard 无默认 mock（`MissingPluginException` + 未 await = unhandled async error）→ 注册 `SystemChannels.platform` handler |
+
+> **未做（如实登记）**：阈值 5 基线测量属 M3.5-T02 增补（AI 已就绪、埋点已留）；`defaultSelectionOnly` 默认开 = `AI-09` ③ 受限标注按拍板实现，问答专属不拦截范围行。
+
+### 2.63 M3 TTS 主线 T06~T09（TTS-01~07，2026-10-03 ~ 10-05）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M3 TTS 主线四任务：T06 系统朗读 / T07 后台与系统集成 / T08 设置·定时·进度联动 / T09 在线引擎 |
+| 提交 | `82ef0fb` `4c1be57` `4c17e7a` `772a31f` |
+| 日期 | 2026-10-03 ~ 2026-10-05 |
+| 一句话目标 | 系统 TTS 先行（段落朗读 + 高亮跟随），后台播放与在线引擎双引擎随后；朗读不建第二套进度 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| 代数（generation）取消 | 停止/换段后旧回调作废 | `tts_controller.dart` | `_gen`：start/stop/resume 各 ++、pause 不 ++；从指定段起读、跨章续读、纯标点段跳过；引擎三结局 `TtsSpeakResult` |
+| 粘性高亮跟随 | 只滚动到段落可见处 | `highlight_follow.dart` | `isParagraphVisible` ratio=0.5；`SpeakingHighlight` 恒定一层 `DecoratedBox` |
+| 音频焦点宿主自取 | flutter_tts 焦点回调是空的 | `lib/tts/audio_session.dart` | **flutter_tts Android `requestAudioFocus` 是空 listener** → 来电暂停/恢复必须宿主自取：`speech()` 配方（`willPauseWhenDucked=true`，duck 也走暂停-恢复） |
+| AudioService 一进程一次 | 重复 init 断言崩 | `lib/platform/audio_service.dart` | `_cacheManager==null` assert → handler / 事件总线必须**静态**；`DefaultCacheManager()` 构造即异步 IO → 注入 `_NullArtCacheManager`（MediaItem 恒无 artUri）；Windows/Linux 测试宿主默认 `NoOpAudioService` |
+| Dart cascade 闭包坑 | 编译期 setter 报错 | T07 实证 | cascade 赋值里箭头闭包须再包一层：`..onX = (() => f())`——否则 `=> expr..next` 对 expr 开级联；`AudioHandler` 的 mediaItem/playbackState 是只读 ValueStream，上屏走 `BaseAudioHandler` 派生 + `BehaviorSubject.add` |
+| **TTS 直写与跟随跳的队列挤占**（自动跟随回归根因） | 每段直写挤爆 AtomicFile 队列 | `_followSpeakingPaged(saveOld: false)`（`4c17e7a`） | 每段 `_writeTtsProgress`（save+markRead，十余次 IO）与 follow 跳的 `_pagedJumpTo(saveOld:true)` 同挤同路径 `_tails` 队列 + `settle(20)` 轮预算 → saveOld 每次拖到下轮才排空，而下一段 `++_primeSeq` 已把本跳作废（探针 `abort1 seq=2 now=3`）→ offset 卡 43。**修法**：直写已在本段入场同步置 `_ttsProgress` 并落盘同一坐标，跟随跳 `saveOld:false`（重写完全相同的数据无意义）。**沉淀**：widget 测试「同路径两条未 await 的写链」会挤占 settle 预算——探针用 begin/enter/saved/done 三点夹逼定位 |
+| 双引擎切换 | 系统 / 在线 | `online_tts.dart` + `tts_settings_page.dart` | URL 模板 / OpenAI 兼容 `audio/speech` 双模式；5xx/429 有限重试 3 次、4xx 立即失败；**sha256 请求指纹 + 本地音频缓存**（`tts_audio/`，tmp+rename 原子写）；stop/换段作废回 cancelled；密钥走 `AiKeyVault`；引擎切换丢弃控制器重建；新增依赖 `audioplayers 6.8.1` |
+| 后台播放平台面 | Android 前台服务为主成本 | AndroidManifest + `MainActivity : AudioServiceActivity` | WAKE_LOCK/FGS_MEDIA_PLAYBACK/POST_NOTIFICATIONS + MediaButtonReceiver；iOS `UIBackgroundModes=audio`；Linux/macOS 降级仅前台（已确认）；`androidStopForegroundOnPause:false`（Android 12+ 后台重启 FGS 受限） |
+
+> **未做 / 待真机（如实登记）**：① POST_NOTIFICATIONS 系统自动提示是否弹（不弹需补运行时请求）；② 锁屏续读、iOS 全链路（R3 需 Mac）；③ flutter_tts 4.2.5 = pub 最新，无支持 Built-in Kotlin 的版本（上游 issue #644/#647 已存在，非致命保留）。
+
+### 2.64 M35-T03 ① ② ③ — 最小 FRB 通路脚手架 + `mobi` KF8 最小验证（2026-10-05）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M3.5-T03 ★GATE★ 的**实施半边**（RUST-07/08/04、Q20、Q25）；gate 实跑与拍板在负责人 |
+| 提交 | `76cd350`（前置 lint 清零）`ae46fb5`（脚手架）`f3cc47b`（KF8 探针） |
+| 日期 | 2026-10-05 |
+| 一句话目标 | 把 gate 需要的三样东西备齐：**最小 FRB 通路**、**无 cargo 构建降级**、**`mobi` crate KF8 能力实证**——过不过由负责人 5 条命令说话 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| Rust 侧最小实现 | 对齐 `kRustAbiVersion` 的可探测面 | `rust/api/{mod,error,guard}.rs` | `ffi_guard` + `probe() -> "0.1.0"`；`#![deny(clippy::disallowed_methods)]` + `clippy.toml` 6 条 NF-D8；Cargo.toml 双 profile 显式 `panic=unwind`、frb=2.13.0 精确锁 + thiserror + mobi |
+| **官方模板经本机 codegen 收割**（非手写） | 防手搓 Cargokit 与官方漂移 | `rust_builder/**` 46 文件 | 在 `_t03_scratch` clone 上跑 codegen 2.12.0 `integrate` 收割；android `ndkVersion` 校准结论 = **维持 `flutter.ndkVersion`**（3.47.5 默认 28.2 ≥ 规格 27）不硬编码 |
+| codegen 2.12.0 跑通三实证 | 消除「冷启动能不能生成」疑虑 | scratch 实录 | ① 泛型 `ffi_guard` 被 FRB **自动跳过**（`functions are ignored because they have generic arguments`）；② 冷启动（无 `frb_generated`）codegen 可自产；③ main.dart demo 覆盖与 2.12 生成物**不取** |
+| 护栏测试 ×2 | 防生成物漂移 / 反排除丢失 | `generated_files_committed_test` 改造 | 原「生成物必须已提交」与 `.gitattributes` §G.4 反排除**字面互斥** → 改为「有效规则行提及 `lib/src/rust` 必须以 `!` 开头 + `!` 反排除在场 + `*.dart` 通配判红」 |
+| **KF8 两种入口探针**（Q25 退化分支坐实） | gate ③ 判语留档 | `rust/tests/kf8_gate`（`f3cc47b`） | `entry-a`（纯 KF8 azw3）：`open=OK version=8 content=PANIC verdict=UNSUPPORTED`——正文解码 panic（`record.rs:154` PDB 切片 `next_offset - extra_bytes < curr_offset` 无下界保护）；`entry-b`（KF6 头 + EXTH121）：`boundary=Some(5281) version=6 jumped=false content=OK(215274 chars) verdict=KF6_HEADER_ONLY`——EXTH121 可读但 crate **无跳转逻辑**；源码实读 crate **无 INDX/TOC 章节列表 API** |
+| 探针设计 = 事实留档型 | 不以红测入库 | catch_unwind 包正文解码 + `GATE[...]` 判语行 | 稳定断言（打开 / version / EXTH121 在场）才 fail；panic 分支只打判语 |
+| R1 结论 | 「两者都不利」**未触发** | — | M2b-T05 纯 Dart 双分支 HIT（KF8 必须走 Q25 预注册分支：直译 Kotlin boundary/SKEL/FRAG）→ 负责人拍板材料 |
+| lint 清零 | 消除 analyze 噪声 | `76cd350` | archive 4.3.0 `ZipEncoder().encode` 已返回非空 `List<int>`（3 处迁移残留可空声明）；`mobi_probe` 私有类型进公开 API（`_CdicEntry`→`CdicEntry`）——**7 → 0** |
+
+**交负责人命令（gate 实跑，5 条）**：① `cargo install flutter_rust_bridge_codegen --version 2.13.0`（RUST-08 三处同版）；② 仓库根 `flutter_rust_bridge_codegen generate` → 生成物 + Cargo.lock 全部入库；③ gate① `flutter build apk --debug` / `flutter build windows --debug`（Cargokit×3.47.5）；④ gate② cargo 移出 PATH 后 `flutter test` + `flutter build` 仍过（无 Rust 降级）；⑤ gate③ `cd rust && cargo test --test kf8_gate -- --nocapture`。
+
+> **未做（如实登记）**：① `lib/src/rust/**` 生成物与 `integration_test/frb_probe_test.dart`——**依赖 ②codegen 先跑**（下一轮补，RustLib.init + probe 对齐）；② scratch 遗留 `D:\Projects\_t03_scratch`（模板收割用，含 cargo target）批次清理由负责人执行；③ 五能力 Rust 实现属 T04/B 线（gate 通过才开工）。
+
+### 2.65 M4 WebDAV 同步 T01~T06（SYNC-01~07 + STAT-08，2026-10-05）
+
+| 项 | 值 |
+|---|---|
+| 任务 | M4 同步支线六任务（T01 通道 / T02 进度 / T03 条目合并 / T04 备份恢复 / T05 自动触发 / T06 统计并集） |
+| 提交 | `cd9b14c` `55d0651` `500c277` `5c7936a` `8590e0a` `160e2c0` |
+| 日期 | 2026-10-05 |
+| 一句话目标 | 同步通道**只做一遍**（PRD §17，STAT-08 复用）；进度取新、条目并集、备份白名单、触发四时机、失败可见 |
+
+| 技术点 | 用途 | 落点 | 关键写法或坑 |
+|---|---|---|---|
+| 通道只做一遍 | 六任务共用 | `webdav_client.dart`（T01） | 纯 `dart:io HttpClient` + xml 解析 PROPFIND；Basic 认证；`Depth` 头无常量→字面量；路径相对 `{url}/{dir}/` 根、段逐个 `encodeComponent`；`stat` 404→null、`delete` 404 幂等、`upload` 507→diskFull；错误剥 XML 细节 → 中文可读 160 字 |
+| 密码不落明文 | `DATA-02` | `SyncPasswordVault`（prefix=`sync.password.`） | `sync_config.toJson` 结构性四键**无密码**；配置持久化 `sync_state` 分文件 |
+| **进度「取更新」闸门**（F7） | 只在需要时发请求 | `lib/sync/conflict.dart`（纯判定零 IO） | `stat` → 远端缺失分流 → **闸门 stale**（`local.updatedAt > syncedAt` 才上传；否则 **skipped 连 GET 都不发**）→ 下载 → `takeRemote`/`keepLocal`/`identical`；口径：闸门 `<=` 含等于、`remoteModified=null` 放行、**跳过不更新 syncedAt**（否则闸门永久失效）、hint 双向丢弃、跳过/判同/上传后均 `markSynced(now)` |
+| **裁决对称性** | 防双侧互不来回覆盖震荡 | `entry_sync.dart`（T03） | `resolve(l,r)` 必须与 `resolve(r,l)` 同胜者：`byContent`（JSON 字典序大者胜）与 `resolveIndexConflict` 三级（`lastReadAt` 新者胜 → 任一 origin==`user` → 字典序）均满足；变更按**内容指纹**判定防无谓回写 |
+| 设置同步的**内容相等短路** | 防「下载 → mtime 变新 → 再上传」回声 | `settings_sync.dart` | 判定序：stat 缺失 → download（**放 try 外**，通道失败不误报「损坏」）→ 非 Map → failed → `local==null` → save → **相等先短路** → 远端 mtime 缺失视为最旧 → 上传；同刻**远端胜**（收敛）；本地 mtime = 偏好**文件** mtime（HttpDate 1 秒分辨率，同刻测试须 `setLastModified` 整秒对齐） |
+| 备份包**白名单结构性排除凭据** | `DATA-02`：包内搜不到密码 / API Key | `lib/sync/backup.dart`（T04） | 白名单顺带排除 sync_config / credentials / sync_state / ai_providers / 书籍副本 / structure / covers / 旁路后缀——**凭据不进包靠结构不靠黑名单**；测试解压全字节搜敏感串 |
+| **恢复闸门零写入优先** | 校验不过一个字节都不写 | `lib/sync/restore.dart` | zip 可解 → `meta.json` 必有 → `schemaVersion ≤ 1`，全过才分派；四闸门用例断言 `targetDir.listSync(), isEmpty`（**setUp 禁存 sync_config**——会落文件污染断言）；**zip slip**：`normalizeZipPath` 不折叠 `..` → 分派层白名单自拒 |
+| 段级剔除语义 | 坏一段不毁整包 | `_readJson` 损坏 → null → 跳过该键 | 损坏段剔除但**完好段照常进包**（settings 只坏 app → 包内仅 `{reading}`）；**双段全坏才整条不进包** |
+| 触发四时机 | PRD §10.4 + B.4 | `lib/sync/sync_trigger.dart`（T05） | 启动**仅拉进度**（测试断言远端 `library` 零触碰）；退页 = 单本进度 + 备份到期；退出 App = 进度 + 三件套 + 备份；间隔 1 天（拨钟 +25h 钉死）；**跳过报告不落 `lastReport` 不通知**；失败 = `failures` 逐条 + 重试按钮 |
+| 取消确定性 | 断点续传的可取消 | `uploadStream` / `downloadToFile` | `File.openRead` 64KB 分块（dart:io `_blockSize`）——200KB 首进度 cancel → 第 2 块前抛；断言「远端无**完整**文件」；失败路径先 `request.done.ignore()` 再 `abort()`（防 unhandled async error） |
+| 统计并集幂等 | STAT-08 复用通道与 `mergeById` | `lib/stats/stats_sync.dart`（T06） | 会话 `id` 并集、同 id 时长取大；`sync_state.json` 单文件双键同写（`lastBackupAt==0` 不落键保既有精确断言） |
+
+**测试基建（T03~T06 直接复用）**：`_MockDav`（PROPFIND/GET/PUT/MKCOL 四方法内存服务端 + `failStatus` 注错 + `seed()/seedBytes()`；文件键 = `Uri.encodeComponent` 逐段拼，与 `WebdavClient._segments` 同口径）；`_MemorySecureStore`；纯 `test()` 真 socket。**关键实证**：widget 测试 `TestWidgetsFlutterBinding` 装 `HttpOverrides` 把 suite 内 HttpClient 拦成 400（框架自警）→ 连接类 UI 用例注入 `_StubWebdavClient`/`_FakeDav` 只验呈现，真网络语义留纯 `test()`；开关落盘断言需**默认 40 轮 settleReal**（exists→write flush→rename 每步占一个 runAsync 窗口）。
+
+**lint 三连（同型坑）**：① `prefer_initializing_formals` 触发条件 = 字段名恰为 `'_'+参数名`（`_client=client` 触发、`_progress=progressStore` 不触发）→ 命名初始化形参**不能**写 `this._x` → 行尾 `// ignore:` + 两行理由（先例 `high_perf_registry.dart:72`）；② `SyncRunReport` 静态工厂与实例字段**不可同名**（`conflicting_static_and_instance`）→ 字段改 `wasSkipped`；③ `GlassOverlays.showToast` 返回 **`VoidCallback`**（dismiss 回调）非 Future → `await` 触 `await_only_futures`。
+
+> **未做 / 范围注记（如实登记）**：① 笔记无存储待落地后并入；② **书签删除不跨设备传播**（并集无墓碑，PRD 未定义）；③ `progressRemotePath` 净化 `/\.?`→`_` 防被客户端拆目录、作者空→`未知`；④ M4-T07（MOBI）受 gate 阻塞、T08/T09 属验收批。
