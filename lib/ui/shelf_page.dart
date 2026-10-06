@@ -48,6 +48,7 @@ import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
 import '../reader/bookmark_store.dart';
 import '../reader/progress_store.dart';
+import '../reader/reader_open_transition.dart';
 import '../reader/reader_page.dart';
 import '../reader/reading_prefs_store.dart';
 import '../settings/shelf_layout_store.dart';
@@ -56,6 +57,7 @@ import '../stats/stats_service.dart';
 import '../sync/sync_trigger.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
+import 'book_card.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
@@ -484,7 +486,22 @@ class _ShelfPageState extends State<ShelfPage> {
       // ReaderPage._open() 承担（其自带 spinner + 错误态，RD-05 仍满足）。
 
       if (!mounted) return;
-      final MaterialPageRoute<void> route = MaterialPageRoute<void>(
+      // 开书转场（2026-10-06）：用 [ReaderOpenRoute] 替掉裸 [MaterialPageRoute]，
+      // 转场期间在阅读页之上盖「封面 + 书名 + 进度」遮罩，等阅读页首帧真正上屏
+      // （`ReaderPage` 在 `addPostFrameCallback` 里发信号）再淡出。
+      //
+      // 动因（真机 release 档实测，见 docs/tech-usage.md §2.69 附一~附七）：
+      // 点书卡到正文上屏 335~509ms，其中「首帧那一帧的框架任务插队」占 230~290ms
+      // （探针已证**不是**解析——`content()` 内部四段合计 0ms）。这段等待属引擎侧
+      // 首触（字体 / 图片解码器 / Skia 管线），**无法消除**，但可以被遮罩藏起来：
+      // 用户点下即见封面动效，而非白屏。
+      final ReaderOpenRoute route = ReaderOpenRoute(
+        cover: buildStandaloneBookCover(
+          record: record,
+          format: record.format,
+        ),
+        title: record.title,
+        subtitle: '正在打开…',
         builder: (_) => ReaderPage(
           source: source,
           record: record,

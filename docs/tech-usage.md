@@ -2832,3 +2832,59 @@ K 是根治但代价大，应在 J 落地并验证后再评估。
 **这一点必须真机验证**（连开 2 本书，比第二次 `open.total` 是否≈105ms）
 —— DevTools trace 或加一版埋点均可。
 
+
+#### §2.69 附八：开书过渡遮罩（`ReaderOpenRoute`）——把等待「藏」起来而不是消除它
+
+**动因**：探针已定案（附六）那 773ms **100% 在 `content()` 调用栈之外**，是首帧
+那一帧的框架任务插队（引擎侧首触：字体 / 图片解码器 / Skia 管线）。**它无法消除**
+——方案 J（首帧不等 `content()`）已实测打脸回退（图片书没有段落可渲染）。既然
+消不掉，就**让它可见地"有事可做"**。
+
+**结构**（`lib/reader/reader_open_transition.dart`，新文件）：
+
+| 部件 | 职责 |
+|---|---|
+| `ReaderOpenTransition`（静态门闸） | 阅读页 ⇄ 转场的**唯一**通信面。`arm()` 由转场登记，`signalReady()` 由阅读页在**首帧 postFrameCallback** 里调用，`disarm()` 在 dispose 撤销 |
+| `ReaderOpenRoute` | `PageRoute` 子类；转场期间在阅读页**之上**盖遮罩，遮罩不透明度 = `(1 - 淡出进度) × 转场进度` |
+| `_OpenCoverCurtain` | 状态机：收到 `signalReady()` → `_fade.forward()`（260ms `easeOutCubic`）；**兜底**——转场 `AnimationStatus.completed` 也强制撤 |
+| `_CurtainBody` | 封面（132×186）+ 书名 + 细进度条 + 「正在打开…」，整体 `Transform.translate` 上移 12px（纯 transform，不触发布局） |
+
+**为什么用「门闸」而不是把回调塞进 `ReaderPage` 构造**：阅读页**不该知道**
+「自己是从书架推过来的」——它只负责「我准备好了没有」。门闸让两者解耦，且
+深链 / 测试直进阅读页时门闸为 no-op（**零开销、行为不变**）。
+
+**关键时序**（`ReaderPage._open` 尾部）：
+
+```dart
+widget.openTrace?.attachFirstFrameProbe();
+WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+  if (!mounted || _disposed) return;
+  ReaderOpenTransition.signalReady();   // ← 下一帧**真正上屏**才撤遮罩
+});
+```
+
+**不能**在 `reader.ready` 处撤——那一刻正文还没被 `paint`，提前撤会让遮罩淡出
+过程露出空白，反而出现「闪一下再出字」。
+
+**封面同源**：新增 `buildStandaloneBookCover`（`book_card.dart` 底部），与
+`BookCard` 内封面**逐项同源**（同一三态 + 同一 `DefaultBookCover` + 同一格式角标），
+故遮罩上的封面与书架那张卡**视觉一致**，转场不会「换了一张脸」。不画投影
+（遮罩是纯色底，投影几乎不可见且多一层合成开销）。
+
+**返回手势不变**：仍走 `Navigator.push` + `PageRoute`（不是 `PageRouteBuilder`），
+故系统预测性返回 / 手势**完全不受影响**；阅读页转场动效仍由
+`kAppPageTransitions` 的平台 builder 统一提供，本文件不重复实现。
+
+**测试**（`test/reader/reader_open_transition_test.dart` **5 条**）：推入后遮罩在位
+→ 信号后淡出 / **兜底**（永不发信号，转场播完也必须撤，否则用户盯封面卡死）/
+无门闸 no-op / 门闸一次性 / `disarm` 不留悬挂回调。
+**变异测试**验证过：把 `signalReady()` 改成 no-op ⇒ 「门闸一次性」一条判红
+（证明测试非空转；「兜底」那条因有 `AnimationStatus` 兜底而仍绿，符合设计）。
+
+**回归**：`test/reader + tts + search + ui + diagnostics` **全量零失败**
+（较基线更干净——基线有 6 条既有失败，本次跑出 0 条，说明它们是并行 flake）。
+`dart analyze lib/ test/` 零问题。
+
+**已知代价（如实登记）**：① 遮罩期间用户看到的是「封面 + 正在打开…」而非正文，
+若加载慢（>1s）体感是「卡在封面」；② 淡出 260ms 固定，不自适应实际剩余时间；
+③ **未真机复跑**（`flutter run` 归负责人手动跑），动画时长与观感待真机确认。
