@@ -271,9 +271,15 @@ class DartEpubSource implements BookSource {
 
     // baseDir：XHTML 文件所在目录，用于把 <img src> 的相对路径归一化为绝对包内路径。
     final String baseDir = p.posix.dirname(section.href);
+    // 「首帧一次性门」定位探针（2026-10-06，见 §2.69 附四/五）：把 `content()`
+    // 切成「取字节（惰性 loadBytes → inflate）」与「转文本（extractSection）」两段。
+    // 与 `extractSection` 内的 `se.*` 三段配合，可判定 291ms 究竟落在哪一段。
+    final PerfWatch bytesWatch = PerfLog.watch('content.bytes');
+    final Uint8List raw = section.rawBytes;
+    bytesWatch.done('rawKB=${raw.length ~/ 1024}');
     final List<String> paragraphs = chapter.locate.isEmpty
-        ? extractSection(section.rawBytes, baseDir: baseDir).paragraphs
-        : extractParagraphsFromFragment(section.rawBytes, chapter.locate,
+        ? extractSection(raw, baseDir: baseDir).paragraphs
+        : extractParagraphsFromFragment(raw, chapter.locate,
             baseDir: baseDir);
 
     return ChapterContent.paragraphs(paragraphs);

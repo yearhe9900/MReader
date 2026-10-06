@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 
+import '../diagnostics/perf_log.dart';
 import 'text_codec.dart';
 import 'zip_paths.dart';
 
@@ -61,11 +62,23 @@ const Set<String> _skipTags = <String>{
 /// 章内 `#id` 跳转 = `paragraphs.indexWhere((p) => p.contains('\x00ID:$id\x00'))`；
 /// 链接 = 按 `\x00` 切分后奇数段以 `A:` 开头者即 href（闭合标记为 `A`）。
 ExtractedSection extractSection(Uint8List bytes, {String baseDir = ''}) {
+  // ── 首帧「一次性门」定位探针（2026-10-06，见 docs/tech-usage.md §2.69 附四/五）──
+  // 真机 release 档 `reader.firstBatch` 291~442ms，而按内容量归一后
+  // 「后台补齐章0.01ms/段、首帧章 2.3~3.5ms/段」⇒ 慢在「第一次」而非数据量。
+  // 本探针把 `extractSection` 内部切成三段，用于判定这批成本**落在哪一段**：
+  // 若三段之和远小于 `reader.content` 的总耗时 ⇒ 门在 `extractSection` **之外**
+  // （引擎侧首触 / 归档读取器首触），H1 方案（提前开门）才有效；反之则可直接优化本函数。
+  // 用 PerfWatch 而非 Stopwatch：口径与既有 `reader.*` 段一致，且可被
+  // `--dart-define=MREADER_PERF_LOG=false` 整体静音。
+  final PerfWatch decodeWatch = PerfLog.watch('se.decode');
   final String? decoded = _tryDecodeText(bytes);
+  decodeWatch.done('rawKB=${bytes.length ~/ 1024}');
   if (decoded == null) return const ExtractedSection();
   final String source = decoded;
 
+  final PerfWatch parseWatch = PerfLog.watch('se.parse');
   final dom.Document? doc = _tryParseHtml(source);
+  parseWatch.done('chars=${source.length}');
   if (doc == null) {
     // 连宽松解析都失败：退化为「粗暴去标签」，至少让用户看到字。
     return ExtractedSection(paragraphs: _stripTags(source));
@@ -74,12 +87,14 @@ ExtractedSection extractSection(Uint8List bytes, {String baseDir = ''}) {
   final dom.Element? body = doc.body ?? doc.documentElement;
   if (body == null) return const ExtractedSection();
 
+  final PerfWatch walkWatch = PerfLog.watch('se.walk');
   final List<String> paragraphs = <String>[];
   final StringBuffer buffer = StringBuffer();
   _walk(body, paragraphs, buffer, baseDir);
   _flush(buffer, paragraphs);
   // CNT-04a：纯标记段落（块级 id 嵌套块级子元素时产生）接力到相邻段落。
   _mergeMarkerOnlyParagraphs(paragraphs);
+  walkWatch.done('paras=${paragraphs.length}');
 
   final _ResolvedTitle title = _resolveTitle(body, doc);
 
