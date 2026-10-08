@@ -2774,7 +2774,26 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         speakingPara: _pageSpeaking(view.href),
       ),
     ));
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
+    // 内容外裹 `SingleChildScrollView(physics: Never)`：**只**为了让它给 Column
+    // 无界主轴约束 + 自己裁到页框。
+    //
+    // ## ⚠️ 为什么不能直接返回 Column（2026-10-08，真机「滑动模式顶/底被截断」）
+    //
+    // 本 widget 被 `PageTurnLayers` 放进 `Stack(fit: StackFit.expand)` ⇒ **紧约束**
+    // （宽高都 = 可视区）。而排版参数（页高）来自上一帧的 `_pageConfig`：chrome
+    // 切换那一帧可视区已经变小、页表还是旧的 ⇒ `标题占高 + 页高 > 可视区高`
+    // ⇒ Column 直接**溢出**（探针实测 debug 报 `RenderFlex overflowed by 154`，
+    // 即底部约 5 行被黄黑斜纹盖住 → 用户看到的就是「底部文字被截断」）。
+    // 下一帧 reprime 完成后自愈（探针：越界 142px 只存在 1 帧）。
+    //
+    // 换 `SingleChildScrollView` 后：Column 拿到无界高（不再触发溢出断言），
+    // 外层按页框裁切——**像素结果与改前一致**（本来就该被裁），但不再有
+    // 溢出条纹，也不再在 debug 控制台刷断言。
+    return SingleChildScrollView(
+      physics: const NeverScrollableScrollPhysics(),
+      child:
+          Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
+    );
   }
 
   /// 当前朗读段在 [href] 章上的段下标投影（非该章 / 未朗读 → null）。

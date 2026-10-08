@@ -22,6 +22,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/library/library_repository.dart';
+import 'package:mreader/reader/pagination/page_renderer.dart';
 import 'package:mreader/reader/pagination/paged_scroller.dart';
 import 'package:mreader/reader/pagination/paged_turn_body.dart';
 import 'package:mreader/reader/progress_store.dart';
@@ -332,6 +333,58 @@ void main() {
       expect(scrollerFinder, findsOneWidget, reason: '滚动体全程保活（未重挂）');
 
       // 排空停稳采样 debounce / 进度落盘的真异步与 timer。
+      await settle(tester);
+    });
+
+    testWidgets('T05-d 验收③：chrome 切换那一帧页底越界不再触发溢出断言',
+        (WidgetTester tester) async {
+      // 「滑动模式顶部和底部文字被截断」的定案（tech-usage §2.74）：
+      // 唤出 / 收起 chrome 会真的改变 body 高度 ⇒ 排版参数必须重排，而重排是
+      // **帧末**才起步的 ⇒ 切换那一帧仍在按旧页表绘制：`标题占高 + 页高` 大于
+      // 新的可视区高。改前那是 Column 直接溢出（debug 报 `RenderFlex
+      // overflowed by 154`，底部约 5 行被黄黑斜纹盖住）；改后外层裁切、
+      // 不再有溢出断言（几何自愈仍是下一帧，探针实测只存在 1 帧）。
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      // 切滑动模式（面板打开态 ⇒ 此时 chrome 可见）。
+      await showChrome(tester);
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('pageMode-slide')));
+      await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+      await settle(tester);
+
+      // 收起 chrome（可视区变大）→ 再唤出（可视区变小）= 制造配置突变那一帧。
+      await tester.tap(find.byKey(const Key('reader-chrome-toggle-status')));
+      await tester.pumpAndSettle();
+      await settle(tester);
+      expect(tester.takeException(), isNull, reason: '切换前必须无待报异常');
+
+      await showChrome(tester); // 内部只 pump 一帧 —— 正是「旧页表 + 新可视区」
+      expect(tester.takeException(), isNull,
+          reason: '旧页表画进更小的可视区：应被裁切，不许触发 RenderFlex 溢出');
+
+      // 自愈：reprime 完成后页内容回到可视区内。
+      await settle(tester, rounds: 30);
+      final Rect area = tester.getRect(
+          find.byKey(const ValueKey<String>('reader-content-area')));
+      final Finder pages = find.descendant(
+          of: find.byType(PageTurnBody),
+          matching: find.byType(PageContent),
+          skipOffstage: false);
+      expect(pages, findsWidgets, reason: '滑动模式应有当前页');
+      for (int i = 0; i < pages.evaluate().length; i++) {
+        final Rect r = tester.getRect(pages.at(i));
+        expect(r.bottom, lessThanOrEqualTo(area.bottom + 0.5),
+            reason: '第 $i 页应已收敛进可视区内（bottom=${r.bottom} '
+                'area=${area.bottom}）');
+        expect(r.top, greaterThanOrEqualTo(area.top - 0.5));
+      }
+      expect(tester.takeException(), isNull);
+
       await settle(tester);
     });
   });
