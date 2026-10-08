@@ -3019,3 +3019,81 @@ Dart VM 对小对象构造有优化，**逐节点 `RegExp` 构造本身并不贵
 
 **未真机复跑**（`flutter run` 归负责人手动跑）——**动效观感必须真机看**，尤其
 「呼吸幅度是否合适」「三段错峰是否被感知为卡顿」两点，测试无法判断。
+
+### 2.70 真机「字没显示全 / 文字丢失上一半」定案（2026-10-08，`2ecde8d`）
+
+**症状**：阅读页首行只露下半截（截图量得约 45% 被切），末行被常驻进度条压住变暗。
+负责人同一现象报了三次（含改过一次之后仍复现），故按「先量再改」走完整实证链。
+
+#### 1. 证据链（先把「是什么」钉死，再谈「为什么」）
+
+- **截图放大**：真机截图 1220×2656（另一张 881×1920）。顶行「芽」被切掉艹部后
+  读成「牙」——**一条直线水平切**，不是叠字、不是缺字。两张不同时间 / 不同滚动
+  位置的截图**同一形态** ⇒ 系统性，非偶发滚动位置。
+- **放大工具**（本批临时写的，用完已删，配方留此以免重造）：系统无 PIL、
+  PowerShell `Add-Type System.Drawing` 被安全策略拦，最终用 **Dart + pub 缓存里的
+  `image: 3.3.0`**：`.scratch/imgtool/`（`pubspec.yaml` 依赖 `image: 3.3.0`）+
+  `bin/crop.dart`，`PUB_CACHE=D:/pub_cache dart pub get --offline` 后
+  `dart run bin/crop.dart <src> <name,x,y,w,h,scale>...`。
+  注意 `image` 3.3.0 的 `copyCrop` 是**位置参数**（`copyCrop(img,x,y,w,h)`），
+  `copyResize` 才是具名参数——签名猜错会直接编译失败。
+
+#### 2. 真因（两处，各自独立）
+
+**(a) 落位按「页内字符比例」折算 —— 首行被切的主因**
+
+`PagedScrollerState.offsetFor` 原式 = `页顶 + (页内字符比例) × 页高`。
+比例落在页中间时，视口顶就落在**某一行的中间**，该行只露下半截。
+开书恢复（`_primeOpenSync`）/ 跳章 / 跳书签 / 跳目录**全走这条路径**，
+所以是「每次必现」而不是偶发。
+
+**旧测试把缺陷钉成了契约**——`paged_scroller_test.dart` 里
+`testWidgets('分数落位：charOffset 124 → offset 439（页顶上方 72）')` 断言
+`tester.getTopLeft(target).dy == -72.0`，即「目标页顶在视口上方 72px」。
+72 = 2×29 + 14，那 14 就是被切掉的首行上半截。**断言越具体，越容易把 bug 固化。**
+
+改法：`offsetFor` 增加 `required double paragraphSpacing` 参数，新增
+`_lineTopInPage` = 页窗口内目标行行顶（页首行 = 0），逐行累加 `MeasuredLine.height`，
+**跨段处再加一次 `paragraphSpacing`**（与 `PageContent` 在段间插 `SizedBox` 的位置、
+`PageBreaker._heightOf` 的口径同源）。漏掉段间距 = 把行顶算低 = 视口顶又切回行中间。
+
+**(b) 28dp 让位加错层级 —— 末行被压住**
+
+`Padding(bottom: _kProgressIndicatorReserve)` 加在正文 `Stack` **外面**，
+而 `ReaderProgressIndicator` 挂在同一个 `Stack` **里面**的 `bottom: 0`。
+两层一起被压扁 ⇒ 正文与指示条**同步上移、照旧重叠**，还在控制条上方白留一条
+28dp 空带（截图里那条缝就是这么来的）。
+改法：让位挪进 `Stack` 内部、只裹滚动体，指示条仍贴 Stack 底边；
+并挂 `reader-content-area` key 供测试量。
+
+#### 3. 被证伪的假设（避免回潮）
+
+| 假设 | 证伪 |
+|---|---|
+| `PageContent` 内外盒高不一致（`config.pageHeight` vs `PageSlice.height`），故裁掉页末文字 | 两处调用方（`PagedScroller`、`_turnPageWidget`）**都传了** `clipHeight`，且传的就是 `page.height` ⇒ `clipHeight ?? page.height` **恒等于**改前值。那次「修复」一行都没生效，注释里的因果链是编的 |
+| 首行被 `AppBar` 压住 | `Scaffold` 给 body 的 `MediaQuery` 做了 `removePadding(removeTop: widget.appBar != null)`（`scaffold.dart:3030`），并把 body 放在 `contentTop`（`:1114`）⇒ 正文区里的 `mq.padding.top` **恒为 0**。那段 `Padding(top: topInset)` 非全屏时是 no-op，只在沉浸全屏（`appBar == null`）才有意义 |
+| 翻页模式页框错位切掉首行 | `_turnPageWidget` 用 `Align(alignment: Alignment.topCenter)`，页贴顶；`PageTurnLayers` 用 `StackFit.expand`，页仍贴顶 ⇒ 切不出首行 |
+
+#### 4. 测试与变异验证
+
+- `paged_scroller_test.dart`：`('a',124)` 439→425、新增 `('a',110)`=396；
+  「分数落位」改名「行顶落位」，断言页顶 `dy == -58`（整 2 行）+ 不变式
+  `(-dy) % 29 == 0`（视口顶必落在行边界上）。旧值 439/72 在新契约下判红，
+  **已实测**（改代码后旧断言报 `Expected: <439.0> Actual: <425.0>`）。
+- `reader_inset_test.dart`：原两条都钉不住 ②——第一条断言
+  `vBottom == pBottom`（正文区底边 = 指示条底边），而这恰恰是**重叠**的充要条件；
+  第二条「变异护栏」断言 `viewport.height < 640`，在 `topInset` 恒 0 之后已空转。
+  重写为「内容底 ≤ 指示条顶（不重叠）」+「视口底 − 内容底 == 28」。
+- **变异验证**：把让位 `Padding` 置零 ⇒
+  `content.bottom=715.0 > indicator.top=689.0` 判红，第一条同为红。非空转。
+- 几何基线（393×852，top44/bottom34）：视口 `h=615`、正文可排版区 `h=587`、
+  指示条 `h=26`（top 689）。**可排版高 587 与改前一致**，所以分页几何没动——
+  这也是「阅读器 425 条全绿」的原因。
+
+#### 5. 回归
+
+`test/reader + typography + perf + search` **425 条全绿**（`-j 1` 串行）；
+`test/ui + widget_test.dart` **172 条全绿**；`dart analyze lib/ test/` 零问题。
+
+**真机观感仍待负责人复跑**：本批只保证「首行完整、末行不被压」的几何结论，
+「落位行贴视口顶后读感是否符合预期」需真机确认。
