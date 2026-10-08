@@ -14,6 +14,7 @@ import 'package:mreader/reader/pagination/page_breaker.dart';
 import 'package:mreader/reader/pagination/page_paginator.dart';
 import 'package:mreader/reader/pagination/page_renderer.dart';
 import 'package:mreader/reader/pagination/paged_scroller.dart';
+import 'package:mreader/reader/selection_overlay.dart';
 
 import '../test_config.dart';
 
@@ -166,6 +167,42 @@ void main() {
       expect(empty.visibleRange(0, 400, 200).isEmpty, isTrue);
       expect(empty.chapterAtOrBefore(0), -1);
     });
+
+    test('连续渲染口径：章高 == 标题 + Σ行高 + Σ跨段间距（页边界不产生缝合）', () {
+      // **这是「滚动模式改连续渲染」的前提**（2026-10-08）：只有整章连续铺开的
+      // 自然高与 `PagedLayout` 的章高（= Σ页高 + Σ跨页间距）**逐像素相等**，
+      // 改完后 `Positioned(top/height)`、`offsetFor`、`sampleNow` 才都不用动。
+      //
+      // 夹具恰好覆盖两种页边界：`p0→p1` / `p2→p3` 是**段中续页**（补 0），
+      // `p1→p2` 是**跨段**（补一次段间距 8）。
+      const double spacing = 8;
+      double continuousHeight(PagedChapterView v) {
+        double h = v.headingHeight; // 标题占位（连续渲染里也照占）
+        for (int i = 0; i < v.lines.length; i++) {
+          if (i > 0 &&
+              v.lines[i].paragraphIndex != v.lines[i - 1].paragraphIndex) {
+            h += spacing;
+          }
+          h += v.lines[i].height;
+        }
+        return h;
+      }
+
+      final PagedLayout layout = PagedLayout.build(
+        <PagedChapterView>[viewA(), viewB()],
+        paragraphSpacing: spacing,
+      );
+      expect(
+        continuousHeight(viewA()),
+        layout.chapterTops[1] - layout.chapterTops[0],
+        reason: '章 a 连续高应等于布局章高',
+      );
+      expect(
+        continuousHeight(viewB()),
+        layout.totalHeight - layout.chapterTops[1],
+        reason: '章 b 连续高应等于布局章高',
+      );
+    });
   });
 
   group('滚动容器上屏', () {
@@ -210,6 +247,130 @@ void main() {
       expect(find.text('章 b'), findsOneWidget);
 
       await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    /// 章内连续坐标：第 [k] 行的**行顶**（相对章内容起点，含标题占位）。
+    ///
+    /// 完全由 `lines`（测量产物）+ 段间距推出，**不经过 `PagedLayout`**——用来
+    /// 交叉验证「页窗口的裁切边界是否恰好落在行边界上」。`lines` 是章内连续
+    /// 无空档的行序，故第 k 行之前要补的是「跨段处一次段间距」（与
+    /// `PageBreaker._heightOf` / 渲染侧 `SizedBox` 同口径）。
+    double lineTopInChapter(List<MeasuredLine> lines, int k, double heading,
+        double spacing) {
+      double y = heading;
+      for (int i = 0; i < k; i++) {
+        if (i > 0 && lines[i].paragraphIndex != lines[i - 1].paragraphIndex) {
+          y += spacing;
+        }
+        y += lines[i].height;
+      }
+      if (k > 0 && lines[k].paragraphIndex != lines[k - 1].paragraphIndex) {
+        y += spacing;
+      }
+      return y;
+    }
+
+    testWidgets('连续铺开：页窗口恰为 [首行行顶, 末行行底]（滚动不切行、不留缝）',
+        (WidgetTester tester) async {
+      // 「**滚动时内容连续**」的正面证明（2026-10-08）：滚动模式是逐页
+      // `PageContent` + `ClipRect` 拼的，页边界会不会切行，取决于**裁切框的上下边
+      // 是否恰好落在首行行顶 / 末行行底**。这里在真实渲染树里量 `PageContent`
+      // 矩形的上下边，与「只由测量行表推出的连续坐标」对拍——不经过布局表。
+      //
+      // 覆盖三种落点：0（页 0 顶）、132 / 439（**非行对齐**的自由滚动位）、
+      // 972（末端 clamp）。439 尤关键：视口顶落在页 2 内 72px = 2×29 + 14，
+      // 即**行中间**——改前正是这种非行对齐偏移把首行切掉一半。
+      final List<PagedChapterView> chs = <PagedChapterView>[viewA(), viewB()];
+      await tester.pumpWidget(host(chs));
+      final PagedScrollerState state =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+
+      for (final double target in <double>[0, 132, 439, 972]) {
+        state.scrollController.jumpTo(target);
+        await tester.pump();
+        expect(state.offset, target);
+
+        final VisibleRange range =
+            state.layout.visibleRange(target, 400, config.pageHeight);
+        final List<Rect> rects = <Rect>[];
+        final List<int> owners = <int>[];
+        for (int i = range.first; i <= range.last; i++) {
+          final FlatPage e = state.layout.flatPages[i];
+          final PagedChapterView chapter = chs[e.chapterIndex];
+          final PageSlice page = chapter.pages[e.pageIndex];
+          if (page.lineCount == 0) continue;
+          final Rect r =
+              tester.getRect(pageOf(chapter.paragraphs, e.pageIndex));
+          final double chTop = state.layout.chapterTops[e.chapterIndex];
+          final int last = page.firstLine + page.lineCount - 1;
+          final double pageTop = lineTopInChapter(
+              chapter.lines, page.firstLine, chapter.headingHeight, 8);
+          final double pageBottom = lineTopInChapter(
+                  chapter.lines, last, chapter.headingHeight, 8) +
+              chapter.lines[last].height;
+
+          // 上边 = 首行行顶、下边 = 末行行底 ⇒ 裁切框**不含任何半行**。
+          expect(r.top + target, chTop + pageTop,
+              reason: '章${chapter.href}页${e.pageIndex}@$target：上边未落在首行行顶');
+          expect(r.bottom + target, chTop + pageBottom,
+              reason: '章${chapter.href}页${e.pageIndex}@$target：下边未落在末行行底');
+          rects.add(r);
+          owners.add(e.chapterIndex);
+        }
+
+        final List<int> order = List<int>.generate(rects.length, (int i) => i)
+          ..sort((int a, int b) => rects[a].top.compareTo(rects[b].top));
+        for (int i = 1; i < order.length; i++) {
+          final double gap =
+              rects[order[i]].top - rects[order[i - 1]].bottom;
+          // 同章：0（同段续页）或 8（跨段间距）；跨章：下一章的标题占位。
+          final bool sameChapter = owners[order[i]] == owners[order[i - 1]];
+          final double expected =
+              sameChapter ? -1 : chs[owners[order[i]]].headingHeight;
+          expect(sameChapter ? (gap == 0.0 || gap == 8.0) : gap == expected,
+              isTrue,
+              reason: sameChapter
+                  ? '同章页间只允许 0 或 8，实测 $gap'
+                  : '跨章页间应为标题占位 $expected，实测 $gap');
+        }
+        // 视口 [target, target+400]（布局坐标）全程被覆盖：页窗口 + 章标题占位。
+        final double firstTop = rects[order.first].top + target;
+        final double lastBottom = rects[order.last].bottom + target;
+        expect(
+            firstTop <= target ||
+                firstTop - chs[owners[order.first]].headingHeight <= target,
+            isTrue,
+            reason: '@$target 视口顶未被页窗口或章标题占位覆盖（页顶 $firstTop）');
+        expect(lastBottom, greaterThanOrEqualTo(target + 400),
+            reason: '@$target 视口底未被页窗口覆盖（页底 $lastBottom）');
+      }
+
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('段落渲染高 == Σ 测量行高（测量↔渲染无漂移 ⇒ 裁切框不切字）',
+        (WidgetTester tester) async {
+      // 上一条证明「裁切边界落在行边界」，这条证明「行边界本身两侧一致」：
+      // 渲染出来的段落高度必须逐像素等于它的测量行高之和，否则页内末尾若干行
+      // 会被裁掉（渲染比测量高）或留白（低）。
+      //
+      // 四支点（同宽 / 同样式缩进 / 同 textScaler / 同 strut）任一漂移都会在此判红。
+      final List<PagedChapterView> chs = <PagedChapterView>[viewA(), viewB()];
+      await tester.pumpWidget(host(chs));
+
+      // 章 a 页 1 = 行 5..10，全部属段落 0 ⇒ 该页只渲染一个段落。
+      final Finder para = find.descendant(
+        of: pageOf(parasA, 1),
+        matching: find.byKey(paragraphKey('a', 0)),
+      );
+      expect(para, findsOneWidget);
+      final double measured = linesA
+          .where((MeasuredLine l) => l.paragraphIndex == 0)
+          .fold(0.0, (double a, MeasuredLine l) => a + l.height);
+      expect(measured, 319.0); // 11 行 × 29（夹具实测行高）
+      expect(tester.getSize(para).height, measured);
+
       await tester.pumpWidget(const SizedBox());
     });
   });
