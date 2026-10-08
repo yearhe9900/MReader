@@ -2414,7 +2414,7 @@ EdgeInsets shelfGridPadding(double topInset) =>
 |---|---|---|---|
 | 顶栏 | ① 检索与标记 | 搜索、书签 | `CNT-06` / `TYP-06`，页面级查找与标记 |
 | 顶栏 | ② AI 增强 | **单入口** → 面板内 4 行 | `AI-04`~`AI-07` 同属 AI 能力，平铺 4 个是拥挤主因 |
-| 顶栏 | ③ 外观与视图 | 外观、目录、全屏 | `TYP-03`/`TYP-07`/`TYP-08` + `NAV-01`（要求 AppBar 目录按钮）+ `TYP-09` |
+| 顶栏 | ③ 外观与视图 | 外观、目录 | `TYP-03`/`TYP-07`/`TYP-08` + `NAV-01`（要求 AppBar 目录按钮）。**全屏按钮已于 2026-10-08 移除**（默认全屏，切换改走点正文，`TYP-09`） |
 | 控制条①行 | 章节 | 上一章、下一章、进度读数 | 同一层级 = 位置导航；读数是「当前在哪」的组内读数 |
 | 控制条①行 | 朗读与 AI | AI 摘要、朗读、朗读设置 | 同属「听/读辅助」，按可用性出，三者全关则整组隐藏 |
 | 控制条②行 | 排版 | 字号(−/值/+) ‖ 行距(滑块) ‖ 版面(边距/主题) | `TYP-01`/`TYP-02`/`TYP-03` 同属排版参数 |
@@ -3173,3 +3173,106 @@ DELTA    total=0.0            para0=0.0   para1=0.0
 
 `test/reader + typography + perf + search` **428 绿**（`-j 1`）；
 `test/ui + widget_test.dart` **172 绿**；`dart analyze` 三项零问题。
+
+### 2.72 默认全屏 + chrome 点正文切换 + 底部读数改口径（2026-10-08）
+
+**起因**：负责人三项要求——① 去除右上角全屏切换按钮；② 默认改为全屏；
+③ 底部显示当前章节 + 当前章节页数 + 全书进度百分比（附截图口径
+`全书名 · 第一章 | 8/20 22.2%`）。
+
+两个追问的答复（拍板）：chrome 显隐入口 = **点正文中间**；底部格式
+= **按截图 + 保留 2dp 进度条**。
+
+#### 1. 拍板后的形态
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| `_fullscreen` 初值 | `false`（顶栏常显） | **`true`**（进书即沉浸） |
+| 全屏切换按钮 | 顶栏 `reader-fullscreen-enter` + 全屏浮层 `reader-fullscreen-exit` | **两者删除**；切换改走点正文 |
+| chrome 入口 | 顶栏按钮 | 点正文（`reader-chrome-toggle`）+ 点常驻读数行（`reader-chrome-toggle-status`） |
+| 底部读数 | 「第 N/M 章 · X%」（整数百分比） | 左**当前章标题**（ellipsis）+ 右「`n/N` `x.y%`」（章内页 / 本章总页 / 全书百分比一位小数） |
+| 底部让位 | 固定 28dp | 28dp + `MediaQuery.padding.bottom`（手势导航条） |
+
+`_fullscreen` **不落盘**：每次进阅读页回到全屏静息态（负责人未要求记住 chrome 显隐）。
+
+#### 2. 三个非显然的写法
+
+**(a) 单表达式覆盖两种 chrome 形态的底部让位**
+
+`Scaffold` 在 `bottomNavigationBar != null` 时才 `removeBottomPadding`
+（`scaffold.dart:3031`）。默认全屏 ⇒ 无控制条 ⇒ `mq.padding.bottom` 有值（真机手势条 ≈ 34dp）；
+唤出 chrome ⇒ 控制条自带 `SafeArea(bottom: true)` ⇒ 该值自动回到 0。
+故 `final double bottomInset = mq.padding.bottom;` **不需要按 `_fullscreen` 分支**。
+
+**(b) 让位要「只让文字、不让底色」，必须在指示器内部吃**
+
+外面包 `SafeArea` 会把 `DecoratedBox` 的底色一并顶上去，系统栏那条露出正文
+（观感「进度条浮在字上、底下漏一条」）。故 `bottomInset` 作为 `Column` 末尾的
+`SizedBox` 由 `ReaderProgressIndicator` 自己消化（底色铺到屏幕下缘）；
+**同一个量**同时加进正文预算 `reserve = _kProgressIndicatorReserve + bottomInset`
+（两处同源，否则正文会被多盖一条）。
+
+**(c) chrome 层必须是正文的祖先，不能是兄弟**
+
+`HitTestBehavior.translucent` 的**兄弟**层会先把自己加进 `HitTestResult.path`，
+而手势竞技场按 path 顺序判定（`GestureBinding.dispatchEvent` 从 index 0 派发、
+`sweep` 取首个成员）⇒ 覆盖层会抢掉正文里链接的 `TapGestureRecognizer`（`CNT-04` 失效）。
+做成**祖先**后 path 是「链接 → 本层」，链接先入竞技场即胜出。
+不干扰滚动：`TapGestureRecognizer` 超出 `kTouchSlop` 即自我拒绝。
+
+**为什么读数行也要能点**：图片页（CBZ/CBR/PDF）中央点击被「点页全屏缩放」占用
+（`FMT-02` 验收②，PRD 要求），点正文那条路径在图片页必然被内层 `_ImagePage` 抢走。
+常驻读数行在两种模式下都在，故把它做成**模式无关**入口——只加热区、**零新像素**。
+
+#### 3. 读数与翻页体同源
+
+`_viewPositionAt(int index, double pos)` 由 `_turnPosition()`（翻页体，吃语义坐标
+`_currentIndex`/`_chapterPos`）与 `_livePageNumber`（读数，吃滚动实时值
+`_liveIndex`/`_livePos`）**共用**——两处页号口径因此不可能不一致。
+百分比口径 `_livePercentValue` 与顶栏副标题的整数 `_livePercent` 同源
+（`(overall × 1000).floor() / 10`）：0.9999 显示 99.9%，只有真的读完才显示 100.0%。
+页表未就绪（增量分页首帧 / 占位章）⇒ `(0, 0)` ⇒ 读数退化为只显示百分比，
+**不显示「0/0」**。
+
+#### 4. 测试影响：12 条红 + 1 条断言被判为「钉住性能细节」
+
+读数左栏显示当前章标题 ⇒ 树里同名 `Text` 有两处（正文标题 + 读数）。
+`findsOneWidget` 类断言与 `tester.getTopLeft` 全部受影响（实测 12 条）。
+收口办法：装具加 `chapterHeading(title)` =
+`find.descendant(of: find.byKey(ValueKey('reader-content-area')), matching: find.text(title))`
+——**只认正文区那一份**；`settle` 之外的顶栏交互前一律先 `showChrome(tester)`（幂等）。
+
+**更要紧的一条**：`回归③` 原断言「第 1 章标题**不在树上**」在本次改动后误红。
+对照实测（`git stash` 回 HEAD 跑同一条）：
+
+| | 落位偏移 `paged.prime … off=` |
+|---|---|
+| HEAD | **906** |
+| 本次 | **1065** |
+
+页高因多扣 34dp 手势条而变矮 ⇒ 同一语义坐标的落位偏移变化 ⇒ 第 1 章标题被纳入
+`PagedScroller` 的**懒构建**范围（仍在视口上方、不可见）。
+⇒ 该断言钉的是**构建窗口大小**（性能细节），不是产品契约，已改锚**正文段落**的视口语义：
+
+```dart
+expect(find.textContaining('第1章正文', findRichText: true).hitTestable(),
+    findsNothing, reason: '落点在第 2 章中部 → 第 1 章正文应完全在视口外');
+```
+
+**为什么不能继续锚章标题**（变异实测）：章标题按设计排在首行**上方**（§2.71 页窗口
+= `[首行行顶, 末行行底]`），落到章首时标题恰在视口上方 ⇒ 标题 finder 无法区分
+「刚到第 1 章」与「早已离开第 1 章」——把播种改成第 1 章开头（`h1` / `0.0`），
+标题版断言**仍绿**，正文版断言**判红**（`Found 13 widgets with text containing 第1章正文`）。
+
+#### 5. 回归
+
+`test/reader + typography + perf + search` **429 绿**（`-j 1`）；
+`test/ui + widget_test.dart` **172 绿**（`-j 1`）；`dart analyze` 零问题。
+
+#### 6. 边界（如实记录，未做）
+
+- 底部控制条**自己**也有一条进度读数（`control_bar.dart` 的「第 N/M 章 · X%」）。
+  本次未动它：它只在唤出 chrome 时可见，且改动会牵动 `reader_chrome_layout_test.dart`
+  与窄屏降级常量 `kReaderControlProgressMinWidth`。**待负责人决定**是否去掉这条
+  与底部读数重复（且单位不同：章 vs 页）的读数。
+- `_fullscreen` 不落盘（见 §1）；若日后要「记住上次 chrome 显隐」，需新增设置项。
