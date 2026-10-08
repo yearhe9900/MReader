@@ -187,7 +187,15 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      await tester.tap(find.byKey(const Key('reader-image-page:p/1.png')));
+      // 打在图片**顶部**而非中心：这本假漫画按 800×800 铺开，整页图 rect 实测
+      // 高 800（top 60 / bottom 860），**中心 y=460 已超出 600 的测试屏**。
+      // `tester.tap` 打的是元素中心 ⇒ 命中的是别的 widget，点按静默失效。
+      // 2026-10-06 正文避让系统栏后 viewport 变矮（469），该假设更容易不成立——
+      // 但这是**测试的取点假设**随视口变化，与被测行为（点页 → 缩放查看器）无关。
+      final Rect imageRect =
+          tester.getRect(find.byKey(const Key('reader-image-page:p/1.png')));
+      await tester.tapAt(
+          Offset(imageRect.left + imageRect.width / 2, imageRect.top + 20));
       await tester.pumpAndSettle(); // 路由转场（无无限动画，可 settle）
 
       expect(find.byKey(const Key('reader-image-zoom')), findsOneWidget);

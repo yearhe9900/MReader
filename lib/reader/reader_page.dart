@@ -155,6 +155,13 @@ const int _kMaxRestoreFrames = 8;
 /// 占位块在「尚无任何已加载章可测」时的默认高度（逻辑像素）。
 const double _kDefaultChapterHeight = 480;
 
+/// 正文底部为常驻 [ReaderProgressIndicator] 预留的高度（dp）。
+///
+/// 实测：该条= 2dp 细条 + `EdgeInsets.symmetric(vertical: 4)` + 一行 `bodySmall`
+/// ≈ 26dp。改前分页模式页高 = 满屏视口高，**末页最后一行被这条压住**（真机截图
+/// 「字没显示全」）。此常量给正文留出这段高度。
+const double _kProgressIndicatorReserve = 28;
+
 /// R1②：交互挂起后台补齐的**兜底帧数**（到期自动恢复，见 `ReaderPage._pauseAutoFill`）。
 ///
 /// 不做成「秒」而做成「补齐批次数」：补齐循环每批递减一次（[_autoFillLoop]），
@@ -334,6 +341,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   final Map<int, GlobalKey> _chapterKeys = <int, GlobalKey>{};
 
   /// 正文滚动区（视口）的 `GlobalKey`——把章块全局坐标换算到视口坐标系。
+  /// 正文视口（已让开上下系统栏 / 进度条）。
   final GlobalKey _viewportKey = GlobalKey();
 
   /// 整本连续滚动列表的控制器（内容就绪后创建）。
@@ -4330,9 +4338,25 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       builder: (BuildContext context, BoxConstraints constraints) {
         _viewportWidth = constraints.maxWidth;
         _viewportHeight = constraints.maxHeight;
+        // 正文**可用**高度：扣掉顶部 AppBar 与底部常驻进度条 + 系统栏inset。
+        //
+        // 修复「字被遮住」（2026-10-06 真机截图）：改前正文按**满屏**高度排版，
+        // 首行被 AppBar 压住、末行被常驻的 [ReaderProgressIndicator] 压住——
+        // 分页模式尤其明显（页高 = 视口高，两端各切掉一截）。
+        // `MediaQuery.paddingOf` 已含系统栏（状态栏/导航条）inset；
+        // AppBar 高用 `kToolbarHeight`（Material 默认 56）与进度条实测高度对齐。
+        final MediaQueryData mq = MediaQuery.of(context);
+        final double topInset = mq.padding.top;
+        final double usableHeight = math.max(
+          0.0,
+          constraints.maxHeight - topInset - _kProgressIndicatorReserve,
+        );
         _syncPageConfig(PaginationConfig(
           pageWidth: constraints.maxWidth - _settings.pageMargin.horizontal,
-          pageHeight: constraints.maxHeight,
+          // 页高按**可用**高度算：否则每页都会被上下各切掉一截。
+          pageHeight: usableHeight > 0
+              ? usableHeight
+              : constraints.maxHeight,
           textStyle: bodyStyle,
           paragraphSpacing: 16,
           textScaleFactor: MediaQuery.textScalerOf(context).scale(1.0),
@@ -4341,10 +4365,31 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         // 划词操作条（选区非空时钉在选区上方——构建期算好，按层序插入）。
         final Widget? selBar =
             _selection != null ? _buildSelectionBar() : null;
-        return SizedBox.expand(
-          key: _viewportKey,
-          child: Stack(
-            children: <Widget>[
+        return Padding(
+          // **只加「顶部状态栏 + 底部进度条预留」两段**，刻意**不加** `mq.padding.bottom`。
+          //
+          // 为什么不加底部系统栏inset：Scaffold 的 `bottomNavigationBar`（控制条）
+          // **自带 `SafeArea(bottom: true)`**（见 `control_bar.dart`），系统手势条
+          // 已在那一层避让；正文区若再加一次就是**重复计入**，实测把控制条挤到
+          // `RenderFlex overflowed by 19 pixels`（`appearance_sheet_test` T05-d 判红）。
+          //
+          // 顶部相反：AppBar 由 Scaffold 顶开，但**正文区自己**要避开状态栏，
+          // 否则首行被状态栏/AppBar 压住。
+          //
+          // 底部那 28dp（`_kProgressIndicatorReserve`）是给**常驻进度指示条**留的
+          // ——它在正文 Stack 内`bottom: 0`，不占布局，必须显式让位，
+          // 否则末页最后一行被它压住（真机截图「字没显示全」）。
+          padding: EdgeInsets.only(
+            top: topInset,
+            bottom: _kProgressIndicatorReserve,
+          ),
+          // 正文容器（已让开上下 inset）：测试与选区定位都以此为视口基准。
+          child: SizedBox.expand(
+            key: const ValueKey<String>('reader-viewport'),
+            child: KeyedSubtree(
+              key: _viewportKey,
+              child: Stack(
+              children: <Widget>[
               Positioned.fill(
                 child: NotificationListener<ScrollUpdateNotification>(
                   // `TYP-09` 验收②：滚动实时刷新进度显示（只写显示字段）。
@@ -4357,10 +4402,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                         ? _buildPagedBody()
                         : ListView.builder(
                             controller: _controller,
-                            // bottom 留出进度指示条高度（约 28px）+ 留白，
-                            // 避免末段正文被常驻指示条压住看不见。
+                            // 进度指示条的占位已由**外层 Padding** 统一提供
+                            // （`_kProgressIndicatorReserve`），此处只需章节间的
+                            // 呼吸留白（改前 40 是在重复为同一条让位）。
                             padding:
-                                const EdgeInsets.only(top: 8, bottom: 40),
+                                const EdgeInsets.only(top: 8, bottom: 12),
                             itemCount: chapters.length,
                             itemBuilder: (BuildContext context, int index) =>
                                 _buildChapterItem(theme, bodyStyle, index),
@@ -4440,7 +4486,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     onPressed: _toggleFullscreen,
                   ),
                 ),
-            ],
+              ],
+              ),
+            ),
           ),
         );
       },

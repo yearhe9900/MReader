@@ -1,6 +1,13 @@
 // 页内容渲染器（T05-c R2）契约：页框几何、平移量、段落拼装、渲染-测量同源支点。
 // 期望值一律硬编码。夹具同 `pagination_measure_test`：fontSize 18 / height 1.6、
 // pageWidth 180（10 字/行）、行高 29.0、段间距 8。
+// ## 契约变更（2026-10-06）：页框高 = **本页内容自然高**（`PageSlice.height`）
+//
+// 原断言页框 = `config.pageHeight`（200）。那与调用方 [PagedScroller] 的
+// `Positioned(height: e.height)` 不一致 ⇒ 真机分页模式下（`pageHeight` = 视口高、
+// 末页内容远不足一屏）超出部分被外层裁掉 ⇒ **负责人截图「文字丢失上一半」**。
+// 现页框 = `PageSlice.height`（本页实际内容高），内外盒一致、**不裁任何一行**。
+//
 // 夹具 A（页高 200，两段各 100 字）：22 行 → 4 页 lineCount 6/5/6/5——
 // 页 1 贪心后切在 p1 内被断句回拉到 p0 段末（窗口 8 字 ≤ 50），故**无跨段页**。
 // 夹具 B（页高 215，p0 100 字 + p1 10 字）：页 1 吃到章末（切点 = 段末不回拉）
@@ -82,11 +89,13 @@ void main() {
     });
   });
 
-  testWidgets('页 0：段首页平移 0、单段落、页框 180×200、正文宽 180',
+  testWidgets('页 0：段首页平移 0、单段落、页框 = 本页内容高、正文宽 180',
       (WidgetTester tester) async {
     await tester.pumpWidget(host(pages[0]));
 
-    expect(tester.getSize(find.byType(PageContent)), const Size(180, 200));
+    // 页框高 = pages[0].height（内容自然高），不再是 pageHeight。
+    expect(tester.getSize(find.byType(PageContent)),
+        Size(180, pages[0].height));
     expect(find.byType(InlineParagraph), findsOneWidget);
     expect(
       tester.widget<InlineParagraph>(find.byType(InlineParagraph)).text,
@@ -113,7 +122,8 @@ void main() {
     );
     final Transform transform = tester.widget<Transform>(find.byType(Transform));
     expect(transform.transform.storage[13], -174.0);
-    expect(tester.getSize(find.byType(PageContent)), const Size(180, 200));
+    expect(tester.getSize(find.byType(PageContent)),
+        Size(180, pages[1].height));
   });
 
   testWidgets('跨段页（夹具 B）：段0 + 间距 8 + 段1，平移 −203', (WidgetTester tester) async {
@@ -156,7 +166,8 @@ void main() {
     );
     final Transform transform = tester.widget<Transform>(find.byType(Transform));
     expect(transform.transform.storage[13], -203.0); // 行0..6 × 29
-    expect(tester.getSize(find.byType(PageContent)), const Size(180, 215));
+    // 页框 = 本页内容自然高（本夹具 182），不再是 pageHeight(215)。
+    expect(tester.getSize(find.byType(PageContent)), const Size(180, 182));
   });
 
   testWidgets('clipHeight 覆盖页框（页 0 标题预留由视图层裁进）',
@@ -186,7 +197,8 @@ void main() {
       )),
     );
 
-    expect(tester.getSize(find.byType(PageContent)), const Size(180, 200));
+    // 空页 `height: 0` ⇒ 页框 0（改前错误地回落 `pageHeight`=200）。
+    expect(tester.getSize(find.byType(PageContent)), const Size(180, 0));
     expect(find.byType(InlineParagraph), findsNothing);
     expect(find.byType(Transform), findsNothing);
   });
