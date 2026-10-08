@@ -87,6 +87,7 @@ class EpubSection {
     required this.href,
     required Uint8List rawBytes,
     this.linear = true,
+    this.uncompressedBytes = 0,
   })  : _eagerBytes = rawBytes,
         _loader = null;
 
@@ -99,6 +100,7 @@ class EpubSection {
     required this.href,
     required Uint8List Function() loadBytes,
     this.linear = true,
+    this.uncompressedBytes = 0,
   })  : _eagerBytes = null,
         _loader = loadBytes;
 
@@ -113,6 +115,25 @@ class EpubSection {
   /// 与解析层的 `EpubSectionRef.linear` 同义；属性缺省即 `true`（主线阅读内容）。
   /// 非主线章节保留可读，由章节表标注「（非主线）」。
   final bool linear;
+
+  /// 该章 XHTML 的**解压后字节长度**（zip 中央目录里的 `uncompressedSize`）。
+  ///
+  /// ## 为什么记它（2026-10-08 真机「EPUB 章节加载特别慢」定案）
+  ///
+  /// 它只服务一件事：给「全书进度百分比」提供**章间相对权重**的廉价估算
+  /// （`DartEpubSource.chapterWeightEstimates()`）。改前那条路是
+  /// `chapterCharCounts()`——逐章 `rawBytes` + HTML 解析统计精确字数，
+  /// 真机 1152 章的书实测把主 isolate **独占秒级**，而它换来的只是一个
+  /// 一位小数的百分比。
+  ///
+  /// 本值在 [bindEpubResult] 绑定闭包时**顺手取自中央目录**：zip 解码器已把
+  /// `uncompressedSize` 读进 `ArchiveFile.size`（`archive-3.6.1` 的
+  /// `zip_decoder.dart:43`），**零解压、零额外 IO**。
+  ///
+  /// `0` = 未知（手造 `EpubBook` / 急切实体），消费方须按「无权重」处理。
+  ///
+  /// 口径提醒：XHTML 里含标签，故它**不是**字数——只保证「与章内文本量正相关」。
+  final int uncompressedBytes;
 
   final Uint8List? _eagerBytes;
   final Uint8List Function()? _loader;

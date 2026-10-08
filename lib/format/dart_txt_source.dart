@@ -243,6 +243,21 @@ class DartTxtSource implements BookSource {
   }
 
   @override
+  Future<List<int>?> chapterWeightEstimates() async {
+    await _ensurePrepared();
+    final List<_Segment>? segments = _segments;
+    if (_disposed || segments == null) return null; // dispose 竞态：优雅返回 null
+
+    // 权重 = 分段的**原始长度**（`end - start`），**不逐字符扫空白**——
+    // 改前 `chapterCharCounts()` 对 20MB 的书要在主 isolate 上跑完整本
+    // `codeUnitAt` + 空白判定，而这里只是取两个整数之差。
+    // 空白占比逐章稳定 ⇒ 作为「章间相对比例」与精确口径等价。
+    return <int>[
+      for (final _Segment segment in segments) segment.end - segment.start,
+    ];
+  }
+
+  @override
   Stream<SearchEvent> search(String query, {required CancelToken cancel}) async* {
     if (query.isEmpty) return;
     await _ensurePrepared();

@@ -146,6 +146,9 @@ class CbrSource implements BookSource {
   Future<List<int>?> chapterCharCounts() async => null;
 
   @override
+  Future<List<int>?> chapterWeightEstimates() async => null;
+
+  @override
   Future<Uint8List?> readResource(String href) async {
     try {
       await _ensurePrepared();

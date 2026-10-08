@@ -78,6 +78,23 @@ class DartEpubSource implements BookSource {
   List<int>? _chapterChars;
   bool _disposed = false;
 
+  /// `匹配键 -> spine section` 索引（惰性建一次，`dispose` 时清）。
+  ///
+  /// ## 为什么要它（2026-10-08）
+  ///
+  /// 改前 [_sectionByHref] 是**线性扫描 + 逐元素现算 `_matchKey`**（百分号解码 +
+  /// 小写化）。而 `chapters()`（有目录书：每个目录项反查一次 section）与
+  /// `chapterWeightEstimates()`（逐章反查）都是**逐章调用**，于是整体退化成
+  /// **O(章数²)**——真机 1152 章的书意味着 ~130 万次 `_matchKey`，白烧百毫秒级
+  /// 的主 isolate 时间。本索引把三条路径一起降到 O(章数)。
+  ///
+  /// 键取 [_matchKey]，故与 [_sectionByHref] 原语义等价；**同键保留首个**
+  /// （对应原线性扫描的「先出现者胜」）。
+  Map<String, EpubSection>? _sectionIndex;
+
+  /// [_sectionIndex] 对应的书（换书 / 重解析后须重建索引）。
+  EpubBook? _sectionIndexBook;
+
   /// 已释放 / 竞态时 `load()` 的最小返回（title 不空、author 不空、origins 全 `none`）。
   ///
   /// **满足 [BookMeta] 自身的不变式**：`author` 不得留空字符串（`META-01`），
@@ -357,6 +374,27 @@ class DartEpubSource implements BookSource {
   }
 
   @override
+  Future<List<int>?> chapterWeightEstimates() async {
+    final List<Chapter> chapterList = await chapters();
+    final EpubBook? book = await _bookOnce();
+    if (_disposed || book == null) return null;
+
+    // 权重 = 该章 XHTML 的**解压后字节长度**（`EpubSection.uncompressedBytes`，
+    // 绑定时顺手取自 zip 中央目录）。**不解压、不解析 HTML**——这是本方法存在的
+    // 全部意义（见 `BookSource.chapterWeightEstimates` 的对比表）。
+    //
+    // 与 `chapterCharCounts()` 的相对误差来源：XHTML 的标签/属性量逐章不同。
+    // 对「章间相对比例」足够；且只喂给一位小数的进度百分比。
+    final List<int> out = List<int>.filled(chapterList.length, 0);
+    for (int i = 0; i < chapterList.length; i++) {
+      final EpubSection? section = _sectionFor(book, chapterList[i], i);
+      if (section == null) continue;
+      out[i] = section.uncompressedBytes;
+    }
+    return out;
+  }
+
+  @override
   Stream<SearchEvent> search(String query, {required CancelToken cancel}) async* {
     if (query.isEmpty) return;
 
@@ -419,6 +457,8 @@ class DartEpubSource implements BookSource {
     _chapters = null;
     _totalChars = null;
     _chapterChars = null;
+    _sectionIndex = null;
+    _sectionIndexBook = null;
   }
 
   /// 是否已释放（供体检 / 测试观察）。
@@ -428,13 +468,25 @@ class DartEpubSource implements BookSource {
   ///
   /// 「linear=no 是否已被目录覆盖」这类判断只能按 href 匹配——目录项数与
   /// spine 项数可以不相等，按索引兜底会错位（`CNT-05`）。
+  ///
+  /// 走 [_sectionIndex]（O(1)）；索引按需建一次，**同键保留首个** section
+  /// ——与建索引前的线性扫描「先出现者胜」逐位等价。
   EpubSection? _sectionByHref(EpubBook book, String href) {
-    final String target = _matchKey(href);
-    for (final EpubSection section in book.sections) {
-      if (_matchKey(section.href) == target) return section;
+    Map<String, EpubSection>? index = _sectionIndex;
+    if (index == null || !_indexMatches(book)) {
+      index = <String, EpubSection>{};
+      for (final EpubSection section in book.sections) {
+        // 「首个胜」：同键已存在则**不覆盖**（`putIfAbsent` 语义）。
+        index.putIfAbsent(_matchKey(section.href), () => section);
+      }
+      _sectionIndex = index;
+      _sectionIndexBook = book;
     }
-    return null;
+    return index[_matchKey(href)];
   }
+
+  /// 索引是否还对应 [book]（换书 / 重解析后须重建）。
+  bool _indexMatches(EpubBook book) => identical(_sectionIndexBook, book);
 
   /// 由 [Chapter] 定位 spine section（供 `content(i)` / `search()` 用）。
   ///

@@ -299,11 +299,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   BookMeta? _meta;
   List<Chapter>? _chapters;
 
-  /// 每章字数权重（`M-PAGE` T03：全书进度**字数加权**；`null` = 尚未取到 /
+  /// 每章**权重估算**（`M-PAGE` T03：全书进度加权；`null` = 尚未取到 /
   /// 该源不支持（PDF/CBZ/CBR）→ 等权退化，与迁移前公式一致）。
   ///
-  /// 来源 `BookSource.chapterCharCounts()`，`_open()` 内**不阻塞**首帧异步取
+  /// 来源 `BookSource.chapterWeightEstimates()`（**廉价估算**，EPUB = zip 条目
+  /// 解压后长度、TXT = 分段长度），`_open()` 内**不阻塞**首帧异步取
   /// （取到前按等权显示，取到后 `setState` 切换；不改变开书时序）。
+  ///
+  /// ⚠️ 刻意**不用**精确口径 `chapterCharCounts()`：真机 1152 章的书会在主
+  /// isolate 上冻住秒级（实测 300 章 = 270ms 停顿）。详见 [_loadChapterWeights]。
   List<int>? _chapterWeights;
 
   Object? _error;
@@ -3122,12 +3126,25 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
   }
 
-  /// 异步取每章字数权重（fire-and-forget，见 [_chapterWeights] 注释）。
+  /// 异步取每章**权重估算**（fire-and-forget，见 [_chapterWeights] 注释）。
+  ///
+  /// ## ⚠️ 只走 `chapterWeightEstimates`，**绝不**回落 `chapterCharCounts`
+  /// （2026-10-08 真机「EPUB 章节加载特别慢 / 快滑多章没加载」定案）
+  ///
+  /// 这里的返回值只喂给一个**一位小数的进度百分比**，而精确口径
+  /// （`chapterCharCounts`）在 EPUB 上是「逐章解压 + 解析 XHTML」——真机 1152 章
+  /// 的书实测把主 isolate **独占秒级**（探针：300 章 301ms，其中停顿 270ms；
+  /// 随章数线性增长），且正好落在开书后、用户开始滚动的那一刻：帧回调与分页
+  /// `step` 全部停摆 ⇒ 「章节要等很久才出来」「快滑过去好几章还是空的」。
+  ///
+  /// 故本方法**无条件**保证「开书路径零全书遍历」：估算取不到（源不支持）就
+  /// 直接保持等权——不回落精确口径，不给自己留一条会让 UI 冻住的后路。
+  /// 代价只是百分比从「精确字数加权」退化为「等权」，与迁移前公式同形。
   ///
   /// `null`（源不支持）保持等权；dispose / 竞态静默放弃，不写状态。
   Future<void> _loadChapterWeights() async {
     try {
-      final List<int>? weights = await widget.source.chapterCharCounts();
+      final List<int>? weights = await widget.source.chapterWeightEstimates();
       if (!mounted || _disposed || weights == null) return;
       final List<Chapter>? chapters = _chapters;
       if (chapters == null || weights.length != chapters.length) return;

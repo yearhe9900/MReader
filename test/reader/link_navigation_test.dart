@@ -125,6 +125,9 @@ class _LinkFakeSource implements BookSource {
   Future<List<int>?> chapterCharCounts() async => null;
 
   @override
+  Future<List<int>?> chapterWeightEstimates() async => null;
+
+  @override
   Future<Uint8List?> readResource(String href) async => null;
 
   @override

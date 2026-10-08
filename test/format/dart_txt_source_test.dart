@@ -268,6 +268,33 @@ void main() {
       await source.dispose();
     });
 
+    test('chapterWeightEstimates：分段长度（零扫描口径），供阅读页进度用', () async {
+      final DartTxtSource source =
+          DartTxtSource(fileName: 'c3.txt', bytes: _utf8(_twoChaptersText()));
+
+      final List<Chapter> chapters = await source.chapters();
+      final List<int>? est = await source.chapterWeightEstimates();
+      expect(est, isNotNull);
+      expect(est!.length, chapters.length, reason: '长度与 chapters() 一致（接口契约）');
+      expect(est.every((int v) => v > 0), isTrue,
+          reason: '每章都应有正权重（全 0 会静默退化成等权）');
+
+      // 夹具字面量：分段 = 章标题之后到下一章标题之前，含各行的换行符。
+      // `_body(1500)` = 69 行 × (21 字 + '\n') = 1518，另含标题行尾那一个 '\n'
+      // ⇒ 1519。**不含**章标题文字本身（`_splitByRule` 的 segStart = m.end）——
+      // 这正是「Σ 权重 ≠ 全书字数」的来源，接口文档已声明不承诺二者相等。
+      expect(est, <int>[1519, 1519]);
+
+      // 口径关系：估算含空白 ⇒ 恒 ≥ 精确口径（精确口径剔除空白）。
+      final List<int> exact = (await source.chapterCharCounts())!;
+      for (int i = 0; i < exact.length; i++) {
+        expect(est[i], greaterThanOrEqualTo(exact[i]),
+            reason: '估算 = 分段原始长度（含换行），必须 ≥ 非空白字数');
+      }
+
+      await source.dispose();
+    });
+
     test('sniffFormat：.txt 与「无扩展名但内容是文本」都判 txt', () {
       expect(sniffFormat(fileName: 'a.txt', bytes: _utf8('hello')), FormatKind.txt);
       expect(

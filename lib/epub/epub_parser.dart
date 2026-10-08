@@ -627,6 +627,10 @@ EpubBook _bindBook(_ParsedEpub parsed) {
       href: ref.href,
       loadBytes: lazyEntryLoader(file),
       linear: ref.linear,
+      // 解压后长度**顺手取自 zip 中央目录**（`ArchiveFile.size` 即
+      // `uncompressedSize`，`zip_decoder.dart:43` 写入）——零解压、零额外 IO。
+      // 只服务进度的章间相对权重（`chapterWeightEstimates`），详见该字段文档。
+      uncompressedBytes: file.size,
     ));
   }
   return EpubBook(
