@@ -3404,24 +3404,47 @@ pageHeight 200 / 段落渲染高 319，用完即删）：
 与 `R1②`[_pauseAutoFill] 的分工：那边挂起的是**全书预热**（Profiler 实测 56% 纯 CPU），
 这里只为**紧邻视口的一章**起一次 IO。
 
-#### 6. 如实记录：**未修**的一条边界 —— chrome 切换瞬间页底被切一帧
+#### 6. 「滑动模式底部被截断」= chrome 切换那一帧按旧页表绘制的溢出
 
 `usableHeight = 视口高 − 顶部 inset − reserve`，而「唤出 chrome」会真的改变
 `constraints.maxHeight`（`AppBar` + 控制条把 body 顶小）⇒ **换页配置必须重排**。
 重排是帧末 `_requestReprime` 起步的，于是**切换那一帧仍按旧页表绘制**：
-旧页表（524 高）画进新可视区（413）⇒ 底部约 5 行被裁（探针实测 `99..623` vs `56..469`，
-debug 下还伴随 `RenderFlex overflowed by 154`）。下一帧 reprime 完成后自愈。
+旧页表（524 高）画进新可视区（413）⇒ 底部约 5 行被裁（探针
+`_probe_slide` 实测 `99..623` vs `56..469`；`_probe_bigslide` 用 400 段大章复测
+= 越界 142px、**只存在 1 帧**，第 2 帧即自愈——不随章长恶化）。
 
-- 影响面：只持续 1~2 帧（真机 ~16~33ms），**未修**（`_syncPageConfig` 的延迟消费是
-  build 期禁 `setState` 的结构性约束，改它要动「配置变更如何原子生效」这一层）。
-- 若要根治，方向是让**正文排版区不随 chrome 变**（chrome 覆盖而非顶开正文，即 legado 的
-  形态）——那是 `TYP-09`「底部让位两口径」的**契约变更**，须负责人拍板。
+真正的伤害在**渲染层**：`_turnPageWidget` 返回的是 `Column`，被 `PageTurnLayers`
+放进 `Stack(fit: StackFit.expand)` ⇒ 紧约束 ⇒ 内容高于可视区时 **RenderFlex 直接溢出**
+（debug 下底部那几行被黄黑斜纹盖住，观感正是「文字被截断」；控制台刷
+`overflowed by 154 pixels`）。
+
+修：外层裹 `SingleChildScrollView(physics: NeverScrollableScrollPhysics())`
+——只为一件事：给 Column **无界主轴**（不再触发溢出断言）并自己裁到页框。
+**像素结果与改前完全一致**（本来就该被裁），改掉的是溢出条纹与 debug 断言。
+变异（改回裸 `Column`）⇒ 新护栏判红，实测
+`Actual: FlutterError:<A RenderFlex overflowed by 154 pixels on the bottom.>`。
+
+> 「**顶部**被截断」未复现：`_turnPageWidget` 是顶对齐（`MainAxisAlignment.start`），
+> 量不到上溢；如实记录，未改。
+
+#### 6.1 仍未根治的一层（如实记录）
+
+配置突变那一帧的几何自愈仍是**下一帧**（`_syncPageConfig` 的延迟消费是 build 期禁
+`setState` 的结构性约束）。若要连这一帧都消掉，方向是让**正文排版区不随 chrome 变**
+（chrome 覆盖而非顶开正文，即 legado 的形态）——那是 `TYP-09`「底部让位两口径」的
+**契约变更**，须负责人拍板。
 
 #### 7. 回归与护栏
 
 - 新增 `test/reader/placeholder_band_test.dart` 两条：占位块高 `95.8`（且 `< pageHeight/2`）、
   占位→真实合入视口 `Δ ≤ 2dp`。
+- `appearance_sheet_test.dart` 新增 `T05-d 验收③`：chrome 切换那一帧**不许**触发
+  RenderFlex 溢出断言（并断言 reprime 后页内容回到可视区内）。
 - **变异**（把占位高改回 `cfg.pageHeight`）：两条均判红 —— ①`Expected: <95.8> Actual: <572.0>`；
   ②`Expected: a value less than or equal to <2.0> Actual: <2684.0>`。
-- 全组：`test/reader + typography + perf + search` **432** 全绿、`test/ui + widget_test.dart`
-  **172** 全绿（均 `-j 1`）；`dart analyze` 零问题。
+  **变异**（`_turnPageWidget` 改回裸 `Column`）：验收③判红 ——
+  `Actual: FlutterError:<A RenderFlex overflowed by 154 pixels on the bottom.>`。
+- 全组（`-j 1`）：`test/reader + typography + perf + search` **433** 全绿、
+  `test/ui + widget_test.dart` **172** 全绿；`dart analyze` 零问题。
+  注：`tool/test.sh reader` 的**并行**跑法偶发 flake（两次跑分别挂在
+  `placeholder_band_test` / `stats_collector_test`），验收一律 `-j 1`。
