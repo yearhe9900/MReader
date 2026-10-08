@@ -727,23 +727,48 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   Future<void> _open() async {
     final Stopwatch openClock = Stopwatch()..start();
     try {
+      // ## 开书关键路径（2026-10-08 改：三份 store 并发起跑）
+      //
+      // 改前是 `load() → chapters() → progress → bookmarks → prefs` 六段**串行**
+      // await；探针（`_probe_layout`）实测开书 222ms 里 `reader.stores` 占
+      // **130ms（59%）**，而这三份都是互不依赖的小 JSON 读——纯属白等。
+      // 现在三份 store 与书源解析**同时起跑**，只 await 首帧真正要用的部分：
+      //   · `progress`：决定恢复章节 / 章内位置；
+      //   · `prefs`：决定排版参数（字号 / 行距 / 页边距 / 翻页方式）；
+      //   · `bookmarks`：首帧用不到 → 同一批 IO 照跑，到手后再 setState 补进树
+      //     （顺带把「书签读取失败」从「整本书打不开」降级成「书签暂时没有」）。
+      final PerfWatch storesWatch = PerfLog.watch('reader.stores');
+      final Future<ReadingProgress?> progressF =
+          widget.progressStore.load(widget.record.bookId);
+      final Future<ReadingPrefs?> prefsF =
+          widget.readingPrefsStore?.load() ?? Future<ReadingPrefs?>.value();
+      final Future<List<Bookmark>> bookmarksF =
+          widget.bookmarkStore?.load(widget.record.bookId) ??
+              Future<List<Bookmark>>.value(const <Bookmark>[]);
+
       final PerfWatch loadWatch = PerfLog.watch('reader.load');
       final BookMeta meta = await widget.source.load();
       loadWatch.done('impl=${widget.source.implId}');
       final PerfWatch chaptersWatch = PerfLog.watch('reader.chapters');
       final List<Chapter> chapters = await widget.source.chapters();
       chaptersWatch.done('count=${chapters.length}');
-      final PerfWatch storesWatch = PerfLog.watch('reader.stores');
-      final ReadingProgress? progress =
-          await widget.progressStore.load(widget.record.bookId);
-      // TYP-06~09：书签（按书）与阅读偏好（全局）。store 未接线时为 null / 空，
-      // 走内存态默认（构造注释里的降级口径）。
-      final List<Bookmark> bookmarks =
-          await widget.bookmarkStore?.load(widget.record.bookId) ??
-              <Bookmark>[];
-      final ReadingPrefs? prefs = await widget.readingPrefsStore?.load();
-      storesWatch.done();
+      // `reader.stores` 现在量的是**关键路径上的净等待**（store 起跑早于
+      // `reader.load`，源解析期间它们已完成 ⇒ 取值趋 0 即「已不在关键路径上」）。
+      final ReadingProgress? progress = await progressF;
+      final ReadingPrefs? prefs = await prefsF;
+      storesWatch.done('concurrent');
       if (!mounted) return;
+
+      // 书签后到（首帧不等）：到手前按空表显示，不影响开书。
+      unawaited(() async {
+        try {
+          final List<Bookmark> loaded = await bookmarksF;
+          if (!mounted || _disposed) return;
+          setState(() => _bookmarks = loaded);
+        } catch (_) {
+          // 书签读取失败：保持空表（不阻断阅读）。
+        }
+      }());
 
       // 定位：先按 href（稳定身份）匹配，匹配不到退回 index 并 clamp。
       int index = _resolveIndex(chapters, progress);
@@ -772,7 +797,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           _background = prefs.background;
           _pageTurnMode = prefs.pageMode;
         }
-        _bookmarks = bookmarks;
+        // `_bookmarks` 不在这里赋值：它是异步后到的（见上面 `bookmarksF`），
+        // 首帧按空表渲染、到手后单独 setState 补进（不再阻塞开书）。
         _meta = meta;
         _chapters = chapters;
         _currentIndex = index;
@@ -1657,8 +1683,32 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
   }
 
+  /// 未分页占位块的高度：**章标题占高 + 一行「载入中」+ 呼吸**。
+  ///
+  /// ## ⚠️ 改前 = `cfg.pageHeight`（整屏）——2026-10-08 改（真机「章节间有大段空白」）
+  ///
+  /// 滚动是**连续长卷**：每个还没排完版的章都先占一整屏空白，用户往下滚时看到
+  /// 的就是「上一章正文 → 一整屏空白（只有中间一行『载入中』）→ 下一章正文」。
+  /// 更糟的是**占位→真实的章高突变**：占位 1 屏（探针实测 572）→ 真实章 N 屏
+  /// （同夹具实测 2727，约 4.8 倍），这是滚动跳动最大的单一来源（与
+  /// `_applyPagedSample` 的陈旧章内比例叠加后，视口会直接落到新章末尾）。
+  ///
+  /// 小占位块把两件事同时压小：空白从「一整屏」变成「一行」，高度突变从
+  /// 4.8 倍压到同一量级——真实章高由测量得出后仍走既有语义重锚（
+  /// `_applyPagedViews` 的 `chapterTops` 差补偿），机制不变。
+  ///
+  /// 占位语义（`Center('第 N 章 · 载入中…')`）刻意**不**换成真标题：占位块
+  /// 与真章的区分是多条既有用例的判据（`reader_page_test` 回归①靠
+  /// 「占位块只显示载入中、无正文段落」判「第 1 章还没补齐」）。
+  double _placeholderBandHeight(int index, PaginationConfig cfg) {
+    final double line = (cfg.textStyle.fontSize ?? 16) *
+        (cfg.textStyle.height ?? 1.2) *
+        cfg.textScaleFactor;
+    return _headingHeightOf(index, cfg) + line + 24;
+  }
+
   /// 构建窗口章视图：正文 + 分页结果都有 → 真视图；否则占位章
-  /// （headingHeight = 整页高，seed / 估算落位正好落在占位块内）。
+  /// （headingHeight = [_placeholderBandHeight]——**不再是整页高**）。
   List<PagedChapterView> _buildPageViews(
       List<int> window, PaginationConfig cfg) {
     final List<Chapter>? chapters = _chapters;
@@ -1686,7 +1736,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           paragraphs: const <String>[],
           lines: const <MeasuredLine>[],
           pages: const <PageSlice>[],
-          headingHeight: cfg.pageHeight,
+          headingHeight: _placeholderBandHeight(i, cfg),
           heading: Center(
             child: Text(
               '第 ${i + 1} 章 · 载入中…',
@@ -1884,7 +1934,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           ? (charOffset / total).clamp(0.0, 1.0)
           : _chapterPos.clamp(0.0, 1.0);
       final int windowPos = _window.indexOf(index);
-      landAt = ((windowPos < 0 ? 0 : windowPos) * cfg.pageHeight +
+      // 目标章之前的窗口章高**直接取布局表的章顶**（不再按「每章一屏」估：
+      // 占位块自 2026-10-08 起不是整页高，按 `pageHeight` 估会高估数倍）。
+      // 目标章自身的章内偏移仍是 `frac × 页高` 的粗估——它的真实页表还没出来，
+      // 随后由 `_pendingLand` 的二次精确落位收敛（`RC1`）。
+      landAt = ((windowPos < 0 ? 0.0 : layout.chapterTops[windowPos]) +
               frac * cfg.pageHeight)
           .clamp(0.0, double.infinity);
       _pendingLand = (index: index, charOffset: charOffset);
@@ -2166,6 +2220,30 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
   }
 
+  /// 窗口**尾追加**时立刻预热新章正文（直译 legado「预载下一章」的语义）。
+  ///
+  /// ## 为什么不能在停稳才载
+  ///
+  /// 改前正文只在 [_onPagedStopped] ③（`loadFirstBatch`）才载：用户快滑到窗口
+  /// 尾部 → 新章先以占位块上屏 → **要等停手**才看到正文（真机「章节间有大段
+  /// 空白」，探针实测占位块曾是整屏 572dp）。这里改成「追加的那一刻就起 IO」：
+  /// 正文读取本身异步、不占滚动帧；到手后登记未分页章 + 启动空闲分页帧，
+  /// 于是正文通常在被滑到之前已就位，占位块只在网络/解压慢时短暂出现。
+  ///
+  /// 与 [`R1②`][_pauseAutoFill] 的分工：那边挂起的是**全书预热**（Profiler 实测
+  /// 占补齐阶段 56% 纯 CPU，交互期该让位）；这里只为**紧邻视口的那一章**起一次
+  /// IO，是「翻页不空等」的必要代价，量级是单章而非整本。
+  Future<void> _preloadWindowTail(int index) async {
+    final ChapterAutoLoader? loader = _loader;
+    if (loader == null || index < 0 || _disposed) return;
+    if (_cache.peek(index) == null) {
+      await loader.loadFirstBatch(index);
+      if (!mounted || _disposed || !_pagedMode) return;
+    }
+    _registerWindowUnpaginated();
+    _startPagedFrames();
+  }
+
   /// 启动空闲分页帧链（postFrame 逐帧切片；防重入）。
   void _startPagedFrames() {
     if (_pagedFramesRunning || !mounted || _disposed) return;
@@ -2232,6 +2310,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             book + 1 < chapters.length &&
             !_window.contains(book + 1)) {
           _window.add(book + 1); // 尾部追加：当前章顶不动，零扰动
+          unawaited(_preloadWindowTail(book + 1));
           _syncPagedViews();
         } else if (gi == 0 &&
             book - 1 >= 0 &&
@@ -2359,9 +2438,20 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       final int book = _window[c].clamp(0, chapters.length - 1);
       _positionSampled = false; // `RC3`：章内位置不可信，不写盘
       if (book != _currentIndex || book != _liveIndex) {
+        // ## ⚠️ 章内比例必须一起归零（2026-10-08 修，真机「滚动时跳动」）
+        //
+        // `_chapterPos` 是**章内**比例，只对本章有意义。落到占位章（页表还没
+        // 出来）时若只换章身份、留着上一章的比例，等该章排完版后
+        // `_ensurePagedActive → _primeOpenSync(charOffset: _currentCharOffset())`
+        // 会拿这个「别人的比例」去落位——探针实测：读第 2 章末 → 滚进第 3 章
+        // 占位块（比例仍是第 2 章的 0.9）→ 第 3 章排版完成后视口直接落到
+        // **第 3 章末尾**（offset 5454→4882 = 该章最后一屏），等于整章被跳过。
+        // 占位块只表示「这一章还没排」，视口落在它的上沿 ⇒ 语义就是章首。
         setState(() {
           _currentIndex = book;
           _liveIndex = book;
+          _chapterPos = 0.0;
+          _livePos = 0.0;
         });
       }
       return;
