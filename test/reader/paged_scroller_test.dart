@@ -373,6 +373,44 @@ void main() {
 
       await tester.pumpWidget(const SizedBox());
     });
+
+    testWidgets('页内容顶对齐：首段渲染顶 == 页框顶 − preHeight（禁 OverflowBox 居中）',
+        (WidgetTester tester) async {
+      // 2026-10-08 新增。上一条只证明了「段落渲染高 == 测量行高」，
+      // 但**没证明段落在页框里的位置**——而位置才是「裁切窗顶边是否切在字中间」
+      // 的决定因素。
+      //
+      // `PageContent` 的 `OverflowBox` 若不显式给 `alignment`，默认是
+      // `Alignment.center`（`basic.dart:3430`）⇒ 整块「完整段落」会在裁切框里
+      // **垂直居中**，偏移 = (clipHeight − 内容高) / 2，既非行高整数倍、又随
+      // 页内段数变化 ⇒ 页首行被裁掉一截、窗口还会落到相邻页正文上
+      // （真机症状：底部多出一行下半截）。
+      //
+      // 期望值硬编码（不引用生产常量，避免同义反复）：页框顶 {40,185,367,541}、
+      // preHeight {0,145,0,174}（145 = 5×29、174 = 6×29，夹具实测行高 29）
+      // ⇒ 首段渲染顶恒为 {40,40,367,367}。
+      final List<PagedChapterView> chs = <PagedChapterView>[viewA(), viewB()];
+      await tester.pumpWidget(host(chs));
+
+      // 页 0/1 属段落 0，页 2/3 属段落 1（夹具：段 0 = 11 行、段 1 = 11 行）。
+      const List<double> expectTop = <double>[40, 40, 367, 367];
+      const List<int> paraOfPage = <int>[0, 0, 1, 1];
+      for (int i = 0; i < 4; i++) {
+        final Finder para = find.descendant(
+          of: pageOf(parasA, i),
+          matching: find.byKey(paragraphKey('a', paraOfPage[i])),
+        );
+        expect(para, findsOneWidget, reason: '页 $i 应渲染段落 ${paraOfPage[i]}');
+        expect(
+          tester.getTopLeft(para).dy,
+          expectTop[i],
+          reason: '页 $i：首段渲染顶必须等于「页框顶 − preHeight」。'
+              '若为居中（偏移 (页框高 − 内容高)/2），此处会偏 −87 / −72.5。',
+        );
+      }
+
+      await tester.pumpWidget(const SizedBox());
+    });
   });
 
   group('charOffset 落位', () {

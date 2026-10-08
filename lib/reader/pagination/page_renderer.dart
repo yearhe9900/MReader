@@ -151,11 +151,23 @@ class PageContent extends StatelessWidget {
         // 页框高与内容高解耦：完整段落常高于页框——OverflowBox 给 Column
         // tight 宽（stretch 同测量宽）+ 无界高（RenderFlex 不报 overflow），
         // 越界部分由外层 ClipRect 裁掉。
+        //
+        // ⚠️ `alignment` **必须显式写 `topLeft`**（2026-10-08 修）：
+        // `OverflowBox.alignment` 默认是 `Alignment.center`（`basic.dart:3430`），
+        // 于是「完整段落」整块会在裁切框里**垂直居中**，偏移量
+        // `(clipHeight − 内容高) / 2` 既非行高整数倍、又随页内段数变化 ⇒
+        // 裁切窗顶边切在字中间（真机症状「底部多出一行下半截」），
+        // 且窗口会落到相邻页的正文上（同页重复 / 跳字）。
+        // 探针实测（夹具 pageHeight 200 / 段落 319）：页 0 偏移 −87
+        // （= (145−319)/2）、页 2 偏移 −72.5（= (174−319)/2），而顶对齐应为 0。
+        // 顶对齐后 `Transform.translate(−preHeight)` 才是窗口内唯一的位移，
+        // 「页窗口 == [页首行行顶, 页末行行底]」才成立（§2.71 的结论要求这一条）。
         child: OverflowBox(
           minWidth: config.pageWidth,
           maxWidth: config.pageWidth,
           minHeight: 0,
           maxHeight: double.infinity,
+          alignment: Alignment.topLeft,
           child: MediaQuery(
             data: MediaQuery.of(context).copyWith(
               textScaler: TextScaler.linear(config.textScaleFactor),
