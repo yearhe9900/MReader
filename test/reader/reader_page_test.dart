@@ -25,6 +25,7 @@ import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_progress.dart';
 import 'package:mreader/ui/glass_kit.dart';
 
+import 'reader_harness.dart';
 import '../test_config.dart';
 
 /// 临时目录实现 [AppPaths]，仅用于测试。
@@ -234,6 +235,7 @@ void main() {
         (WidgetTester tester) async {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
+      await showChrome(tester); // 默认沉浸全屏：顶栏要主动唤出（TYP-09）
 
       // 标题取书库记录标题（而非内嵌书名）
       expect(find.text('书架书名'), findsOneWidget);
@@ -242,8 +244,10 @@ void main() {
       // 不含诊断信息（implId `dart-fake` / 旧格式 `N 章 · dart-*`）
       expect(find.textContaining('dart-'), findsNothing);
 
-      // 首章标题（正文目视）+ 进度百分比可见
-      expect(find.text('第一章'), findsOneWidget);
+      // 首章标题（正文目视）+ 进度百分比可见。
+      // 「第一章」自 2026-10-08 起有**两处**：正文里的章标题 + 底部读数左栏的
+      // 当前章标题（负责人指定的读数格式）——故这里断言 findsWidgets。
+      expect(find.text('第一章'), findsWidgets);
       expect(find.textContaining('%'), findsWidgets);
       expect(find.textContaining('第1章'), findsWidgets);
     });
@@ -254,6 +258,7 @@ void main() {
       await _settle(tester);
 
       // 打开目录
+      await showChrome(tester);
       await tester.tap(find.byIcon(Icons.list));
       await tester.pumpAndSettle();
 
@@ -287,7 +292,7 @@ void main() {
 
       // 弹窗关闭、正文滚到第三章、副标题显示「第3章」
       expect(find.byType(ListTile), findsNothing);
-      expect(find.text('第三章'), findsOneWidget);
+      expect(chapterHeading('第三章'), findsOneWidget);
       expect(find.textContaining('第3章'), findsWidgets);
     });
 
@@ -310,18 +315,18 @@ void main() {
       await _settle(tester);
 
       // 落到第 3 章：第三章可见，且第一章已滚出视口（内容高于一屏，证明真的滚动了）
-      expect(find.text('第三章'), findsOneWidget);
+      expect(chapterHeading('第三章'), findsOneWidget);
       expect(find.textContaining('第3章'), findsWidgets);
-      expect(find.text('第一章'), findsNothing);
+      expect(chapterHeading('第一章'), findsNothing);
     });
 
     testWidgets('RD-04 无进度时回落到第 1 章开头', (WidgetTester tester) async {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      expect(find.text('第一章'), findsOneWidget);
+      expect(chapterHeading('第一章'), findsOneWidget);
       expect(find.textContaining('第1章'), findsWidgets);
-      expect(find.text('第三章'), findsNothing);
+      expect(chapterHeading('第三章'), findsNothing);
     });
 
     testWidgets('RD-04 同版面 localHint：重开 seed 首帧落回第 3 章（backlog① 方案 A）',
@@ -330,6 +335,7 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
+      await showChrome(tester);
       await tester.tap(find.byIcon(Icons.list));
       await tester.pumpAndSettle();
       await tester.tap(find.text('第三章'));
@@ -384,8 +390,8 @@ void main() {
         expectedSeed,
         reason: '分页 seed 必须按语义坐标落在目标章占位块（窗口位×页高+章内比例×页高），不得从 0 起跳',
       );
-      expect(find.text('第三章'), findsOneWidget);
-      expect(find.text('第一章'), findsNothing);
+      expect(chapterHeading('第三章'), findsOneWidget);
+      expect(chapterHeading('第一章'), findsNothing);
     });
 
     // ── 进度漂移回归（#36：RC1~RC4）────────────────────────────────────
@@ -512,7 +518,7 @@ void main() {
           reason: '应有内容渲染（占位章也算），排除空壳假绿');
 
       // 收敛断言：目标章标题与正文都进了树（旧实现两者皆无）。
-      expect(find.text('第六章'), findsOneWidget,
+      expect(chapterHeading('第六章'), findsOneWidget,
           reason: '分页一次落位必须把目标章带进布局窗口并落定');
       // 注：正文段落由 `InlineParagraph` 渲染为 `Text.rich`（RichText），
       // `find.textContaining` 默认**不匹配富文本**，必须显式 `findRichText: true`。
@@ -625,12 +631,25 @@ void main() {
       // 页区间断言（`T07` 迁移：几何契约 → 页区间契约，原「章标题滚出
       // 视口 ≥300px」像素断言改判）：落点在第 2 章中部——视口顶采样落在
       // h2 且章内字符比例 ≈0.5；且第 1 章已卸载、副标题切到「第2章」。
-      expect(find.text('第二章'), findsOneWidget);
-      expect(find.text('第一章'), findsNothing);
+      expect(chapterHeading('第二章'), findsOneWidget);
+      // 「第 1 章已离开视口」按**视口语义**判定，且锚在**正文段落**上而非章标题。
+      //
+      // · 锚章标题不行（2026-10-08 变异实测）：章标题按设计排在首行**上方**，
+      //   落到章首时标题恰在视口上方 ⇒ 标题 finder 无法区分「刚到第 1 章」与
+      //   「早已离开第 1 章」（把播种改成第 1 章开头，标题断言仍绿而本断言红）。
+      // · 也不再用「在不在树里」：`_window` = 当前章 ±1，但页**是否被构建**取决于
+      //   `PagedScroller` 的懒构建范围——底部让开手势导航条使页高 −34dp、落位偏移
+      //   由 906 变 1065 后，第 1 章标题被纳入构建范围（仍在视口上方、不可见），
+      //   旧断言因此误红。构建范围是性能细节，不是产品契约。
+      expect(
+        find.textContaining('第1章正文', findRichText: true).hitTestable(),
+        findsNothing,
+        reason: '落点在第 2 章中部 → 第 1 章正文应完全在视口外',
+      );
       expect(find.textContaining('第2章'), findsWidgets);
       // 章标题在视口外（`hitTestable` 视口语义，同 `search_jump` 口径；
       // 分页窗口下「在树上」≠「在视口内」）。
-      expect(find.text('第二章').hitTestable(), findsNothing,
+      expect(chapterHeading('第二章').hitTestable(), findsNothing,
           reason: '落点在章中部 → 章标题应在视口上方（视口外）');
       final PagedScrollerState state =
           tester.state<PagedScrollerState>(find.byType(PagedScroller));
@@ -688,7 +707,11 @@ void main() {
         await tester.pump(const Duration(milliseconds: 8));
         if (mask.evaluate().isNotEmpty) sawMask = true;
         // 窗口只含 [1,2]：出现「第一章」= 布局落到了书首，属错误跳变。
-        if (find.text('第一章').evaluate().isNotEmpty) sawWrongChapter = true;
+        // 只看正文区（`chapterHeading`）：底部读数左栏也会显示当前章标题，
+        // 那是读数、不是布局落点，不作为跳变证据。
+        if (chapterHeading('第一章').evaluate().isNotEmpty) {
+          sawWrongChapter = true;
+        }
       }
       expect(sawMask, isFalse,
           reason: '分页一次落位：恢复期间不得出现遮罩（旧方案B 遮罩契约已反转）');
@@ -697,8 +720,8 @@ void main() {
 
       await _settle(tester);
       // 非空验证：恢复确实落到了目标章（排除「什么都没发生」的假绿）。
-      expect(find.text('第三章'), findsOneWidget);
-      expect(find.text('第一章'), findsNothing);
+      expect(chapterHeading('第三章'), findsOneWidget);
+      expect(chapterHeading('第一章'), findsNothing);
     });
 
     testWidgets('回归④：占位→真实合入不得挪动视口（上方章高度回填后语义重锚）',
@@ -727,7 +750,7 @@ void main() {
       await _settle(tester);
 
       // 落定：记「第 2 章标题顶 − 视口顶」间距 d1（第 1 章仍是估算占位高）。
-      final Finder title = find.text('第二章');
+      final Finder title = chapterHeading('第二章');
       final Finder viewport = find.byType(PagedScroller);
       expect(title, findsOneWidget, reason: '恢复应落到第 2 章');
       final double d1 =

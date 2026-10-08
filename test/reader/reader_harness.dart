@@ -174,6 +174,39 @@ BookRecord fakeRecord() => const BookRecord(
 LibraryRepository fakeRepository(AppPaths paths) =>
     LibraryRepository(paths: paths, coverStore: FileCoverStore(paths));
 
+/// 唤出阅读页 chrome（顶栏 + 底部控制条）。
+///
+/// `TYP-09` 口径变更（2026-10-08，负责人拍板）：进阅读页**默认沉浸全屏**
+/// （`_fullscreen = true`），顶栏与底部控制条只在**点正文**时出现；顶栏里的
+/// 「进入全屏」按钮与全屏时右上角的「退出全屏」浮层按钮均已移除。
+///
+/// 因此凡是要点顶栏按钮（搜索 `reader-search` / 书签 `reader-bookmarks` /
+/// 外观 `reader-appearance` / 目录 `reader-toc` / AI `reader-ai-panel`）的用例，
+/// **必须先调本函数**，否则按钮不在树上。
+///
+/// 走**常驻状态行**（`reader-chrome-toggle-status`）而不是点正文：图片页（CBZ/PDF）
+/// 的中央点击被「点页全屏缩放」占用（`FMT-02` 验收②），点正文那条路径在图片页
+/// 会打开缩放查看器。状态行在两种模式下都在，故本函数模式无关。
+///
+/// **幂等**：顶栏已在树上时直接返回，不再点（切换是开关语义，重复点会把 chrome
+/// 收回去）。这样调用方可以无脑在每个顶栏交互前插一行，不必判断当前状态。
+Future<void> showChrome(WidgetTester tester) async {
+  if (find.byType(AppBar).evaluate().isNotEmpty) return;
+  await tester.tap(find.byKey(const Key('reader-chrome-toggle-status')));
+  await tester.pump();
+}
+
+/// 正文里的章标题（**排除底部读数左栏那一份**）。
+///
+/// 2026-10-08 起底部常驻读数的左栏显示**当前章标题**，于是树里同名 `Text` 有两处
+/// （正文标题 + 读数）。凡是要断言「某章标题出现在正文里 / 已滚出视口 / 位置在哪」
+/// 的用例都必须用本函数收口——否则 `findsOneWidget` 会被读数那一份打破，
+/// `tester.getTopLeft` 也会因命中两个而抛错（实测 12 条用例受影响）。
+Finder chapterHeading(String title) => find.descendant(
+      of: find.byKey(const ValueKey<String>('reader-content-area')),
+      matching: find.text(title),
+    );
+
 /// 关书（换异类 widget 把树拆掉）并排空 dispose 发起的假区保存。
 ///
 /// ⚠️ `pumpWidget` 对**同类型无 key** 的 widget 走 `Widget.canUpdate` →

@@ -61,6 +61,7 @@ void main() {
       await tester.pumpWidget(buildApp());
       await settle(tester);
 
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-bookmarks')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('bookmark-add')));
@@ -98,6 +99,7 @@ void main() {
       // 第二次打开：换一个 store 实例（模拟重启）→ 书签仍在。
       await tester.pumpWidget(buildApp(store: BookmarkStore(paths)));
       await settle(tester);
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-bookmarks')));
       await tester.pumpAndSettle();
       expect(
@@ -121,14 +123,16 @@ void main() {
       await settle(tester);
 
       // 去第 3 章，在那里加书签。
+      await showChrome(tester);
       await tester.tap(find.byIcon(Icons.list));
       await tester.pumpAndSettle();
       await tester.tap(find.text('第三章'));
       await tester.pumpAndSettle();
       await settle(tester);
       await tester.pumpAndSettle();
-      expect(find.text('第三章'), findsOneWidget);
+      expect(chapterHeading('第三章'), findsOneWidget);
 
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-bookmarks')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('bookmark-add')));
@@ -145,15 +149,17 @@ void main() {
       // 关弹窗 → 回第 1 章 → 再开弹窗点书签行 → 应跳回第 3 章。
       Navigator.of(tester.element(find.byType(BookmarkSheet))).pop();
       await tester.pumpAndSettle();
+      await showChrome(tester);
       await tester.tap(find.byIcon(Icons.list));
       await tester.pumpAndSettle();
       await tester.tap(find.text('第一章'));
       await tester.pumpAndSettle();
       await settle(tester);
       await tester.pumpAndSettle();
-      expect(find.text('第一章'), findsOneWidget);
-      expect(find.text('第三章'), findsNothing);
+      expect(chapterHeading('第一章'), findsOneWidget);
+      expect(chapterHeading('第三章'), findsNothing);
 
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-bookmarks')));
       await tester.pumpAndSettle();
       await tester.tap(
@@ -167,7 +173,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // 验收②：落回书签标记的第 3 章。
-      expect(find.text('第三章'), findsOneWidget);
+      expect(chapterHeading('第三章'), findsOneWidget);
       expect(find.text('第一章'), findsNothing);
       expect(find.textContaining('第3章'), findsWidgets);
     });
@@ -176,6 +182,7 @@ void main() {
       await tester.pumpWidget(buildApp());
       await settle(tester);
 
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-bookmarks')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('bookmark-add')));

@@ -97,6 +97,7 @@ void main() {
       // 初始：系统默认（fontFamily 为 null）。
       expect(paragraph(tester).style.fontFamily, isNull);
 
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-appearance')));
       await tester.pumpAndSettle();
 
@@ -135,6 +136,7 @@ void main() {
       // 初始亮度 1.0：不加遮罩。
       expect(find.byKey(const Key('reader-brightness-mask')), findsNothing);
 
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-appearance')));
       await tester.pumpAndSettle();
 
@@ -181,6 +183,7 @@ void main() {
       await tester.pumpWidget(buildApp());
       await settle(tester);
 
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-appearance')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('background-sepia')));
@@ -212,6 +215,7 @@ void main() {
       expect(paragraph(tester).style.color, const Color(0xFFE6E6E6));
 
       // 纯黑预设：页面底恰为 #000000，正文浅色（#D9D9D9）。
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-appearance')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('background-black')));
@@ -245,6 +249,7 @@ void main() {
       expect(turnFinder, findsNothing);
       final Element scrollerBefore = tester.element(scrollerFinder);
 
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-appearance')));
       await tester.pumpAndSettle();
 
@@ -293,6 +298,7 @@ void main() {
       await settle(tester);
 
       // 开面板切「滑动」→ 点遮罩关面板回阅读页。
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-appearance')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('pageMode-slide')));
@@ -306,9 +312,10 @@ void main() {
       expect(turnFinder, findsOneWidget);
       expect(scrollerFinder, findsOneWidget);
       expect(
-        find.text('第一章'),
+        chapterHeading('第一章'),
         findsOneWidget,
-        reason: '页 0 渲染章标题（翻页体内；滚动体 Offstage 被跳过）',
+        reason: '页 0 渲染章标题（翻页体内；滚动体 Offstage 被跳过）。'
+            '只看正文区：底部读数左栏也显示当前章标题，不计入。',
       );
 
       // 翻页体宽度 = 阅读页 body 全宽 800 → 位移 300 → progress = 0.375
@@ -317,7 +324,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.text('第一章'),
+        chapterHeading('第一章'),
         findsNothing,
         reason: '已翻到页 1：章标题只渲染在页 0',
       );

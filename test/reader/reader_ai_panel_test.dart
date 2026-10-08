@@ -130,10 +130,12 @@ void main() {
         ),
       ));
       await settle(tester);
+      await showChrome(tester); // 默认沉浸全屏：顶栏要主动唤出（TYP-09）
 
       final AppBar bar = tester.widget<AppBar>(find.byType(AppBar));
-      // 顶栏动作数上限：搜索/书签/AI/外观/目录/全屏 = 6。
-      expect(bar.actions!.length, lessThanOrEqualTo(6),
+      // 顶栏动作数上限：搜索/书签/AI/外观/目录 = 5（全屏切换按钮已于
+      // 2026-10-08 移除，详见 `reader_page._fullscreen` 注释）。
+      expect(bar.actions!.length, lessThanOrEqualTo(5),
           reason: '顶栏动作过多会把标题挤没（9 × 48dp > 393dp 屏宽）');
 
       // 书名与副标题都还在（改前被挤成 0 宽）。
@@ -146,10 +148,12 @@ void main() {
         'reader-bookmarks',
         'reader-appearance',
         'reader-toc',
-        'reader-fullscreen-enter',
       ]) {
         expect(find.byKey(Key(key)), findsOneWidget, reason: '缺入口 $key');
       }
+      // 全屏切换按钮**已移除**（负责人要求：默认即全屏、点正文切换）。
+      expect(find.byKey(const Key('reader-fullscreen-enter')), findsNothing);
+      expect(find.byKey(const Key('reader-fullscreen-exit')), findsNothing);
     });
   });
 }

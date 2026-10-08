@@ -22,6 +22,7 @@ import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_progress.dart';
 import 'package:mreader/typography/typeset.dart';
 
+import 'reader_harness.dart';
 import '../meta/meta_fixtures.dart';
 import '../test_config.dart';
 
@@ -214,6 +215,7 @@ void main() {
       await _settle(tester);
 
       // 目录跳到第 3 页。
+      await showChrome(tester);
       await tester.tap(find.byIcon(Icons.list));
       await tester.pumpAndSettle();
       await tester.tap(find.text('第 3 页'));

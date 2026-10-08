@@ -25,6 +25,9 @@ import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
 
 import '../test_config.dart';
+// 只用 `chapterHeading`（正文里的章标题，排除底部读数左栏那一份）。
+// 本文件自带 `_settle` / `_TestAppPaths`，与装具同名符号不冲突。
+import 'reader_harness.dart';
 
 /// 临时目录实现 [AppPaths]，仅用于测试。
 class _TestAppPaths implements AppPaths {
@@ -302,7 +305,10 @@ void main() {
 
       // 反查 Chapter 命中第 2 章，且 #note2 段落进入视口（页级落位）。
       _expectInViewport(tester, '这是注释二的内容', '跨文件跳转');
-      expect(find.textContaining('第2章'), findsWidgets);
+      // 2026-10-08：本用例不唤出 chrome（默认沉浸全屏），故不能用顶栏副标题
+      // 「第2章 · N%」当锚点——改用正文里的第 2 章标题（读数左栏同名 Text 已被
+      // `chapterHeading` 排除）。
+      expect(chapterHeading('第二章'), findsOneWidget);
       expect(find.byIcon(Icons.arrow_back), findsOneWidget);
 
       // 返回原位置：回到第 1 章 [2] 段。

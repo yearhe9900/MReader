@@ -69,9 +69,10 @@
 //   · **`TYP-08` 亮度与背景色**：应用内亮度遮罩（黑色叠加层，不透明度
 //     `1 - brightness`，实时 + 持久化）+ 预设背景色板（白 / 米黄 / 灰 / 纯黑，
 //     夜间一律映射暗色——验收③「夜间模式不产生白底」）；
-//   · **`TYP-09` 全屏与进度指示**：沉浸全屏（隐藏 AppBar 与底部控制条，
-//     右上浮动按钮退出并恢复）+ 细粒度进度指示「第 N/M 章 · X%」——
-//     **滚动实时更新**（[_updateLiveProgress] 只写显示字段 `_liveIndex` /
+//   · **`TYP-09` 默认全屏与进度指示**：进阅读页**默认沉浸全屏**（隐藏 AppBar
+//     与底部控制条），**不设全屏切换按钮**——chrome 由点正文唤出 / 收起
+//     （[_toggleFullscreen]）；底部常驻读数「当前章标题 · 当前章 n/N · 全书 x.y%」
+//     **随滚动 / 翻页实时更新**（[_updateLiveProgress] 只写显示字段 `_liveIndex` /
 //     `_livePos`，滚动中间态**不进** `_currentIndex` / `_chapterPos`，
 //     `RC1` 写盘闸门与「采样置后」原则不动）。
 //
@@ -155,11 +156,15 @@ const int _kMaxRestoreFrames = 8;
 /// 占位块在「尚无任何已加载章可测」时的默认高度（逻辑像素）。
 const double _kDefaultChapterHeight = 480;
 
-/// 正文底部为常驻 [ReaderProgressIndicator] 预留的高度（dp）。
+/// 正文底部为常驻 [ReaderProgressIndicator] 预留的高度（dp，**不含**底部系统栏）。
 ///
 /// 实测：该条= 2dp 细条 + `EdgeInsets.symmetric(vertical: 4)` + 一行 `bodySmall`
-/// ≈ 26dp。改前分页模式页高 = 满屏视口高，**末页最后一行被这条压住**（真机截图
-/// 「字没显示全」）。此常量给正文留出这段高度。
+/// ≈ 26dp，留 2dp 余量。改前分页模式页高 = 满屏视口高，**末页最后一行被这条压住**
+/// （真机截图「字没显示全」）。此常量给正文留出这段高度。
+///
+/// 2026-10-08：默认全屏后指示器还要让开手势导航条，那部分**另算**——正文预算取
+/// `本常量 + MediaQuery.padding.bottom`（见 `_buildBody` 的 `reserve`），
+/// 本常量只描述指示器自身的文字高度，不随机型变。
 const double _kProgressIndicatorReserve = 28;
 
 /// R1②：交互挂起后台补齐的**兜底帧数**（到期自动恢复，见 `ReaderPage._pauseAutoFill`）。
@@ -505,7 +510,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   List<Bookmark> _bookmarks = <Bookmark>[];
 
   /// 沉浸全屏（`TYP-09`）：`true` = 隐藏 AppBar 与底部控制条。
-  bool _fullscreen = false;
+  ///
+  /// **默认 `true`**（2026-10-08 负责人拍板「默认改为全屏」）：进阅读页即沉浸。
+  /// 顶栏里原来的「进入全屏」按钮（`reader-fullscreen-enter`）与全屏时右上角的
+  /// 「退出全屏」浮层按钮（`reader-fullscreen-exit`）**都已移除**——全屏是静息态、
+  /// 不再是需要按钮切换的模式；两侧 chrome 一律由点正文唤出（`reader-chrome-toggle`，
+  /// 见 `_buildBody`），`TYP-09` 验收①「点正文可唤出与收起」由此承担。
+  ///
+  /// 不落盘：每次进阅读页都回到全屏静息态（负责人未要求记住 chrome 显隐）。
+  bool _fullscreen = true;
 
   /// 滚动**实时显示**用的章索引 / 章内位置（`TYP-09` 验收②）。
   ///
@@ -2560,27 +2573,35 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         ReaderPageMode.scroll => PageTurnMode.slide,
       };
 
-  /// 语义坐标（`_currentIndex` + `_chapterPos`）→ 当前页在视图表中的位置。
-  /// `pageIndex == -1` = 占位章（页表空）；视图表不含当前章 → `null`。
-  ({int viewIndex, int pageIndex})? _turnPosition() {
+  /// 语义坐标（章下标 + 章内比例）→ 当前页在视图表中的位置。
+  /// `pageIndex == -1` = 占位章（页表空）；视图表不含该章 → `null`。
+  ///
+  /// `pos` 由调用方注入，故**同一套换算同时服务两处**：翻页体用语义坐标
+  /// （`_currentIndex` / `_chapterPos`，见 [_turnPosition]），底部读数用滚动实时值
+  /// （`_liveIndex` / `_livePos`，见 [_livePageNumber]）——两处页号口径因此天然一致。
+  ({int viewIndex, int pageIndex})? _viewPositionAt(int index, double pos) {
     if (_pageViews.isEmpty) return null;
-    final String href = _hrefAt(_currentIndex);
+    final String href = _hrefAt(index);
     if (href.isEmpty) return null;
     final int v = _pageViews.indexWhere((PagedChapterView w) => w.href == href);
     if (v < 0) return null;
     final List<PageSlice> pages = _pageViews[v].pages;
     if (pages.isEmpty) return (viewIndex: v, pageIndex: -1);
-    // `_chapterPos` 与 `totalChars` 同源（`charCountOf(paragraphs)`）——
+    // `pos` 与 `totalChars` 同源（`charCountOf(paragraphs)`）——
     // 比例 × 总字数还原字符偏移，与保存 / 落位口径一致。
     final int total = PagePaginator.charCountOf(_pageViews[v].paragraphs);
     if (total <= 0) return (viewIndex: v, pageIndex: 0);
     final int charOffset =
-        (_chapterPos.clamp(0.0, 1.0) * total).round().clamp(0, total);
+        (pos.clamp(0.0, 1.0) * total).round().clamp(0, total);
     int p = PageBreaker.findPageByCharOffset(pages, charOffset);
     if (p < 0) p = 0;
     if (p >= pages.length) p = pages.length - 1;
     return (viewIndex: v, pageIndex: p);
   }
+
+  /// 语义坐标（`_currentIndex` + `_chapterPos`）→ 当前页在视图表中的位置。
+  ({int viewIndex, int pageIndex})? _turnPosition() =>
+      _viewPositionAt(_currentIndex, _chapterPos);
 
   /// 方向 → 目标（书内章下标 + 章内页码）；书边 / 占位邻章阻塞返回 `null`。
   ///
@@ -3011,7 +3032,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   ///
   /// `TYP-09` 验收②：取滚动实时值 `_liveIndex` / `_livePos`；
   /// 存档侧的 `markRead` 仍用语义值（[_overallProgress]），互不干扰。
-  int get _livePercent {
+  /// 顶栏副标题（[ReaderPage._subtitle]）仍在用这个整数口径。
+  int get _livePercent => _livePercentValue.floor();
+
+  /// 显示用全书进度百分比（**一位小数**，同样向下取整到 0.1）。
+  ///
+  /// 底部常驻指示器口径（负责人 2026-10-08 指定截图格式「22.2%」）。
+  /// 向下取整的理由与 [_livePercent] 同：`overall` 即使 0.9999 也显示 99.9%，
+  /// 只有真的读完（= 1.0）才显示 100.0%——避免「差一点就满格」的观感。
+  double get _livePercentValue {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null || chapters.isEmpty) return 0;
     final double overall = overallReadingProgress(
@@ -3020,7 +3049,31 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       chapterCount: chapters.length,
       chapterWeights: _chapterWeights,
     );
-    return (overall * 100).floor();
+    return (overall.clamp(0.0, 1.0) * 1000).floor() / 10;
+  }
+
+  /// 底部读数用的当前（实时）章标题；章表未就绪 / 下标越界 → 空串。
+  String get _liveChapterTitle {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null ||
+        _liveIndex < 0 ||
+        _liveIndex >= chapters.length) {
+      return '';
+    }
+    return chapters[_liveIndex].title;
+  }
+
+  /// 底部读数用的**章内页位**：页码（1 基）+ 本章总页数。
+  ///
+  /// 页表未就绪（增量分页首帧 / 占位章）→ `(0, 0)`，指示器退化为只显示百分比
+  /// （不显示「0/0」这种没有信息量的读数）。
+  ({int number, int total}) get _livePageNumber {
+    final ({int viewIndex, int pageIndex})? pos =
+        _viewPositionAt(_liveIndex, _livePos);
+    if (pos == null || pos.pageIndex < 0) return (number: 0, total: 0);
+    final int total = _pageViews[pos.viewIndex].pages.length;
+    if (total <= 0) return (number: 0, total: 0);
+    return (number: pos.pageIndex + 1, total: total);
   }
 
   /// 是否夜间（暗色主题）——`TYP-08` 验收③「夜间模式不产生白底」的判定基准：
@@ -3321,6 +3374,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   /// 沉浸全屏切换（`TYP-09`）：隐藏 / 恢复 AppBar 与底部控制条。
+  ///
+  /// 两个入口，都在 `_buildBody`：点正文（`reader-chrome-toggle`）与点常驻读数行
+  /// （`reader-chrome-toggle-status`，图片页里中央点击被「点页全屏缩放」占用，
+  /// 故需要一个模式无关的入口）；顶栏与全屏浮层的两个切换按钮已按负责人要求移除
+  /// （详见 `_fullscreen` 字段注释）。
   void _toggleFullscreen() {
     setState(() => _fullscreen = !_fullscreen);
   }
@@ -3368,7 +3426,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
     return Scaffold(
       backgroundColor: _pageColor(theme),
-      // `TYP-09` 验收①③：沉浸全屏隐藏顶部栏，退出全屏原样恢复。
+      // `TYP-09` 验收①：默认全屏 ⇒ `_fullscreen` 初值 `true`，此处即 `null`；
+      // 点正文唤出 chrome 后顶栏原样出现（验收①「唤出与收起」）。
       appBar: _fullscreen
           ? null
           : AppBar(
@@ -3424,7 +3483,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     ],
                   ),
                 // 分组③ 外观与视图：外观面板（`TYP-03`/`TYP-07`/`TYP-08`）、
-                // 目录（`NAV-01` 要求 AppBar 目录按钮）、沉浸全屏（`TYP-09`）。
+                // 目录（`NAV-01` 要求 AppBar 目录按钮）。
+                // 全屏切换按钮（`reader-fullscreen-enter`）已移除（2026-10-08）：
+                // 默认即全屏、切换改走点正文，详见 `_fullscreen` 字段注释。
                 ReaderAppBarGroup(
                   children: <Widget>[
                     IconButton(
@@ -3438,12 +3499,6 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                       tooltip: '目录',
                       icon: const Icon(Icons.list),
                       onPressed: ready ? _openToc : null,
-                    ),
-                    IconButton(
-                      key: const Key('reader-fullscreen-enter'),
-                      tooltip: '全屏',
-                      icon: const Icon(Icons.fullscreen),
-                      onPressed: ready ? _toggleFullscreen : null,
                     ),
                   ],
                 ),
@@ -4357,9 +4412,22 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         // AppBar 高用 `kToolbarHeight`（Material 默认 56）与进度条实测高度对齐。
         final MediaQueryData mq = MediaQuery.of(context);
         final double topInset = mq.padding.top;
+        // 底部系统栏让位（手势导航条，真机约 34dp）。
+        //
+        // 默认全屏（`appBar == null`）时 `Scaffold` 不再对 body 做
+        // `removeBottomPadding`（`scaffold.dart:3031` 的判定是
+        // `bottomNavigationBar != null`），所以 `mq.padding.bottom` 有值；
+        // 唤出 chrome 时控制条作为 `bottomNavigationBar` 存在、自带
+        // `SafeArea(bottom: true)`，这里自动回到 0——**一个表达式覆盖两种形态**，
+        // 不需要按 `_fullscreen` 分支。
+        //
+        // ⚠️ 只让开「文字」不让开「底色」：让位由 [ReaderProgressIndicator] 内部
+        // 吃掉（它的底色须铺到屏幕下缘）。这里只负责把同一个量算进正文预算。
+        final double bottomInset = mq.padding.bottom;
+        final double reserve = _kProgressIndicatorReserve + bottomInset;
         final double usableHeight = math.max(
           0.0,
-          constraints.maxHeight - topInset - _kProgressIndicatorReserve,
+          constraints.maxHeight - topInset - reserve,
         );
         _syncPageConfig(PaginationConfig(
           pageWidth: constraints.maxWidth - _settings.pageMargin.horizontal,
@@ -4408,12 +4476,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               children: <Widget>[
               // 正文让开常驻进度指示条：Padding 必须在 Stack **内部**、只裹滚动体，
               // 指示条自身仍贴 Stack 底边——这样「内容底」与「指示条顶」才真的错开
-              // （`usableHeight` 同样扣这 28dp，两侧口径一致）。
+              // （`usableHeight` 同样扣这段 reserve，两侧口径一致）。
               Positioned.fill(
                 child: Padding(
-                  padding: const EdgeInsets.only(
-                    bottom: _kProgressIndicatorReserve,
-                  ),
+                  padding: EdgeInsets.only(bottom: reserve),
                   // 正文可排版区（测试用它钉「内容底 ≤ 指示条顶」）。
                   // 与 `reader-viewport` 同款：key 挂在 **Padding 之内**的盒上，
                   // 否则量到的是含 padding 的外框、与视口等底，量不出让位。
@@ -4426,20 +4492,38 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   child: NotificationListener<ScrollEndNotification>(
                     onNotification:
                         _pagedMode ? _onPagedScrollEnd : _onScrollEnd,
-                    child: _pagedMode
-                        ? _buildPagedBody()
-                        : ListView.builder(
-                            controller: _controller,
-                            // 进度指示条的占位已由**上方那个 Padding**
-                            // （`_kProgressIndicatorReserve`）统一提供，
-                            // 此处只需章节间的呼吸留白（改前 40 是在重复为同一条让位）。
-                            padding:
-                                const EdgeInsets.only(top: 8, bottom: 12),
-                            itemCount: chapters.length,
-                            itemBuilder: (BuildContext context, int index) =>
-                                _buildChapterItem(theme, bodyStyle, index),
-                          ),
-                      ),
+                    // `TYP-09` 验收③（2026-10-08 改口径）：chrome 切换的唯一入口
+                    // ——点正文。
+                    //
+                    // ⚠️ 这一层**必须是正文的祖先**（包在外面），不能做 Stack 里
+                    // 覆盖在正文之上的兄弟层：`HitTestBehavior.translucent` 的
+                    // 兄弟层会把自己先加进 `HitTestResult.path`，而手势竞技场按
+                    // path 顺序判定（`GestureBinding.dispatchEvent` 从 index 0 起
+                    // 派发、`sweep` 取首个成员）⇒ 覆盖层的 tap 会**抢掉**正文里
+                    // 链接的 `TapGestureRecognizer`（`CNT-04` 链接点击会失效）。
+                    // 做祖先时 path 是「链接 → 本层」，链接先入竞技场即胜出。
+                    //
+                    // 不干扰滚动：`TapGestureRecognizer` 一旦超出 `kTouchSlop`
+                    // 就自我拒绝，拖拽 / 惯性 / 长按划词都不受影响。
+                    child: GestureDetector(
+                      key: const Key('reader-chrome-toggle'),
+                      behavior: HitTestBehavior.translucent,
+                      onTap: _toggleFullscreen,
+                      child: _pagedMode
+                          ? _buildPagedBody()
+                          : ListView.builder(
+                              controller: _controller,
+                              // 进度指示条的占位已由**上方那个 Padding**
+                              // （`reserve`）统一提供，
+                              // 此处只需章节间的呼吸留白（改前 40 是在重复为同一条让位）。
+                              padding:
+                                  const EdgeInsets.only(top: 8, bottom: 12),
+                              itemCount: chapters.length,
+                              itemBuilder: (BuildContext context, int index) =>
+                                  _buildChapterItem(theme, bodyStyle, index),
+                            ),
+                    ),
+                  ),
                     ),
                   ),
                 ),
@@ -4494,28 +4578,34 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   ),
                 ),
               // `TYP-09`：细粒度进度指示（常驻；全屏隐藏控制条后仍是可见进度）。
+              //
+              // 本行**自身也是 chrome 切换入口**（`reader-chrome-toggle-status`）：
+              // 文本页靠点正文即可唤出 chrome，但**图片页（CBZ/CBR/PDF）的中央点击
+              // 已被「点页全屏缩放」占用**（`FMT-02` 验收②，PRD 要求），点正文那条
+              // 路径在图片页必然被内层 `_ImagePage` 的 tap 抢走。常驻状态行在两种
+              // 模式下都在、又是同一块「阅读状态」语义，故把它做成**模式无关**的入口
+              // ——只加点击热区、不新增任何像素。
+              //
+              // `bottomInset` 由指示器内部吃掉（底色铺到屏幕下缘、只有文字让开
+              // 手势导航条）；同一个量已加进正文 reserve（见上方 `reserve`）——
+              // 两处**必须同源**，否则正文会被多盖住一条。
               Positioned(
                 left: 0,
                 right: 0,
                 bottom: 0,
-                child: ReaderProgressIndicator(
-                  chapterNumber: _liveIndex + 1,
-                  chapterCount: chapters.length,
-                  percent: _livePercent,
-                ),
-              ),
-              // `TYP-09` 验收③：全屏时右上浮动按钮——退出并恢复顶部栏。
-              if (_fullscreen)
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: IconButton.filledTonal(
-                    key: const Key('reader-fullscreen-exit'),
-                    tooltip: '退出全屏',
-                    icon: const Icon(Icons.fullscreen_exit),
-                    onPressed: _toggleFullscreen,
+                child: GestureDetector(
+                  key: const Key('reader-chrome-toggle-status'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _toggleFullscreen,
+                  child: ReaderProgressIndicator(
+                    chapterTitle: _liveChapterTitle,
+                    pageNumber: _livePageNumber.number,
+                    pageCount: _livePageNumber.total,
+                    percent: _livePercentValue,
+                    bottomInset: bottomInset,
                   ),
                 ),
+              ),
               ],
               ),
             ),

@@ -89,6 +89,7 @@ void main() {
       await settle(tester);
 
       // 真按钮链：搜索按钮 → 面板 → 提交 → 点第一条命中。
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-search')));
       await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const Key('search-input')), '正文');
@@ -135,6 +136,7 @@ void main() {
       await tester.pumpWidget(buildApp(source));
       await settle(tester);
 
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-search')));
       await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const Key('search-input')), '图');

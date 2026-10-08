@@ -62,32 +62,44 @@ void main() {
       await settle(tester);
     }
 
-    testWidgets('视口几何：视口 = 整个正文区，指示条贴视口底边（不占布局）',
+    testWidgets('全屏态视口几何：让开状态栏、视口 = 整个正文区，指示条贴屏幕底边',
         (WidgetTester tester) async {
       await pumpPhone(tester);
 
-      // 探针实测基线（393×852，top44/bottom34）：
-      //   viewport      top=100 bottom=715 h=615
-      //   content-area  top=100 bottom=687 h=587（= viewport − 28 让位）
-      //   indicator     top=689 bottom=715 h=26
-      //   ⇒ content.bottom(687) ≤ indicator.top(689)，两者不重叠。
+      // 探针实测基线（393×852，top44/bottom34，**默认沉浸全屏**）：
+      //   viewport      top=44  bottom=852 h=808（顶让开 44 状态栏）
+      //   content-area  top=44  bottom=790 h=746（= viewport − 62 让位）
+      //   indicator     top=792 bottom=852 h=60（26 内容 + 34 导航条让位）
+      //   ⇒ content.bottom(790) ≤ indicator.top(792)，两者不重叠。
       //
-      // 注：2026-10-08 前 viewport 高是 587——因为 28dp 让位加在视口**外面**，
-      // 把整个视口连同指示条一起压扁了；现在让位挪到视口内部，视口回到整高 615，
-      // **正文可排版高仍是 587**（= 分页预算 `usableHeight`，故分页几何未变）。
+      // 注 1：2026-10-08 前 viewport 高是 587——28dp 让位加在视口**外面**、
+      // 把整个视口连同指示条一起压扁了；现在让位挪到视口内部。
+      // 注 2：同一批「默认全屏」变更后 `AppBar` 不在树上，body 从 y=0 起算，
+      // 顶部让位由 `mq.padding.top`（44）承担；底部因 `bottomNavigationBar`
+      // 不存在、`Scaffold` 不再 `removeBottomPadding`，多出一段 34 的导航条让位
+      // （见 `reader_page` 的 `reserve`），故让位合计 28 + 34 = 62。
       final Rect viewport = tester.getRect(find.byKey(const Key('reader-viewport')));
-      expect(viewport.height, 615, reason: '视口高实测基线（探针）');
+      expect(viewport.top, moreOrLessEquals(44, epsilon: 0.5),
+          reason: '全屏态正文顶让开状态栏');
+      expect(viewport.height, 808, reason: '视口高实测基线（探针）');
 
       final Rect content =
           tester.getRect(find.byKey(const Key('reader-content-area')));
-      expect(content.height, 587, reason: '正文可排版高 = 分页预算 usableHeight');
-      expect(viewport.bottom - content.bottom, moreOrLessEquals(28, epsilon: 0.5),
-          reason: '正文区应让开 _kProgressIndicatorReserve');
+      expect(content.height, 746, reason: '正文可排版高 = 分页预算 usableHeight');
+      expect(viewport.bottom - content.bottom, moreOrLessEquals(62, epsilon: 0.5),
+          reason: '正文区应让开「指示条高 28 + 导航条 34」');
 
-      // 指示条仍贴视口底边（它在 Stack 内 `bottom: 0`，不占布局）。
+      // 指示条仍贴屏幕底边（它在 Stack 内 `bottom: 0`，不占布局）。
       final Rect indicator =
           tester.getRect(find.byKey(const Key('reader-progress-indicator')));
       expect(indicator.bottom, moreOrLessEquals(viewport.bottom, epsilon: 0.5));
+
+      // 新增契约（默认全屏后才有意义）：**读数文字**必须让开手势导航条——
+      // 改前指示条贴物理底边，读数会被系统手势条压住。
+      final Rect readout =
+          tester.getRect(find.byKey(const Key('reader-progress-text')));
+      expect(readout.bottom, lessThanOrEqualTo(viewport.bottom - 34 + 0.5),
+          reason: '读数底 ${readout.bottom} 应让开底部导航条（屏底 − 34）');
       expect(tester.takeException(), isNull);
     });
 

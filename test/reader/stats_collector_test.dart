@@ -129,6 +129,7 @@ void main() {
       // 跳章交互（目录 → `_goToChapter` 汇聚点）。
       // 注：点 ListTile 而非 `find.text('第三章')`——该文案在树里出现两处
       // （NAV-01 未拖拽时恰好唯一），按文本点会歧义。
+      await showChrome(tester);
       await tester.tap(find.byIcon(Icons.list));
       await tester.pumpAndSettle();
       expect(find.byType(ListTile), findsNWidgets(3));
