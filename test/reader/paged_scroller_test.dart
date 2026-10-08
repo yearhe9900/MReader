@@ -221,13 +221,16 @@ void main() {
       final PagedScrollerState state =
           tester.state<PagedScrollerState>(find.byType(PagedScroller));
 
+      // 落位口径 = **行顶对齐**（2026-10-08 契约变更，改前是页内比例折算）：
+      // 偏移 − 页顶 恒为行高 29 的整数倍，故视口首行必是完整行。
       expect(state.offsetForCharOffset('a', 0), 40.0);
-      expect(state.offsetForCharOffset('a', 100), 367.0);
-      expect(state.offsetForCharOffset('a', 124), 439.0);
+      expect(state.offsetForCharOffset('a', 100), 367.0); // 页 2 首行 → +0
+      expect(state.offsetForCharOffset('a', 110), 396.0); // 页 2 第 2 行 → +29
+      expect(state.offsetForCharOffset('a', 124), 425.0); // 页 2 第 3 行 → +58
       expect(state.offsetForCharOffset('a', 250), isNull); // 超出页表
       expect(state.offsetForCharOffset('zz', 0), isNull); // 不在窗口
       expect(state.offsetForCharOffset('b', 0), 726.0);
-      expect(state.offsetForCharOffset('b', 100), 1053.0);
+      expect(state.offsetForCharOffset('b', 100), 1053.0); // 页 2 首行 → +0
 
       await tester.pumpWidget(const SizedBox());
     });
@@ -249,7 +252,7 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
 
-    testWidgets('分数落位：charOffset 124 → offset 439（页顶上方 72）',
+    testWidgets('行顶落位：charOffset 124 → offset 425，页顶上方 58 = 2×29（首行完整）',
         (WidgetTester tester) async {
       await tester.pumpWidget(host(<PagedChapterView>[viewA(), viewB()]));
       final PagedScrollerState state =
@@ -257,10 +260,16 @@ void main() {
 
       expect(state.jumpToCharOffset('a', 124), isTrue);
       await tester.pump();
-      expect(state.offset, 439.0);
+      expect(state.offset, 425.0);
       final Finder target = pageOf(parasA, 2);
       expect(target, findsOneWidget);
-      expect(tester.getTopLeft(target).dy, -72.0);
+      // 页顶被推到视口上方 58px = **整 2 行**（29×2）⇒ 视口首行是完整行。
+      // 改前比例落位给 439（页顶上方 72 = 2×29 + 14）：首行被切掉 14px，
+      // 真机表现即「字没显示全 / 文字丢失上一半」。
+      final double pageTopDy = tester.getTopLeft(target).dy;
+      expect(pageTopDy, -58.0);
+      // 契约本身：视口顶必落在行边界上（页顶偏移是行高的整数倍）。
+      expect(-pageTopDy % 29.0, 0.0);
 
       await tester.pumpWidget(const SizedBox());
     });

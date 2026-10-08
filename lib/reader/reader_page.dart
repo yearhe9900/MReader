@@ -1855,8 +1855,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     String sig = _computeSignature(_window);
     PagedLayout layout =
         PagedLayout.build(views, paragraphSpacing: cfg.paragraphSpacing);
-    double? landAt =
-        PagedScrollerState.offsetFor(layout, views, href, charOffset);
+    double? landAt = PagedScrollerState.offsetFor(
+      layout,
+      views,
+      href,
+      charOffset,
+      paragraphSpacing: cfg.paragraphSpacing,
+    );
     final bool landed = landAt != null;
     if (landAt == null) {
       // 页表未覆盖目标（占位/部分页）：按窗口位置 + 章内比例估算落位，
@@ -2028,7 +2033,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         final PagedLayout layout = PagedLayout.build(
             views, paragraphSpacing: cfg.paragraphSpacing);
         landOffset = PagedScrollerState.offsetFor(
-            layout, views, _hrefAt(pending.index), pending.charOffset);
+          layout,
+          views,
+          _hrefAt(pending.index),
+          pending.charOffset,
+          paragraphSpacing: cfg.paragraphSpacing,
+        );
         if (landOffset != null) {
           _pendingLand = null;
           _positionConverged = true;
@@ -4366,23 +4376,29 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         final Widget? selBar =
             _selection != null ? _buildSelectionBar() : null;
         return Padding(
-          // **只加「顶部状态栏 + 底部进度条预留」两段**，刻意**不加** `mq.padding.bottom`。
+          // **只让顶部**（且只在沉浸全屏时才有值）；底部一律不加，见下。
           //
-          // 为什么不加底部系统栏inset：Scaffold 的 `bottomNavigationBar`（控制条）
-          // **自带 `SafeArea(bottom: true)`**（见 `control_bar.dart`），系统手势条
-          // 已在那一层避让；正文区若再加一次就是**重复计入**，实测把控制条挤到
-          // `RenderFlex overflowed by 19 pixels`（`appearance_sheet_test` T05-d 判红）。
+          // ⚠️ 顶部这段只对**沉浸全屏**有意义（2026-10-08 读 Flutter 源码核实）：
+          // `Scaffold` 给 body 的 `MediaQuery` 做了
+          // `removePadding(removeTop: widget.appBar != null)`（`scaffold.dart:3030`），
+          // 并把 body 放在 `contentTop`＝AppBar 之下（`scaffold.dart:1114`）。
+          // 所以**非全屏时这里的 `mq.padding.top` 恒为 0**，加不加都一样；
+          // 全屏时 `appBar == null`：既不移除 padding、也不顶开正文，
+          // 必须自己让开状态栏——这才是这段 Padding 存在的唯一理由。
+          // （改前这里的注释写成「正文区自己要避开状态栏，否则首行被 AppBar 压住」，
+          //  与实际相反，已订正。）
           //
-          // 顶部相反：AppBar 由 Scaffold 顶开，但**正文区自己**要避开状态栏，
-          // 否则首行被状态栏/AppBar 压住。
+          // 底部**不能**加在这一层：常驻进度指示条就挂在下面那个 Stack 的
+          // `bottom: 0`，把 28dp 加在 Stack **外面**只会把「正文 + 指示条」整体
+          // 上移，两者照旧重叠，还在控制条上方白留一条 28dp 空带——真机截图实测
+          // 即「末行被指示条盖住变暗 + 被切」。正确做法：在 Stack **内部**只给
+          // 正文让位（见 `Positioned.fill` 里那个 Padding）。
           //
-          // 底部那 28dp（`_kProgressIndicatorReserve`）是给**常驻进度指示条**留的
-          // ——它在正文 Stack 内`bottom: 0`，不占布局，必须显式让位，
-          // 否则末页最后一行被它压住（真机截图「字没显示全」）。
-          padding: EdgeInsets.only(
-            top: topInset,
-            bottom: _kProgressIndicatorReserve,
-          ),
+          // 底部也不加 `mq.padding.bottom`：`bottomNavigationBar`（控制条）自带
+          // `SafeArea(bottom: true)`，且 Scaffold 已 `removeBottomPadding`
+          // （`scaffold.dart:3031`），重复计入会把控制条挤到
+          // `RenderFlex overflowed by 19 pixels`（`appearance_sheet_test` T05-d）。
+          padding: EdgeInsets.only(top: topInset),
           // 正文容器（已让开上下 inset）：测试与选区定位都以此为视口基准。
           child: SizedBox.expand(
             key: const ValueKey<String>('reader-viewport'),
@@ -4390,8 +4406,20 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               key: _viewportKey,
               child: Stack(
               children: <Widget>[
+              // 正文让开常驻进度指示条：Padding 必须在 Stack **内部**、只裹滚动体，
+              // 指示条自身仍贴 Stack 底边——这样「内容底」与「指示条顶」才真的错开
+              // （`usableHeight` 同样扣这 28dp，两侧口径一致）。
               Positioned.fill(
-                child: NotificationListener<ScrollUpdateNotification>(
+                child: Padding(
+                  padding: const EdgeInsets.only(
+                    bottom: _kProgressIndicatorReserve,
+                  ),
+                  // 正文可排版区（测试用它钉「内容底 ≤ 指示条顶」）。
+                  // 与 `reader-viewport` 同款：key 挂在 **Padding 之内**的盒上，
+                  // 否则量到的是含 padding 的外框、与视口等底，量不出让位。
+                  child: SizedBox.expand(
+                    key: const ValueKey<String>('reader-content-area'),
+                    child: NotificationListener<ScrollUpdateNotification>(
                   // `TYP-09` 验收②：滚动实时刷新进度显示（只写显示字段）。
                   onNotification:
                       _pagedMode ? _onPagedScrollUpdate : _onScrollUpdate,
@@ -4402,15 +4430,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                         ? _buildPagedBody()
                         : ListView.builder(
                             controller: _controller,
-                            // 进度指示条的占位已由**外层 Padding** 统一提供
-                            // （`_kProgressIndicatorReserve`），此处只需章节间的
-                            // 呼吸留白（改前 40 是在重复为同一条让位）。
+                            // 进度指示条的占位已由**上方那个 Padding**
+                            // （`_kProgressIndicatorReserve`）统一提供，
+                            // 此处只需章节间的呼吸留白（改前 40 是在重复为同一条让位）。
                             padding:
                                 const EdgeInsets.only(top: 8, bottom: 12),
                             itemCount: chapters.length,
                             itemBuilder: (BuildContext context, int index) =>
                                 _buildChapterItem(theme, bodyStyle, index),
                           ),
+                      ),
+                    ),
                   ),
                 ),
               ),

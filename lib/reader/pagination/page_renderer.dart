@@ -98,26 +98,21 @@ class PageContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 裁切框高 = **本页内容的自然高**（[PageSlice.height]），不是 `pageHeight`。
+    // 裁切框高 = 本页内容的自然高（[PageSlice.height]）。
     //
-    // ##⚠️ 改为 `page.height` 的原因（2026-10-06，负责人截图「文字丢失上一半」）
+    // ## ⚠️ 订正（2026-10-08）：`?? page.height` 是**防御式兜底**，不是真机
+    // 「文字丢失上一半」的修复——改前那版注释把它写成修复，是错的。
     //
-    // 改前取 `config.pageHeight`（视口高），而调用方 [PagedScroller] 用
-    // `Positioned(top: e.top, height: e.height, child: PageContent(...))`
-    // ——外层盒只有 `PageSlice.height`（内容自然高，如 58；末页常远小于视口高）。
-    // 两层高度不一致 ⇒ 内层 `OverflowBox` 按 `pageHeight` 排版、允许内容向下延伸，
-    // 外层 `Positioned` 却只给 `e.height` ⇒ **超出部分连同底部若干行一起被裁掉**。
+    // 实情：两处调用方——[PagedScroller] 与 `ReaderPage._turnPageWidget`——
+    // **都传了** `clipHeight`，且传的就是 `e.height` / `page.height`（同一个值），
+    // 于是 `clipHeight ?? page.height` 的取值**恒等于**改前，一行都没变。
     //
-    // 症状随「视口高 − 内容高」差值放大：真机分页模式下 `pageHeight` 是整个
-    // 视口高（近屏高），末页内容远不足一屏 ⇒ 差值最大 ⇒ 末页底部整行丢失、
-    // 看起来像「文字被吃掉一半」。
+    // 真机首行被切的真因在**落位**：`PagedScrollerState.offsetFor` 原先按
+    // 「页顶 + 页内字符比例 × 页高」折算，比例落在行中间 ⇒ 卷轴顶就切在行中间
+    // ⇒ 首行只露下半截。已改为按行顶对齐（见 `offsetFor` 的「为什么按行顶」）。
     //
-    // 用 `page.height` 后内外盒一致：裁切范围 = 本页实际内容，**不裁任何一行**，
-    // 页间留白由 `PageSlice.height` 与下一页 `top` 的差自然形成
-    // （见 [PagedScroller] 「页框 = `PageSlice.height`」的注释）。
-    //
-    // `clipHeight` 仍保留：页 0 传 `pageHeight − headingHeight`（标题占高），
-    // 那是**故意**只露一部分的语义，非此bug。
+    // 保留 `??` 只为防将来出现「不传 `clipHeight`」的调用方拿到 null；
+    // 「页框 = 本页内容自然高」这个语义结论不变。
     final double height = clipHeight ?? page.height;
     final Widget empty = SizedBox(width: config.pageWidth, height: height);
     if (page.lineCount == 0 || page.firstLine >= lines.length) return empty;

@@ -1,10 +1,18 @@
-// 阅读页正文**不被系统栏 / AppBar / 常驻进度条遮挡**的布局契约（2026-10-06）。
+// 阅读页正文**不被常驻进度条遮挡**的布局契约（2026-10-06 起，2026-10-08 订正）。
 //
-// 起因：负责人真机截图「字没显示全」——首行被 AppBar 压住、末行被常驻
-// [ReaderProgressIndicator] 压住。根因是改前正文按**满屏视口**排版
-// （`pageHeight = constraints.maxHeight`），分页模式尤其明显（每页两端各切一截）。
+// 起因：负责人真机截图「字没显示全」。当时归因成「首行被 AppBar 压住、
+// 末行被常驻 [ReaderProgressIndicator] 压住」，据此做了两处改动；
+// 2026-10-08 读 Flutter 源码核对后订正为：
+//   · 「首行被 AppBar 压住」**不成立**——`Scaffold` 给 body 的 MediaQuery 做了
+//     `removePadding(removeTop: appBar != null)`（`scaffold.dart:3030`），
+//     并把 body 放在 AppBar 之下（`scaffold.dart:1114`）；正文区里的
+//     `mq.padding.top` 恒为 0。（首行被切的真因在落位，见
+//     `PagedScrollerState.offsetFor` 的「为什么按行顶」。）
+//   · 「末行被进度条压住」**成立**，且改前**没修好**：28dp 预留被加在正文
+//     Stack **外面**，而指示条在 Stack **里面** `bottom: 0`，两者同步上移、
+//     照旧重叠，还在控制条上方白留 28dp。
 //
-// 本测试钉住：给simulated 带刘海/手势条的手机上，正文区上下各留出了对应高度。
+// 本测试钉住两件事：正文排版区确实让开了指示条；正文区高 = 分页预算 `usableHeight`。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -19,7 +27,7 @@ import '../test_config.dart';
 void main() {
   capTestTimeout();
 
-  group('阅读页正文避让系统栏与常驻进度条', () {
+  group('阅读页正文避让常驻进度条', () {
     late Directory tempDir;
     late TestAppPaths paths;
     late ProgressStore progressStore;
@@ -36,9 +44,8 @@ void main() {
       if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
     });
 
-    testWidgets('正文区上下留出系统栏 + 常驻进度条的高度',
-        (WidgetTester tester) async {
-      // 模拟刘海机：顶部 44（状态栏）、底部 34（手势条），屏高 852。
+    /// 刘海机：顶部 44（状态栏）、底部 34（手势条），屏高 852。
+    Future<void> pumpPhone(WidgetTester tester) async {
       tester.view.physicalSize = const Size(393, 852);
       tester.view.devicePixelRatio = 1.0;
       tester.view.padding = const FakeViewPadding(top: 44, bottom: 34);
@@ -53,49 +60,52 @@ void main() {
         ),
       ));
       await settle(tester);
+    }
+
+    testWidgets('视口几何：视口 = 整个正文区，指示条贴视口底边（不占布局）',
+        (WidgetTester tester) async {
+      await pumpPhone(tester);
 
       // 探针实测基线（393×852，top44/bottom34）：
-      //   viewport top=100 bottom=687 h=587 / progress-indicator top=661 bottom=687 h=26
-      // 正文区高587 =屏高852 − AppBar区(100) − 底部控制条(165)，
-      // 其中 165 已含系统手势条 34 + 进度条预留 28 + 控制条本体。
-      final Size viewport =
-          tester.getSize(find.byKey(const Key('reader-viewport')));
-      expect(viewport.height, 587, reason: '正文区高度实测基线（探针）');
+      //   viewport      top=100 bottom=715 h=615
+      //   content-area  top=100 bottom=687 h=587（= viewport − 28 让位）
+      //   indicator     top=689 bottom=715 h=26
+      //   ⇒ content.bottom(687) ≤ indicator.top(689)，两者不重叠。
+      //
+      // 注：2026-10-08 前 viewport 高是 587——因为 28dp 让位加在视口**外面**，
+      // 把整个视口连同指示条一起压扁了；现在让位挪到视口内部，视口回到整高 615，
+      // **正文可排版高仍是 587**（= 分页预算 `usableHeight`，故分页几何未变）。
+      final Rect viewport = tester.getRect(find.byKey(const Key('reader-viewport')));
+      expect(viewport.height, 615, reason: '视口高实测基线（探针）');
 
-      // 关键契约：**正文区底边 = 进度条底边**（进度条在 Stack 内 `bottom: 0`），
-      // 且 viewport 底边 **高于** AppBar 底边——两者共同保证首行/末行都不被遮。
-      final double vBottom =
-          tester.getBottomLeft(find.byKey(const Key('reader-viewport'))).dy;
-      final double pBottom =
-          tester.getBottomRight(find.byKey(const Key('reader-progress-indicator'))).dy;
-      expect(vBottom, moreOrLessEquals(pBottom, epsilon: 0.5),
-          reason: '进度条应贴在正文区底部（vBottom=$vBottom pBottom=$pBottom）');
+      final Rect content =
+          tester.getRect(find.byKey(const Key('reader-content-area')));
+      expect(content.height, 587, reason: '正文可排版高 = 分页预算 usableHeight');
+      expect(viewport.bottom - content.bottom, moreOrLessEquals(28, epsilon: 0.5),
+          reason: '正文区应让开 _kProgressIndicatorReserve');
+
+      // 指示条仍贴视口底边（它在 Stack 内 `bottom: 0`，不占布局）。
+      final Rect indicator =
+          tester.getRect(find.byKey(const Key('reader-progress-indicator')));
+      expect(indicator.bottom, moreOrLessEquals(viewport.bottom, epsilon: 0.5));
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('变异护栏：inset 归零时正文区会变高（此测试应判红）',
+    testWidgets('不遮挡契约：内容底 ≤ 指示条顶（变异即判红）',
         (WidgetTester tester) async {
-      // 防「有人把inset 删了但测试仍绿」——把viewport 高度**下限**钉住：
-      // 带 inset 时 587；去掉 44+34+28=106 后约 693。故下界取 640可捕获。
-      tester.view.physicalSize = const Size(393, 852);
-      tester.view.devicePixelRatio = 1.0;
-      tester.view.padding = const FakeViewPadding(top: 44, bottom: 34);
-      addTearDown(tester.view.reset);
+      // 这条同时是**变异护栏**：
+      //   · 删掉让位 Padding      → `reader-content-area` 找不到 / 底边与指示条同高 → 红；
+      //   · 把 Padding 挪到 Stack 外 → `viewport.bottom − content.bottom == 0` → 红
+      //     （2026-10-08 改前就是这个形态，真机表现为末行被 85% 底色盖住发暗）。
+      await pumpPhone(tester);
 
-      await tester.pumpWidget(MaterialApp(
-        home: ReaderPage(
-          source: FakeBookSource(),
-          record: fakeRecord(),
-          progressStore: progressStore,
-          repository: repo,
-        ),
-      ));
-      await settle(tester);
+      final Rect content =
+          tester.getRect(find.byKey(const Key('reader-content-area')));
+      final Rect indicator =
+          tester.getRect(find.byKey(const Key('reader-progress-indicator')));
 
-      final Size viewport =
-          tester.getSize(find.byKey(const Key('reader-viewport')));
-      expect(viewport.height, lessThan(640),
-          reason: 'inset 失效时正文区会高约 106dp（实测 ${viewport.height}px）');
+      expect(content.bottom, lessThanOrEqualTo(indicator.top + 0.5),
+          reason: 'content.bottom=${content.bottom} indicator.top=${indicator.top}');
       expect(tester.takeException(), isNull);
     });
   });

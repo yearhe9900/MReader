@@ -18,7 +18,8 @@
 // 章内字符偏移（复用 `sampleCharOffset`，与保存口径同源；标题区 → 页 0 页首）。
 //
 // 落位（保证④）：`offsetForCharOffset` = 找章（不在窗口 / 页表未覆盖 →
-// `null`，占位语义）→ `findPageByCharOffset` 二分 → 页顶 + 页内比例折算；
+// `null`，占位语义）→ `findPageByCharOffset` 二分 → **页顶 + 目标行行顶**
+// （按行对齐，理由见 `offsetFor` 的「为什么按行顶」注释）；
 // [PagedScrollerState.jumpToCharOffset] 单次 `jumpTo`（clamp 上界）——**一次
 // 落位、无校正环**（≤8 帧校正环 / `detectChapterAt` / 章高模型随 c3 退役）。
 import 'dart:async';
@@ -462,15 +463,32 @@ class PagedScrollerState extends State<PagedScroller> {
     );
   }
 
-  /// 字符偏移 → 滚动偏移（页顶 + 页内比例线性折算；静态版）。
+  /// 字符偏移 → 滚动偏移（**页顶 + 目标行行顶**；静态版）。
   /// 章不在 [chapters] / 页表未覆盖（`charOffset >` 末页页尾）→ null（占位
   /// 语义）。c3 跳转流用它对**预计算新布局**先算偏移再 jump（单帧无闪）。
+  ///
+  /// ## ⚠️ 为什么按「行顶」而不是「页内比例」（2026-10-08）
+  ///
+  /// 改前 = `页顶 + (页内字符比例) × 页高`。比例落在页中间时，视口顶就落在
+  /// **某一行的中间**：该行只露出下半截（上半被卷轴裁掉），用户看到的就是
+  /// 「字没显示全 / 文字丢失上一半」。开书恢复、跳章、跳书签、跳目录**每次都
+  /// 走这条路径**，所以是稳定复现、不是偶发——真机连续两张截图的首行都被切
+  /// 掉约 45%（见 `docs/tech-usage.md` §2.70）。
+  ///
+  /// 按行顶对齐后：目标字符所在行的**整行**都在视口内（该行贴视口顶），页内
+  /// 其余内容紧随其后，语义上就是「从这一行开始读」。卷轴坐标若因此小于
+  /// `pageTop`（目标行是页首行）或大于页尾，由 [jumpToCharOffset] 的 clamp 兜住。
+  ///
+  /// 段间距必须计入：页内跨段处渲染侧有 `paragraphSpacing`（与
+  /// [PageSlice.height] / `PageBreaker._heightOf` 同源），漏掉会把行顶算低，
+  /// 等于**重新把视口顶切回行中间**——本修复就白做了。
   static double? offsetFor(
     PagedLayout layout,
     List<PagedChapterView> chapters,
     String href,
-    int charOffset,
-  ) {
+    int charOffset, {
+    required double paragraphSpacing,
+  }) {
     final int c = chapters.indexWhere((PagedChapterView v) => v.href == href);
     if (c < 0) return null;
     final List<PageSlice> pages = chapters[c].pages;
@@ -478,17 +496,49 @@ class PagedScrollerState extends State<PagedScroller> {
     if (charOffset > pages.last.end) return null;
     final int p = PageBreaker.findPageByCharOffset(pages, charOffset);
     if (p < 0) return null;
-    final PageSlice page = pages[p];
-    final int span = page.end - page.start;
-    final double fraction = span > 0
-        ? ((charOffset - page.start) / span).clamp(0.0, 1.0).toDouble()
-        : 0;
-    return layout.pageTops[c][p] + fraction * page.height;
+    return layout.pageTops[c][p] +
+        _lineTopInPage(chapters[c], pages[p], charOffset, paragraphSpacing);
+  }
+
+  /// 目标字符所在行在**页窗口**内的 y（页首行 = 0）。
+  ///
+  /// 页窗口 = `PageContent` 里 `ClipRect` 显示的那一段 Column：从页首行贴页顶
+  /// 起算，所以「页首行 y = 0」。逐行累加行高（行表是章内**连续无空档**的字符
+  /// 区间划分，故「第一个 `end > charOffset` 的行」就是目标行），跨段处再加一次
+  /// [paragraphSpacing]——与渲染侧 `PageContent` 在段间插 `SizedBox` 的位置一致。
+  ///
+  /// 越界宽容：`charOffset` 恰在页尾、或页为 0 行占位页 → 返回 0 / 页内累计高，
+  /// 由调用方 clamp。
+  static double _lineTopInPage(
+    PagedChapterView chapter,
+    PageSlice page,
+    int charOffset,
+    double paragraphSpacing,
+  ) {
+    final List<MeasuredLine> lines = chapter.lines;
+    final int last = page.firstLine + page.lineCount - 1;
+    double y = 0;
+    for (int i = page.firstLine; i <= last && i < lines.length; i++) {
+      final MeasuredLine line = lines[i];
+      if (charOffset < line.end) return y;
+      y += line.height;
+      final int next = i + 1;
+      if (next < lines.length &&
+          lines[next].paragraphIndex != line.paragraphIndex) {
+        y += paragraphSpacing;
+      }
+    }
+    return y;
   }
 
   /// 实例委托（当前布局 + 当前窗口）。
-  double? offsetForCharOffset(String href, int charOffset) =>
-      offsetFor(_layout, widget.chapters, href, charOffset);
+  double? offsetForCharOffset(String href, int charOffset) => offsetFor(
+        _layout,
+        widget.chapters,
+        href,
+        charOffset,
+        paragraphSpacing: widget.config.paragraphSpacing,
+      );
 
   /// 一次落位：算偏移 → clamp 上界 → 单跳（无校正环）。返回是否落位成功。
   /// 落位后按停手采样（`jumpTo` 是否发通知不作假设，显式重置计时器）。
