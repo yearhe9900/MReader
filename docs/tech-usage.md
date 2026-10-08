@@ -3352,3 +3352,76 @@ pageHeight 200 / 段落渲染高 319，用完即删）：
 
 `test/reader + typography + perf + search` 与 `test/ui + widget_test.dart`
 （均 `-j 1`）全绿；`dart analyze` 零问题。
+
+### 2.74 真机三症状定案：占位整屏 / 陈旧章内比例 / 开书三 store 串行（2026-10-08）
+
+负责人报「① 打开图书观感上还是很慢 ② 滚动模式文字重叠、章节间大段空白、滚动时跳动
+③ 滑动模式顶部与底部文字被截断，可以参考 legado 优化」。先量后猜——四条探针
+（`test/reader/_probe_*_test.dart`，直接驱动生产 `ReaderPage`，用完即删）实测如下。
+
+#### 1. 探针实测（夹具 800×600 视口 ⇒ `pageHeight = 572.0`）
+
+| 探针 | 量到的东西 | 结论 |
+|---|---|---|
+| `_probe_layout` | 滚动模式上屏页盒 0..524 / 540..1109 / 1125..1694；页内 12 段 y = 0,45,…,495..524（= 29 行高 + 16 段间距） | **滚动排版盒与行表模型逐像素一致**，稳态无重叠、无缝 |
+| `_probe_long` | 168→90 字符长段落（页边界落段中间）：`pre` 平移量、段落渲染高 vs `Σ 行高` 全部相等；页 1 窗口 528..1085 正落在第 8 段首行（1085−1056 = 29 = 一行） | 「整段渲染 + `Transform.translate(−preHeight)`」路径**正确**（不该往这里找重叠） |
+| `_probe_placeholder` | 未分页章占位块 **572.0**（= 整屏）；真实章 2727.0（5 页） | 占位块 = 一整屏空白；占位→真实 = **4.8 倍**高度突变 |
+| 同上（放行闸门后） | 视口 `5454.0 → 4882.0`，窗口 `[h1,h2,h3]` → `[h2,h3]` | 视口被丢到新章**末尾**（整章被跳过） |
+| `_probe_slide` | 开书即滑动：`PageContent` 43..567 在视口 0..572 内 ✓；唤出 chrome 后（未 settle）页 99..623 vs 视口 56..469 ⇒ **底部切 154px + RenderFlex overflowed by 154**；settle 后 99..443 ✓ | chrome 切换瞬间有一帧「页底被切」 |
+
+#### 2. 「章节间大段空白」= 未分页章的占位块按整页高排
+
+`_buildPageViews` 给未分页章 `headingHeight: cfg.pageHeight`（整屏），滚动是**连续长卷**，
+于是「上一章正文 → 一整屏只有中间一行『载入中』→ 下一章正文」。
+
+修：`_placeholderBandHeight(index, cfg) = 标题占高 + 一行正文 + 24`（实测 43.0+28.8+24 = **95.8**）。
+占位语义（`Center('第 N 章 · 载入中…')`）**刻意不换成真标题**——占位块与真章的区分是
+`reader_page_test` 回归①「占位块只显示载入中、无正文段落」的判据。
+
+#### 3. 「滚动时跳动」= 占位章上的**陈旧章内比例**
+
+`_applyPagedSample(null)`（采样为空 = 该章无页表 = 占位）改前只换章身份、
+**留着上一章的 `_chapterPos`**；该章排完版后
+`_ensurePagedActive → _primeOpenSync(charOffset: _currentCharOffset())`
+拿这个「别人的比例」去落位 ⇒ 直接落到新章末尾。修：换章时 `_chapterPos` / `_livePos`
+一并归零（视口落在占位块上沿 ⇒ 语义就是章首）。
+
+#### 4. 「打开很慢」= 开书关键路径上三份 store **串行**等
+
+实测 `reader.ready 222ms` 里 `reader.stores` = **130ms（59%）**，而这是
+`progress → bookmarks → prefs` 三段互不依赖的小 JSON 读，纯白等。
+
+修：三份 store 与书源解析**同时起跑**；只 await 首帧真正要用的 `progress` / `prefs`；
+`bookmarks` 后到（同一批 IO，到手后单独 `setState`）——顺带把「书签读取失败」从
+「整本书打不开」降级成「书签暂时没有」。
+`reader.stores` 的语义随之变为**关键路径净等待**（起跑早于 `reader.load`，趋 0 即已让开）。
+
+#### 5. 尾追加即预热正文（legado「预载下一章」语义）
+
+改前正文只在停稳（`_onPagedStopped` ③）才载 ⇒ 快滑到窗口尾，新章先以占位块上屏，
+**要等停手**才见正文。修：`_onPagedScrollUpdate` 尾追加时 `unawaited(_preloadWindowTail(...))`
+——IO 异步不占滚动帧，到手后登记未分页章 + 启空闲分页帧。
+与 `R1②`[_pauseAutoFill] 的分工：那边挂起的是**全书预热**（Profiler 实测 56% 纯 CPU），
+这里只为**紧邻视口的一章**起一次 IO。
+
+#### 6. 如实记录：**未修**的一条边界 —— chrome 切换瞬间页底被切一帧
+
+`usableHeight = 视口高 − 顶部 inset − reserve`，而「唤出 chrome」会真的改变
+`constraints.maxHeight`（`AppBar` + 控制条把 body 顶小）⇒ **换页配置必须重排**。
+重排是帧末 `_requestReprime` 起步的，于是**切换那一帧仍按旧页表绘制**：
+旧页表（524 高）画进新可视区（413）⇒ 底部约 5 行被裁（探针实测 `99..623` vs `56..469`，
+debug 下还伴随 `RenderFlex overflowed by 154`）。下一帧 reprime 完成后自愈。
+
+- 影响面：只持续 1~2 帧（真机 ~16~33ms），**未修**（`_syncPageConfig` 的延迟消费是
+  build 期禁 `setState` 的结构性约束，改它要动「配置变更如何原子生效」这一层）。
+- 若要根治，方向是让**正文排版区不随 chrome 变**（chrome 覆盖而非顶开正文，即 legado 的
+  形态）——那是 `TYP-09`「底部让位两口径」的**契约变更**，须负责人拍板。
+
+#### 7. 回归与护栏
+
+- 新增 `test/reader/placeholder_band_test.dart` 两条：占位块高 `95.8`（且 `< pageHeight/2`）、
+  占位→真实合入视口 `Δ ≤ 2dp`。
+- **变异**（把占位高改回 `cfg.pageHeight`）：两条均判红 —— ①`Expected: <95.8> Actual: <572.0>`；
+  ②`Expected: a value less than or equal to <2.0> Actual: <2684.0>`。
+- 全组：`test/reader + typography + perf + search` **432** 全绿、`test/ui + widget_test.dart`
+  **172** 全绿（均 `-j 1`）；`dart analyze` 零问题。
