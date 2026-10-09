@@ -3071,7 +3071,7 @@ Dart VM 对小对象构造有优化，**逐节点 `RegExp` 构造本身并不贵
 | 假设 | 证伪 |
 |---|---|
 | `PageContent` 内外盒高不一致（`config.pageHeight` vs `PageSlice.height`），故裁掉页末文字 | 两处调用方（`PagedScroller`、`_turnPageWidget`）**都传了** `clipHeight`，且传的就是 `page.height` ⇒ `clipHeight ?? page.height` **恒等于**改前值。那次「修复」一行都没生效，注释里的因果链是编的 |
-| 首行被 `AppBar` 压住 | `Scaffold` 给 body 的 `MediaQuery` 做了 `removePadding(removeTop: widget.appBar != null)`（`scaffold.dart:3030`），并把 body 放在 `contentTop`（`:1114`）⇒ 正文区里的 `mq.padding.top` **恒为 0**。那段 `Padding(top: topInset)` 非全屏时是 no-op，只在沉浸全屏（`appBar == null`）才有意义 |
+| 首行被 `AppBar` 压住 | `Scaffold` 给 body 的 `MediaQuery` 做了 `removePadding(removeTop: widget.appBar != null)`（`scaffold.dart:3030`），并把 body 放在 `contentTop`（`:1114`）⇒ 正文区里的 `mq.padding.top` **恒为 0**。那段 `Padding(top: topInset)` 非全屏时是 no-op，只在沉浸全屏（`appBar == null`）才有意义。<br>**⚠️ 2026-10-09 再订正（§2.79）**：条目前半仍成立（`Scaffold` 只加工 **body 自己**的 MediaQuery），但「非全屏时是 no-op」**已作废**——`topInset` 改取页面级 `context` 的**外层**系统 inset，故那段 `Padding` 两种 chrome 形态下**恒有值**（也是「chrome 不改排版区」的一半） |
 | 翻页模式页框错位切掉首行 | `_turnPageWidget` 用 `Align(alignment: Alignment.topCenter)`，页贴顶；`PageTurnLayers` 用 `StackFit.expand`，页仍贴顶 ⇒ 切不出首行 |
 
 #### 4. 测试与变异验证
@@ -3089,6 +3089,9 @@ Dart VM 对小对象构造有优化，**逐节点 `RegExp` 构造本身并不贵
 - 几何基线（393×852，top44/bottom34）：视口 `h=615`、正文可排版区 `h=587`、
   指示条 `h=26`（top 689）。**可排版高 587 与改前一致**，所以分页几何没动——
   这也是「阅读器 425 条全绿」的原因。
+  **⚠️ 2026-10-09 订正（§2.79）**：以上是**当时**（chrome 常显）的口径。现在
+  默认沉浸全屏 ⇒ 基线为视口 `h=808`、正文可排版区 `h=746`、指示条 `h=60`
+  （792..852）；且这组值在**两种 chrome 形态下相同**（这正是 §2.79 的契约）。
 
 #### 5. 回归
 
@@ -3203,12 +3206,19 @@ DELTA    total=0.0            para0=0.0   para1=0.0
 
 #### 2. 三个非显然的写法
 
-**(a) 单表达式覆盖两种 chrome 形态的底部让位**
+**(a) 底部让位只吃系统 inset（2026-10-09 改口径，见 §2.79）**
 
-`Scaffold` 在 `bottomNavigationBar != null` 时才 `removeBottomPadding`
-（`scaffold.dart:3031`）。默认全屏 ⇒ 无控制条 ⇒ `mq.padding.bottom` 有值（真机手势条 ≈ 34dp）；
-唤出 chrome ⇒ 控制条自带 `SafeArea(bottom: true)` ⇒ 该值自动回到 0。
-故 `final double bottomInset = mq.padding.bottom;` **不需要按 `_fullscreen` 分支**。
+改前靠一个**巧合**：`Scaffold` 在 `bottomNavigationBar != null` 时才
+`removeBottomPadding`（`scaffold.dart:3032`），于是「默认全屏 ⇒ 无控制条 ⇒
+`mq.padding.bottom` 有值（真机手势条 ≈ 34dp）；唤出 chrome ⇒ 控制条自带
+`SafeArea(bottom: true)` ⇒ 该值自动回到 0」，一个表达式覆盖两态。
+
+**现在改成显式**：正文预算与底部读数一律取**页面级 `context`**（Scaffold
+外层）的 `systemMq.padding.bottom`；读数再按 `_fullscreen` 决定是否吃掉这 34dp
+（它在控制条**上方**时那一条由控制条的 `SafeArea(bottom: true)` 承担，重复计入会在
+两者之间留 34dp 空带）。
+**不能**再读 body 里那份 `MediaQuery`——它被 `Scaffold` 加工过（顶部 44→0/100、
+底部 34→0/槽高），会让 chrome 参与排版。
 
 **(b) 让位要「只让文字、不让底色」，必须在指示器内部吃**
 
@@ -4030,3 +4040,110 @@ f057 46.1  f058 44.6   …   f065+ 44.4  ← 阅读页稳态
 
 `test/reader/reader_open_transition_test.dart` **11 全绿**（含第 ⑪ 条接线护栏）；
 `reader` 组与 `ui` 组 `-j 1` 串行复验结果见提交信息；`dart analyze lib test` 零问题。
+
+### 2.79 chrome 改为覆盖层：点中间菜单不再改动正文排版区（2026-10-09）
+
+**起因**：负责人原话「**阅读页点击中间菜单，不应该修改阅读区的高度**」。
+这正是 `TYP-09` 一直挂账的那条契约变更（§2.74 §6「根治需 `TYP-09`『正文排版区
+不随 chrome 变』契约变更，**待拍板**」+ 进度表 #10）——本轮拍板落地。
+
+#### 1. 根因（探针实测，393×852 / top44 / bottom34）
+
+| 量 | 全屏（默认） | 唤出 chrome |
+|---|---|---|
+| `reader-viewport` | `(0,44,393,852)` `h=808` | `(0,100,393,715)` `h=615` |
+| `reader-content-area` | `(0,44,393,790)` **`h=746`** | `(0,100,393,687)` **`h=587`** |
+| `reader-progress-indicator` | `792..852` | `689..715` |
+| `ReaderControlBar` | 不在树上 | `715..852` |
+| `AppBar` | 不在树上 | `0..100` |
+| `MediaQuery` @body 内 | `(0,44,0,34)` | `EdgeInsets.zero` |
+| `MediaQuery` @body 外 | `(0,44,0,34)` | `(0,44,0,34)` |
+
+两条独立成因，**叠加**成 −159px（≈ 5 行）的排版区变化：
+
+1. **`appBar` / `bottomNavigationBar` 是 Scaffold 的「占位」槽**：
+   `_ScaffoldLayout.performLayout` 取 `contentTop = appBarHeight`
+   （`scaffold.dart:1043`，`extendBodyBehindAppBar` 为真时才为 0）、
+   `contentBottom = bottom − max(minInsets.bottom, bottomWidgetsHeight)`
+   （`scaffold.dart:1088-1091`）⇒ body 高 852 → 615。
+2. **`_buildBody` 里那个 `context` 是 LayoutBuilder 的**（遮蔽 `State.context`）：
+   `MediaQuery.of(context)` 拿到的是 `Scaffold` 给 **body** 加工过的那份
+   （`scaffold.dart:3030-3033` 定 `removeTop: appBar != null` /
+   `removeBottom: bottomNavigationBar != null`）⇒ 顶部 44→0、底部 34→0。
+
+⇒ `usableHeight = 852 − 44 − 62 = 746` 变成 `615 − 0 − 28 = 587`；
+`PaginationConfig` 有值相等语义 ⇒ `_syncPageConfig` 判定「变了」→ `_requestReprime`
+⇒ 整页重排、阅读位置肉眼可见地跳。
+
+#### 2. 修法（两层，缺一不可）
+
+| 层 | 改动 | 依据 |
+|---|---|---|
+| `Scaffold` | 加 `extendBody: true` + `extendBodyBehindAppBar: true` ⇒ body **恒占满整屏** | `contentTop = 0`（`scaffold.dart:1043`）；`extendBody` 在 `minInsets.bottom <= bottomWidgetsHeight`（键盘未弹时恒真）把底部层高度**加回** `bodyMaxHeight`（`scaffold.dart:1098-1101`） |
+| 正文预算 | `topInset` / `bottomInset` 改取**页面级 `context`**（Scaffold 外层）的 `systemMq`，不用 body 内那份 | `Scaffold` 只加工其子孙的 MediaQuery；页面级 `context` 读到的仍是系统值 |
+
+只做第一层不够：body 高度恒定了，但 body 内 `mq.padding` 仍随 chrome 变
+（顶 44→100、底 34→槽高），`usableHeight` 照旧变。只做第二层也不够：body 仍被挤矮。
+
+#### 3. 底部层合并（读数 + 控制条同槽）
+
+`bottomNavigationBar: Column(min)[读数, 控制条]`，三条理由：
+
+- 读数**恒在**该槽（`TYP-09` 验收①「chrome 全隐藏时它必须仍在」），且它自身就是
+  模式无关的 chrome 入口（`reader-chrome-toggle-status`）。
+- 读数排在**控制条之上**，正中 `control_bar.dart` 窄屏让位那条的依赖
+  「同一串文字仍由控制条正上方的 `ReaderProgressIndicator` 常驻显示」。
+  **顺序写反过一次**：实测 `indicator.bottom=852 / bar.top=655`（读数跑到控制条
+  **下面**）⇒ 已被新护栏钉住。
+- 配合 `extendBody`，两者只是**覆盖**正文 ⇒ 增删控制条不改排版区。
+
+读数的 `bottomInset` 按 `_fullscreen` **二分**：只有它落在屏幕底边（chrome 收起）
+时才吃掉系统手势条那 34dp；控制条在它下面时那一条由控制条自己的
+`SafeArea(bottom: true)` 承担——重复计入会在两者之间留 34dp 空带（变异实测
+`readout.bottom` 距 `bar.top` 由 4 变 38）。
+
+#### 4. 连带修的体验缺陷：跳转后收起 chrome
+
+chrome 变成覆盖层后**顶栏会压在正文上沿**，而搜索命中 / 目录 / 书签 / 摘要的落位
+一律「目标在页顶」（§2.70 行顶对齐）⇒ 跳过去第一眼看到的目标正好在顶栏底下。
+探针实测：目标段落矩形**两态完全相同** `Rect(8,0,792,29)`，差的只是可命中性
+（chrome 开 `hitTestable=0` / 收 `=1`；顶栏占 `0..56`）。
+
+修法 = `_exitChrome()`，四处调用（`TocSheet.onSelect` / `BookmarkSheet.onJump` /
+`SearchSheet.onJump` / 摘要 `onJump`）。语义上也本该如此：「从弹层里挑一个位置」
+＝「我要开始读这里」；参考实现（legado）的目录 / 搜索是**独立页面**，回到阅读页时
+菜单本就是收起的。**控制条的「上/下一章」不做**——那时用户正在用控制条。
+
+#### 5. 护栏与变异实测
+
+新护栏：`test/reader/reader_inset_test.dart` 第三条「唤出 / 收起 chrome 不得改动
+正文排版区」——两态 `reader-viewport` / `reader-content-area` **逐边相同**、
+正文里的字（`chapterHeading`）屏幕矩形相同、读数落在控制条正上方、两者间不留空带。
+
+| 变异 | 实测 |
+|---|---|
+| 去掉 `extendBody: true` | **红** `Expected: <746> Actual: <686.0>` |
+| 正文预算改回读 body 内 `MediaQuery` | **红** `Expected: <746> Actual: <720.0>` |
+| 读数 `bottomInset` 恒传系统值（不按 `_fullscreen` 二分） | **红** `Actual: <38.0>`（断言 ≤ 8） |
+| 底部层顺序写反（读数在控制条之下） | **红** `indicator.bottom=852 / bar.top=655` |
+
+口径变更：`appearance_sheet_test` T05-d 的触发方式从「收起 / 唤出 chrome」改为
+**系统 inset 变化**（`tester.view.padding`，正文可排版高 572 → 508）——chrome 已
+不再制造几何突变，那条用例的旧前提作废（否则就是「把缺陷钉成契约」的反面：
+把**已失效的场景**留在注释里）。
+
+#### 6. 已知边界与待拍板
+
+- **chrome 覆盖正文**：顶栏盖 `0..100`（正文上沿 56px ≈ 2 行）、控制条盖
+  `715..852`（正文下沿 77px ≈ 3 行）；chrome 可视时**可见阅读窗口 = 100..715**，
+  与改前**同一个窗口**——变化只是「正文不再为它让路」。
+- **另一条未采用的路线**：让排版区整体下移 56（高度不变、也不重排），文字不被顶栏遮。
+  代价是文字每次切换平移 56px，且需把 `usableHeight`（高度）与顶偏移**解耦**。
+  **若负责人更接受「文字下移、但不被顶栏遮住」，可改走这条** —— 待拍板。
+- 读数与控制条在 chrome 态各占 26 + 34 / 137，读数**不会**被控制条覆盖（同槽上下相邻）。
+
+#### 7. 测试与验收
+
+`test/reader + typography + perf + search` **441 条全绿**（`-j 1` 串行）；
+`test/ui + widget_test.dart` **172 条全绿**；`dart analyze lib test` 零问题。
+**真机观感待负责人复验**：顶栏 / 控制条压住正文的观感、跳转后自动收起 chrome 是否合意。
