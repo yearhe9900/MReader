@@ -134,7 +134,8 @@ void main() {
       await settle(tester);
 
       final PagedScrollerState st = scrollerState(tester);
-      expect(st.offset, 43.0, reason: '开书落位基线（章标题占高 43）');
+      expect(st.offset, 60.0, reason: '开书落位基线（章标题占高 60：文本 24 + '
+          'gapTop 24 + gapBottom 12，章标题改版后 §2.82）');
 
       // 连续四轮「慢滚 → 停」，每轮都必须零位移（真机症状是「每次滚动都跳」）。
       for (int round = 0; round < 4; round++) {

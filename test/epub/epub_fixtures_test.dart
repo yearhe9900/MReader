@@ -172,7 +172,8 @@ void main() {
       final ExtractedSection ex = extractSection(
           sectionByHref(book, 'OEBPS/text/ch1.xhtml').rawBytes);
 
-      // 标题：h1 提取为章标题、正文首段去重（UI 单独渲染 → TYP-04 居中，实机目验）。
+      // 标题：h1 提取为章标题、正文首段去重（UI 单独渲染 → TYP-04 左对齐加粗，
+      // 2026-10-09 改版，实机目验）。
       expect(ex.title, '第一章 排版语义', reason: '第2条·标题：h1 提取为章标题');
       expect(ex.paragraphs.first, '首段正文，<b>加粗</b>与<i>斜体</i>应生效。',
           reason: '第2条·标题：正文首段与标题去重');

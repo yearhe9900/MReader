@@ -156,6 +156,15 @@ const int _kMaxRestoreFrames = 8;
 /// 占位块在「尚无任何已加载章可测」时的默认高度（逻辑像素）。
 const double _kDefaultChapterHeight = 480;
 
+/// 章标题块顶部空档（**章间空行隔离**，2026-10-09 负责人拍板）。
+///
+/// 每个章标题块都带这段空档 ⇒ 分页长卷里章与章之间恒隔一个空行量级
+/// （改前两章几乎贴着——旧版的 `Divider` 是题-文分隔，不管章间距）。
+const double _kHeadingGapTop = 24;
+
+/// 章标题与正文的呼吸（旧留白链 6+1+12 里的「12」；横线删除后保留题-文间距）。
+const double _kHeadingGapBottom = 12;
+
 /// 正文底部为常驻 [ReaderProgressIndicator] 预留的高度（dp，**不含**底部系统栏）。
 ///
 /// 实测：该条= 2dp 细条 + `EdgeInsets.symmetric(vertical: 4)` + 一行 `bodySmall`
@@ -1678,7 +1687,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return title.isNotEmpty ? title : '第 ${index + 1} 节';
   }
 
-  /// 章标题占高（测量与渲染**同源**）：TextPainter 行高 + 19（6+1+12 留白链）。
+  /// 章标题占高（测量与渲染**同源**）：TextPainter 行高 + 留白链
+  /// （[_kHeadingGapTop] 章间空行 + [_kHeadingGapBottom] 题文呼吸）。
   double _headingHeightOf(int index, PaginationConfig cfg) {
     if (_headingTextStyle == null) return 0;
     final TextPainter painter = TextPainter(
@@ -1688,24 +1698,27 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     )..layout(maxWidth: cfg.pageWidth);
     final double height = painter.height;
     painter.dispose();
-    return height + 19;
+    return height + _kHeadingGapTop + _kHeadingGapBottom;
   }
 
   /// 章标题 widget（与 [_headingHeightOf] 同一文本 / 样式 / 缩放）。
+  ///
+  /// 2026-10-09 负责人拍板（改 `TYP-04`「标题居中」旧口径）：**左对齐、加粗、
+  /// 不要横线**；章间空行隔离 = 标题块顶部 [_kHeadingGapTop] 空档——每个章
+  /// 标题块都带，章与章之间因此恒隔一个空行（此前分页长卷里两章几乎贴着）。
   Widget _headingWidget(int index, PaginationConfig cfg) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
+        const SizedBox(height: _kHeadingGapTop),
         Text(
           _headingTitle(index),
-          textAlign: TextAlign.center,
+          textAlign: TextAlign.left,
           textScaler: TextScaler.linear(cfg.textScaleFactor),
           style: _headingTextStyle,
         ),
-        const SizedBox(height: 6),
-        const Divider(height: 1),
-        const SizedBox(height: 12),
+        const SizedBox(height: _kHeadingGapBottom),
       ],
     );
   }
@@ -1745,9 +1758,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       if (i < 0 || i >= chapters.length) continue;
       final ChapterContent? content = _cache.peek(i);
       final PaginatedChapter? pag = _paginatedOf(i);
+      // ## ⚠️ 真身判据 = 「内容已就绪 + 页表已出」，**刻意不看段落数**
+      // （2026-10-09，真机「初次打开《枭臣》章间卡住一条『载入中…』」）
+      //
+      // 分章产物里存在**定稿的空段章**（如 TOC 规则把孤行「正文」切成一章、
+      // 正文区间只有空行 ⇒ `_splitParagraphs` 后 0 段）。分页内核对空章天生
+      // 一页空页（`PageBreaker.paginate`「每章至少一页」，`IncrementalPaginator`
+      // 空段构造即完成），它就是「**只有章标题**」的真身块。判据若掺
+      // `paragraphList.isNotEmpty`，空段章会**永驻**「载入中…」占位——把
+      // 「这一章没有正文」错当成「正文还没来」。
       if (content != null &&
           content.imagePages == null &&
-          content.paragraphList.isNotEmpty &&
           pag != null) {
         out.add(PagedChapterView(
           href: chapters[i].href,
@@ -1944,12 +1965,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         index > 0 ? _cache.peek(index - 1) : null;
     final ChapterContent? next =
         index + 1 < chapters.length ? _cache.peek(index + 1) : null;
-    final bool prevOk = prev != null &&
-        prev.imagePages == null &&
-        prev.paragraphList.isNotEmpty;
-    final bool nextOk = next != null &&
-        next.imagePages == null &&
-        next.paragraphList.isNotEmpty;
+    // 邻章可分页 = 已就绪的文本章（**空段章也算**——它有一张空页的定稿页表，
+    // 不登记就永远成不了真身；见 [_registerWindowUnpaginated] 同注）。
+    final bool prevOk = prev != null && prev.imagePages == null;
+    final bool nextOk = next != null && next.imagePages == null;
     scheduler.open(
       href: href,
       paragraphs: content.paragraphList,
@@ -2330,8 +2349,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         charOffset: _currentCharOffset(), keepScrollRemainder: true);
   }
 
-  /// 把窗口内「有正文但未分页」的章登记进预分页队列（prev 槽位复用，
+  /// 把窗口内「已就绪但未分页」的章登记进预分页队列（prev 槽位复用，
   /// 队列按 href 去重；当前章 / 已有定稿的自动跳过）。
+  ///
+  /// **空段章也登记**（2026-10-09）：它是「一张空页」的定稿章（内核
+  /// `PageBreaker.paginate` 空行表返回一页空页、`IncrementalPaginator` 空段
+  /// 构造即完成），登记即秒完成入缓存——否则 `_paginatedOf` 恒 `null`，
+  /// `_buildPageViews` 永远把它当「载入中…」占位（真机《枭臣》孤行「正文」
+  /// 切出的空段章卡在章间实证）。
   void _registerWindowUnpaginated() {
     final PaginationScheduler? scheduler = _scheduler;
     final PaginationConfig? cfg = _pageConfig;
@@ -2341,9 +2366,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     for (final int i in _window) {
       if (i < 0 || i >= chapters.length) continue;
       final ChapterContent? content = _cache.peek(i);
-      if (content == null ||
-          content.imagePages != null ||
-          content.paragraphList.isEmpty) {
+      if (content == null || content.imagePages != null) {
         continue;
       }
       scheduler.setWindow(
@@ -5042,18 +5065,19 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          // TYP-04：标题居中；颜色随背景色板（TYP-08 对比度 / 夜间无白底）。
+          // 标题左对齐加粗、无横线（2026-10-09 负责人拍板，改 TYP-04「居中」旧
+          // 口径）；颜色随背景色板（TYP-08 对比度 / 夜间无白底）。章间空行由
+          // 本块外层 Padding（top 16 + 上一章 bottom 24）提供，分页路径则挂在
+          // 标题块顶部 [_kHeadingGapTop]——两条路径都保证章与章隔开。
           Text(
             heading,
-            textAlign: TextAlign.center,
+            textAlign: TextAlign.left,
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.bold,
               color: bodyStyle.color,
             ),
           ),
-          const SizedBox(height: 6),
-          const Divider(height: 1),
-          const SizedBox(height: 12),
+          const SizedBox(height: _kHeadingGapBottom),
           for (int p = 0; p < paragraphs.length; p++)
             Padding(
               // CNT-04c：链接跳转的目标段落懒挂 key（仅跳转目标段有 key，

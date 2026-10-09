@@ -85,10 +85,12 @@ void main() {
       expect(views[1].pages, isNotEmpty, reason: '第 2 章应是真页表');
       expect(views[2].pages, isEmpty, reason: '第 3 章被闸门挂住 ⇒ 占位块');
 
-      // ① 占位块高：改前 = `cfg.pageHeight`（572.0 = 整屏）。现 = 95.8
-      //    （标题 43.0 + 正文一行 18×1.6 = 28.8 + 24 呼吸）。
-      expect(views[2].headingHeight, 95.8);
-      expect(views[0].headingHeight, 43.0, reason: '真章标题占高仍是实测值');
+      // ① 占位块高：改前 = `cfg.pageHeight`（572.0 = 整屏）。现 = 112.8
+      //    （标题 60.0 + 正文一行 18×1.6 = 28.8 + 24 呼吸）。
+      //    标题占高 60.0 = 文本 24 + `_kHeadingGapTop` 24 + `_kHeadingGapBottom` 12
+      //    （章标题改版后留白链 19→36，`§2.82`）。
+      expect(views[2].headingHeight, 112.8);
+      expect(views[0].headingHeight, 60.0, reason: '真章标题占高仍是实测值');
       // 与「整页高」的对比断言：占位块必须**远小于**一页。
       expect(views[2].headingHeight, lessThan(sc.config.pageHeight / 2),
           reason: '占位块不许再占一整屏（改前 = ${572.0}，pageHeight=' 
@@ -97,8 +99,8 @@ void main() {
 
       // ② 布局总高 = 两章真内容 + 一个占位块（不是三章整屏）
       final PagedLayout layout = scrollerState(tester).layout;
-      expect(layout.chapterTops[2], 5454.0);
-      expect(layout.totalHeight, 5549.8);
+      expect(layout.chapterTops[2], 5488.0); // 旧 5454.0 + 两章标题各 17
+      expect(layout.totalHeight, 5600.8); // 5488.0 + 占位块 112.8
     });
 
     testWidgets('占位块→真实章合入不许移动视口（Δ ≤ 2dp）',
@@ -123,7 +125,7 @@ void main() {
           reason: '必须真的顶到滚动域下界（否则测不到占位块→真实的合入）；'
               'allow 4dp：drag 惯性停在物理余量处（实测 4975.0 / max 4977.8）');
 
-      // 放行第 3 章：占位块（95.8）→ 真实章（2727.0，5 页）。
+      // 放行第 3 章：占位块（112.8）→ 真实章（2727.0 + 17 标题，5 页）。
       gate.complete();
       await settle(tester, rounds: 40);
 
