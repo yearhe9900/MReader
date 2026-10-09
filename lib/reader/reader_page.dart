@@ -163,8 +163,13 @@ const double _kDefaultChapterHeight = 480;
 /// （真机截图「字没显示全」）。此常量给正文留出这段高度。
 ///
 /// 2026-10-08：默认全屏后指示器还要让开手势导航条，那部分**另算**——正文预算取
-/// `本常量 + MediaQuery.padding.bottom`（见 `_buildBody` 的 `reserve`），
-/// 本常量只描述指示器自身的文字高度，不随机型变。
+/// `本常量 + 系统 padding.bottom`（Scaffold **外层**的 MediaQuery，见 `_buildBody`
+/// 的 `reserve`），本常量只描述指示器自身的文字高度，不随机型变。
+///
+/// 2026-10-09（`TYP-09`）：底部层改挂 Scaffold 的 `bottomNavigationBar` 槽 +
+/// `extendBody`，这段让位因此**不再**依赖「全屏时 `Scaffold` 恰好不
+/// `removeBottomPadding`」那种巧合——一律取外层系统 inset（`systemMq`），
+/// chrome 显隐不影响它。
 const double _kProgressIndicatorReserve = 28;
 
 /// R1②：交互挂起后台补齐的**兜底帧数**（到期自动恢复，见 `ReaderPage._pauseAutoFill`）。
@@ -522,6 +527,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 见 `_buildBody`），`TYP-09` 验收①「点正文可唤出与收起」由此承担。
   ///
   /// 不落盘：每次进阅读页都回到全屏静息态（负责人未要求记住 chrome 显隐）。
+  ///
+  /// 2026-10-09（`TYP-09`，负责人拍板「点中间菜单不应修改阅读区高度」）：chrome
+  /// 是**覆盖层**（`extendBody*`，见 [build]）——唤出 / 收起它**不改变正文排版区
+  /// 几何**（护栏见 `reader_inset_test.dart` 的同名用例）。因为跳转类入口
+  /// （搜索 / 目录 / 书签 / 摘要）落位在**页顶**、会被顶栏压住，故跳转后自动
+  /// 收起 chrome（[_exitChrome]）。
   bool _fullscreen = true;
 
   /// 滚动**实时显示**用的章索引 / 章内位置（`TYP-09` 验收②）。
@@ -3347,6 +3358,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             currentIndex: _currentIndex,
             onSelect: (int index) {
               Navigator.of(sheetContext).pop();
+              _exitChrome(); // 落到目标页顶 ⇒ 必须收起顶栏，否则目标被它压住。
               unawaited(_goToChapter(index));
             },
           ),
@@ -3372,6 +3384,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             onDelete: _removeBookmark,
             onJump: (Bookmark bookmark) {
               Navigator.of(sheetContext).pop();
+              _exitChrome(); // 落到目标页顶 ⇒ 必须收起顶栏，否则目标被它压住。
               unawaited(_goToBookmark(bookmark));
             },
           ),
@@ -3395,6 +3408,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             startSearch: _startSearch,
             onJump: (SearchHit hit, String query) {
               Navigator.of(sheetContext).pop();
+              _exitChrome(); // 落到目标页顶 ⇒ 必须收起顶栏，否则目标被它压住。
               unawaited(_jumpToSearchHit(hit, query));
             },
           ),
@@ -3618,6 +3632,24 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     setState(() => _fullscreen = !_fullscreen);
   }
 
+  /// 从弹层里选定一个位置跳过去后**收起 chrome**（`TYP-09`）。
+  ///
+  /// 为什么必须有这一步：chrome 现在是**覆盖层**（`extendBody*`，见 [build]），
+  /// 顶栏压在正文上沿 56dp；而搜索命中 / 目录 / 书签 / 摘要的落位一律是
+  /// 「目标在页顶」（`§2.70` 行顶对齐）⇒ 若跳转时 chrome 还开着，用户跳过去
+  /// 第一眼看到的目标恰好压在顶栏底下（探针实测：目标段落矩形
+  /// `Rect(8,0,792,29)` 落在顶栏 `0..56` 之内 ⇒ 不可命中、看不见）。
+  ///
+  /// 语义上也本该如此：「从弹层里挑一个位置」＝「我要开始读这里」，
+  /// 参考实现（legado）的目录 / 搜索是独立页面，回到阅读页时菜单本就是收起的。
+  ///
+  /// 只在「控制条上/下一章」这类**就地操作**里保持 chrome（那时用户正在用控制条，
+  /// 收掉会让他找不到按钮）。
+  void _exitChrome() {
+    if (_fullscreen) return;
+    setState(() => _fullscreen = true);
+  }
+
   /// 外观面板回调（`TYP-07` / `TYP-08`）：排版变化走位置锚定，亮度 / 背景只重绘。
   void _onPrefsChanged(ReadingPrefs next) {
     final bool typesetChanged = next.settings != _settings;
@@ -3658,9 +3690,32 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final ThemeData theme = Theme.of(context);
     final List<Chapter>? chapters = _chapters;
     final bool ready = _ready && chapters != null && chapters.isNotEmpty;
+    // 正文预算与底部读数**只吃系统 inset**，故取 Scaffold **外层**的 MediaQuery。
+    //
+    // ⚠️ 不能用 body 里那份：`Scaffold` 会给 body 单独加工一个 MediaQuery
+    // （`scaffold.dart:3030-3033` 定 removeTop/removeBottom，`_BodyBuilder`
+    // （`scaffold.dart:960-985`）再按 extendBody* 改写），唤出 chrome 时
+    // 顶部 44→0、底部 34→0（探针实测）。正文几何若跟着它走，就等于让 chrome
+    // 参与排版 —— 正是本次要修掉的缺陷。
+    final MediaQueryData systemMq = MediaQuery.of(context);
 
     return Scaffold(
       backgroundColor: _pageColor(theme),
+      // `TYP-09` 契约（2026-10-09 负责人拍板）：**唤出 / 收起 chrome 不得改变
+      // 正文排版区高度**。
+      //
+      // 改前 `appBar` / `bottomNavigationBar` 是**占位**槽：`_ScaffoldLayout`
+      // 用 `contentTop = appBarHeight`、`contentBottom = bottom −
+      // max(minInsets.bottom, bottomWidgetsHeight)` 把 body 挤矮
+      // （`scaffold.dart:1041-1104`），探针实测 body 高 852 → 615 ⇒ 正文可排版高
+      // 746 → 587（−159px，约 5 行），整页重排、阅读位置肉眼可见地跳。
+      //
+      // 两个 `extendBody*` 让 body **恒占满整屏**（`contentTop = 0`；`extendBody`
+      // 还会把底部层高度加回 `bodyMaxHeight`，见 `scaffold.dart:1098-1101`），
+      // chrome 退化成**覆盖层**：顶栏盖住正文上沿、底部层盖住正文下沿，
+      // 正文自己一像素都不动。
+      extendBody: true,
+      extendBodyBehindAppBar: true,
       // `TYP-09` 验收①：默认全屏 ⇒ `_fullscreen` 初值 `true`，此处即 `null`；
       // 点正文唤出 chrome 后顶栏原样出现（验收①「唤出与收起」）。
       appBar: _fullscreen
@@ -3739,8 +3794,38 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                 ),
               ],
             ),
-      bottomNavigationBar: ready && !_fullscreen
-          ?             ReaderControlBar(
+      // 底部层 = 常驻读数（恒在）+ 控制条（chrome 唤出时）。
+      //
+      // 合成**同一个槽**、且读数排在**上面**（`[读数, 控制条]`）：
+      //   ① 读数必须落在控制条**正上方**——`control_bar.dart` 的窄屏让位
+      //      （`kReaderControlProgressMinWidth`）明确依赖这一条；
+      //   ② 收起 chrome 时槽里只剩读数 ⇒ 它自然贴屏幕底边（与改前逐像素一致）；
+      //   ③ 配合 `extendBody`，二者只是**覆盖**正文、不参与正文预算 ⇒
+      //      增删控制条不会改动正文排版区高度（`TYP-09`）。
+      //
+      // 读数在槽内**恒在**（`TYP-09` 验收①：chrome 全隐藏时它必须仍在），
+      // 且它自身就是 chrome 切换入口（`reader-chrome-toggle-status`）——
+      // 图片页中央点击被「点页全屏缩放」占用，需要一个模式无关的入口。
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          GestureDetector(
+            key: const Key('reader-chrome-toggle-status'),
+            behavior: HitTestBehavior.opaque,
+            onTap: _toggleFullscreen,
+            child: ReaderProgressIndicator(
+              chapterTitle: _liveChapterTitle,
+              pageNumber: _livePageNumber.number,
+              pageCount: _livePageNumber.total,
+              percent: _livePercentValue,
+              // 只有落在**屏幕底边**（chrome 收起）时才让开系统手势导航条；
+              // 控制条在它下面时，那一条由控制条自己的 `SafeArea(bottom: true)`
+              // 承担——重复计入会在两者之间留一条 34dp 空带。
+              bottomInset: _fullscreen ? systemMq.padding.bottom : 0,
+            ),
+          ),
+          if (ready && !_fullscreen)
+            ReaderControlBar(
               settings: _settings,
               onSettingsChanged: _onSettingsChanged,
               chapterNumber: _liveIndex + 1,
@@ -3758,8 +3843,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               onTtsSettings: widget.ttsSettings == null
                   ? null
                   : () => unawaited(_openTtsSettings()),
-            )
-          : null,
+            ),
+        ],
+      ),
       // CNT-04c 验收②：链接返回栈非空时显示「返回」按钮，弹栈恢复原位置；
       // 栈空隐藏（普通 Material，玻璃留给 M2a-T04）。
       floatingActionButton: _linkStack.isNotEmpty
@@ -3769,7 +3855,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               child: const Icon(Icons.arrow_back),
             )
           : null,
-      body: _buildBody(theme),
+      body: _buildBody(theme, systemMq),
     );
   }
 
@@ -4383,6 +4469,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           loadText: _summaryTextAt,
           onJump: (int index) {
             Navigator.of(ctx).pop();
+            _exitChrome(); // 落到目标页顶 ⇒ 必须收起顶栏，否则目标被它压住。
             unawaited(_goToChapter(index));
           },
         ),
@@ -4573,7 +4660,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     ));
   }
 
-  Widget _buildBody(ThemeData theme) {
+  /// 正文容器。
+  ///
+  /// [systemMq] 必须是 **Scaffold 外层**的 MediaQuery（由 [build] 传入）：正文预算
+  /// 只吃系统 inset，不吃 chrome（见下方 `topInset` / `bottomInset` 注释）。
+  Widget _buildBody(ThemeData theme, MediaQueryData systemMq) {
     final Object? error = _error;
     if (error != null) {
       // 打开 / 解析失败：给出可读提示（格式错误的 `message` 已中文化）。
@@ -4638,27 +4729,26 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       builder: (BuildContext context, BoxConstraints constraints) {
         _viewportWidth = constraints.maxWidth;
         _viewportHeight = constraints.maxHeight;
-        // 正文**可用**高度：扣掉顶部 AppBar 与底部常驻进度条 + 系统栏inset。
+        // 正文**可用**高度：扣掉顶部系统栏 + 底部常驻读数让位。
         //
-        // 修复「字被遮住」（2026-10-06 真机截图）：改前正文按**满屏**高度排版，
-        // 首行被 AppBar 压住、末行被常驻的 [ReaderProgressIndicator] 压住——
-        // 分页模式尤其明显（页高 = 视口高，两端各切掉一截）。
-        // `MediaQuery.paddingOf` 已含系统栏（状态栏/导航条）inset；
-        // AppBar 高用 `kToolbarHeight`（Material 默认 56）与进度条实测高度对齐。
-        final MediaQueryData mq = MediaQuery.of(context);
-        final double topInset = mq.padding.top;
+        // ⚠️ 这里的 `context` 是 **LayoutBuilder 的**（遮蔽了 `State.context`），
+        // `MediaQuery.of(context)` 拿到的是 `Scaffold` 给 **body** 加工过的那份：
+        // 唤出 chrome 时 `appBar != null` ⇒ `removeTop`、`bottomNavigationBar != null`
+        // ⇒ `removeBottom`（`scaffold.dart:3030-3033`），于是顶部 44→0、底部 34→0
+        // （探针实测）。**几何一律取外层的 [systemMq]**——body 那份只该影响其子孙
+        // 自己的 `SafeArea`，不该影响排版。
+        //
+        // 这是 `TYP-09` 契约（chrome 不改正文排版区高度）的另一半：`Scaffold` 侧已用
+        // `extendBody*` 把 body 钉成满屏，此处再把两条 inset 钉成系统值 ⇒
+        // `usableHeight` 与 chrome 状态**完全无关**（探针实测 746 → 恒定 746，
+        // 改前唤出 chrome 会掉到 587）。
+        final double topInset = systemMq.padding.top;
         // 底部系统栏让位（手势导航条，真机约 34dp）。
         //
-        // 默认全屏（`appBar == null`）时 `Scaffold` 不再对 body 做
-        // `removeBottomPadding`（`scaffold.dart:3031` 的判定是
-        // `bottomNavigationBar != null`），所以 `mq.padding.bottom` 有值；
-        // 唤出 chrome 时控制条作为 `bottomNavigationBar` 存在、自带
-        // `SafeArea(bottom: true)`，这里自动回到 0——**一个表达式覆盖两种形态**，
-        // 不需要按 `_fullscreen` 分支。
-        //
         // ⚠️ 只让开「文字」不让开「底色」：让位由 [ReaderProgressIndicator] 内部
-        // 吃掉（它的底色须铺到屏幕下缘）。这里只负责把同一个量算进正文预算。
-        final double bottomInset = mq.padding.bottom;
+        // 吃掉（它的底色须铺到屏幕下缘）。同一个量已由 [build] 传给底部层，
+        // 这里负责把它算进正文预算——两处**必须同源**，否则正文会被多盖住一条。
+        final double bottomInset = systemMq.padding.bottom;
         final double reserve = _kProgressIndicatorReserve + bottomInset;
         final double usableHeight = math.max(
           0.0,
@@ -4672,35 +4762,29 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               : constraints.maxHeight,
           textStyle: bodyStyle,
           paragraphSpacing: 16,
-          textScaleFactor: MediaQuery.textScalerOf(context).scale(1.0),
+          textScaleFactor: systemMq.textScaler.scale(1.0),
         ));
         _ensureController();
         // 划词操作条（选区非空时钉在选区上方——构建期算好，按层序插入）。
         final Widget? selBar =
             _selection != null ? _buildSelectionBar() : null;
         return Padding(
-          // **只让顶部**（且只在沉浸全屏时才有值）；底部一律不加，见下。
+          // **只让顶部**（让系统状态栏）；底部一律不加，见下。
           //
-          // ⚠️ 顶部这段只对**沉浸全屏**有意义（2026-10-08 读 Flutter 源码核实）：
-          // `Scaffold` 给 body 的 `MediaQuery` 做了
-          // `removePadding(removeTop: widget.appBar != null)`（`scaffold.dart:3030`），
-          // 并把 body 放在 `contentTop`＝AppBar 之下（`scaffold.dart:1114`）。
-          // 所以**非全屏时这里的 `mq.padding.top` 恒为 0**，加不加都一样；
-          // 全屏时 `appBar == null`：既不移除 padding、也不顶开正文，
-          // 必须自己让开状态栏——这才是这段 Padding 存在的唯一理由。
-          // （改前这里的注释写成「正文区自己要避开状态栏，否则首行被 AppBar 压住」，
-          //  与实际相反，已订正。）
+          // 顶部让位与 chrome 无关：`topInset` 取自 Scaffold **外层**的系统 inset
+          // （见上方注释），且 `extendBodyBehindAppBar: true` 让 body 从 y=0 起画，
+          // 所以**两种 chrome 状态下这里都是同一个值**——正文顶不会因为唤出顶栏
+          // 而挪位（改前非全屏时 body 被 `contentTop = appBarHeight` 顶下去）。
           //
-          // 底部**不能**加在这一层：常驻进度指示条就挂在下面那个 Stack 的
-          // `bottom: 0`，把 28dp 加在 Stack **外面**只会把「正文 + 指示条」整体
-          // 上移，两者照旧重叠，还在控制条上方白留一条 28dp 空带——真机截图实测
-          // 即「末行被指示条盖住变暗 + 被切」。正确做法：在 Stack **内部**只给
-          // 正文让位（见 `Positioned.fill` 里那个 Padding）。
+          // 底部**不能**加在这一层：常驻读数挂在 Stack 的 `bottom: 0`（现在移到了
+          // Scaffold 的底部层，见 [build]），把 28dp 加在 Stack **外面**只会把
+          // 「正文 + 读数」整体上移、两者照旧重叠，还在控制条上方白留一条 28dp
+          // 空带——真机截图实测即「末行被读数盖住变暗 + 被切」。正确做法：在 Stack
+          // **内部**只给正文让位（见 `Positioned.fill` 里那个 Padding）。
           //
-          // 底部也不加 `mq.padding.bottom`：`bottomNavigationBar`（控制条）自带
-          // `SafeArea(bottom: true)`，且 Scaffold 已 `removeBottomPadding`
-          // （`scaffold.dart:3031`），重复计入会把控制条挤到
-          // `RenderFlex overflowed by 19 pixels`（`appearance_sheet_test` T05-d）。
+          // 底部也不加系统 inset：那个量由底部层（[ReaderProgressIndicator] 的
+          // `bottomInset`）自己吃掉，它的底色要铺到屏幕下缘；这里重复计入会让正文
+          // 白让一条、且与控制条口径打架。
           padding: EdgeInsets.only(top: topInset),
           // 正文容器（已让开上下 inset）：测试与选区定位都以此为视口基准。
           child: SizedBox.expand(
@@ -4709,13 +4793,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               key: _viewportKey,
               child: Stack(
               children: <Widget>[
-              // 正文让开常驻进度指示条：Padding 必须在 Stack **内部**、只裹滚动体，
-              // 指示条自身仍贴 Stack 底边——这样「内容底」与「指示条顶」才真的错开
+              // 正文让开常驻读数：Padding 必须在 Stack **内部**、只裹滚动体，
+              // 读数自身在外层贴屏幕底边——这样「内容底」与「读数顶」才真的错开
               // （`usableHeight` 同样扣这段 reserve，两侧口径一致）。
               Positioned.fill(
                 child: Padding(
                   padding: EdgeInsets.only(bottom: reserve),
-                  // 正文可排版区（测试用它钉「内容底 ≤ 指示条顶」）。
+                  // 正文可排版区（测试用它钉「内容底 ≤ 读数顶」）。
                   // 与 `reader-viewport` 同款：key 挂在 **Padding 之内**的盒上，
                   // 否则量到的是含 padding 的外框、与视口等底，量不出让位。
                   child: SizedBox.expand(
@@ -4812,35 +4896,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-              // `TYP-09`：细粒度进度指示（常驻；全屏隐藏控制条后仍是可见进度）。
+              // `TYP-09`：常驻读数**不在这里**——它已移到 Scaffold 的底部层
+              // （见 [build] 的 `bottomNavigationBar`），与控制条同槽、上下相邻。
               //
-              // 本行**自身也是 chrome 切换入口**（`reader-chrome-toggle-status`）：
-              // 文本页靠点正文即可唤出 chrome，但**图片页（CBZ/CBR/PDF）的中央点击
-              // 已被「点页全屏缩放」占用**（`FMT-02` 验收②，PRD 要求），点正文那条
-              // 路径在图片页必然被内层 `_ImagePage` 的 tap 抢走。常驻状态行在两种
-              // 模式下都在、又是同一块「阅读状态」语义，故把它做成**模式无关**的入口
-              // ——只加点击热区、不新增任何像素。
-              //
-              // `bottomInset` 由指示器内部吃掉（底色铺到屏幕下缘、只有文字让开
-              // 手势导航条）；同一个量已加进正文 reserve（见上方 `reserve`）——
-              // 两处**必须同源**，否则正文会被多盖住一条。
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: GestureDetector(
-                  key: const Key('reader-chrome-toggle-status'),
-                  behavior: HitTestBehavior.opaque,
-                  onTap: _toggleFullscreen,
-                  child: ReaderProgressIndicator(
-                    chapterTitle: _liveChapterTitle,
-                    pageNumber: _livePageNumber.number,
-                    pageCount: _livePageNumber.total,
-                    percent: _livePercentValue,
-                    bottomInset: bottomInset,
-                  ),
-                ),
-              ),
+              // 为什么必须挪出去：`extendBody: true` 之后正文铺满整屏，读数的
+              // `bottom: 0` 会被控制条整块盖住（`control_bar.dart` 的窄屏让位
+              // 明确依赖「读数在控制条正上方」）。放进底部层则两态都正确：
+              // chrome 收起时它贴屏幕底边，唤出时自动排在控制条之上。
               ],
               ),
             ),

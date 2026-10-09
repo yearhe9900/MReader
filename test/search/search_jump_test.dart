@@ -100,6 +100,14 @@ void main() {
       await settle(tester); // 跳转：loadFirstBatch + 「估算 + 校正」收敛。
       await tester.pumpAndSettle();
 
+      // 跳转后 chrome 自动收起（`_exitChrome`，2026-10-09）：chrome 是覆盖层
+      // （`extendBody*`），顶栏压在正文上沿 56dp；而跳转落位一律「目标在页顶」。
+      // 顶栏若还开着，目标整行都压在它下面 ⇒ 探针实测两态目标矩形**完全相同**
+      // （`Rect(8,0,792,29)`），差别只在可命中性（开 0 / 收 1）。
+      // 故下一条同时钉住「跳转即退出 chrome」这一新契约。
+      expect(find.byType(AppBar), findsNothing,
+          reason: '从弹层跳转后应收起 chrome，否则页顶的目标被顶栏压住');
+
       // 跳到第 2 章：第 1 章滚出视口、**目标段落**落在视口内。
       // 分页模式下 `_window` 把三章页面整棵构建在树上，`find.text` 的
       // 「在树上」不再等于「在视口内」→ 视口语义一律用 hitTestable

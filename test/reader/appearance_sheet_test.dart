@@ -336,14 +336,18 @@ void main() {
       await settle(tester);
     });
 
-    testWidgets('T05-d 验收③：chrome 切换那一帧页底越界不再触发溢出断言',
+    testWidgets('T05-d 验收③：可视区突变那一帧页底越界不再触发溢出断言',
         (WidgetTester tester) async {
       // 「滑动模式顶部和底部文字被截断」的定案（tech-usage §2.74）：
-      // 唤出 / 收起 chrome 会真的改变 body 高度 ⇒ 排版参数必须重排，而重排是
-      // **帧末**才起步的 ⇒ 切换那一帧仍在按旧页表绘制：`标题占高 + 页高` 大于
-      // 新的可视区高。改前那是 Column 直接溢出（debug 报 `RenderFlex
-      // overflowed by 154`，底部约 5 行被黄黑斜纹盖住）；改后外层裁切、
-      // 不再有溢出断言（几何自愈仍是下一帧，探针实测只存在 1 帧）。
+      // 可视区变矮 ⇒ 排版参数必须重排，而重排是**帧末**才起步的 ⇒ 切换那一帧
+      // 仍在按旧页表绘制：`标题占高 + 页高` 大于新的可视区高。改前那是 Column
+      // 直接溢出（debug 报 `RenderFlex overflowed by 154`，底部约 5 行被黄黑
+      // 斜纹盖住）；改后外层裁切、不再有溢出断言（几何自愈仍是下一帧）。
+      //
+      // ⚠️ 口径变更（2026-10-09，`TYP-09`）：**chrome 切换不再改变可视区**
+      // （正文预算只吃系统 inset，见 `reader_inset_test.dart` 的同名护栏），
+      // 故触发方式从「收起 / 唤出 chrome」改为**系统 inset 变化**
+      // （状态栏 + 手势导航条出现）——那才是本用例真正要兜的场景。
       await tester.pumpWidget(buildApp());
       await settle(tester);
 
@@ -357,13 +361,18 @@ void main() {
       await tester.pumpAndSettle();
       await settle(tester);
 
-      // 收起 chrome（可视区变大）→ 再唤出（可视区变小）= 制造配置突变那一帧。
+      // chrome 收起 / 唤出：只作冒烟（切换过程无异常），不再制造几何突变。
       await tester.tap(find.byKey(const Key('reader-chrome-toggle-status')));
       await tester.pumpAndSettle();
       await settle(tester);
-      expect(tester.takeException(), isNull, reason: '切换前必须无待报异常');
+      expect(tester.takeException(), isNull, reason: 'chrome 收起必须无待报异常');
+      await showChrome(tester);
+      expect(tester.takeException(), isNull, reason: 'chrome 唤出必须无待报异常');
 
-      await showChrome(tester); // 内部只 pump 一帧 —— 正是「旧页表 + 新可视区」
+      // 可视区突变：系统 inset 出现（正文可排版高 572 → 508，矮 64）。
+      tester.view.padding = const FakeViewPadding(top: 24, bottom: 40);
+      addTearDown(tester.view.reset);
+      await tester.pump(); // 只 pump 一帧 —— 正是「旧页表 + 新可视区」
       expect(tester.takeException(), isNull,
           reason: '旧页表画进更小的可视区：应被裁切，不许触发 RenderFlex 溢出');
 
