@@ -87,7 +87,7 @@ PDF   fmt01_gen_mixed_layout.pdf · 路由 OK
 
 ### 4.1 Android（P0 · 主力机 · 小米 HyperOS）
 
-前置：Developer Mode 可选；`adb` 无线调试（`192.168.137.119:35223`）。
+前置：Developer Mode 可选；`adb` **USB 直连**（不要用无线调试地址——只有 USB 一条口径）。
 
 | 步骤 | 命令 / 动作 | 通过标准 |
 |---|---|---|
