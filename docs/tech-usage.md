@@ -4261,3 +4261,85 @@ chrome 变成覆盖层后**顶栏会压在正文上沿**，而搜索命中 / 目
 `test/ui + widget_test.dart` **172 条全绿**；`dart analyze lib test` 零问题。
 **真机复验待负责人**：章尾反复开合是否不再跳章、开书期读数（章标题 · n/N · 百分比）
 是否稳定。
+
+### 2.81 EPUB+TXT 开书提速：两级缓存 + 导入即按章预热（2026-10-09）
+
+**起因**：负责人原话「**打开图书还是感觉慢，还能从哪儿优化，比如书籍导入就按章节进行缓存**
+（只是思路，不一定要实现）」「你没有考虑txt」「**epub+txt一起优化**」。
+
+#### 1. 两级缓存族（判据 / 信封 / 失败语义复用 M-PAGE `T06`）
+
+| 缓存 | 目录 | 载荷 | 覆盖格式 |
+|---|---|---|---|
+| TXT 大纲缓存 | `outline/` | 章节切分结果 | TXT |
+| 章正文缓存 | `chapters/` | 逐章段落表 | EPUB + TXT 共用 |
+
+- 共用判据 `StructureCacheKey`（`bookId` + 副本 mtime/size），任一变 → 整体 miss。
+- 信封 schema + 判据 + 载荷三段式；**损坏 / 判据不符 → 按 miss 绝不抛**（缓存是
+  加速层，读坏了就现场重算，不阻断开书）。
+- 「该章就是没正文」是稳定事实（内容决定，判据已钉死文件身份）⇒ 空表照写照读。
+
+#### 2. 章正文磁盘缓存：追加 blob + 原子索引
+
+`chapters/<bookId>.blob`（追加式段落负载）+ `chapters/<bookId>.index.json`（区间表）：
+
+- **写 = 先追加 blob 再原子写索引**（`JsonStore` + `AtomicFile`，DATA-01 轮转语义）；
+  索引里记录每章 `[start, end)` 字节区间。
+- **写串行化 Future 链**：并发写 6 章不串味（并发下区间表不交错）。
+- **判据失效整体重置 + 首写截断旧 blob**：杜绝旧判据的垃圾字节混进新区间表
+  （截断推迟到首写而非重置时，重置本身零 IO）。
+- 段落负载 = UTF-8 JSON 数组：段落可含任意 Unicode（含换行、NUL 包裹锚点标记），
+  JSON 无转义歧义；单章体量小（最大章 ~100K 字 ⇒ ~200KB）解析可忽略。
+
+#### 3. 导入即按章预热（2026-10-09 拍板）
+
+`importFile` 尾部 `_scheduleWarmUp(record)`：后台逐章读原文写缓存，**绝不拖慢导入本身**；
+失败静默——缓存是加速层，慢一点不碍事。
+
+生命周期三件套（`LibraryRepository`）：
+
+- `_warmUps`：每书一个在途任务（`bookId → Future`）；
+- `_warmUpStopping`：停止旗，预热循环逐章让位即退；
+- `pendingWarmUps`：收尾等待（测试 tearDown 删临时目录前必等，杜绝
+  「后台还在写盘 → `FileSystemException: 目录不是空的`」竞态；5 个测试文件已接）。
+
+**删书⓪ 预热收尾必须在删任何文件之前**（实证）：预热收尾原先放在「删副本文件」
+之后，Windows 上预热仍持有原文件读句柄 → `PathAccessException errno = 32
+另一个程序正在使用此文件`。修法 = ⓪（立旗 → `await _warmUps[bookId]` → 撤旗）
+提到 `deleteBook` 最前，再删封面 / 副本 / 缓存 / 索引。这同时根治「删完又被预热
+写回来」的删后孤儿（`LIB-06` 护栏钉住：预热在途立即删 → `outline/`、`chapters/`、
+`structure/` 三目录必须为空）。
+
+#### 4. widget 测试 fake 区 round 预算（基建实证，非产品缺陷）
+
+删书链新增 ⓪ + ②c 真 IO 步数后，`shelf_page_test` 两个删书用例挂（BookCard 未消失 /
+ReadingProgress 非 null），但 ②a②b③ 探针显示删除链**全部跑完**：
+
+- `flutter_test` 的 `runAsync` fork `realAsyncZone`（`binding.dart:2269`），真 IO 的
+  await 每步只在 pump 轮里推进约一步；
+- `_settle`（`N` 轮 `runAsync(10ms)` + `pump(10ms)`）默认 40 轮 < 删书链步数
+  ⇒ UI 帧没轮到刷新（`rounds: 200` 实验证实即通过）；
+- 归因链：探针 → `git stash` 基线对照 → 配置 X 二分（format 层保留 / 书库 UI 全基线）
+  → 单回填 WIP 复挂锁定 `library_repository` diff → rounds 实验定性。
+
+修法 = 两个删书用例定点加深 `await _settle(tester, rounds: 100)`，**不改产品行为**。
+生产环境真 IO 实时完成，无此预算问题。
+
+#### 5. 变异判红验证（护栏须证能判红）
+
+| 变异 | 判红用例 | 结果 |
+|---|---|---|
+| 移除 ⓪ 预热收尾整块 | `LIB-06：删书不残留缓存孤儿（预热在途立即删）` | **红** |
+| ②c 不删两类缓存 | 同上 | **红** |
+| 首写不截断 blob | `② 判据失效 → 整体重置；首写截断旧 blob` | **红** |
+| mtime 判据恒真 | `① 判据任一不符 → miss` | **红** |
+
+#### 6. 测试与验收
+
+- `test/format/chapter_text_cache_test.dart` **14 条**（信封编解码 / 磁盘 store /
+  `DartEpubSource` 接线含命中短路哨兵、故障当 miss）；
+- `test/format/txt_outline_cache_test.dart` **25 条**；
+- `test/library/library_repository_test.dart` **8 条**（含 LIB-06 护栏）；
+- `test/ui/shelf_page_test.dart` **22 条全绿**（两个删书用例 `rounds: 100`）；
+- `bash tool/test.sh fast` **471 条全绿**；`dart analyze lib test` 零问题。
+- 五平台冒烟与全量测试为待拍板 gate（进度表挂账）。
