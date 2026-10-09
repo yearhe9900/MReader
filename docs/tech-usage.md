@@ -4343,3 +4343,73 @@ ReadingProgress 非 null），但 ②a②b③ 探针显示删除链**全部跑�
 - `test/ui/shelf_page_test.dart` **22 条全绿**（两个删书用例 `rounds: 100`）；
 - `bash tool/test.sh fast` **471 条全绿**；`dart analyze lib test` 零问题。
 - 五平台冒烟与全量测试为待拍板 gate（进度表挂账）。
+
+### 2.82 空段章卡「载入中」与章标题样式改版（2026-10-09）
+
+真机《枭臣》（校对版全本）「初次打开图书」章间卡着一条「第 N 章 · 载入中…」
+不消失（楔子真身已在下方渲染）。负责人拍板「**可以只显示章节名**」；同日拍板
+章标题样式「**左对齐、加粗、不需要横线分割；每章节之间添加空行隔离**」
+（改 `TYP-04`「标题居中」旧口径）。
+
+#### 1. 根因链（探针实证）
+
+TOC 规则（legado `txtTocRule.json` 12 条，`正文(?!完|结)` 关键字）把孤行「正文」
+切成独立章，正文区间只含空行 ⇒ `_splitParagraphs` 后 **0 段**（探针
+`.scratch/probe_txt_empty_chapter.dart` 坐实 `[1] title="正文" paras=0`）。
+旧真身判据含 `paragraphList.isNotEmpty` ⇒ 空段章**永驻**占位分支——把
+「这一章没有正文」错当成「正文还没来」；`_registerWindowUnpaginated` 又跳过
+空段章 ⇒ 永无分页条目，占位块永远换不成真身。**确定性缺陷**（每次开书都在）。
+
+#### 2. 分页内核的空章契约（修复依据）
+
+`PageBreaker.paginate([])` 返回**一张空页**（「每章至少一页，免得上层到处判空页」）；
+`IncrementalPaginator` 空段**构造即完成**（`_complete = paragraphs.isEmpty`，`prime`
+恒 true）；`PaginationScheduler._enqueuePrefetch` 不拒空段。⇒ 让空段章走完分页
+管线拿天生空页，它就是「**只有章标题**」的真身块——与负责人拍板一致。
+
+#### 3. 修法（`reader_page.dart` 三处，签名/翻页零改动）
+
+- `_buildPageViews` 真身判据 = 「内容已就绪 + 页表已出」，**刻意不看段落数**；
+- `_registerWindowUnpaginated` 不跳过空段章（登记即秒完成入缓存）；
+- `_primeOpenSync` prevOk/nextOk 放行空段邻章（空段章有一张空页的定稿页表）。
+
+空页使 `'1c'` 签名自然触发占位→真切换、翻页落页 0 显示章名。ListView 路径
+（`_buildChapterItem`）占位判据只看 `content == null`，空段章天然渲染「标题 + 0 段」，
+无此缺陷。
+
+#### 4. 章标题样式改版（TYP-04 口径变更）
+
+分页路径 `_headingWidget`：`Column[ SizedBox(gapTop=24)、Text(左对齐+bold)、
+SizedBox(gapBottom=12) ]`（改前 `Text(center) + 6 + Divider(1) + 12`）；
+ListView 路径同款。**测量与渲染同源**（`_headingHeightOf` 与 `_headingWidget` 共用
+文本/样式/缩放与留白链常量）：标题占高 = 文本 24 + 24 + 12 = **60.0**（改前 43.0）。
+章间空行隔离 = 每个标题块**顶部** 24 空档（改前两章几乎贴着）；题文呼吸 12 保留
+（横线删了，题-文间距不塌）。牵连字面量同步：占位块高 95.8→112.8、
+`scroll_stop_stability` 开书落位基线 43.0→60.0。
+
+#### 5. 变异判红（护栏须证能判红；掩护关系如实记录）
+
+| 变异 | 判红用例 | 结果 |
+|---|---|---|
+| 真身判据掺回 `paragraphList.isNotEmpty` | `empty_chapter` 两用例（`views[1]/[2].pages`） | **红** |
+| 窗口登记跳过空段章 | `empty_chapter` 用例②（`views[2].pages` 空列表） | **红** |
+| prevOk/nextOk 掺回段落数判据 | —— | 绿（**被窗口登记掩护**） |
+| `_kHeadingGapTop` 24→0 | `heading_style`（高度链断言） | **红** |
+| 标题 `TextAlign` 改回 center | `heading_style` | **红** |
+| 加回 `Divider` | `heading_style`（结构 + findsNothing） | **红** |
+
+掩护关系定性：`_registerWindowUnpaginated` 覆盖窗口全量（⊇ target±1），单撤
+prevOk/nextOk **无用户可见回归**（终态断言无法区分）；其价值是**时序纵深**——
+开书即把 ±1 邻章喂给 scheduler 并行预分页，不等窗口登记。故不设独立护栏用例。
+隔离夹具注记：用例②须让空段章**离开 target±1**（`[60,0,0]` 尾部连排空段、
+拖 −2500 停 px=2232 / prime index=0 / 窗口 [0,1]→[0,1,2]）；空段章矮使窗口尾近、
+尾追加才触发（正常高章窗口尾远不触发——第一版 `[60,60,0]` 栽在这）。
+
+#### 6. 测试与验收
+
+- `test/reader/empty_chapter_test.dart` **2 条**（空段章只显章名 + 窗口登记路径隔离）；
+- `test/reader/heading_style_test.dart` **1 条**（左对齐/加粗/无横线/章间空行/60.0 同源）；
+- `placeholder_band_test` / `scroll_stop_stability_test` 字面量随留白链同步（+17）；
+- `bash tool/test.sh reader` **450 条全绿**、`ui` 172 条全绿、`dart analyze lib test` 零问题；
+- 一次并发跑曾挂 4 个既有时序用例（负载偶发，`-j 1` 与复跑全绿）——若复发参照
+  ui 组「验收 `-j 1`」纪律。
