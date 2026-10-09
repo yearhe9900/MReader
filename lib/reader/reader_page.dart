@@ -1980,10 +1980,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 补余量没有意义，其二次收敛（`_syncPagedViews(tryPendingLand: true)`）
       // 属程序化落位、按行顶对齐即可。
       landAt += remainder;
+      // `at` = 落位**前**的现场像素：`off - at` 就是这一次落位真正造成的位移
+      // （真机排查用；布局未变时二者必须相等，差 0 = 用户看不见移动）。
       PerfLog.mark(
           'paged.prime',
           'index=$index char=$charOffset off=${landAt.toStringAsFixed(0)}'
-          '${remainder == 0 ? '' : ' rem=${remainder.toStringAsFixed(1)}'}');
+          '${remainder == 0 ? '' : ' rem=${remainder.toStringAsFixed(1)}'}'
+          ' at=${_pagedPixelsOrNull()?.toStringAsFixed(0) ?? '-'}');
     }
     // 锚点可达性：窗口截断出「伪书尾」时锚点超滚动域 → 必越界 clamp 掉进
     // 上一章（身份漂移）。不足则扩窗补足（当前章在窗口中部，append 不改
@@ -2000,7 +2003,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (cfgChanged || sig != _viewsSignature) {
       _applyPagedViews(views, cfg, sig, offset: landAt);
     } else {
-      _jumpPaged(landAt);
+      _jumpPaged(landAt, why: 'prime');
     }
     return landed;
   }
@@ -2040,6 +2043,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return rem.clamp(-cfg.pageHeight, cfg.pageHeight).toDouble();
   }
 
+  /// 现场滚动像素（滚动体未附着 → `null`；只用于日志）。
+  double? _pagedPixelsOrNull() {
+    final ScrollController? controller = _controller;
+    if (controller == null || !controller.hasClients) return null;
+    return controller.position.pixels;
+  }
+
   /// 程序化跳转包装：期间派发的通知基于陈旧布局，处理器抑制。
   void _pagedOp(VoidCallback op) {
     _inPagedOp = true;
@@ -2053,12 +2063,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 单跳到 [target]：|Δ|<0.01 跳过；在旧上界内立即跳（pre-jump），
   /// 超出则帧末补跳（setState 后新布局已建，接受 1 帧滑移——
   /// 同帧先跳会被旧 `maxScrollExtent` 弹簧拉回）。
-  void _jumpPaged(double target) {
+  ///
+  /// [why] 只进日志（`paged.move`）：真机「跳动」排查需要**每一条程序化位移**
+  /// 都留痕，光看 `paged.prime` 分不清「算出来的目标」与「真的跳了」。记的是
+  /// **实际**前后值，故 `d` 就是用户看到的那次平移量。
+  void _jumpPaged(double target, {String why = 'prime'}) {
     final ScrollController? controller = _controller;
     if (controller == null || !controller.hasClients) return;
     final double pixels = controller.position.pixels;
     if ((target - pixels).abs() < 0.01) return;
     if (target >= 0 && target <= controller.position.maxScrollExtent) {
+      _notePagedMove(why, pixels, target);
       _pagedOp(() => controller.jumpTo(target));
       return;
     }
@@ -2067,8 +2082,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       final double clamped = target
           .clamp(0.0, controller.position.maxScrollExtent);
       if ((clamped - controller.position.pixels).abs() < 0.01) return;
+      _notePagedMove('$why.late', controller.position.pixels, clamped);
       _pagedOp(() => controller.jumpTo(clamped));
     });
+  }
+
+  /// 记一条程序化位移（**唯一**留痕点：`paged.move`）。
+  void _notePagedMove(String why, double from, double to) {
+    PerfLog.mark(
+        'paged.move',
+        'why=$why from=${from.toStringAsFixed(1)} '
+        'to=${to.toStringAsFixed(1)} d=${(to - from).toStringAsFixed(1)}');
   }
 
   /// 窗口可达性修补：锚点 [anchor] 所需滚动域（`anchor + 视口高`）超出窗口
@@ -2138,7 +2162,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         }
       }
     }
-    if (target != null) _jumpPaged(target); // pre-jump 在 setState 前
+    if (target != null) _jumpPaged(target, why: 'views'); // pre-jump 在 setState 前
     setState(() {
       _pageViews = views;
       _viewsSignature = sig;
@@ -2429,6 +2453,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   Future<void> _onPagedStopped() async {
     final int seq = ++_pagedStopSeq;
     if (!mounted || _disposed || !_pagedMode) return;
+    // 每次停手一行：真机录屏的「哪一帧跳了」只能靠这里对齐（`px` = 停手时
+    // 的现场像素；后续 `paged.move` 的 `d` 就是那次位移）。
+    PerfLog.mark(
+        'paged.stop',
+        'px=${_pagedPixelsOrNull()?.toStringAsFixed(1) ?? '-'} '
+        'index=$_currentIndex pos=${_chapterPos.toStringAsFixed(3)}');
     _syncPagedIdentity(); // ① 不保存（采样置后原则）
     if (!mounted || seq != _pagedStopSeq) return;
     _positionConverged = true; // ② `RC1`：停稳即用户认可的位置

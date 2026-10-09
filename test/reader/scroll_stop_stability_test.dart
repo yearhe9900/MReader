@@ -32,6 +32,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mreader/diagnostics/perf_log.dart';
 import 'package:mreader/reader/pagination/page_breaker.dart';
 import 'package:mreader/reader/pagination/page_renderer.dart';
 import 'package:mreader/reader/pagination/paged_scroller.dart';
@@ -158,6 +159,7 @@ void main() {
             reason: '第 $round 轮夹具必须让视口停在行中间（当前 offset=$during '
                 '行顶=$lineTop），否则本用例测不出「吸附到行顶」这个缺陷');
 
+        PerfLog.records.clear(); // 清在 `up()` 之前：停手流从 `up()` 那一刻起跑
         await g.up();
         await settle(tester, rounds: 25);
 
@@ -169,6 +171,18 @@ void main() {
         expect(st.offset, during,
             reason: '第 $round 轮：停手后 offset 必须与自由滚动落点一致'
                 '（before=$before during=$during after=${st.offset}）');
+        // 最直接的一条：**`_jumpPaged` 连跳都不该发起**（`|Δ| < 0.01` 挡掉）。
+        // 这条同时说明 `paged.move` 是真机排查用的有效探针——它零出现即零位移。
+        final List<String> moves = PerfLog.records
+            .where((String r) => r.contains('paged.move'))
+            .toList();
+        expect(moves, isEmpty,
+            reason: '第 $round 轮：停手流里不许出现任何程序化位移（改后应恒为空；'
+                '改前会打出 why=prime d=-12.0）：$moves');
+        expect(
+            PerfLog.records.any((String r) => r.contains('paged.stop')),
+            isTrue,
+            reason: '第 $round 轮：停手流必须真的跑过（否则上面两条是假绿）');
       }
 
       await closeBook(tester);
