@@ -1822,7 +1822,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         final PaginationScheduler? scheduler = _scheduler;
         if (scheduler == null || _pageConfig == null) continue;
         if (_pendingLand == null) _syncPagedIdentity();
-        if (!_primeOpenSync(charOffset: _currentCharOffset())) {
+        if (!_primeOpenSync(
+            charOffset: _currentCharOffset(), keepScrollRemainder: true)) {
           _reprimeRequested = true; // 内容未就绪：保留待办
           return;
         }
@@ -1867,7 +1868,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// prime 同步段（**不得在 build 期调用**）：消费 [_pendingConfig] →
   /// [PaginationScheduler.open]（首屏突发 + 登记 ±1）→ 预计算视图与布局 →
   /// 精确落位（offsetFor）或估算挂 [_pendingLand]。返回 `true` = 已精确落位。
-  bool _primeOpenSync({required int charOffset}) {
+  ///
+  /// [keepScrollRemainder]：自然滚动停手 / reprime 重锚时必须置 `true`——
+  /// 见 [_scrollRemainderOf]；程序化落位（开书恢复 / 跳章 / 跳书签 / 跳目录 /
+  /// 搜索命中）保持默认 `false` = **行顶对齐**（`§2.70` 语义）。
+  bool _primeOpenSync({
+    required int charOffset,
+    bool keepScrollRemainder = false,
+  }) {
     if (!mounted || _disposed || !_pagedMode) return false;
     final PaginationScheduler? scheduler = _scheduler;
     final PaginationConfig? pendingCfg = _pendingConfig;
@@ -1894,6 +1902,21 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _pageConfig = cfg; // 消费待换参数（视图与 config 同批换新）
 
     final String href = chapters[index].href;
+    // ## ⚠️ 自然停手必须保留「行内像素余量」（2026-10-09 真机「每次滚动都跳动」）
+    //
+    // `offsetFor` 落位口径 = **页顶 + 目标行行顶**（`§2.70`，为「开书/跳转后
+    // 不从半行开始读」而设）。但**自由滚动**的视口顶几乎不会正好落在行顶，于是
+    // 每次停手都被吸附过去一次：内容整块下移「该行已被滚过的余量」⇒ 顶端原本
+    // 被切掉上半截的那一行**突然露全**。探针实测（`_probe_scroll_jump_test`）
+    // 连续四次停手位移恒为 **−12.0px**。
+    //
+    // 语义上「用户滚到哪就是哪」，`§2.71` 已定「视口顶落在行中间」不是缺陷——
+    // 故把余量补回行顶，等于**位置没动**。布局未变时 `landAt_new == lineTop`
+    // ⇒ 目标值与现场像素**恰好相等** ⇒ [`_jumpPaged`] 因 `|Δ| < 0.01` 直接
+    // 跳过，位移为 0；布局真变了（章顶移动 / 页表增长）时仍按语义坐标跟着走。
+    final double remainder = keepScrollRemainder
+        ? (_scrollRemainderOf(href, charOffset) ?? 0.0)
+        : 0.0;
     final ChapterContent? prev =
         index > 0 ? _cache.peek(index - 1) : null;
     final ChapterContent? next =
@@ -1953,8 +1976,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     } else {
       _pendingLand = null;
       _positionConverged = true; // `RC1`：一次精确落位即收敛
-      PerfLog.mark('paged.prime',
-          'index=$index char=$charOffset off=${landAt.toStringAsFixed(0)}');
+      // 行内余量只补在**精确落位**上：估算落位（上一分支）本来就是粗的，
+      // 补余量没有意义，其二次收敛（`_syncPagedViews(tryPendingLand: true)`）
+      // 属程序化落位、按行顶对齐即可。
+      landAt += remainder;
+      PerfLog.mark(
+          'paged.prime',
+          'index=$index char=$charOffset off=${landAt.toStringAsFixed(0)}'
+          '${remainder == 0 ? '' : ' rem=${remainder.toStringAsFixed(1)}'}');
     }
     // 锚点可达性：窗口截断出「伪书尾」时锚点超滚动域 → 必越界 clamp 掉进
     // 上一章（身份漂移）。不足则扩窗补足（当前章在窗口中部，append 不改
@@ -1974,6 +2003,41 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       _jumpPaged(landAt);
     }
     return landed;
+  }
+
+  /// 视口顶相对「其所在行行顶」的像素余量（**自然滚动停手**再锚定用）。
+  ///
+  /// ## 为什么需要它（2026-10-09 真机「每次滚动，顶部文字显示一半，弹跳一下显示全部」）
+  ///
+  /// 落位口径 [`PagedScrollerState.offsetFor`] = 页顶 + **目标行行顶**，这是为
+  /// **程序化落位**定的（开书恢复 / 跳章 / 跳书签 / 跳目录 / 搜索命中都要「从这一行
+  /// 开始读」而不是从半行，见 `§2.70`）。但**自由滚动**的视口顶几乎不会正好落在行顶，
+  /// 于是每次停手都被吸附一次：内容整块下移「该行已被滚过的余量」⇒ 顶端那行突然露全。
+  /// 探针实测连续四次停手位移恒为 **−12.0px**（`_probe_scroll_jump_test`）。
+  ///
+  /// `§2.71` 已定「视口顶落在行中间」是连续排版的固有形态、**不是缺陷**；语义上
+  /// 「用户滚到哪就是哪」。故把余量补回行顶 = **位置没动**：
+  ///   · 布局未变 ⇒ `landAt_new == lineTop` ⇒ 目标值与现场像素**恰好相等** ⇒
+  ///     [`_jumpPaged`] 被 `|Δ| < 0.01` 挡掉，位移为 0；
+  ///   · 布局真变了（章顶移动 / 页表增长）⇒ 目标值随语义坐标一起移动，且保住
+  ///     行内位置——比「跳到行顶」更贴近用户预期。
+  ///
+  /// 返回 `null` = 不可得（无滚动体 / 采样 href 对不上 / 数值异常）→ 调用方按
+  /// 行顶对齐落位（等价改前行为，不做无依据的平移）。
+  ///
+  /// 上下界取 `±cfg.pageHeight`：`sampleCharOffset` 是**按页内字符均匀折算**的
+  /// 线性插值，与真实「像素→行」映射有偏差，余量偶尔会略偏；夹到一页以内既保证
+  /// 「布局未变时仍精确」又不至于把落点甩出可视范围。
+  double? _scrollRemainderOf(String href, int charOffset) {
+    final PagedScrollerState? scroller = _scroller;
+    final PaginationConfig? cfg = _pageConfig;
+    if (scroller == null || cfg == null) return null;
+    if (!scroller.scrollController.hasClients) return null;
+    final double? lineTop = scroller.offsetForCharOffset(href, charOffset);
+    if (lineTop == null) return null;
+    final double rem = scroller.scrollController.offset - lineTop;
+    if (rem.isNaN || rem.isInfinite) return null;
+    return rem.clamp(-cfg.pageHeight, cfg.pageHeight).toDouble();
   }
 
   /// 程序化跳转包装：期间派发的通知基于陈旧布局，处理器抑制。
@@ -2197,7 +2261,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   Future<void> _ensurePagedActive() async {
     await _ensureWindowImageSizes(_window);
     if (!mounted || _disposed || _jumpInFlight) return;
-    _primeOpenSync(charOffset: _currentCharOffset());
+    // **自然停手**：必须保留行内像素余量，否则每次停手都被吸附到行顶
+    // （真机「底部/顶部文字弹跳」；见 [_scrollRemainderOf]）。
+    _primeOpenSync(
+        charOffset: _currentCharOffset(), keepScrollRemainder: true);
   }
 
   /// 把窗口内「有正文但未分页」的章登记进预分页队列（prev 槽位复用，
