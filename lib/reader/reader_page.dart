@@ -2136,6 +2136,16 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       return (views: views, layout: layout, sig: sig);
     }
     final int before = _window.length;
+    // ## ⚠️ 这里**不能**给窗口加上界（2026-10-09 实测，反向证据）
+    //
+    // 未排页表的章只贡献一条 `_placeholderBandHeight`（≈96dp）占位带，`totalHeight`
+    // 因此很难够到 `anchor + vh` ⇒ 该循环会多 append 出约 `ceil(vh / 96)` 章。
+    // 看起来该收口（并会让分页缓存 LRU 挤掉当前章），但把窗口压到缓存容量
+    // （5 章）后 `reader_page_test` 回归②（深章节恢复）立刻判红：窗口布局总高
+    // 小于视口时 `maxScrollExtent == 0`，`_jumpPaged` 的目标被 clamp 成 0 且
+    // 「与现场相等 ⇒ 直接 return」，**落位被静默丢弃且永不重试**（无 `paged.move`
+    // 留痕），目标章自然进不了视图。真正该修的是「淘汰不能碰正在渲染的章」——
+    // 见 `PaginationCache.setProtected`；窗口多 append 只是浪费，不是错。
     while (layout.totalHeight < anchor + vh &&
         _window.last < chapters.length - 1) {
       _window.add(_window.last + 1);
@@ -2186,6 +2196,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       }
     }
     if (target != null) _jumpPaged(target, why: 'views'); // pre-jump 在 setState 前
+    // 窗口章 = 正在渲染的章：必须留在分页缓存里（读路径 [_paginatedOf] 走只读
+    // `peek`，不参与 LRU 提位 ⇒ 被淘汰即静默退化为占位带、锚点以上布局塌陷
+    // ⇒ 像素→章 采样错位并落盘。见 `PaginationCache.put`）。
+    _scheduler?.cache.setProtected(
+      <String>[for (final PagedChapterView v in views) v.href],
+    );
     setState(() {
       _pageViews = views;
       _viewsSignature = sig;

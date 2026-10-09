@@ -85,6 +85,75 @@ void main() {
     });
   });
 
+  group('保护集：正在渲染的窗口章不被淘汰', () {
+    // 真机依据（2026-10-09「多次开关图书章节跳动」）：读路径
+    // `ReaderPage._paginatedOf` 走只读 `peek`，**不参与 LRU 提位** ⇒
+    // 窗口章数 > 上界时，被淘汰的恰是**最先排完页表的当前章**；它一被挤掉，
+    // 视图就静默退化为占位带（高 ≈ 96dp）⇒ 锚点以上布局塌陷一整章高 ⇒
+    // 像素→章 采样错位并落盘。
+
+    test('保护中的 href 跳过淘汰，改淘汰更久未用的非保护项', () {
+      final PaginationCache cache = PaginationCache(maxChapters: 3);
+      cache
+        ..put(ch('A'))
+        ..put(ch('B'))
+        ..put(ch('C'));
+      cache.setProtected(<String>['A']); // A = 正在渲染的当前章
+      cache.put(ch('D'));
+      expect(cache.count, 3);
+      expect(cache.hrefs.toList(), <String>['A', 'C', 'D']); // B 顶替 A 被淘汰
+      expect(cache.peek('A', cfg1), isNotNull);
+      expect(cache.peek('B', cfg1), isNull);
+    });
+
+    test('全在保护集：宁可暂时超界，也不淘汰正在渲染的章', () {
+      // 保护集在**分页完成之前**就写好（`_applyPagedViews` 按窗口 href 写入），
+      // 所以「即将排完的目标章」也在里面。
+      final PaginationCache cache = PaginationCache(maxChapters: 1);
+      cache.put(ch('A'));
+      cache.setProtected(<String>['A', 'B']);
+      cache.put(ch('B'));
+      expect(cache.count, 2); // 上界是目标值，不是硬上界
+      expect(cache.hrefs.toList(), <String>['A', 'B']);
+      expect(cache.peek('A', cfg1), isNotNull); // 当前章一个都没丢
+      expect(cache.peek('B', cfg1), isNotNull);
+    });
+
+    test('不在保护集的新写入自己让位（窗口外章不挤走窗口章）', () {
+      final PaginationCache cache = PaginationCache(maxChapters: 2);
+      cache
+        ..put(ch('A'))
+        ..setProtected(<String>['A', 'B'])
+        ..put(ch('B'));
+      cache.put(ch('C')); // C 在窗口外 → 淘汰 C 自己
+      expect(cache.count, 2);
+      expect(cache.hrefs.toList(), <String>['A', 'B']);
+    });
+
+    test('保护集只在淘汰时起作用：get / peek 返回值不变', () {
+      final PaginationCache cache = PaginationCache(maxChapters: 2);
+      cache.put(ch('A'));
+      cache.setProtected(<String>['A']);
+      expect(cache.get('A', cfg1), isNotNull);
+      expect(cache.peek('A', cfg1), isNotNull);
+      expect(cache.has('A', cfg1), isTrue);
+      expect(cache.protectedHrefs, <String>{'A'});
+    });
+
+    test('setProtected 覆盖（不是并集）；clear 一并清空', () {
+      final PaginationCache cache = PaginationCache(maxChapters: 2);
+      cache
+        ..put(ch('A'))
+        ..put(ch('B'))
+        ..setProtected(<String>['A'])
+        ..setProtected(<String>['B']); // 覆盖：A 不再受保护
+      cache.put(ch('C'));
+      expect(cache.hrefs.toList(), <String>['B', 'C']); // A 被淘汰
+      cache.clear();
+      expect(cache.protectedHrefs, isEmpty);
+    });
+  });
+
   group('配置哈希失效', () {
     test('config 不匹配：get 返回 null 且整条移除（释放槽位）', () {
       final PaginationCache cache = PaginationCache();

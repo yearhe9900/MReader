@@ -10,6 +10,9 @@ import 'page_breaker.dart';
 import 'page_paginator.dart';
 
 /// 同时驻留的完整分页结果上界（里程碑 T02：**LRU 5 章**）。
+///
+/// ⚠️ `maxChapters` 是**目标值**而非硬上界：[setProtected] 保护中的条目跳过淘汰
+/// （正在渲染的窗口章可能多于 5 章）。理由见 [PaginationCache.setProtected]。
 const int kPaginationCacheChapters = 5;
 
 /// 一章在一套排版参数下的分页结果（缓存值 / 上屏读取单元）。
@@ -105,14 +108,49 @@ class PaginationCache {
   }
 
   /// 写入（或更新）一条**完整**结果，随后按上界淘汰最久未用者。
+  ///
+  /// ## ⚠️ 淘汰必须跳过 [setProtected]（2026-10-09，真机「多次开关图书章节跳动」）
+  ///
+  /// 读路径（`ReaderPage._paginatedOf` → [peek]）**不参与 LRU 提位**（[peek]
+  /// 明确不触碰顺序），所以「谁最新」只反映**分页完成顺序**，与「谁正在被渲染」
+  /// 无关。于是「窗口内章数 > `maxChapters`」时，被淘汰的恰恰是**最先排完页表的
+  /// 当前章**：它一被挤掉，`_buildPageViews` 就静默退化为占位带
+  /// （`_placeholderBandHeight` ≈ 96dp）⇒ **锚点以上布局整体塌陷一整章高**⇒
+  /// 同帧的像素→章 采样把现场像素映射到**邻章**，且走 `save: true` 落盘。
+  /// 探针实测：窗口 `[0..5]` + 缓存 `[h1..h5]`，再 `put(h6)` 后变 `[h2..h6]`，
+  /// 视图形态 `RRRRRP` → `PRRRRR`，读数从「第一章 2/2」跳到「第二章 1/2」，
+  /// 每次开书漂一整章。
+  ///
+  /// 因此 [maxChapters] 是**目标值**而非硬上界：全在保护集时宁可暂时超界。
   void put(PaginatedChapter chapter) {
     _entries.remove(chapter.href);
     _entries[chapter.href] = chapter;
     while (_entries.length > maxChapters) {
-      _entries.remove(_entries.keys.first);
+      String? victim;
+      for (final String href in _entries.keys) {
+        if (!_protected.contains(href)) {
+          victim = href;
+          break;
+        }
+      }
+      if (victim == null) break; // 全受保护：不淘汰正在渲染的章。
+      _entries.remove(victim);
     }
   }
 
+  /// 保护集：**正在渲染的窗口章**（`ReaderPage._applyPagedViews` 每次换视图时
+  /// 同步写入）。只在淘汰时起作用，不影响 [get] / [peek] 的返回值。
+  Set<String> _protected = const <String>{};
+
+  /// 覆盖保护集（传入当前窗口的全部 href；顺序无关）。
+  void setProtected(Iterable<String> hrefs) => _protected = hrefs.toSet();
+
+  /// 当前保护集（测试观察用）。
+  Set<String> get protectedHrefs => _protected;
+
   /// 清空（换书 / 配置整体切换时由调度器调用）。
-  void clear() => _entries.clear();
+  void clear() {
+    _entries.clear();
+    _protected = const <String>{};
+  }
 }
