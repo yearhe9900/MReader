@@ -270,7 +270,7 @@ class _VocabPageState extends State<VocabPage> {
         _toast('文件已丢失：${record.fileName}');
         return;
       }
-      // 结构缓存判据（M-PAGE T06）：与书架开书同款——缓存不中即不启用。
+      // 缓存判据（M-PAGE T06 + §2.81）：与书架开书同款——判据不中即不启用。
       final StructureCacheKey? cacheKey =
           await widget.repository.structureCacheKey(record);
       final BookSource source = await openBook(
@@ -278,6 +278,8 @@ class _VocabPageState extends State<VocabPage> {
         bytes: bytes,
         structureCache: widget.repository.structureCache,
         cacheKey: cacheKey,
+        txtOutlineCache: widget.repository.txtOutlineCache,
+        chapterTextCache: widget.repository.chapterTextCache,
       );
       if (!mounted) return;
       final MaterialPageRoute<void> route = MaterialPageRoute<void>(

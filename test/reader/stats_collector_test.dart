@@ -59,7 +59,9 @@ void main() {
       service = StatsService(paths);
     });
 
-    tearDown(() {
+    tearDown(() async {
+      // 导入预热收尾再删目录（防后台写盘 vs 删目录竞态，§2.81）。
+      await repo.pendingWarmUps;
       if (tempDir.existsSync()) {
         tempDir.deleteSync(recursive: true);
       }

@@ -8,6 +8,13 @@
 // M3.5 若把「编码探测 / 大文件分章」Rust 化，会新增 `RustTxtSource` 实现同一接口，
 // 本文件保持不动（PRD §15.6.2：Rust 首版只做「探测出编码名」，解码仍留 Dart）。
 //
+// ## 两级缓存（2026-10-09 批次，与 EPUB 侧同族；细节见 tech-usage.md §2.81）
+//
+// · **大纲缓存**（`txt_outline_cache.dart`）：命中 = `_txtPrepareTask` 整段跳过，
+//   不再整本解码 / 全文正则 / 跨 isolate 运回整份字符串；
+// · **章正文缓存**（`chapter_text_cache.dart`）：`content(i)` 命中 = 零解码零切段。
+//   两级都与 `cacheKey` 成对启用、判据失效按 miss 重算，缓存坏掉绝不影响开书。
+//
 // ## 分章算法出处（PRD 附录 A：算法/格式规范级可借鉴来源）
 //
 // 1:1 照译参考实现：
@@ -52,6 +59,9 @@ import '../meta/meta_source.dart' show kUnknownAuthor;
 import '../meta/txt_meta.dart';
 import '../task/isolate_runner.dart';
 import 'book_source.dart';
+import 'chapter_text_cache.dart';
+import 'structure_cache.dart';
+import 'txt_outline_cache.dart';
 
 // `Chapter` / `ChapterContent` / `MReaderFormatException` 经 `book_source.dart`
 // 的 export 转出，不再单独 import（与 `dart_epub_source.dart` 一致）。
@@ -96,6 +106,9 @@ class DartTxtSource implements BookSource {
     required this.fileName,
     required this.bytes,
     this.runner = const IsolateRunner(),
+    this.outlineCache,
+    this.cacheKey,
+    this.chapterTextCache,
   });
 
   /// 原始文件名（书名缺失时兜底；也是唯一元数据来源）。
@@ -107,7 +120,18 @@ class DartTxtSource implements BookSource {
   /// isolate 派发器（`PERF-01`）：默认派真实后台 isolate，测试可注入 spy / 故障 runner。
   final IsolateRunner runner;
 
+  /// TXT 大纲缓存（与 [cacheKey] **成对**才有意义，缺一即不启用）：
+  /// 命中 = 整本解码 + 全文分章 + 跨 isolate 大字符串拷贝**整段跳过**。
+  final TxtOutlineCacheStore? outlineCache;
+
+  /// 缓存判据（`bookId` + 副本 `mtime/size`）；大纲缓存与章正文缓存共用。
+  final StructureCacheKey? cacheKey;
+
+  /// 章正文缓存（与 [cacheKey] **成对**才有意义）：命中 = 零解码零切段。
+  final ChapterTextCacheStore? chapterTextCache;
+
   String? _text;
+  String? _encoding;
   List<_Segment>? _segments;
   List<Chapter>? _chapters;
   Future<void>? _preparing;
@@ -154,12 +178,30 @@ class DartTxtSource implements BookSource {
 
   @override
   Future<ChapterContent> content(int chapterIndex) async {
+    // ① 章正文缓存优先（命中 = 零解码零切段；缓存里就是最终段落）。
+    final ChapterTextCacheStore? textCache = chapterTextCache;
+    final StructureCacheKey? key = cacheKey;
+    if (textCache != null && key != null && chapterIndex >= 0) {
+      final PerfWatch cacheWatch = PerfLog.watch('chapter.cache');
+      List<String>? hit;
+      try {
+        hit = await textCache.read(key, chapterIndex);
+      } catch (_) {
+        hit = null; // 缓存读故障当 miss
+      }
+      cacheWatch.done('hit=${hit == null ? 0 : 1} impl=txt idx=$chapterIndex');
+      if (_disposed) return const ChapterContent.paragraphs(<String>[]);
+      if (hit != null) return ChapterContent.paragraphs(hit);
+    }
+
     await _ensurePrepared();
-    // dispose 竞态：`await` 恢复后可能已被释放（`_text` / `_segments` 已清空）。
-    // 用局部变量取快照 + 判空，**不用 `!` 断言**（那是竞态崩溃的根因）。
+    if (_disposed) return const ChapterContent.paragraphs(<String>[]);
+    // ② 回落现场计算：大纲命中时 `_text` 尚未解码（整本解码只在此路径付一次）。
+    //    dispose 竞态：`await` 恢复后可能已被释放——用局部变量取快照 + 判空，
+    //    **不用 `!` 断言**（那是竞态崩溃的根因）。
     final List<_Segment>? segments = _segments;
-    final String? text = _text;
-    if (_disposed || segments == null || text == null) {
+    final String text = await _textOnce();
+    if (_disposed || segments == null) {
       return const ChapterContent.paragraphs(<String>[]);
     }
     if (chapterIndex < 0 || chapterIndex >= segments.length) {
@@ -178,6 +220,13 @@ class DartTxtSource implements BookSource {
         chapterIndex < chapterList.length &&
         paragraphs.first == chapterList[chapterIndex].title) {
       paragraphs.removeAt(0);
+    }
+
+    // 写回章正文缓存（best-effort；**只在真实计算后**写——竞态空结果绝不落盘）。
+    if (textCache != null && key != null && !_disposed) {
+      try {
+        await textCache.write(key, chapterIndex, paragraphs);
+      } catch (_) {}
     }
     return ChapterContent.paragraphs(paragraphs);
   }
@@ -304,6 +353,7 @@ class DartTxtSource implements BookSource {
     _preparing = null;
     _decoding = null;
     _text = null;
+    _encoding = null;
     _segments = null;
     _chapters = null;
     _totalChars = null;
@@ -323,6 +373,30 @@ class DartTxtSource implements BookSource {
   }
 
   Future<void> _prepare() async {
+    // 大纲缓存命中 = **整段跳过**「解码 + 空检 + 分章」的 isolate 派发
+    // （含那份整本书大小的字符串拷贝），章节表直接由落盘大纲还原。
+    final TxtOutlineCacheStore? outlineCache = this.outlineCache;
+    final StructureCacheKey? key = cacheKey;
+    if (outlineCache != null && key != null) {
+      final PerfWatch outlineWatch = PerfLog.watch('txt.outline');
+      TxtOutline? hit;
+      try {
+        hit = await outlineCache.read(key);
+      } catch (_) {
+        hit = null; // 缓存读故障当 miss（加速层，绝不让开书失败）
+      }
+      outlineWatch.done('hit=${hit == null ? 0 : 1} book=${key.bookId}');
+      if (_disposed) return;
+      if (hit != null) {
+        _encoding = hit.encoding;
+        _installSegments(<_Segment>[
+          for (final TxtChapterSpan c in hit.chapters)
+            _Segment(c.start, c.end, c.title),
+        ]);
+        return;
+      }
+    }
+
     // `PERF-01`：解码 + 空检 + 分章一并派到后台 isolate（业务错误经信封回传）。
     final _TxtPrepareOutcome outcome =
         await runner.runWithFallback<Uint8List, _TxtPrepareOutcome>(
@@ -335,11 +409,34 @@ class DartTxtSource implements BookSource {
     if (error != null) throw error; // 业务错误（如 txtNoContent）：与旧路径同型同码
     final String? text = outcome.text;
     final List<_Segment>? segments = outcome.segments;
-    if (text == null || segments == null) {
-      // 不变量：无错必有文本 + 分段。信封被破坏按坏文件处理。
+    final String? encoding = outcome.encoding;
+    if (text == null || segments == null || encoding == null) {
+      // 不变量：无错必有文本 + 分段 + 编码名。信封被破坏按坏文件处理。
       throw const MReaderFormatException(FormatErrorCode.corruptFile);
     }
     _text = text;
+    _encoding = encoding;
+    _installSegments(segments);
+
+    // 写回大纲缓存（best-effort：缓存是加速层，写失败静默、绝不影响开书）。
+    if (outlineCache != null && key != null && !_disposed) {
+      try {
+        await outlineCache.write(
+          key,
+          TxtOutline(
+            encoding: encoding,
+            chapters: <TxtChapterSpan>[
+              for (final _Segment s in segments)
+                TxtChapterSpan(start: s.start, end: s.end, title: s.title),
+            ],
+          ),
+        );
+      } catch (_) {}
+    }
+  }
+
+  /// 装载章表（大纲缓存命中与现场解析两条路径共用）。
+  void _installSegments(List<_Segment> segments) {
     _segments = segments;
     _chapters = List<Chapter>.unmodifiable(<Chapter>[
       for (final _Segment s in segments)
@@ -358,9 +455,12 @@ class DartTxtSource implements BookSource {
   }
 
   Future<String> _decodeOffloaded() async {
-    final String text = await runner.runWithFallback<Uint8List, String>(
+    // 已知生效编码名（大纲缓存带回）→ 直接按名解码，免掉整本重探测
+    // （`detectEncodingName` 的严格 UTF-8 那级要整本扫）。
+    final String text = await runner
+        .runWithFallback<(Uint8List, String?), String>(
       _txtDecodeTask,
-      bytes,
+      (bytes, _encoding),
       debugLabel: 'mreader-txt-decode',
     );
     if (!_disposed) _text = text;
@@ -565,14 +665,16 @@ class _Segment {
 
 /// [_txtPrepareTask] 的返回信封（跨 isolate 纯数据）。
 ///
-/// 不变量：`text`/`segments` 与 [error] **恰一非空**。业务错误经信封传递而非 throw，
-/// 让 `IsolateRunner.runWithFallback` 能把「业务错误」与「派发失败 / 远端意外」分开
-/// （只有后者才回落本 isolate 重跑）。
+/// 不变量：`text`/`segments`/`encoding` 与 [error] **恰一非空**。业务错误经信封
+/// 传递而非 throw，让 `IsolateRunner.runWithFallback` 能把「业务错误」与
+/// 「派发失败 / 远端意外」分开（只有后者才回落本 isolate 重跑）。
 class _TxtPrepareOutcome {
-  const _TxtPrepareOutcome.ok(this.text, this.segments) : error = null;
+  const _TxtPrepareOutcome.ok(this.text, this.segments, this.encoding)
+      : error = null;
   const _TxtPrepareOutcome.failed(this.error)
       : text = null,
-        segments = null;
+        segments = null,
+        encoding = null;
 
   /// 解码并剥掉 BOM 后的全文（成功时非空；空文本属业务错误，不会走到这）。
   final String? text;
@@ -580,25 +682,42 @@ class _TxtPrepareOutcome {
   /// 分章结果（成功时非空）。
   final List<_Segment>? segments;
 
+  /// 生效编码名（`detectEncodingName` 口径，落 TXT 大纲缓存用）。
+  final String? encoding;
+
   /// 业务错误（失败时非空）。
   final MReaderFormatException? error;
 }
 
 /// 解码 + 剥行首 BOM 残留（`decodeText` 已按 `NF-C4` 六级兜底）。
-String _decodeAndStripBom(Uint8List bytes) {
-  final String decoded = decodeText(bytes);
-  return decoded.startsWith('\uFEFF') ? decoded.substring(1) : decoded;
-}
+String _decodeAndStripBom(Uint8List bytes) =>
+    _stripBom(decodeText(bytes));
+
+/// 剥行首 BOM 残留（[decodeTextNamed] / [decodeText] 的解码结果共用）。
+String _stripBom(String decoded) =>
+    decoded.startsWith('\uFEFF') ? decoded.substring(1) : decoded;
 
 /// `PERF-01` 的解码任务（顶层纯函数）：未走 [_txtPrepareTask] 的入口（如
-/// `totalCharCount`）单独解码时派发。
-String _txtDecodeTask(Uint8List bytes) => _decodeAndStripBom(bytes);
+/// `totalCharCount`、大纲缓存命中后的 `content()` 回落）单独解码时派发。
+///
+/// 入参 `(bytes, 编码名)`：编码名已知（大纲缓存带回）时按名解码，免掉整本重探测；
+/// `null` 时走 `decodeText` 全流程（探测 + 解码）。
+String _txtDecodeTask((Uint8List, String?) message) {
+  final (Uint8List bytes, String? encoding) = message;
+  return encoding == null
+      ? _decodeAndStripBom(bytes)
+      : _stripBom(decodeTextNamed(encoding, bytes));
+}
 
 /// `PERF-01` 的 TXT 准备任务（顶层纯函数）：解码 + 空检 + 分章一并在后台 isolate
 /// 算完；业务错误（[FormatErrorCode.txtNoContent]）收进 [_TxtPrepareOutcome] 信封。
+///
+/// 编码名只探测**一次**（`detectEncodingName` 的严格 UTF-8 那级要整本扫），
+/// 探测结论经 [decodeTextNamed] 直接复用，并随信封回传给大纲缓存。
 _TxtPrepareOutcome _txtPrepareTask(Uint8List bytes) {
   final Stopwatch clock = Stopwatch()..start();
-  final String text = _decodeAndStripBom(bytes);
+  final String encoding = detectEncodingName(bytes);
+  final String text = _stripBom(decodeTextNamed(encoding, bytes));
   final int decodeMs = clock.elapsedMilliseconds;
   if (text.trim().isEmpty) {
     return _TxtPrepareOutcome.failed(
@@ -610,8 +729,8 @@ _TxtPrepareOutcome _txtPrepareTask(Uint8List bytes) {
   PerfLog.step('txt.prepare', clock.elapsedMilliseconds,
       'bytes=${bytes.length} decode=${decodeMs}ms '
       'analyze=${clock.elapsedMilliseconds - decodeMs}ms '
-      'chapters=${segments.length}');
-  return _TxtPrepareOutcome.ok(text, segments);
+      'chapters=${segments.length} enc=$encoding');
+  return _TxtPrepareOutcome.ok(text, segments, encoding);
 }
 
 /// 一条 TXT 目录规则（章名 + 正则源码）。

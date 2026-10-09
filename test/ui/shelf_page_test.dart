@@ -132,6 +132,9 @@ void main() {
     });
 
     tearDown(() async {
+      // 导入预热收尾再删目录（防后台写盘 vs 删目录竞态，§2.81）。
+      // tearDown 在 FakeAsync 之外跑，真 await 照常（与 setUp 同款口径）。
+      await repo.pendingWarmUps;
       if (await tempDir.exists()) {
         await tempDir.delete(recursive: true);
       }
@@ -377,9 +380,11 @@ void main() {
       await tester.tap(find.text('移出书架'));
       await tester.pumpAndSettle();
 
-      // 点击「删除」（`_deleteBook` 内含真 IO，需 _settle）
+      // 点击「删除」（`_deleteBook` 内含真 IO，需 _settle）。
+      // 删书链的真 IO 步数多（副本/封面/三份缓存清理/索引+进度收尾），
+      // 40 轮预算不够走到 `_loadBooks` 刷 UI → 加深到 100 轮（§2.81 实测）。
       await tester.tap(find.text('删除'));
-      await _settle(tester);
+      await _settle(tester, rounds: 100);
 
       // 书卡消失，空态出现
       expect(find.byType(BookCard), findsNothing);
@@ -417,7 +422,8 @@ void main() {
       await tester.tap(find.text('移出书架'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('删除'));
-      await _settle(tester);
+      // 删书链真 IO 步数多（见上一用例注释）：预算加深到 100 轮（§2.81）。
+      await _settle(tester, rounds: 100);
 
       expect(await tester.runAsync(() => progressStore.load(bookId)), isNull);
     });

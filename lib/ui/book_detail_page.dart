@@ -177,8 +177,8 @@ class _BookDetailPageState extends State<BookDetailPage> {
   Future<BookMeta?> _reparse() async {
     final Uint8List? bytes = await widget.repository.readBookBytes(_record);
     if (bytes == null || bytes.isEmpty) return null;
-    // M-PAGE `T06`：与书架开书同一缓存（判据命中零解析——详情页「一次性回填」
-    // 与「恢复自动值」是重开本书的高频路径）。
+    // M-PAGE `T06` + §2.81：与书架开书同一批缓存（判据命中零解析——详情页
+    // 「一次性回填」与「恢复自动值」是重开本书的高频路径；TXT 走大纲缓存）。
     final StructureCacheKey? cacheKey =
         await widget.repository.structureCacheKey(_record);
     final BookSource source = await openBook(
@@ -186,6 +186,8 @@ class _BookDetailPageState extends State<BookDetailPage> {
       bytes: bytes,
       structureCache: widget.repository.structureCache,
       cacheKey: cacheKey,
+      txtOutlineCache: widget.repository.txtOutlineCache,
+      chapterTextCache: widget.repository.chapterTextCache,
     );
     try {
       return await source.load();

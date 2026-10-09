@@ -23,6 +23,7 @@ import '../meta/meta_source.dart' show kUnknownAuthor;
 import '../model/epub_book.dart';
 import '../task/isolate_runner.dart';
 import 'book_source.dart';
+import 'chapter_text_cache.dart';
 import 'structure_cache.dart';
 
 /// 打开本地 EPUB（纯字节入口）。
@@ -41,6 +42,7 @@ class DartEpubSource implements BookSource {
     this.runner = const IsolateRunner(),
     this.structureCache,
     this.cacheKey,
+    this.chapterTextCache,
     this.prefetchFlatTitles = true,
   });
 
@@ -62,6 +64,10 @@ class DartEpubSource implements BookSource {
 
   /// 缓存判据（`bookId + 副本 mtime/size`）；与 [structureCache] 成对提供。
   final StructureCacheKey? cacheKey;
+
+  /// 章正文缓存（与 [cacheKey] **成对**才有意义，缺一即不启用）：`content(i)`
+  /// 命中 = 零解压零 HTML 解析；miss → 现场计算后写回（best-effort）。
+  final ChapterTextCacheStore? chapterTextCache;
 
   /// 是否做无目录书的 `flatTitles` 标题预取（挂账 #6）。默认 `true` = 既有行为；
   /// 搜索后台重建路径（`search_session.dart`）传 `false`：跳过全书预解压，命中章
@@ -275,6 +281,23 @@ class DartEpubSource implements BookSource {
 
   @override
   Future<ChapterContent> content(int chapterIndex) async {
+    // ① 章正文缓存优先（命中 = 零解压零 HTML 解析；缓存里就是最终段落）。
+    final ChapterTextCacheStore? textCache = chapterTextCache;
+    final StructureCacheKey? key = cacheKey;
+    if (textCache != null && key != null && chapterIndex >= 0) {
+      final PerfWatch cacheWatch = PerfLog.watch('chapter.cache');
+      List<String>? hit;
+      try {
+        hit = await textCache.read(key, chapterIndex);
+      } catch (_) {
+        hit = null; // 缓存读故障当 miss
+      }
+      cacheWatch
+          .done('hit=${hit == null ? 0 : 1} impl=epub idx=$chapterIndex');
+      if (_disposed) return const ChapterContent.paragraphs(<String>[]);
+      if (hit != null) return ChapterContent.paragraphs(hit);
+    }
+
     final List<Chapter> chapterList = await chapters();
     if (chapterIndex < 0 || chapterIndex >= chapterList.length) {
       return const ChapterContent.paragraphs(<String>[]);
@@ -299,6 +322,12 @@ class DartEpubSource implements BookSource {
         : extractParagraphsFromFragment(raw, chapter.locate,
             baseDir: baseDir);
 
+    // 写回章正文缓存（best-effort；只在真实抽取后写，dispose/竞态空结果不落盘）。
+    if (textCache != null && key != null && !_disposed) {
+      try {
+        await textCache.write(key, chapterIndex, paragraphs);
+      } catch (_) {}
+    }
     return ChapterContent.paragraphs(paragraphs);
   }
 

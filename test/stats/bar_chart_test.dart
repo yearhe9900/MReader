@@ -332,9 +332,9 @@ void main() {
         (WidgetTester tester) async {
       final Directory tempDir =
           Directory.systemTemp.createTempSync('mreader_drill_');
+      final AppPaths paths = TestAppPaths(tempDir);
+      final LibraryRepository repo = fakeRepository(paths);
       try {
-        final AppPaths paths = TestAppPaths(tempDir);
-        final LibraryRepository repo = fakeRepository(paths);
         // 测试体在 FakeAsync 区：真 IO 必须包 runAsync（否则永不完成 → 超时）。
         final ImportResult imported = await tester.runAsync(
           () => repo.importFile(
@@ -369,6 +369,9 @@ void main() {
         expect(find.text(imported.record.title), findsOneWidget);
         expect(find.text(imported.record.bookId), findsNothing);
       } finally {
+        // 导入预热收尾再删目录（真 IO 须经 runAsync 让真事件循环换气；
+        // 防「后台写盘 vs 删目录」竞态，§2.81）。
+        await tester.runAsync(() => repo.pendingWarmUps);
         if (tempDir.existsSync()) {
           tempDir.deleteSync(recursive: true);
         }

@@ -27,6 +27,15 @@ import 'package:charset/charset.dart';
 String decodeText(Uint8List bytes) =>
     _decodeByName(detectEncodingName(bytes), bytes);
 
+/// 按**已知生效编码名**解码（[detectEncodingName] 的结果）；兜底语义与
+/// [decodeText] 逐字节一致（不抛异常、GBK 失败退 latin1）。
+///
+/// 存在的理由：调用方（`_txtPrepareTask`）要**既拿编码名又拿解码结果**落进
+/// TXT 大纲缓存（`txt_outline_cache.dart`）——先 `detectEncodingName` 再
+/// `decodeText` 会把探测跑两遍（严格 UTF-8 那级要整本扫），此入口消掉重复。
+String decodeTextNamed(String name, Uint8List bytes) =>
+    _decodeByName(name, bytes);
+
 /// 探测编码名（`NF-C4` 六级兜底的**判定结果**）。
 ///
 /// 返回**生效**编码名（不是「声明」的编码名）——即 [decodeText] 最终实际采用的那一档：

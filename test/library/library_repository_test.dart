@@ -44,6 +44,9 @@ void main() {
     });
 
     tearDown(() async {
+      // 导入预热是后台写盘任务：先等收尾再删目录，杜绝
+      // 「FileSystemException: 目录不是空的」删目录竞态（§2.81）。
+      await repo.pendingWarmUps;
       if (await tempDir.exists()) {
         await tempDir.delete(recursive: true);
       }
@@ -148,6 +151,31 @@ void main() {
       final List<BookRecord> remaining = await repo.loadBooks();
       expect(remaining, hasLength(1));
       expect(remaining[0].bookId, b.record.bookId);
+    });
+
+    test('LIB-06：删书不残留缓存孤儿（预热在途立即删）', () async {
+      final ImportResult result = await repo.importFile(
+        bytes: _txtBytes('刚导入就删的书。'),
+        fileName: '秒删.txt',
+      );
+      // 不等预热收尾立即删（预热几乎必然在途）：deleteBook ②a 立停止旗、
+      // await 本书收尾后再清缓存——绝不允许「删完又被预热写回来」。
+      await repo.deleteBook(result.record);
+      await repo.pendingWarmUps;
+
+      for (final String sub in <String>['outline', 'chapters', 'structure']) {
+        final Directory dir = Directory(
+          '${tempDir.path}${Platform.pathSeparator}$sub',
+        );
+        if (await dir.exists()) {
+          final List<FileSystemEntity> left = await dir.list().toList();
+          expect(
+            left,
+            isEmpty,
+            reason: '$sub/ 不得残留删后缓存文件（孤儿）：$left',
+          );
+        }
+      }
     });
 
     test('purgeOrphans：孤儿封面被清理', () async {

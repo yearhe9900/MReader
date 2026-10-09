@@ -478,6 +478,8 @@ class _ShelfPageState extends State<ShelfPage> {
         bytes: bytes,
         structureCache: widget.repository.structureCache,
         cacheKey: cacheKey,
+        txtOutlineCache: widget.repository.txtOutlineCache,
+        chapterTextCache: widget.repository.chapterTextCache,
       );
       sniffWatch.done('impl=${source.implId}');
       trace.step('sniff', sniffWatch.elapsedMs, 'impl=${source.implId}');

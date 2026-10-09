@@ -11,11 +11,16 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../format/book_registry.dart';
+import '../format/book_source.dart';
+import '../format/chapter_text_cache.dart';
 import '../format/structure_cache.dart';
+import '../format/txt_outline_cache.dart';
 import '../meta/cover_store.dart';
-import '../model/book_meta.dart';
 import '../platform/app_paths.dart';
+import '../storage/chapter_text_cache_store.dart';
 import '../storage/structure_cache_store.dart';
+import '../storage/txt_outline_cache_store.dart';
 import 'book_index.dart';
 import 'book_record.dart';
 import 'import_service.dart';
@@ -46,12 +51,43 @@ class LibraryRepository {
   final BookIndex _index;
   final ImportService _importService;
 
+  /// 每本书的导入预热在途任务（收尾后自动出表；见 [_scheduleWarmUp]）。
+  final Map<String, Future<void>> _warmUps = <String, Future<void>>{};
+
+  /// 预热停止旗（[deleteBook] 置位；预热循环逐章让位时检查、立即收尾）。
+  final Set<String> _warmUpStopping = <String>{};
+
+  /// 全部在途的导入预热（await 收尾 = 此后不再有预热写盘）。
+  ///
+  /// 两个用途：① [deleteBook] ②a 等本书收尾再清缓存，杜绝「删完又被预热写
+  /// 回来」的删后孤儿；② 测试 tearDown 删临时目录前先等收尾，杜绝「后台写盘
+  /// vs 删目录」竞态（2026-10-09，`FileSystemException: 目录不是空的`）。
+  Future<void> get pendingWarmUps async {
+    while (_warmUps.isNotEmpty) {
+      await Future.wait(_warmUps.values.toList());
+    }
+  }
+
   /// 结构缓存（M-PAGE `T06`）磁盘实现（惰性单例，目录 `subDir('structure')`）。
   late final FileStructureCacheStore _structureCache =
       FileStructureCacheStore(_paths);
 
   /// 开书管道用的结构缓存（`shelf_page` / `book_detail_page` 经此取用）。
   StructureCacheStore get structureCache => _structureCache;
+
+  /// TXT 大纲缓存（惰性单例，目录 `subDir('outline')`；见 `txt_outline_cache.dart`）。
+  late final FileTxtOutlineCacheStore _txtOutlineCache =
+      FileTxtOutlineCacheStore(_paths);
+
+  /// 开书管道用的 TXT 大纲缓存。
+  TxtOutlineCacheStore get txtOutlineCache => _txtOutlineCache;
+
+  /// 章正文缓存（EPUB + TXT 共用，惰性单例，目录 `subDir('chapters')`）。
+  late final FileChapterTextCacheStore _chapterTextCache =
+      FileChapterTextCacheStore(_paths);
+
+  /// 开书管道用的章正文缓存。
+  ChapterTextCacheStore get chapterTextCache => _chapterTextCache;
 
   /// 加载全部在库书籍（`LIB-01` / `LIB-03`）。
   Future<List<BookRecord>> loadBooks() => _index.load();
@@ -82,6 +118,9 @@ class LibraryRepository {
     // 更新索引
     existing.add(record);
     await _index.save(existing);
+    // 导入即按章预热缓存（2026-10-09 拍板）：后台跑、绝不拖慢导入本身；
+    // 失败静默——缓存是加速层，慢一点不碍事，导入结果不受影响。
+    _scheduleWarmUp(record);
     return ImportResult(record: record, isNew: true);
   }
 
@@ -90,6 +129,14 @@ class LibraryRepository {
   /// **二次确认**在 UI 层（`showDialog`），本方法直接执行。
   /// 删除进度 / 书签 / 笔记 / 统计记录 在 M1-T04 / M2b 接入时连带清理。
   Future<void> deleteBook(BookRecord record) async {
+    // ⓪ 本书预热收尾：立停止旗（预热循环逐章让位即退）→ 等在途任务结束。
+    //   必须在删任何文件**之前**——预热持有原文件读句柄（Windows 上句柄未释放
+    //   时删副本报「另一个程序正在使用此文件」），且绝不能留「删完又被预热写
+    //   回来」的删后孤儿（2026-10-09）。
+    _warmUpStopping.add(record.bookId);
+    await _warmUps[record.bookId];
+    _warmUpStopping.remove(record.bookId);
+
     // ① 删封面（LIB-06 / META-06；NoCover / SyntheticCover 为空操作）
     await _coverStore.delete(record.cover);
 
@@ -104,6 +151,10 @@ class LibraryRepository {
 
     // ②b 删结构缓存（M-PAGE `T06` 连带清理；best-effort，删不掉不阻断删除）
     await _structureCache.delete(record.bookId);
+
+    // ②c 删 TXT 大纲缓存 + 章正文缓存（同上 best-effort）
+    await _txtOutlineCache.delete(record.bookId);
+    await _chapterTextCache.delete(record.bookId);
 
     // ③ 从索引移除
     final List<BookRecord> records = await _index.load();
@@ -165,6 +216,50 @@ class LibraryRepository {
       mtimeMs: stat.modified.millisecondsSinceEpoch,
       size: stat.size,
     );
+  }
+
+  /// 登记并启动一本书的导入预热（失败静默；收尾后自动出表）。
+  ///
+  /// 任务进 [_warmUps]：[deleteBook] ②a 与 [pendingWarmUps] 靠它等收尾。
+  void _scheduleWarmUp(BookRecord record) {
+    final Future<void> job = warmUpBookCaches(record).whenComplete(() {
+      _warmUps.remove(record.bookId);
+      _warmUpStopping.remove(record.bookId);
+    });
+    _warmUps[record.bookId] = job;
+  }
+
+  /// 导入后的**按章缓存预热**（2026-10-09 拍板「导入就按章节缓存」）。
+  ///
+  /// 逐章 `content(i)` = 现场计算一次 + 写回章正文缓存；TXT 顺带写回大纲缓存
+  /// （`_prepare` 自带写回）。每章之间让出一次宏任务，预热不冻结 UI。
+  /// 全程吞错：缓存是加速层，预热失败/中断对导入结果与开书零影响。
+  Future<void> warmUpBookCaches(BookRecord record) async {
+    try {
+      final Uint8List? bytes = await readBookBytes(record);
+      if (bytes == null || bytes.isEmpty) return;
+      final StructureCacheKey? key = await structureCacheKey(record);
+      final BookSource source = await openBook(
+        fileName: record.fileName,
+        bytes: bytes,
+        structureCache: _structureCache,
+        cacheKey: key,
+        txtOutlineCache: _txtOutlineCache,
+        chapterTextCache: _chapterTextCache,
+      );
+      try {
+        final List<Chapter> chapters = await source.chapters();
+        for (int i = 0; i < chapters.length; i++) {
+          if (_warmUpStopping.contains(record.bookId)) return; // 本书已删：收尾
+          await source.content(i); // 计算一次 + 写回章正文缓存
+          await Future<void>.delayed(Duration.zero); // 让出宏任务
+        }
+      } finally {
+        await source.dispose();
+      }
+    } catch (_) {
+      // 预热失败静默（缓存可再生；导入结果不受影响）。
+    }
   }
 
   /// library 副本文件大小（字节；`META-08` 详情页「文件大小」展示用）。

@@ -13,11 +13,13 @@ import '../highperf/high_perf_registry.dart';
 import 'book_source.dart';
 import 'cbz_source.dart';
 import 'cbr_source.dart';
+import 'chapter_text_cache.dart';
 import 'dart_epub_source.dart';
 import 'dart_txt_source.dart';
 import 'pdf_source.dart';
 import 'sniffer.dart';
 import 'structure_cache.dart';
+import 'txt_outline_cache.dart';
 
 // `MReaderFormatException` / `FormatErrorCode` 经 `book_source.dart` 的
 // `export 'error_messages.dart';` 转出，不再单独 import（避免重复导入同一个库）。
@@ -101,8 +103,10 @@ class BookRegistry {
   /// ## 结构缓存注入缝（M-PAGE `T06`）
   ///
   /// [structureCache] + [cacheKey] **成对**透传给 [DartEpubSource]（判据命中零解析，
-  /// 见 `lib/format/structure_cache.dart`）；缺一即不启用，其余格式忽略这两参。
-  /// 签名兼容：两参皆带默认值 `null`，既有调用点一字不动。
+  /// 见 `lib/format/structure_cache.dart`）；[cacheKey] 同时是 TXT 大纲缓存
+  /// （[txtOutlineCache]）与章正文缓存（[chapterTextCache]）的判据——三者共用
+  /// 「bookId + 副本 mtime/size」这一份判据，各自成对启用、缺一即不启用，
+  /// 其余格式忽略这些参数。签名兼容：全部带默认值 `null`，既有调用点一字不动。
   ///
   /// ## 标题预取开关（挂账 #6）
   ///
@@ -127,6 +131,8 @@ class BookRegistry {
     required Uint8List bytes,
     StructureCacheStore? structureCache,
     StructureCacheKey? cacheKey,
+    TxtOutlineCacheStore? txtOutlineCache,
+    ChapterTextCacheStore? chapterTextCache,
     bool prefetchFlatTitles = true,
   }) async {
     switch (sniffFormat(fileName: fileName, bytes: bytes)) {
@@ -136,10 +142,17 @@ class BookRegistry {
           bytes: bytes,
           structureCache: structureCache,
           cacheKey: cacheKey,
+          chapterTextCache: chapterTextCache,
           prefetchFlatTitles: prefetchFlatTitles,
         );
       case FormatKind.txt:
-        return DartTxtSource(fileName: fileName, bytes: bytes);
+        return DartTxtSource(
+          fileName: fileName,
+          bytes: bytes,
+          outlineCache: txtOutlineCache,
+          cacheKey: cacheKey,
+          chapterTextCache: chapterTextCache,
+        );
       case FormatKind.cbz:
         return CbzSource(fileName: fileName, bytes: bytes);
       case FormatKind.cbr:
@@ -176,6 +189,8 @@ Future<BookSource> openBook({
   BookRegistry registry = const BookRegistry(),
   StructureCacheStore? structureCache,
   StructureCacheKey? cacheKey,
+  TxtOutlineCacheStore? txtOutlineCache,
+  ChapterTextCacheStore? chapterTextCache,
   bool prefetchFlatTitles = true,
 }) =>
     registry.open(
@@ -183,6 +198,8 @@ Future<BookSource> openBook({
       bytes: bytes,
       structureCache: structureCache,
       cacheKey: cacheKey,
+      txtOutlineCache: txtOutlineCache,
+      chapterTextCache: chapterTextCache,
       prefetchFlatTitles: prefetchFlatTitles,
     );
 
