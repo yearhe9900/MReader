@@ -3869,3 +3869,164 @@ Stack(fit: StackFit.expand)
 
 **待负责人真机复验**：滑入观感、70dp 圆角与 54% 暗化在真机上的轻重、滑入前半段
 露出阅读页加载态是否突兀。
+
+---
+
+### 2.78 开书转场「先按住、就绪后再滑」：修「打开书闪一下」+ 复核参考动效（2026-10-09）
+
+修负责人真机**必现**的一条：**打开书时整屏先暗一下再变亮**。本节含三件事——
+诊断（逐帧亮度）、修法（负责人拍板「等就绪再滑入」）、以及对 §2.77 一条口径的
+**订正**（参考动效里书架其实是**动的**）。
+
+#### 1. 现象：逐帧亮度上有一次「过冲」
+
+负责人录屏（592×1280 @24fps，7.22s / 173 帧）抽帧逐帧平均亮度（`im.mean()`）：
+
+```
+f052 91.9  f053 88.3  f054 57.0  ← 转场起
+f055 37.5  f056 31.3  ← 最暗（比阅读页稳态还暗）
+f057 46.1  f058 44.6   …   f065+ 44.4  ← 阅读页稳态
+第二次开书 f117 56.9 → f118 37.0 → f119 30.6 → f120 28.3 → f121 45.0（同型）
+```
+
+「最暗比稳态还暗 13 个单位」是关键：**不是**渐进变亮，而是先压过头再弹回来。
+
+#### 2. 根因：转场那 460ms 里，那张「纸」是**空的**
+
+转场期间阅读页尚未完成首帧渲染 ⇒ `ClipRRect` 里的 child 是**透明的** ⇒ 屏幕上
+只剩「被 scrim 压暗的书架」。「书架可见」本身是对的（§2.77），错的是**纸上没有
+东西**，于是「覆盖式」变成了「整屏先暗后亮」。两条独立证据：
+
+1. f054 整屏**书架完整可见**（书卡 / tab / 文字都在，只是变暗）⇒ 没有任何东西盖住
+   它；亮度 97.3 → 57.0 ⇒ alpha = 0.41 ⇒ 反推滑入进度 `p = 0.41 / 0.54 = 0.77`
+   ⇒ **纸张本应已铺 77%**，却看不见 ⇒ 它是空的。
+2. f056 纸张已铺右半边且**可见左边界**（左半仍是书架），纸上是**深色空白 + 白
+   spinner**（亮度 ≈ 18）；f058 同位置换成正文（亮度 ≈ 42）⇒ 一帧内变亮 24 = 闪。
+
+**深层原因（主题差异）**：参考动效是**浅色纸**（纸 ≈ 175 / 书架 ≈ 215，两者都亮）
+⇒「暗化旧页 + 亮纸滑入」成立；MReader 这里是**深色主题**（书架 97 / 阅读页 44.6 /
+空纸 18）⇒ 同一个 scrim 就从「旧页面退后」变成了「整屏变暗」的元凶。**浅色主题下
+会轻很多**。
+
+#### 3. 修法（负责人拍板「等就绪再滑入」）
+
+点书后**先把转场按住**（纸停在屏幕右侧之外、一点都不压暗书架），等阅读页**首帧
+真正上屏**再放行——纸滑进来时上面已经是正文，没有空纸期。
+
+- 门闸 `ReaderOpenTransition`（`arm` / `signalReady` / `disarm` / `isActive`）**加回**：
+  它只回答「阅读页好了没有」，与遮罩无关。带 **owner 令牌**，撤销时只清自己那一份。
+- **按住的是路由动画本身**：`ReaderOpenRoute.hold()` / `release()` 作用在 `PageRoute`
+  的 `AnimationController` 上。等待期状态停在 `forward` ⇒ `ModalRoute` 的 `opaque`
+  保持 false ⇒ 下层书架继续绘制（**一行代码都没碰它**）。
+- **就绪上报点**：`ReaderPage._signalOpenReady()`——在 `_ready` 的 `setState` **之后**
+  走 `addPostFrameCallback`，即「正文那一帧 paint 完」才报。**失败路径也报**（否则
+  书永远打不开）。刻意不用 `Future.delayed`（FakeAsync 里会留下未清挂起物）。
+- **兜底**：`kReaderOpenHoldTimeout = 3s`（`Timer`，`dispose` 里 cancel）。正常路径
+  300ms 内就会报就绪，这条只防「异常路径漏报」——按住期间没有任何其他退出路径。
+- **视觉口径**：按住期间 `_held` 强制 `p == 0`（纸完全在屏幕右侧之外、`scrim == 0`）。
+
+#### 4. 读源码核实的四条框架事实（其中一条订正了我原先的写法）
+
+| # | 事实 | 出处 |
+|---|---|---|
+| ① | `createAnimationController()` **只被调用一次** ⇒ 子类存的 `_controller` 就是主控制器（不是 secondary） | `routes.dart:326` |
+| ② | `overlayEntries.first.opaque` 只在动画走到 `completed` 时置回 true；`forward`/`reverse` 时置 false | `routes.dart:293` |
+| ③ | **`stop(canceled: false)` 并不「让 push 的 future 悬着」**（我原先注释里的说法是错的）：`whenCompleteOrCancel` 走 `TickerFuture.orCancel`，而 `_complete()` 与 `_cancel()` **都会**让 `orCancel` 结算，`Navigator` 的 `pushing → idle` 两种取值下都会提前发生（`navigator.dart:3276`）。区别只在 `true` 会让 `orCancel` 以 `TickerCanceled` 收场（多一条错误路径）。**真正让书架继续绘制的是 ②，不是这里** | `ticker.dart:452/459/471` |
+| ④ | `Ticker.start()` 只在 `idle < phase < postFrameCallbacks` 时取 `currentFrameTimeStamp` ⇒ **在帧后回调里放行，第一次 tick 的 `elapsed` 是 0**：放行之后必须再落一帧才吃得到时间 | `ticker.dart:203` |
+
+**护栏的帧序也必须按这条来**（实测）：点书后**第 1 帧纸张就已经建起来了**
+（`initState` / `hold()` 都在那一帧跑），但**那一帧它落在 offstage 一侧**——
+`find.byKey`（默认 `skipOffstage: true`）返回 0，`skipOffstage: false` 返回 1；
+第 2 帧起才默认可见。所以：**断言只能从第 2 帧起**，而要「放行后能量的到位移」
+还得再多推一帧（④）。
+
+#### 5. 复核参考动效：纸上有正文；**书架其实是动的**
+
+负责人指出这段动效来自 legado，让先看它怎么实现——于是回头把本地四份 legado 系
+源码读了一遍，并**抽帧重看**参考视频（444×960 @24fps，过渡在 2.2~2.6s）：
+
+**源码侧结论：没有可抄的「legado 实现」。**
+
+- `567Reader`（Kotlin，legado 二开）与 `legado-E`（阅读Sigma，legado 衍生物）里，
+  开书一律是 `startActivity(ReadBookActivity)`，**没有任何应用层动画**：无
+  `overridePendingTransition`、无 `makeSceneTransitionAnimation`、无
+  `windowAnimationStyle`/`activityOpenEnterAnimation`、无 Compose
+  `enterTransition`/`slideIntoContainer`；`res/anim/` 只有 200ms 的读页顶/底栏滑动。
+- `legado_flutter-2026`（Flutter 移植）书架→阅读是**裸 `MaterialPageRoute`**。
+- 全仓唯一的 `SlideTransition`（`QReader/lib/service/book.dart`）明确写了
+  「**不对旧路由做任何视差 / 暗化变换**」，与视频不符。
+- 视频里的 App **不是本地这几份**：书架上有「极空间」tab（NAS），四份仓库 grep
+  「极空间」**零命中**。
+⇒ 这条动效更可能是**窗口级（系统 Activity/应用打开）动画**：旧窗口左移 + 压暗 +
+窗口圆角、新窗口从右推入、状态栏不动——那一套不由 App 代码绘制。
+
+**抽帧重看得到的事实（其中第二条订正 §2.77 §③）：**
+
+1. **纸上有正文**：过渡中段（s_09）纸的左缘在屏幕 1/4 处，纸上是整段正文
+   「此行，闫太尉会多有不服…」，**不是空纸、也没有 spinner** ⇒ 参考动效**不存在
+   空纸期**。这正是本次修法要达成的目标；机制上也对得上——系统只在**窗口首个
+   帧缓冲就绪后**才开始播窗口动画，等价于「等就绪再滑」。
+2. **书架不是静止的**：同一帧里书架整块**左移**——tab 行两处特征（「本地」
+   「极空间」）独立量得左移 **−69px 与 −76px**（屏宽 444 的 **16~17%**），书卡上的
+   未读徽标同向位移 ≈ −68px，三个特征互相印证。§2.77 §③原写「书架纹丝不动」，
+   **据此订正**。（是否另有轻微缩小 ≈0.9 未能确证：24fps 录屏对 60fps+ 动画有帧
+   混叠。）
+
+**据此新增两条待拍板**（进度表 #10）：① 是否给 MReader 的书架补上「左移 ~16% +
+压暗」的视差（单窗口 Flutter 里要自己驱动 `secondaryAnimation`，见
+`notes-pitfalls.md` §3）；② 认下「应用层近似」——系统的窗口动画本就不可复刻。
+
+#### 6. 护栏 11 条与变异
+
+`test/reader/reader_open_transition_test.dart`（11 条）：
+
+| # | 用例 | 钉住什么 |
+|---|---|---|
+| ① | 未就绪就一动不动 | 40 帧内 `paperLeft == 一整张纸宽`、`scrim == 0`、书架锚点零位移、**`overlayEntries.first.opaque == false`** |
+| ② | 先按住、就绪后才滑 | 信号之前纸不动，信号一到立刻起滑（顺序，不是同时） |
+| ③ | 推入中：纸进来 / 书架不动 / 压暗 / 圆角满值 | §2.77 四要素 |
+| ④ | 书架全程静止 | 滑入 5 个时点锚点零位移 |
+| ⑤ | 位移曲线前快后慢 | 半程 > 0.7（线性会判红） |
+| ⑥ | 落位：铺满 / 圆角 0 / 暗化终值 | 终态 |
+| ⑦ | 漏报就绪也不卡死 | 3s 超时兜底无条件放行 |
+| ⑧ | 按住期间返回 | 值停在 0 ⇒ 返回是**零时长**的，纸随路由退场；门闸已撤销 |
+| ⑨ | 返回：纸向右滑出 | 反向用同一转场 |
+| ⑩ | 时长/半径/暗化字面量口径 | `460 / 70 / 0.54` |
+| ⑪ | **真阅读页经 `ReaderOpenRoute` 打开** | 门闸会被真的推开（拆掉 `_signalOpenReady` 就判红），且不是靠 3s 兜底 |
+
+**① 里那条 `opaque` 断言是补盲区补出来的**（先按 16 帧写，变异 5 不判红才发现）：
+「按住」的**真正语义是让下层继续被绘制**——`opaque` 只在动画走到 `completed` 时
+置回 true（§4 ②），一旦置回，书架就不再被画、屏幕会空掉；而树坐标（`paperLeft` /
+书架锚点位置）**量不到「还画不画」**，因为不绘制时 widget 仍在树上。所以 ① 的循环
+拉到 **40 帧（≈640ms，刻意超过 460ms 的滑入时长）**，并直接问
+`route.overlayEntries.first.opaque`（`Route.overlayEntries` 与 `OverlayEntry.opaque`
+都是公开 API）。为此 `_Host` 增加可选 `route` 实参，让用例能握住路由引用。
+
+**变异实测（改坏生产代码 → 期望判红）**：
+
+| 变异 | 结果 | 判红断言（实测） |
+|---|---|---|
+| 1 `dispose` 不 `cancel` 超时闹钟 | **红** | `A Timer is still pending even after the widget tree was disposed.`（①） |
+| 3 `dispose` 不撤销门闸登记 | **红** | `Expected: false` / `Actual: <true>`（⑧ `isActive`） |
+| 4 阅读页不上报就绪（`reader_page.dart` 拆掉 `_signalOpenReady()`） | **红** | `Expected: false` / `Actual: <true>`（⑪，理由串「阅读页没报就绪…」） |
+| 5 `hold()` 不真的 `stop()`（只返回 true） | **红** | `opaque` 置回 true（①，见上「补盲区」） |
+| 2 按住期间不强制 `p == 0`（照读 `animation.value`） | **绿（不判红）** | 见 §7 第 2 条——本工作区量不出差别，已如实挂账 |
+
+#### 7. 已知边界（诚实挂账）
+
+- **`ReaderOpenRoute.release()` 里「已被返回打断就拒绝起跑」这条分支在本工作区
+  不可达**：两个上报点（`ReaderPage._signalOpenReady` 与超时闹钟）都自带
+  mounted/dispose 闸，转场被拆时都先失效。留着是防以后新增上报点绕过那道闸——
+  在正在拆卸的路由上点着 ticker 会撞 `AnimationController.dispose` 的
+  「disposed with an active Ticker」断言。**没有对应护栏**。
+- **`_held` 强制 `p == 0` 这一条本身量不出差别**（变异 2 实测：11 全绿）：
+  `hold()` 落在路由入栈后的第 1 帧，那时控制器的值本来就恰好是 0（`_startSimulation`
+  把值置为 `simulation.x(0)`，而 push 不在帧内 ⇒ 首次 tick 的 `elapsed` 也是 0）。
+  留着是为了把口径写进代码，而不是靠「恰好为 0」的推论。**注意区分**：`hold()` 的
+  `stop()` 本身**是**被判红的（变异 5 → ① 的 `opaque` 口径），盲区只在于「强制 0」。
+- **书架左移（~16%）尚未实现**，且**是否要做待拍板**（见 §5 与进度表 #10）。
+
+#### 8. 测试与验收
+
+`test/reader/reader_open_transition_test.dart` **11 全绿**（含第 ⑪ 条接线护栏）；
+`reader` 组与 `ui` 组 `-j 1` 串行复验结果见提交信息；`dart analyze lib test` 零问题。
