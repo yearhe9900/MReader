@@ -126,7 +126,6 @@ import 'image_dimensions.dart';
 import 'highlight_follow.dart';
 import 'link_navigator.dart';
 import 'reader_ai_panel.dart';
-import 'reader_open_transition.dart';
 import 'pagination/incremental_paginator.dart';
 import 'pagination/page_breaker.dart';
 import 'pagination/page_paginator.dart';
@@ -862,13 +861,6 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 用户屏幕上仍是空白。探针量到的那一帧才是「看到书」，两者之差即渲染段。
       widget.openTrace?.mark('ready', 'paged=$paged chapters=${chapters.length}');
       widget.openTrace?.attachFirstFrameProbe();
-      // 开书遮罩淡出信号（`ReaderOpenTransition`）：**等下一帧真正上屏**再撤，
-      // 不能在`ready` 处撤——此刻正文还没被 paint，提前撤会让遮罩淡出过程露出空白，
-      // 反而出现「闪一下再出字」。无门闸（深链 / 测试直进）时是 no-op。
-      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-        if (!mounted || _disposed) return;
-        ReaderOpenTransition.signalReady();
-      });
       if (!paged) _scheduleEstimateRefresh(); // 估高只服务 ListView
       // **不在此处启动后台补齐**（`PERF-02` 时序修正 2026-09-28）：补齐会逐批
       // 「占位→真实」合入、改动总高，而此刻控制器还没建、首次恢复校正也还没跑

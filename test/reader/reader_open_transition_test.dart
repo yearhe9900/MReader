@@ -1,42 +1,59 @@
-// 开书转场遮罩（`ReaderOpenTransition` / `ReaderOpenRoute`）的 widget 测试。
+// 开书转场「纸张滑入」（`ReaderOpenRoute`）的 widget 测试。
 //
-// 钉住三件事：
-//   ① **门闸语义**：阅读页首帧就绪 → 遮罩淡出；无门闸（深链/测试直进）→ no-op；
-//   ② **兜底**：阅读页永不上报（异常路径）→ 转场动画播完也必须撤遮罩，
-//      否则用户盯着一张封面卡死；
-//   ③ **不改既有行为**：阅读页内部逻辑零改动，直进阅读页的既有测试全绿
-//      （本文件只测转场层）。
+// 形态来源：负责人 2026-10-09 给的参考动效，逐帧量化结果见 docs/tech-usage.md §2.77。
+// 本文件钉住四件事：
+//   ① **纸张在动、书架不动**：滑入各时点，纸张左边缘从屏宽递减到 0，而书架锚点
+//      坐标**一个像素都不变**（参考动效里书架是静止被压暗的，不是被推走的）；
+//   ② **圆角口径**：全程保持 70dp，只在落位那一下收到 0（禁「随进度线性收角」）；
+//   ③ **暗化口径**：背景黑色遮罩随滑入进度涨到 54%；
+//   ④ **不依赖任何就绪信号**：内容永远不就绪，纸张也必须铺满（旧版门闸已删除）。
+//
+// 测量纪律：`paperLeft` 量的是 `localToGlobal` 结果（会叠加 `Transform` 的位移），
+// 即「屏幕上纸在哪」，而不是读某个 widget 参数——后者会把「参数对了但渲染没应用」
+// 的缺陷放过去（§2.71 探针自建的教训）。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/reader/reader_open_transition.dart';
 
 import '../test_config.dart';
 
-/// 一个最小宿主：push [ReaderOpenRoute]，页面内容是一个可被信号替换的占位。
-class _Host extends StatelessWidget {
-  const _Host({required this.cover});
+const ValueKey<String> _kShelfKey = ValueKey<String>('shelf-anchor');
+const ValueKey<String> _kPaperKey = ValueKey<String>('paper-body');
+const ValueKey<String> _kOpenKey = ValueKey<String>('open-button');
 
-  final Widget cover;
+/// 一个最小宿主：下层是「书架」页（带一个位置固定的锚点），push [ReaderOpenRoute]。
+class _Host extends StatelessWidget {
+  const _Host({this.busy = false});
+
+  /// 纸张内容是否「永远不就绪」（兜底用例）。
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      // 必须用 `Builder` 取一个**在 `Navigator` 之内**的 context：`_Host` 自己的
+      // context 位于 `MaterialApp` 之上，`Navigator.of` 会抛
+      //「context does not include a Navigator」。
       home: Builder(
-        builder: (BuildContext context) => Scaffold(
-          body: Center(
-            child: ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  ReaderOpenRoute(
-                    cover: cover,
-                    title: '测试书名',
-                    subtitle: '正在打开…',
-                    builder: (_) => const _ReaderStub(),
+        builder: (BuildContext navContext) => Scaffold(
+          body: Stack(
+            children: <Widget>[
+              // 下层「书架」：位置写死的小锚点，用来量书架有没有被动过。
+              const Positioned(
+                left: 12,
+                top: 80,
+                child: SizedBox(key: _kShelfKey, width: 40, height: 40),
+              ),
+              Center(
+                child: ElevatedButton(
+                  key: _kOpenKey,
+                  onPressed: () => Navigator.of(navContext).push(
+                    ReaderOpenRoute(builder: (_) => _Paper(busy: busy)),
                   ),
-                );
-              },
-              child: const Text('open'),
-            ),
+                  child: const Text('open'),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -44,160 +61,158 @@ class _Host extends StatelessWidget {
   }
 }
 
-/// 阅读页替身：首帧后发就绪信号（真实 `ReaderPage` 在 `addPostFrameCallback` 里发）。
-class _ReaderStub extends StatefulWidget {
-  const _ReaderStub();
+/// 阅读页替身：整屏不透明纸色（真身是 `ReaderPage`）。
+class _Paper extends StatelessWidget {
+  const _Paper({this.busy = false});
+
+  final bool busy;
 
   @override
-  State<_ReaderStub> createState() => _ReaderStubState();
+  Widget build(BuildContext context) {
+    return SizedBox.expand(
+      key: _kPaperKey,
+      child: ColoredBox(
+        color: const Color(0xFFDDCC88),
+        child: Center(child: Text(busy ? '载入中' : '正文已上屏')),
+      ),
+    );
+  }
 }
 
-class _ReaderStubState extends State<_ReaderStub> {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-      if (!mounted) return;
-      ReaderOpenTransition.signalReady();
-    });
-  }
+/// 纸张左边缘的**屏幕**坐标（含 `Transform` 位移）。
+double paperLeft(WidgetTester tester) =>
+    tester.getTopLeft(find.byKey(_kPaperKey)).dx;
 
-  @override
-  Widget build(BuildContext context) =>
-      const Scaffold(body: Center(child: Text('正文已上屏')));
+/// 书架锚点的屏幕坐标。
+Offset shelfAt(WidgetTester tester) => tester.getTopLeft(find.byKey(_kShelfKey));
+
+/// 屏幕逻辑宽度（与生产代码同口径取 `MediaQuery`）。
+double screenWidth(WidgetTester tester) =>
+    MediaQuery.sizeOf(tester.element(find.byKey(_kPaperKey))).width;
+
+/// 纸张的圆角半径：转场层那个 `ClipRRect`（纸张的最近 `ClipRRect` 祖先）。
+double paperRadius(WidgetTester tester) {
+  final ClipRRect clip = tester.widget<ClipRRect>(
+    find
+        .ancestor(of: find.byKey(_kPaperKey), matching: find.byType(ClipRRect))
+        .first,
+  );
+  return clip.borderRadius.resolve(TextDirection.ltr).topLeft.x;
+}
+
+/// 背景暗化层的 alpha：转场层 `Stack` 的第一个 child（`ColoredBox`）。
+double scrimAlpha(WidgetTester tester) {
+  final Stack stack = tester.widget<Stack>(
+    find
+        .ancestor(of: find.byKey(_kPaperKey), matching: find.byType(Stack))
+        .first,
+  );
+  return (stack.children.first as ColoredBox).color.a;
 }
 
 void main() {
   capTestTimeout();
 
-  group('开书转场遮罩', () {
-    testWidgets('推入后遮罩在位（盖住正文），发就绪信号后淡出',
+  group('开书转场「纸张滑入」', () {
+    testWidgets('推入中：纸张从右侧进来、书架纹丝不动、背景被压暗、圆角还是满值',
         (WidgetTester tester) async {
-      await tester.pumpWidget(const _Host(
-        cover: ColoredBox(color: Color(0xFF888888)),
-      ));
-      await tester.tap(find.text('open'));
-      await tester.pump(); // 推入动画第一帧
-      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpWidget(const _Host());
+      final double shelfX0 = shelfAt(tester).dx;
 
-      // 转场中：阅读页内容已建，但遮罩仍在上层（正文文字被遮住看不见）。
-      expect(find.text('正文已上屏'), findsOneWidget);
+      await tester.tap(find.byKey(_kOpenKey));
+      await tester.pump(); // 起跑帧
+      await tester.pump(const Duration(milliseconds: 120)); // 滑入中段
 
-      // 播完转场 + 淡出动画。
-      await tester.pumpAndSettle();
+      final double paper = paperLeft(tester);
+      expect(paper, greaterThan(0), reason: '中段纸张还没铺满');
+      expect(paper, lessThan(screenWidth(tester)), reason: '中段纸张应已进入屏幕');
 
-      // 遮罩撤了：书名不再出现于遮罩层。
-      expect(find.text('测试书名'), findsNothing);
-      expect(find.text('正文已上屏'), findsOneWidget);
+      expect(shelfAt(tester).dx, shelfX0,
+          reason: '书架应纹丝不动——动的是纸，不是书架（参考动效里书架静止被压暗）');
+      expect(scrimAlpha(tester), greaterThan(0));
+      expect(scrimAlpha(tester), lessThan(kReaderOpenScrimAlpha),
+          reason: '暗化随滑入进度推进，中段还没到终值');
+      expect(paperRadius(tester), kReaderPaperRadius,
+          reason: '圆角中段应保持满值——参考动效里圆角一直 70px 直到平移到位');
     });
 
-    testWidgets('文字与进度条延迟出现：刚推入时书名不可见',
-        (WidgetTester tester) async {
-      // 若一进屏就显示书名 + 闪进度条，观感即「廉价」（第一版的 complaints 之一）。
-      await tester.pumpWidget(const _Host(
-        cover: ColoredBox(color: Color(0xFF888888)),
-      ));
-      await tester.tap(find.text('open'));
-      List<double> ops() => tester
-          .widgetList<Opacity>(find.byType(Opacity))
-          .map((Opacity o) => o.opacity)
-          .toList();
+    testWidgets('书架全程静止：滑入各时点锚点坐标零位移', (WidgetTester tester) async {
+      await tester.pumpWidget(const _Host());
+      final Offset base = shelfAt(tester);
 
-      // 推入帧：遮罩刚建（首帧可能还没建出 Opacity 节点），推进几帧到遮罩成形。
+      await tester.tap(find.byKey(_kOpenKey));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 16));
-      // 成形帧里必须存在一层 Opacity=0 的文字组（延迟出现，不一进屏就闪）。
-      expect(ops(), contains(0.0),
-          reason: '遮罩成形帧文字组应 Opacity=0（延迟出现）');
 
-      // 随后渐入（0<v<1）——延迟确实走完了，而非永不出现。
-      await tester.pump(const Duration(milliseconds: 60));
-      expect(ops().any((double v) => v > 0 && v < 1), isTrue,
-          reason: '文字组应处于渐入中间态');
-
-      await tester.pumpAndSettle();
-      expect(find.text('测试书名'), findsNothing, reason: '就绪后遮罩撤除');
+      int elapsed = 0;
+      for (final int target in <int>[80, 160, 240, 340, 440]) {
+        await tester.pump(Duration(milliseconds: target - elapsed));
+        elapsed = target;
+        expect(shelfAt(tester), base, reason: '$target ms 时书架锚点动了');
+      }
     });
 
-    testWidgets('无残留定时器：撤遮罩后不留下 pending timer',
+    testWidgets('位移曲线前快后慢：半程已走掉绝大部分位移（easeOutCubic）',
         (WidgetTester tester) async {
-      // 回归 R1 踩过的坑（tech-usage §2.69 附十 教训①）：`Future.delayed` 在
-      // FakeAsync 下会留未清挂起物 ⇒ `A Timer is still pending` 断言。
-      // 本转场的「延迟出现」用帧回调实现，故这里必须干净通过。
-      await tester.pumpWidget(const _Host(
-        cover: ColoredBox(color: Color(0xFF888888)),
-      ));
-      await tester.tap(find.text('open'));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('兜底：阅读页永不发信号，转场播完也撤遮罩',
-        (WidgetTester tester) async {
-      // 直接构造路由但 builder 里**不发**信号（模拟解析失败等异常路径）。
-      await tester.pumpWidget(MaterialApp(
-        home: Builder(
-          builder: (BuildContext context) => Scaffold(
-            body: Center(
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.of(context).push(
-                    ReaderOpenRoute(
-                      cover: const ColoredBox(color: Color(0xFF888888)),
-                      title: '卡死测试',
-                      builder: (_) => const Scaffold(
-                        body: Center(child: Text('永不就绪')),
-                      ),
-                    ),
-                  );
-                },
-                child: const Text('open'),
-              ),
-            ),
-          ),
-        ),
-      ));
-      await tester.tap(find.text('open'));
-      // 只 pump 不 settle 到底（模拟用户盯着看），再手动推进到转场结束。
+      await tester.pumpWidget(const _Host());
+      await tester.tap(find.byKey(_kOpenKey));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 320)); // 转场时长
-      await tester.pump(const Duration(milliseconds: 300)); // 淡出
+      await tester.pump(const Duration(milliseconds: 230)); // 460ms 的一半
+
+      final double width = screenWidth(tester);
+      final double moved = width - paperLeft(tester);
+      // easeOutCubic 半程走 87.5%；线性只有 50%，easeIn 只有 12.5%。
+      expect(moved / width, greaterThan(0.7),
+          reason: '前半程必须走掉大部分位移（线性 / easeIn 曲线会判红）');
+    });
+
+    testWidgets('落位：纸张铺满、圆角收回 0、暗化达终值', (WidgetTester tester) async {
+      await tester.pumpWidget(const _Host());
+      await tester.tap(find.byKey(_kOpenKey));
       await tester.pumpAndSettle();
 
-      // 关键：遮罩必须已撤（否则用户盯着一张封面卡死）。
-      expect(find.text('卡死测试'), findsNothing);
-      expect(find.text('永不就绪'), findsOneWidget);
+      expect(paperLeft(tester), moreOrLessEquals(0, epsilon: 0.01));
+      expect(tester.getTopLeft(find.byKey(_kPaperKey)).dy,
+          moreOrLessEquals(0, epsilon: 0.01));
+      expect(tester.getSize(find.byKey(_kPaperKey)).width, screenWidth(tester));
+      expect(paperRadius(tester), 0,
+          reason: '落位后圆角必须收掉——否则屏幕角上会缺一块（参考动效第 66 帧为 0）');
+      expect(scrimAlpha(tester), closeTo(kReaderOpenScrimAlpha, 0.001));
+      expect(find.text('正文已上屏'), findsOneWidget);
     });
 
-    testWidgets('无门闸时 signalReady 是 no-op（深链/直进阅读页不炸）',
+    testWidgets('内容永远不就绪也不卡：纸张照常落位（旧门闸已删除）',
         (WidgetTester tester) async {
-      // 未 push 任何转场 ⇒ 无门闸；直接发信号不应抛异常。
-      await tester.pumpWidget(const MaterialApp(home: Scaffold(body: Text('x'))));
-      expect(() => ReaderOpenTransition.signalReady(), returnsNormally);
-      expect(ReaderOpenTransition.isActive, isFalse);
+      // 旧版靠静态门闸等「阅读页首帧就绪」才撤遮罩；新版没有门闸——即使内容
+      // 永远不报就绪，纸张也必须铺满、不留在半路翘着的状态。
+      await tester.pumpWidget(const _Host(busy: true));
+      await tester.tap(find.byKey(_kOpenKey));
+      await tester.pumpAndSettle();
+
+      expect(paperLeft(tester), moreOrLessEquals(0, epsilon: 0.01));
+      expect(paperRadius(tester), 0);
+      expect(find.text('载入中'), findsOneWidget);
     });
 
-    testWidgets('门闸一次性：重复发信号不重复淡出', (WidgetTester tester) async {
-      var released = 0;
-      ReaderOpenTransition.arm(() => released++);
-      expect(ReaderOpenTransition.isActive, isTrue);
+    testWidgets('返回：纸张向右滑出（反向用同一转场）', (WidgetTester tester) async {
+      await tester.pumpWidget(const _Host());
+      await tester.tap(find.byKey(_kOpenKey));
+      await tester.pumpAndSettle();
+      expect(paperLeft(tester), moreOrLessEquals(0, epsilon: 0.01));
 
-      ReaderOpenTransition.signalReady();
-      expect(released, 1);
-      // 一次性：闸门已清空，第二次是 no-op。
-      ReaderOpenTransition.signalReady();
-      expect(released, 1);
-      expect(ReaderOpenTransition.isActive, isFalse);
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 160)); // 反向 320ms 的一半
+
+      expect(paperLeft(tester), greaterThan(0), reason: '返回时纸张应向右滑出');
     });
 
-    testWidgets('disarm 撤销登记（用户立刻返回时不留悬挂回调）',
-        (WidgetTester tester) async {
-      var released = 0;
-      ReaderOpenTransition.arm(() => released++);
-      ReaderOpenTransition.disarm();
-      ReaderOpenTransition.signalReady();
-      expect(released, 0, reason: 'disarm 后不应再回调');
-      expect(ReaderOpenTransition.isActive, isFalse);
+    testWidgets('时长口径 = 参考动效的 460ms', (WidgetTester tester) async {
+      expect(kReaderOpenDuration.inMilliseconds, 460);
+      expect(kReaderPaperRadius, 70);
+      expect(kReaderOpenScrimAlpha, 0.54);
+      final ReaderOpenRoute route =
+          ReaderOpenRoute(builder: (_) => const SizedBox.shrink());
+      expect(route.transitionDuration, kReaderOpenDuration);
     });
   });
 }
