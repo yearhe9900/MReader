@@ -4147,3 +4147,117 @@ chrome 变成覆盖层后**顶栏会压在正文上沿**，而搜索命中 / 目
 `test/reader + typography + perf + search` **441 条全绿**（`-j 1` 串行）；
 `test/ui + widget_test.dart` **172 条全绿**；`dart analyze lib test` 零问题。
 **真机观感待负责人复验**：顶栏 / 控制条压住正文的观感、跳转后自动收起 chrome 是否合意。
+
+### 2.80 真机「多次开关图书章节跳动」定案：分页缓存淘汰了正在渲染的当前章（2026-10-09）
+
+**起因**：负责人原话「**还是会出现多次开关图书，出现页数跳动的情况**」，随后定位为
+「**应该是章节跳动了，在当前页尾容易复现**」。
+
+#### 1. 复现与量化（探针：6 章 × 25 段 / 393×852 / top44 / bottom34 / 分页滚动模式）
+
+把视口拖到第一章的**最后一页**（读数 `第一章 2/2 9.7%`）后停手，再「关书 → 重开」：
+
+| 轮次 | 修前 | 修后 |
+|---|---|---|
+| 关书前 | 第一章 2/2 9.7% | 第一章 2/2 9.7% |
+| 重开 #1 | **第二章 1/2 25.1%** | 第一章 2/2 9.6% |
+| 重开 #2 | **第三章 1/2 40.4%** | 第一章 2/2 9.6% |
+| 重开 #3 | 第三章 1/2 40.5% | 第一章 2/2 9.6% |
+| 重开 #4 | 第三章 1/2 40.5% | 第一章 2/2 9.6% |
+
+**每次开书向前漂一整章**，漂到锚点不再落在窗口首章时自己收敛——正是负责人说的
+「多次开关图书，章节跳动」。第 1→2 轮 0.1pp 的回读差是 §2.70 行顶对齐的正常量，
+第 2/3/4 轮**逐字相同**（不累积）。
+
+#### 2. 根因链（五步，每步都有探针打点）
+
+在 `_updateLiveProgress` 之外另加「**所有** `_liveIndex` / `_livePos` 写入点」统一
+打点（`[LV#]`）与「视图真/占位形态 + 分页缓存内容」打点（`[VP]`），实测序列：
+
+```
+[VP] win=[0,1,2,3,4,5] shape=RRRRRP cacheN=5 cache=[h1,h2,h3,h4,h5]
+[VP] win=[0,1,2,3,4,5] shape=PRRRRR cacheN=5 cache=[h2,h3,h4,h5,h6]   ← ① h1（当前章）被淘汰
+[LV#1] sample.now       idx=0 pos=0.5783 ... href=h1 char=96 pg=1 H=1631 c0@0p2 c1@1152p0 …
+[LV#2] sample.debounced idx=1 pos=0.5060 ... href=h2 char=84 pg=0 H=5856 c0@0p0 c1@96p2 …  ← ④ ⑤
+```
+
+1. **窗口被撑大**：开书时窗口按「锚点可达」贪心向后 append（`_repairReachable`），
+   而**未排页表的章只贡献一条 `_placeholderBandHeight`（≈96dp）占位带**，
+   `layout.totalHeight` 因此几乎够不到 `anchor + vh`（第 1 章真实 1152 + 5 条占位带
+   = 1631 < 718 + 746 = 1464 ⇒ 一路 append 到书尾）。探针里 3 章窗口被撑到 6 章，
+   10 章书里实测 `paged.window was=[0..9]`。
+2. 这些章随即被 `_registerWindowUnpaginated`（遍历 `_window`）登记进预分页队列。
+3. `kPaginationCacheChapters` 只有 5 ⇒ `PaginationCache.put` 淘汰 LRU 队首，
+   而**队首恰是「最先排完页表的当前章」**（`paged.prime` 先排它）。
+4. **读路径 `_paginatedOf` 走只读 `peek`**（`pagination_cache.dart` 注释明写「不触碰
+   LRU 序，供签名计算/只读判定」）⇒ 缓存被淘汰后 `_buildPageViews` **静默**退化为
+   占位带 ⇒ 锚点以上布局**凭空少掉一整章高**（1152 → 96）。
+5. 同帧的滚动体防抖采样（`_onPagedDebounced` → `_applyPagedSample`）拿**已经作废的
+   像素偏移**（718）去套**新布局**（`c0@0p0 c1@96p2 …` ⇒ 718 落在第 2 章）⇒
+   把「第二章 pos 0.5060」写进 `_currentIndex` / `_chapterPos`，且 `save: true`
+   **落盘** ⇒ 下一次开书从错章开始，循环成立。
+
+⇒ 症状里「页数跳动」「章节跳动」「章尾易复现」三者同源：章尾页的 `pos` 大、
+采样点离章边界近，布局一塌陷就跨过边界。
+
+#### 3. 修法：分页缓存淘汰**跳过正在渲染的窗口章**
+
+`PaginationCache` 新增 `setProtected(Iterable<String> hrefs)`（保护集）与
+`protectedHrefs`（测试观察）；`put` 的淘汰改为「取第一个非保护项」，
+**全在保护集时 `break`（宁可不淘汰、暂时超界）**。`maxChapters` 因此降格为
+**目标值**而非硬上界，注释已就地订正。
+
+写入点唯一：`_applyPagedViews`（**唯一**换 `_pageViews` 的入口）按 `views` 的 href
+同步保护集 ⇒ 保护集与渲染视图**天然一致**，不会残留。
+
+为什么必须**显式**保护、不能靠 LRU 自愈：读路径用 `peek`（不提位），所以 LRU 序
+只反映**分页完成顺序**——「被渲染的章」与「最近使用的章」是两个完全不同的事实。
+
+#### 4. 一条**被否掉**的替代路线：给窗口加上界
+
+「窗口章数 > 缓存容量」是 ① 的直接推手，所以第一版修法是给两个增长循环加
+`while (… && _window.length < kPaginationCacheChapters)`。**它被回归②打回**：
+
+`reader_page_test` 回归②（深章节恢复：20 章、只首帧批次 `[4,5,6]` 有内容、目标第 6 章）
+在窗口被压到 5 章后判红——`chapterHeading('第六章')` 找不到。日志：
+
+```
+（加上界）[perf] paged.extend window=[4,5,6,7,8] total=500 anchor=184
+          [perf] paged.jump   target=5 char=6/12 landed=true win=5
+          （此后**没有**任何 paged.move —— 落位被静默丢弃）
+（去掉上界）[perf] paged.extend window=[4,5,6,7,8,9,10,11] total=788 anchor=184
+          [perf] paged.move why=views.late from=0.0 to=183.8
+          [perf] paged.move why=views.late from=183.8 to=18115.0
+```
+
+机理：`total(500) < 视口(746)` ⇒ `maxScrollExtent == 0` ⇒ `_jumpPaged(184)` 走
+「帧末补跳」分支，`clamped = 184.clamp(0, 0) = 0`，而现场 `pixels` 也是 0 ⇒
+`|Δ| < 0.01` ⇒ **直接 return，落位被静默丢弃且永不重试**（唯一留痕点 `_jumpPaged`
+在 return 之前，所以连 `paged.move` 都没有）。目标章自然进不了视图。
+
+**结论：窗口多 append 只是浪费（≈ `ceil(vh / 96)` 章），不是错；错的是淘汰碰了
+正在渲染的章。** 两条约束都写进了 `_repairReachable` 的就地注释，防止后来者再
+「顺手收口」。
+
+#### 5. 护栏与变异矩阵
+
+新护栏两条：
+
+- `test/reader/reopen_stability_test.dart`「章尾页反复关书 / 重开：章节与页位读数
+  不漂移」——端到端钉症状（拖到 `2/2` → 关书/重开 ×3 → 三轮都必须 `第一章 2/2`，
+  且第 2/3 轮逐字相同）。
+- `test/reader/pagination_cache_test.dart` 新增「保护集」组 4 条（跳过淘汰 /
+  全保护时超界不淘汰 / 只在淘汰时起作用 / `setProtected` 覆盖语义 + `clear` 清空）。
+
+| 变异 | 页级护栏 | 缓存单测 |
+|---|---|---|
+| **废掉保护集**（`put` 退回无条件 `remove(keys.first)`） | **红** `[第二章 1/2 25.1%, 第三章 1/2 40.4%, 第三章 1/2 40.5%]` | **红** 3 条 |
+| 保留保护集、改坏淘汰目标 | 绿 | — |
+| ~~窗口上界压到 5~~ | 绿 | 回归②**红**（见上节，已否决） |
+
+#### 6. 测试与验收
+
+`test/reader + typography + perf + search` **447 条全绿**（`-j 1` 串行，含新护栏）；
+`test/ui + widget_test.dart` **172 条全绿**；`dart analyze lib test` 零问题。
+**真机复验待负责人**：章尾反复开合是否不再跳章、开书期读数（章标题 · n/N · 百分比）
+是否稳定。
