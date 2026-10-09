@@ -126,6 +126,7 @@ import 'image_dimensions.dart';
 import 'highlight_follow.dart';
 import 'link_navigator.dart';
 import 'reader_ai_panel.dart';
+import 'reader_open_transition.dart';
 import 'pagination/incremental_paginator.dart';
 import 'pagination/page_breaker.dart';
 import 'pagination/page_paginator.dart';
@@ -861,6 +862,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 用户屏幕上仍是空白。探针量到的那一帧才是「看到书」，两者之差即渲染段。
       widget.openTrace?.mark('ready', 'paged=$paged chapters=${chapters.length}');
       widget.openTrace?.attachFirstFrameProbe();
+      // 放行开书转场的纸张滑入（`ReaderOpenTransition`）。**必须等下一帧真正上屏**：
+      // 此刻正文还没被 paint，提前放行会让纸张带着一张空白滑进来——那正是
+      // 「打开书闪一下」的成因。无门闸（深链 / 测试直进）时是 no-op。
+      _signalOpenReady();
       if (!paged) _scheduleEstimateRefresh(); // 估高只服务 ListView
       // **不在此处启动后台补齐**（`PERF-02` 时序修正 2026-09-28）：补齐会逐批
       // 「占位→真实」合入、改动总高，而此刻控制器还没建、首次恢复校正也还没跑
@@ -870,7 +875,22 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error);
+      // 失败也要放行滑入——否则纸张会一直停在屏幕右侧之外，
+      // 用户盯着书架以为卡死了（转场被「按住」时没有任何其他退出路径）。
+      _signalOpenReady();
     }
+  }
+
+  /// 报「阅读页首帧已真正上屏」，放行开书转场的纸张滑入。
+  ///
+  /// 走**帧回调**而不是直接调：`_ready` 的 `setState` 之后这一帧还没绘制，
+  /// 放行早了纸张会带着一张空白滑进来。也刻意不用 `Future.delayed`——
+  /// `testWidgets` 跑在 `FakeAsync` 里，定时器会在页面 dispose 后留下未清挂起物。
+  void _signalOpenReady() {
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (!mounted || _disposed) return;
+      ReaderOpenTransition.signalReady();
+    });
   }
 
   /// 解析恢复用的章索引（href 优先，回退 index 并 clamp）。
