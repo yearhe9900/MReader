@@ -3189,7 +3189,8 @@ DELTA    total=0.0            para0=0.0   para1=0.0
 ③ 底部显示当前章节 + 当前章节页数 + 全书进度百分比（附截图口径
 `全书名 · 第一章 | 8/20 22.2%`）。
 
-两个追问的答复（拍板）：chrome 显隐入口 = **点正文中间**；底部格式
+两个追问的答复（拍板）：chrome 显隐入口 = **点正文中间**（2026-10-10 再收窄为
+「九宫格中宫」，见 §2.83）；底部格式
 = **按截图 + 保留 2dp 进度条**。
 
 #### 1. 拍板后的形态
@@ -4413,3 +4414,72 @@ prevOk/nextOk **无用户可见回归**（终态断言无法区分）；其价�
 - `bash tool/test.sh reader` **450 条全绿**、`ui` 172 条全绿、`dart analyze lib test` 零问题；
 - 一次并发跑曾挂 4 个既有时序用例（负载偶发，`-j 1` 与复跑全绿）——若复发参照
   ui 组「验收 `-j 1`」纪律。
+
+### 2.83 阅读页点按收窄「九宫格中宫」+ `TapUpDetails.localPosition` 兜底陷阱（2026-10-10，`cfb8463`）
+
+负责人拍板「**将阅读页划为9宫格，只有最中间的宫格位置，才能点击呼出菜单**」
+——`TYP-09` 验收③「点正文切换 chrome」的口径再收窄：判定框 = `reader-chrome-toggle`
+手势层的盒（与 `reader-content-area` 同框），按三分线划 3×3，**中宫
+`[w/3, 2w/3] × [h/3, 2h/3]`（含边界）**的落点才呼出 / 收起，其余八格**无任何
+效果**（既不呼出、也不收起——防阅读时侧边 / 角落误触把 chrome 翻出来）。
+
+#### 1. `TapUpDetails.localPosition` 的构造兜底陷阱（SDK 源码实证）
+
+`gestures/tap.dart`：`TapUpDetails` 构造 `localPosition = localPosition ??
+globalPosition`（34-35 / 79-80 行），`TapGestureRecognizer.handleTapUp` 直接用
+`up.localPosition`（746-751 行）⇒ **坐标链一旦不一致会静默退化成全局坐标**。
+而测试窗原点即全局原点、两种写法恒等，这类错位测试照绿、真机才炸。故产品侧
+**显式** `RenderBox.globalToLocal(details.globalPosition)` 把口径钉死在判定框上，
+测试再用「系统 inset 把正文区推离窗口原点」的用例④钉死该口径（那种布局下两
+坐标系不重合，误用全局坐标陷阱点立刻翻红）。
+
+#### 2. 实现落点
+
+- `_chromeToggleKey` 挂在手势层外的 `KeyedSubtree` 上——`GestureDetector` 的
+  key 位已被测试锚点 `Key('reader-chrome-toggle')` 占用，且 KeyedSubtree 无自身
+  RenderObject，落点即手势层的盒；
+- `onTap: _toggleFullscreen` 改 `onTapUp: _onContentTapUp`，闸门只在 `inCenterCell`
+  时调 `_toggleFullscreen`；
+- 手势层**祖先**约束不变（`CNT-04` 链接 / `FMT-02` 图片缩放 / `AI-02` 长按划词
+  各自赢竞技场后本回调不触发）⇒ 中宫判定不碰它们。
+
+#### 3. 读数行第二入口保留 + 显形态覆盖实测
+
+闸门只管**正文手势层**的落点；chrome UI（顶栏 / 控制条 / 常驻读数行）各有
+自己的行为、不进九宫格判定。读数行（`reader-chrome-toggle-status`）是设计内的
+**第二切换入口**（图片页中央点击被「点页全屏缩放」占用，靠它兜底；
+`reader_inset_test` 已双向钉住），**必须保留**。探针实测（测试窗 800×600）：
+chrome 显形态底部层上移，读数行 `Rect(0,471,800,497)`、控制条
+`Rect(0,497,800,600)`、正文区 `Rect(0,0,800,572)` ⇒ 九宫格底排格心 y≈476.7
+恰落在**读数行**上——那是「点 chrome UI」不是「点正文」，不属闸门口径。
+用例②显形态段按实测 rect 剔出这类落点（顶栏 / 控制条 / 读数行），只对露在
+正文上的 5 格断言「不收起」，并以 `hasLength(5)` 钉住覆盖关系（overlay 几何
+变了会翻红提醒人工过目）。
+
+#### 4. 变异判红（正常态先验绿；红断言即目标断言）
+
+| 变异 | 判红用例 | 结果 |
+|---|---|---|
+| 闸门失效恒切（`if (true)`） | 用例②「非中宫落点不许唤出」（+③④边界/陷阱断言） | **红** |
+| 闸门恒 false | 用例①「中宫点按应唤出顶栏 + 控制条」 | **红** |
+| `globalPosition` 顶替 `globalToLocal`（模拟兜底退化） | **仅**用例④陷阱点「局部坐标在顶格」 | **红**（其余 3 绿——默认测试窗两坐标系恒等，正是此变异要的区分度） |
+| 撤 x 下界 `dx >= w/3` | 用例③ 单轴探针 `Offset(265.7, 286.0)` | **红** |
+| 撤 x 上界 `dx <= 2w/3` | 用例③ 单轴探针 `Offset(534.3, 286.0)` | **红** |
+| 撤 y 下界 `dy >= h/3` | 用例③ 单轴探针 `Offset(400.0, 189.7)`（用例④陷阱点同批红） | **红** |
+| 撤 y 上界 `dy <= 2h/3` | 用例③ 单轴探针 `Offset(400.0, 382.3)` | **红** |
+
+掩护发现（首版测试的缺口）：用例③原「边界外 1px」探针是**对角线外双维同出**
+（`(w/3−1, h/3−1)` / `(2w/3+1, 2h/3+1)`）⇒ 单撤一条界会被另一维挡住**判绿**、
+4 条边界实际没钉住。补 4 个**单轴出界**探针（另一维留在中宫带内）后逐条判红。
+
+#### 5. 测试与验收
+
+- `test/reader/chrome_grid_tap_test.dart` **4 条**：中宫 toggle（唤出+收起）／
+  八格无响应（含不收起，假绿排除一并做）／三分线含边界 + 对角与单轴出界探针／
+  系统 inset 推离原点钉 `globalToLocal`；
+- `FakeViewPadding` 是**物理像素**（`MediaQueryData.fromView` 走
+  `EdgeInsets.fromViewPadding(view.padding, devicePixelRatio)` 折逻辑像素）：
+  测试窗默认 DPR=3，逻辑 inset 24dp 须写 `top: 24 * tester.view.devicePixelRatio`，
+  直写 24 只会得到逻辑 8（首版前提断言就栽在这）；
+- `bash tool/test.sh reader` **454 条全绿**、`ui` 172 条全绿、`dart analyze lib test`
+  零问题。
