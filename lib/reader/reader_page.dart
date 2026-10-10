@@ -70,8 +70,9 @@
 //     `1 - brightness`，实时 + 持久化）+ 预设背景色板（白 / 米黄 / 灰 / 纯黑，
 //     夜间一律映射暗色——验收③「夜间模式不产生白底」）；
 //   · **`TYP-09` 默认全屏与进度指示**：进阅读页**默认沉浸全屏**（隐藏 AppBar
-//     与底部控制条），**不设全屏切换按钮**——chrome 由点正文唤出 / 收起
-//     （[_toggleFullscreen]）；底部常驻读数「当前章标题 · 当前章 n/N · 全书 x.y%」
+//     与底部控制条），**不设全屏切换按钮**——chrome 由点正文**九宫格中宫**
+//     唤出 / 收起（2026-10-10 改口径：整屏划 3×3，只有最中间宫格的落点响应，
+//     见 [_onContentTapUp] / [_toggleFullscreen]）；底部常驻读数「当前章标题 · 当前章 n/N · 全书 x.y%」
 //     **随滚动 / 翻页实时更新**（[_updateLiveProgress] 只写显示字段 `_liveIndex` /
 //     `_livePos`，滚动中间态**不进** `_currentIndex` / `_chapterPos`，
 //     `RC1` 写盘闸门与「采样置后」原则不动）。
@@ -532,8 +533,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// **默认 `true`**（2026-10-08 负责人拍板「默认改为全屏」）：进阅读页即沉浸。
   /// 顶栏里原来的「进入全屏」按钮（`reader-fullscreen-enter`）与全屏时右上角的
   /// 「退出全屏」浮层按钮（`reader-fullscreen-exit`）**都已移除**——全屏是静息态、
-  /// 不再是需要按钮切换的模式；两侧 chrome 一律由点正文唤出（`reader-chrome-toggle`，
-  /// 见 `_buildBody`），`TYP-09` 验收①「点正文可唤出与收起」由此承担。
+  /// 不再是需要按钮切换的模式；两侧 chrome 一律由点正文**九宫格中宫**唤出
+  /// （`reader-chrome-toggle`，落点闸门 [_onContentTapUp]，见 `_buildBody`），
+  /// `TYP-09` 验收①「点中宫可唤出与收起」由此承担。
   ///
   /// 不落盘：每次进阅读页都回到全屏静息态（负责人未要求记住 chrome 显隐）。
   ///
@@ -635,6 +637,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 分页滚动容器 key（取 [PagedScrollerState] 的布局表 / 采样口）。
   final GlobalKey<PagedScrollerState> _scrollerKey = GlobalKey<PagedScrollerState>();
+
+  /// 正文 tap 判定框 key（九宫格中宫闸门 [_onContentTapUp] 取 RenderBox 用）。
+  ///
+  /// 挂在 `reader-chrome-toggle` 外面的 `KeyedSubtree` 上——`GestureDetector`
+  /// 的 key 位已被测试锚点 `Key('reader-chrome-toggle')` 占用，且这里要的
+  /// 就是同一块盒（KeyedSubtree 无自身 RenderObject，落点即手势层的盒）。
+  final GlobalKey _chromeToggleKey = GlobalKey(debugLabel: 'chrome-toggle-box');
 
   /// 停稳流程序号：用户再次滚动即作废在途的 async 停稳序列。
   int _pagedStopSeq = 0;
@@ -3663,12 +3672,44 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 沉浸全屏切换（`TYP-09`）：隐藏 / 恢复 AppBar 与底部控制条。
   ///
-  /// 两个入口，都在 `_buildBody`：点正文（`reader-chrome-toggle`）与点常驻读数行
+  /// 两个入口，都在 `_buildBody`：点正文**九宫格中宫**（`reader-chrome-toggle`，
+  /// 落点判定见 [_onContentTapUp]）与点常驻读数行
   /// （`reader-chrome-toggle-status`，图片页里中央点击被「点页全屏缩放」占用，
   /// 故需要一个模式无关的入口）；顶栏与全屏浮层的两个切换按钮已按负责人要求移除
   /// （详见 `_fullscreen` 字段注释）。
   void _toggleFullscreen() {
     setState(() => _fullscreen = !_fullscreen);
+  }
+
+  /// 正文层 tap 的落点闸门（2026-10-10 负责人拍板：「将阅读页划为9宫格，
+  /// 只有最中间的宫格位置，才能点击呼出菜单」）。
+  ///
+  /// 判定框 = `reader-chrome-toggle` 自身的盒（与正文排版区同框）；按
+  /// **三分线**划 3×3，只有落进中宫 `[w/3, 2w/3] × [h/3, 2h/3]`（含边界）的
+  /// tap 才调 [_toggleFullscreen]，其余八格落点一律无事（防阅读时侧边 / 角落
+  /// 误触把 chrome 翻出来）。
+  ///
+  /// ⚠️ 落点换算用 **`globalToLocal(globalPosition)`**，不用
+  /// `TapUpDetails.localPosition`：后者构造兜底是 `localPosition ?? globalPosition`
+  /// （`gestures/tap.dart`）——两处坐标系不一致时会静默退化成全局坐标，
+  /// 而测试窗原点即全局原点、两种写法**恒等**，这类错位测试照绿真机才炸。
+  /// 显式过一次 `RenderBox.globalToLocal` 把口径钉死在判定框上。
+  ///
+  /// 语义不变的邻居：正文链接（`CNT-04`）、图片页点页缩放（`FMT-02`）、
+  /// 长按划词（`AI-02`）各有自己的识别器，赢竞技场后本回调根本不触发
+  /// （`handleTapUp` 只在本识别器胜出时走），中宫判定不碰它们。
+  void _onContentTapUp(TapUpDetails details) {
+    final RenderObject? obj =
+        _chromeToggleKey.currentContext?.findRenderObject();
+    final RenderBox? box = obj is RenderBox ? obj : null;
+    if (box == null || !box.hasSize) return;
+    final Offset local = box.globalToLocal(details.globalPosition);
+    final Size size = box.size;
+    final bool inCenterCell = local.dx >= size.width / 3 &&
+        local.dx <= size.width * 2 / 3 &&
+        local.dy >= size.height / 3 &&
+        local.dy <= size.height * 2 / 3;
+    if (inCenterCell) _toggleFullscreen();
   }
 
   /// 从弹层里选定一个位置跳过去后**收起 chrome**（`TYP-09`）。
@@ -4850,8 +4891,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   child: NotificationListener<ScrollEndNotification>(
                     onNotification:
                         _pagedMode ? _onPagedScrollEnd : _onScrollEnd,
-                    // `TYP-09` 验收③（2026-10-08 改口径）：chrome 切换的唯一入口
-                    // ——点正文。
+                    // `TYP-09` 验收③（2026-10-08 改口径；2026-10-10 再收窄）：
+                    // chrome 切换的唯一入口——点正文**九宫格中宫**（落点闸门
+                    // [_onContentTapUp]：整屏 3×3，只有落进中宫的 tap 响应，
+                    // 其余八格无事——防阅读时侧边 / 角落误触翻出 chrome）。
                     //
                     // ⚠️ 这一层**必须是正文的祖先**（包在外面），不能做 Stack 里
                     // 覆盖在正文之上的兄弟层：`HitTestBehavior.translucent` 的
@@ -4863,23 +4906,27 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     //
                     // 不干扰滚动：`TapGestureRecognizer` 一旦超出 `kTouchSlop`
                     // 就自我拒绝，拖拽 / 惯性 / 长按划词都不受影响。
-                    child: GestureDetector(
-                      key: const Key('reader-chrome-toggle'),
-                      behavior: HitTestBehavior.translucent,
-                      onTap: _toggleFullscreen,
-                      child: _pagedMode
-                          ? _buildPagedBody()
-                          : ListView.builder(
-                              controller: _controller,
-                              // 进度指示条的占位已由**上方那个 Padding**
-                              // （`reserve`）统一提供，
-                              // 此处只需章节间的呼吸留白（改前 40 是在重复为同一条让位）。
-                              padding:
-                                  const EdgeInsets.only(top: 8, bottom: 12),
-                              itemCount: chapters.length,
-                              itemBuilder: (BuildContext context, int index) =>
-                                  _buildChapterItem(theme, bodyStyle, index),
-                            ),
+                    child: KeyedSubtree(
+                      key: _chromeToggleKey,
+                      child: GestureDetector(
+                        key: const Key('reader-chrome-toggle'),
+                        behavior: HitTestBehavior.translucent,
+                        onTapUp: _onContentTapUp,
+                        child: _pagedMode
+                            ? _buildPagedBody()
+                            : ListView.builder(
+                                controller: _controller,
+                                // 进度指示条的占位已由**上方那个 Padding**
+                                // （`reserve`）统一提供，
+                                // 此处只需章节间的呼吸留白（改前 40 是在重复为同一条让位）。
+                                padding:
+                                    const EdgeInsets.only(top: 8, bottom: 12),
+                                itemCount: chapters.length,
+                                itemBuilder:
+                                    (BuildContext context, int index) =>
+                                        _buildChapterItem(theme, bodyStyle, index),
+                              ),
+                      ),
                     ),
                   ),
                     ),
