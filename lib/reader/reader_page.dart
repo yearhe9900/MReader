@@ -2079,9 +2079,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 返回 `null` = 不可得（无滚动体 / 采样 href 对不上 / 数值异常）→ 调用方按
   /// 行顶对齐落位（等价改前行为，不做无依据的平移）。
   ///
-  /// 上下界取 `±cfg.pageHeight`：`sampleCharOffset` 是**按页内字符均匀折算**的
-  /// 线性插值，与真实「像素→行」映射有偏差，余量偶尔会略偏；夹到一页以内既保证
-  /// 「布局未变时仍精确」又不至于把落点甩出可视范围。
+  /// 上下界取 `±cfg.pageHeight` 作防御：采样已与落位共用行表口径（§2.84），
+  /// 布局未变时余量恒等于「视口顶 − 所在行行顶」（0 ~ 行高，视口顶在段间距
+  /// 空白时为负、|rem| ≤ 段间距），clamp 不会触发；但布局突变后（章顶移动 /
+  /// 重排）行表已换代，旧行表余量可能越界——夹到一页以内，不至于把落点甩出
+  /// 可视范围。
   double? _scrollRemainderOf(String href, int charOffset) {
     final PagedScrollerState? scroller = _scroller;
     final PaginationConfig? cfg = _pageConfig;

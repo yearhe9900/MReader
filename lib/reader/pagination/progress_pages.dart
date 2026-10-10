@@ -11,6 +11,11 @@ import 'page_breaker.dart';
 /// [pageIndex] 越界 / [pages] 为空 → 返回 `0`（没有可信位置，不写垃圾值）。
 /// [withinPageFraction] clamp 到 `[0,1]`；页内细分按字符均匀折算
 /// （`start + fraction × (end - start)`），与几何像素比例解耦。
+///
+/// ⚠️ 口径分工（§2.84）：**像素→字符采样**走 `PagedScroller._charStartAtY`
+/// 的行表口径（视口顶所在行行首，与落位 `offsetFor` 成不动点）；本函数的均匀
+/// 折算只服务 `chapterPos` ↔ 页码的**粗定位**（无行表场景）——不要拿它做
+/// 滚动采样，否则「采样→落位」不为恒等、重开书累积漂移。
 int sampleCharOffset({
   required List<PageSlice> pages,
   required int pageIndex,

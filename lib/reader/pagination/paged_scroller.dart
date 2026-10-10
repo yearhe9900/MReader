@@ -14,8 +14,9 @@
 // 占位章（页表未就绪）的「载入中」标题也能上屏。
 //
 // 采样（选型 §2.3 ④「停手 200ms 防抖」）：ScrollUpdate / ScrollEnd 不断重置
-// 计时器——滚动期不采，静默 [kScrollSampleDebounce] 后取**视口顶**所在页换算
-// 章内字符偏移（复用 `sampleCharOffset`，与保存口径同源；标题区 → 页 0 页首）。
+// 计时器——滚动期不采，静默 [kScrollSampleDebounce] 后取**视口顶**所在行的
+// 行首字符（[_charStartAtY]，与落位 [offsetFor] 同一行表口径、成不动点，
+// 重开书不漂移 §2.84；标题区 → 页 0 页首）。
 //
 // 落位（保证④）：`offsetForCharOffset` = 找章（不在窗口 / 页表未覆盖 →
 // `null`，占位语义）→ `findPageByCharOffset` 二分 → **页顶 + 目标行行顶**
@@ -31,7 +32,6 @@ import '../selection_overlay.dart';
 import 'page_breaker.dart';
 import 'page_paginator.dart';
 import 'page_renderer.dart';
-import 'progress_pages.dart';
 
 /// 停手防抖采样延迟（选型 §2.3 ④：停手 200ms 后采样）。
 const Duration kScrollSampleDebounce = Duration(milliseconds: 200);
@@ -79,13 +79,14 @@ class ScrollSample {
   /// 章标识。
   final String href;
 
-  /// 视口顶折算的章内字符偏移（`sampleCharOffset` 口径）。
+  /// 视口顶所在行的**行首**章内字符偏移（[_charStartAtY] 行表口径，与
+  /// `offsetFor` 对偶成不动点 §2.84）。
   final int charOffset;
 
   /// 视口顶所在章内页码。
   final int pageIndex;
 
-  /// 页内比例（几何：视口顶在页内的位置；换算字符时按字符均匀折算）。
+  /// 页内几何比例（视口顶在页高内的位置；仅描述性，不参与字符换算）。
   final double withinPageFraction;
 
   @override
@@ -433,6 +434,9 @@ class PagedScrollerState extends State<PagedScroller> {
 
   /// 立即采样：视口顶所在章 / 页 → 章内字符偏移（防抖到点也走这里）。
   /// 视口顶落在标题区 → 页 0 页首；空章列表 / 空页表 → null。
+  /// 字符换算走**行表口径**（视口顶所在行的行首，[_charStartAtY]），
+  /// 与 [offsetFor] 严格对偶成不动点——「采样→落位→采样」不跨行、不复利，
+  /// 重开书不漂移（`docs/tech-usage.md` §2.84）。
   ScrollSample? sampleNow() {
     if (widget.chapters.isEmpty) return null;
     final double y = offset;
@@ -443,21 +447,27 @@ class PagedScrollerState extends State<PagedScroller> {
 
     int p = _layout.pageAtOrBefore(c, y);
     double fraction = 0;
+    int charOffset;
     if (p < 0) {
       p = 0; // 标题区：页 0 页首
+      charOffset = chapter.pages[0].start;
     } else {
-      final double h = chapter.pages[p].height;
+      final PageSlice page = chapter.pages[p];
+      final double pageY = y - _layout.pageTops[c][p];
+      final double h = page.height;
       if (h > 0) {
-        fraction = ((y - _layout.pageTops[c][p]) / h).clamp(0.0, 1.0).toDouble();
+        fraction = (pageY / h).clamp(0.0, 1.0).toDouble();
       }
+      charOffset = _charStartAtY(
+        chapter,
+        page,
+        pageY,
+        widget.config.paragraphSpacing,
+      );
     }
     return ScrollSample(
       href: chapter.href,
-      charOffset: sampleCharOffset(
-        pages: chapter.pages,
-        pageIndex: p,
-        withinPageFraction: fraction,
-      ),
+      charOffset: charOffset,
       pageIndex: p,
       withinPageFraction: fraction,
     );
@@ -529,6 +539,38 @@ class PagedScrollerState extends State<PagedScroller> {
       }
     }
     return y;
+  }
+
+  /// 视口顶（页内 y）→ 该处**行的行首字符**（[_lineTopInPage] 的逆映射）。
+  ///
+  /// 行块口径与 [_lineTopInPage] 严格对偶：行 i 的像素块 = `[top_i, top_i+height_i)`，
+  /// `top_i` 含跨段 [paragraphSpacing]（段间距归**下一行**的块顶——视口顶落在
+  /// 段间距空白时，语义上「从下一行开始读」，重开书只前移 ≤ 一段间距）。
+  /// y 落在页内容之外（页尾 / 跨页空白）→ [PageSlice.end] = 下一页页首行首。
+  ///
+  /// 不动点（`docs/tech-usage.md` §2.84）：对任意字符 c，
+  /// `_charStartAtY(_lineTopInPage(c))` = c 所在行行首 ⇒ 「采样→落位→采样」
+  /// 不跨行、幂等；程序化落位（行顶）后重采恒为原值，误差不复利。
+  static int _charStartAtY(
+    PagedChapterView chapter,
+    PageSlice page,
+    double yInPage,
+    double paragraphSpacing,
+  ) {
+    final List<MeasuredLine> lines = chapter.lines;
+    if (lines.isEmpty || page.lineCount <= 0) return page.start;
+    final int last = page.firstLine + page.lineCount - 1;
+    double top = 0; // 行块顶（其上跨段间距已计入）
+    for (int i = page.firstLine; i <= last && i < lines.length; i++) {
+      final MeasuredLine line = lines[i];
+      if (i > page.firstLine &&
+          lines[i - 1].paragraphIndex != line.paragraphIndex) {
+        top += paragraphSpacing;
+      }
+      if (yInPage < top + line.height) return line.start;
+      top += line.height;
+    }
+    return page.end;
   }
 
   /// 实例委托（当前布局 + 当前窗口）。

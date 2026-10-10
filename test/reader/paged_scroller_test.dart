@@ -530,7 +530,9 @@ void main() {
       s = state.sampleNow();
       expect(s!.href, 'a');
       expect(s.pageIndex, 2);
-      expect(s.charOffset, 124);
+      // 行表口径（§2.84）：视口顶 72 = 2×29+14 落在 L13 [118,128) → 取行首
+      // 118（改前均匀折算给 124，与落位往返不为恒等）。
+      expect(s.charOffset, 118);
       expect(s.withinPageFraction, closeTo(0.414, 0.001));
 
       // 章 b 标题区（章顶 686、首页顶 726）→ 页 0 页首。
@@ -576,9 +578,195 @@ void main() {
       expect(samples, hasLength(2));
       expect(samples.last.href, 'a');
       expect(samples.last.pageIndex, 2);
-      expect(samples.last.charOffset, 133);
+      // 行表口径（§2.84）：停手 467 → 页内 100 落在 L14 [128,138) → 行首 128
+      //（改前均匀折算给 133）。
+      expect(samples.last.charOffset, 128);
       await tester.pump(const Duration(milliseconds: 300));
       expect(samples, hasLength(2));
+
+      await tester.pumpWidget(const SizedBox());
+    });
+  });
+
+  group('采样↔落位往返（§2.84：重复开关书不再漂移）', () {
+    // 行表事实（探针 `_probe_line_table_test` 实跑回填）：P2 [100,158) 六行
+    // 行首 100/108/118/128/138/148、P3 [158,200) 五行行首 158/168/178/188/198，
+    // 行高一律 29；页顶 367/541。**采样（像素→字符）与落位（字符→像素）必须
+    // 共用同一行表口径**，否则「采样→落位→采样」不为不动点，每次重开书
+    // （落位后 postFrame 立即采样写回 `_chapterPos`）误差复利、内容逐次漂移。
+    testWidgets('往返幂等：439 采样→落位→重采 charOffset 不复利',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(host(<PagedChapterView>[viewA(), viewB()]));
+      final PagedScrollerState state =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+
+      state.scrollController.jumpTo(439); // P2 行中（页内 72 = 2×29 + 14）
+      final ScrollSample? s1 = state.sampleNow();
+      expect(state.jumpToCharOffset('a', s1!.charOffset), isTrue);
+      await tester.pump();
+      expect(state.offset, 425.0); // 落位仍行顶（367+58，§2.70 不破）
+      final ScrollSample? s2 = state.sampleNow();
+      // 目标断言（不动点）：落位后重采必须原样。改前均匀折算 124 → 119
+      // 复利，重开书逐次漂（真机视频「每轮回退 1~2 行、累积」的机制端）。
+      expect(s2!.charOffset, s1.charOffset);
+
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('落位后重采不跨行：168（L18 行首）重采仍 168，不漂回 L17',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(host(<PagedChapterView>[viewA(), viewB()]));
+      final PagedScrollerState state =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+
+      expect(state.jumpToCharOffset('a', 168), isTrue);
+      await tester.pump();
+      expect(state.offset, 570.0); // 541+29：L18 行顶（§2.70 行顶落位不破）
+      final ScrollSample? s = state.sampleNow();
+      // 目标断言：行首字符落位后重采=同行行首。改前均匀折算得 166
+      //（落在 L17 [158,168) 内）→ 跨行回退，重开书内容少一行。
+      expect(s!.charOffset, 168);
+
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('行中采样取行首：584（L18 行中）→ 168（L18 行首）',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(host(<PagedChapterView>[viewA(), viewB()]));
+      final PagedScrollerState state =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+
+      state.scrollController.jumpTo(584); // 541+29+14：L18 行中
+      final ScrollSample? s = state.sampleNow();
+      // 目标断言（行表口径）：视口顶落在行内何处，采样都取**该行行首**。
+      // 改前均匀折算给 170（仍在 L18 内但非行首，落位后贴合差 2 字）→ 红。
+      expect(s!.charOffset, 168);
+
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('三连环不累积：168 → 168 → 168（改前 168→166→158 每轮回退）',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(host(<PagedChapterView>[viewA(), viewB()]));
+      final PagedScrollerState state =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+
+      // 模拟连续三轮「重开书」：落位（offsetFor）→ postFrame 采样写回。
+      final List<int> traj = <int>[168];
+      for (int i = 0; i < 2; i++) {
+        expect(state.jumpToCharOffset('a', traj.last), isTrue);
+        await tester.pump();
+        traj.add(state.sampleNow()!.charOffset);
+      }
+      // 目标断言（误差不复利）：轨迹必须水平。改前实测 [168, 166, 158]
+      //（L18→L17→L17，两轮回退两行）——真机累积漂移的复现。
+      expect(traj, <int>[168, 168, 168]);
+
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // 合成「页内跨段」章（手搭行表/页表，不依赖文本测量）：3 段 × 3 行 ×
+    // 10 字、行高一律 29、段间距 8。P0 跨段（行块 L2=[58,87)、段间距
+    // [87,95)、L3=[95,124)…，高 182 = 6×29+8）、P1 三行（高 87）；
+    // 标题 40、P0 顶 40、跨页段间距 8、P1 顶 230、总高 317。
+    // parasA 的页内恰无段间距，跨段累加路径只有本夹具覆盖（真书多段页
+    // 才是漂移主现场）。
+    PagedChapterView viewC() {
+      final List<MeasuredLine> lines = List<MeasuredLine>.generate(
+        9,
+        (int i) => MeasuredLine(
+          start: i * 10,
+          end: i * 10 + 10,
+          height: 29,
+          paragraphIndex: i ~/ 3,
+          quality: LineBreakQuality.strong,
+        ),
+      );
+      return PagedChapterView(
+        href: 'c',
+        paragraphs: <String>['0123456789' * 3, 'abcdefghij' * 3, 'zzzzzzzzzz' * 3],
+        lines: lines,
+        pages: const <PageSlice>[
+          PageSlice(
+              index: 0,
+              start: 0,
+              end: 60,
+              height: 182,
+              firstLine: 0,
+              lineCount: 6),
+          PageSlice(
+              index: 1,
+              start: 60,
+              end: 90,
+              height: 87,
+              firstLine: 6,
+              lineCount: 3),
+        ],
+        headingHeight: 40,
+        heading: const Text('章 c'),
+      );
+    }
+
+    // 视口 180×150：总高 317 ⇒ maxScrollExtent 167（行顶 135 等可直达）。
+    Widget hostC() => MaterialApp(
+          home: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: 180,
+              height: 150,
+              child: PagedScroller(
+                chapters: <PagedChapterView>[viewC()],
+                config: config,
+                resolveImage: resolve,
+              ),
+            ),
+          ),
+        );
+
+    testWidgets('跨段行顶不动点：30 → 135（含页内段间距 8）→ 重采仍 30',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(hostC());
+      final PagedScrollerState state =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+
+      // 落位：L3 行顶 = 40 + (3×29 + 8) = 135——段间距漏算会给 127（=L3
+      // 被切进视口 8px 处），重蹈 §2.70「字没显示全」。
+      expect(state.offsetForCharOffset('c', 30), 135.0);
+      expect(state.jumpToCharOffset('c', 30), isTrue);
+      await tester.pump();
+      expect(state.offset, 135.0);
+      // 不动点：行顶重采 = 同行行首。改前均匀折算给 31（L3 行内偏 1 字）。
+      expect(state.sampleNow()!.charOffset, 30);
+
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('段间距归下一行：127（段间距顶）/150（L3 行中）→ 均取 30',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(hostC());
+      final PagedScrollerState state =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+
+      // 段间距空白 [127,135) 归**下一行**块顶：视口顶在此 ⇒ 从 L3 读起。
+      // 改前均匀折算给 29（L2 行内）→ 重开书回退一行。
+      state.scrollController.jumpTo(127);
+      expect(state.sampleNow()!.charOffset, 30);
+      // L3 行中取行首。改前给 36（L4 行内）→ 跨行前跳。
+      state.scrollController.jumpTo(150);
+      expect(state.sampleNow()!.charOffset, 30);
+      // L3 尾段（页内 118 ∈ [116,124)）：段间距若漏算，L3 块顶少 8px，
+      // 此处会被误判进 L4（40）——跨段累加的单轴出界探针。
+      state.scrollController.jumpTo(158);
+      expect(state.sampleNow()!.charOffset, 30);
+
+      // 三连环：30 → 30 → 30（改前 30→31 破不动点）。
+      final List<int> traj = <int>[30];
+      for (int i = 0; i < 2; i++) {
+        expect(state.jumpToCharOffset('c', traj.last), isTrue);
+        await tester.pump();
+        traj.add(state.sampleNow()!.charOffset);
+      }
+      expect(traj, <int>[30, 30, 30]);
 
       await tester.pumpWidget(const SizedBox());
     });
