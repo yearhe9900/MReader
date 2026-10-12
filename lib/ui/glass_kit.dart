@@ -41,6 +41,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import 'glass_material.dart';
 import 'glass_runtime.dart';
 import 'glass_scope.dart';
 
@@ -56,14 +57,26 @@ import 'glass_scope.dart';
 /// ——不 re-export 的话，用到大标题的页面就必须直接 import 玻璃库。
 ///
 /// `GlassToastType` 同理（[GlassOverlays.showToast] 的语义参数）。
+///
+/// 2026-10-12 参考图批新增 re-export：`GlassButton` / `GlassChip` /
+/// `GlassTextField`（书架搜索胶囊 / 分组 chips / 书库搜索页输入框的真玻璃实现）+
+/// `GlassDefaults` / `LiquidGlassSettings` / `LiquidRoundedRectangle`
+/// （控件级显式材质与胶囊形状）。理由同上：业务页面只 import 本文件。
 export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
     show
+        GlassButton,
+        GlassChip,
+        GlassDefaults,
         GlassDialogAction,
+        GlassInteractionBehavior,
         GlassLargeTitle,
         GlassLargeTitleController,
         GlassTab,
         GlassTabBarExtraButton,
-        GlassToastType;
+        GlassTextField,
+        GlassToastType,
+        LiquidGlassSettings,
+        LiquidRoundedRectangle;
 
 /// 应用默认玻璃质量档位（PRD §11.3，= 高档的滚动区档位）。
 ///
@@ -296,6 +309,13 @@ class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
 /// 显式传档位（高档 `null` = 吃 `GlassScaffold` 的 `premium` 提示）；
 /// 「关」档退化为 Material [NavigationBar]。
 ///
+/// 2026-10-12 参考图批：显式传 `settings: GlassMaterial.settingsFor(context)`——
+/// 库的底栏**不吃主题**（`tab_bar_bottom_layout.dart:256` 用私有预设
+/// `kBottomBarGlassDefaults`：blur 3 / 折射 1.59 / 玻璃色 α0.24，iOS News 风），
+/// 不传就永远是那套；且 [GlassThemeSettings] 表达不了 `whitenStrength`，
+/// 增白纱罩只能在控件级给。**形态不变**（负责人 2026-10-12 拍板：保持悬浮胶囊，
+/// 只升材质——参数与参考图对照见 `glass_material.dart`）。
+///
 /// 各尺寸参数的默认值与库一致——传出去等价于不传，**只作显式化**，
 /// 便于将来按平台/档位微调（`UI-05`）。**不暴露 `barBorderRadius`**：
 /// 库的默认圆角是私有常量，硬编码会与库升级脱钩。
@@ -437,6 +457,9 @@ class GlassNavBar extends StatelessWidget {
       // 触摸反馈：移除「放大」（不做形变、保留手指位置的柔和高光）
       // —— 见 [GlassNavBar] doc 的「触摸反馈口径」。库默认是 `full`（光晕 + 弹簧缩放）。
       interactionBehavior: GlassInteractionBehavior.glowOnly,
+      // 材质：控件级显式设置（库底栏不吃主题 + 主题无 whitenStrength，
+      // 2026-10-12 参考图批；固定表面档位仍由上面的 quality 逻辑决定）。
+      settings: GlassMaterial.settingsFor(context),
     );
   }
 }

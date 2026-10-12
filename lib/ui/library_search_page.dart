@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../library/book_record.dart';
 import 'glass_kit.dart';
+import 'glass_material.dart';
 import 'home_shell.dart' show kShellBottomInset;
 
 /// 书库搜索页（元数据过滤）。
@@ -61,21 +62,38 @@ class _LibrarySearchPageState extends State<LibrarySearchPage> {
     return GlassNavScaffold(
       appBar: GlassTopBar(
         centerTitle: false,
-        // 玻璃库没有 Material 祖先，输入类控件需自带一个透明 Material 地基
-        // （PRD §11.4）；透明 Material 不绘制底色，玻璃观感不受影响。
-        title: Material(
-          type: MaterialType.transparency,
-          child: TextField(
-            controller: _controller,
-            autofocus: true,
-            textInputAction: TextInputAction.search,
-            onChanged: _onChanged,
-            decoration: const InputDecoration(
-              hintText: '搜索书名、作者或文件名',
-              border: InputBorder.none,
-              isDense: true,
-            ),
+        // 玻璃搜索胶囊（2026-10-12 参考图批）：与书架顶栏搜索胶囊同一套视觉语言
+        // （GlassMaterial 材质 = 强磨砂 + 增白纱罩 + 边缘光）。原实现是裸
+        // `TextField` + 透明 Material 地基——顶栏里一枚「隐形」输入框，与参考图
+        // 的磨砂搜索胶囊差距明显。
+        //   · `useOwnLayer: true`——顶栏内无父玻璃层，自带层才吃得到显式 settings
+        //     （grouped 模式下 per-widget settings 被忽略）；
+        //   · `quality` 不传——落在顶栏的 `GlassIsolationScope(premium)` 上随档位
+        //     走（高档 premium / 中低档被 fixedSurfaceQualityOverride 钉住），与
+        //     书架搜索胶囊同口径；本页不在滚动视图里，无 `UI-04` premium 红线问题；
+        //   · `interactionBehavior: glowOnly`——去「放大」（2026-09-29 项目口径），
+        //     保留手指高光（同 [GlassNavBar]）。
+        title: GlassTextField.search(
+          controller: _controller,
+          autofocus: true,
+          placeholder: '搜索书名、作者或文件名',
+          prefixIcon: Icon(
+            Icons.search,
+            size: 20,
+            color: theme.colorScheme.onSurfaceVariant,
           ),
+          onChanged: _onChanged,
+          // 36 高胶囊（圆角 18 = 半高 → stadium），与书架搜索胶囊同形。
+          height: 36,
+          shape: const LiquidRoundedRectangle(borderRadius: 18),
+          settings: GlassMaterial.settingsFor(context),
+          useOwnLayer: true,
+          interactionBehavior: GlassInteractionBehavior.glowOnly,
+          // 文字色随主题（库默认白 90% 为暗玻璃设计；我们的玻璃面增白，需深字）。
+          textStyle: theme.textTheme.bodyMedium
+              ?.copyWith(color: theme.colorScheme.onSurface),
+          placeholderStyle: theme.textTheme.bodyMedium
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
         ),
         actions: <Widget>[
           if (_query.isNotEmpty)

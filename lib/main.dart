@@ -48,6 +48,7 @@ import 'sync/sync_trigger.dart';
 import 'sync/webdav_client.dart';
 import 'tts/online_tts.dart';
 import 'tts/tts_settings.dart';
+import 'ui/glass_material.dart';
 import 'ui/glass_runtime.dart';
 import 'ui/home_shell.dart';
 
@@ -243,6 +244,13 @@ Future<void> main() async {
   // **应用 ThemeMode**（light / dark / system），而非仅系统亮度。
   // 包裹位置在 `MReaderApp` **之外**，`app.dart` 里 builder 的透明 Material 地基一字不动。
   //
+  // 2026-10-12 参考图批：补 `theme: GlassMaterial.themeData`——此前**未挂主题**，
+  // 所有玻璃面吃库默认材质（玻璃色 12% / blur 5 / 无增白），离参考图
+  // （HyperOS 主题商店：强磨砂 + 亮白纱罩 + 边缘光）差距明显。主题是**材质**
+  // 单一出处；质量档位链不受影响（主题 quality 恒 null，见 glass_material.dart）。
+  // 底栏 / 搜索胶囊 / chips 另走控件级显式 settings（`GlassMaterial.settingsFor`，
+  // 主题表达不了 whitenStrength；底栏更是不吃主题的私有预设）。
+  //
   // 2026-09-28：`home` 由 `ShelfPage` 改为 [HomeShell]——五 tab（书架 / 统计 / AI /
   // 笔记 / 设置）+ 玻璃浮动底栏；书架成为其中一个 tab，依赖原样透传。
   runApp(
@@ -273,6 +281,8 @@ Future<void> main() async {
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,
+      // 玻璃材质单一出处（2026-10-12 参考图批；参数与理由见 `glass_material.dart`）。
+      theme: GlassMaterial.themeData,
     ),
   );
 }

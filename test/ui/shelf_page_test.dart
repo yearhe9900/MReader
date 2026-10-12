@@ -106,9 +106,12 @@ List<String> _titles(WidgetTester tester) => tester
     .toList();
 
 /// 分组筛选栏的 chip 文案（顺序即渲染顺序，「全部」恒在首位）。
+///
+/// 2026-10-12 参考图批：控件由 `FilterChip` 换成 [GlassChip]（真玻璃 pill），
+/// 故这里也改读 `GlassChip.label`（字符串，不再是 `Text` widget）。
 List<String> _chipLabels(WidgetTester tester) => tester
-    .widgetList<FilterChip>(find.byType(FilterChip))
-    .map((FilterChip chip) => (chip.label as Text).data!)
+    .widgetList<GlassChip>(find.byType(GlassChip))
+    .map((GlassChip chip) => chip.label)
     .toList();
 
 void main() {
@@ -264,7 +267,7 @@ void main() {
       expect(isGlassWidget(find.byType(BookCard).evaluate().single.widget), isFalse);
     });
 
-    testWidgets('顶栏搜索胶囊：靠左铺满（全宽）+ 半透明玻璃底 + 保留描边',
+    testWidgets('顶栏搜索胶囊：靠左铺满（全宽）+ 真玻璃材质（GlassButton.custom）',
         (WidgetTester tester) async {
       // 800 宽视口才分得清「靠左铺满」与「居中收缩」。须同时钉
       // `devicePixelRatio = 1`（默认 3 会把逻辑宽算成 266，动作按钮一挤
@@ -299,14 +302,53 @@ void main() {
       // 右侧仍留出两个动作按钮的位置（导入 / 排序）。
       expect(tester.getTopRight(box).dx, lessThan(800 - 48));
 
-      // 样式契约：**半透明玻璃底**（α0.6——参考图搜索胶囊磨砂透出底下内容）
-      // + 一道 1px 描边（同日「描边/底色区分」批次的口径不撤）。
-      final BoxDecoration deco =
-          tester.widget<Container>(box).decoration! as BoxDecoration;
-      expect(deco.color!.a, closeTo(0.6, 0.01));
-      final Border border = deco.border! as Border;
-      expect(border.top.width, 1.0);
-      expect(border.top.style, BorderStyle.solid);
+      // 材质契约（2026-10-12 参考图批）：胶囊已从「半透明色块 `Container` +
+      // 描边」换成**真玻璃** [GlassButton.custom]——磨砂模糊 + 增白纱罩 +
+      // Fresnel 边缘光。断言按材质事实源逐项钉：改材质只许改
+      // `glass_material.dart`（`UI-07` 口径：业务页面不写字面量），这里跟
+      // `glass_material_test.dart` 一样用**字面量**，避免同义反复。
+      final GlassButton btn = tester.widget<GlassButton>(box);
+      expect(btn.height, 36);
+      expect(btn.useOwnLayer, isTrue,
+          reason: '顶栏内无父玻璃层；grouped 模式下 per-widget settings 被忽略');
+      expect(btn.settings, isNotNull);
+      expect(btn.settings!.blur, 9);
+      expect(btn.settings!.glassColor.a, closeTo(0.18, 0.001));
+      expect(btn.settings!.whitenStrength, closeTo(0.16, 0.001));
+      // 交互：去放大（项目口径）+ 轻微果冻。
+      expect(btn.interactionScale, 1.0);
+      expect(btn.stretch, closeTo(0.15, 0.001));
+      // 内容左对齐（默认 center 会把图标 + 文字收到胶囊中间）。
+      expect(btn.alignment, Alignment.centerLeft);
+    });
+
+    testWidgets('分组 chips：GlassChip + 显式 standard 档位（UI-04 滚动区红线）',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('一本'), fileName: 'a.txt'),
+      );
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      final Finder chips = find.byType(GlassChip);
+      expect(chips, findsWidgets);
+      final GlassChip chip = tester.widget<GlassChip>(chips.first);
+      expect(chip.useOwnLayer, isTrue);
+      expect(chip.settings, isNotNull);
+      expect(chip.settings!.blur, 9);
+      expect(chip.interactionScale, 1.0);
+      expect(chip.stretch, closeTo(0.15, 0.001));
+      // 红线断言：**不得是 premium**。chips 行是横向 `SingleChildScrollView`，
+      // 而 `GlassAppBar` 内部给整条面包了 `defaultQuality: premium` 隔离作用域，
+      // 不显式钉 standard 就会被提成 premium（`UI-04`）。
+      expect(chip.quality, isNot(GlassQuality.premium));
+      // 「全部」默认选中 + 选中态亮底（参考图「选中 = 实底亮胶囊」）。
+      expect(chip.selected, isTrue);
+      expect(chip.selectedColor!.a, greaterThan(0.7));
     });
 
     testWidgets('浮动头部 + 内容 edge-to-edge：两行头部恒在顶栏内、首行不被盖住',
@@ -345,7 +387,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byType(GlassTopBar),
-          matching: find.byType(FilterChip),
+          matching: find.byType(GlassChip),
         ),
         findsWidgets,
       );
@@ -706,8 +748,8 @@ void main() {
       // chip 消失、书回到「全部」，且「全部」chip 呈选中态。
       expect(find.text('玄幻'), findsNothing);
       expect(_titles(tester), <String>['a']);
-      final FilterChip allChip = tester.widget<FilterChip>(
-        find.ancestor(of: find.text('全部'), matching: find.byType(FilterChip)),
+      final GlassChip allChip = tester.widget<GlassChip>(
+        find.ancestor(of: find.text('全部'), matching: find.byType(GlassChip)),
       );
       expect(allChip.selected, isTrue);
       // 渲染层回落，**不改写**用户偏好（分组可能因同步 / 撤销而回来）。

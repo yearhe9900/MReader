@@ -60,6 +60,8 @@ import '../tts/tts_settings.dart';
 import 'book_card.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
+import 'glass_material.dart';
+import 'glass_scope.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'library_search_page.dart';
 import 'shelf_grid.dart';
@@ -607,10 +609,10 @@ class _ShelfPageState extends State<ShelfPage> {
 
   /// 浮动头部（两行，参考图形态）：搜索行（胶囊 + 导入/排序）+ 分组 chips 行。
   ///
-  /// 整体包一层透明 [Material]：玻璃库无 Material 祖先（PRD §11.4），而
-  /// `FilterChip`/`InkWell` 都要求最近处有 Material（涟漪与文字样式）；
-  /// `MaterialType.transparency` 不绘制底色，不破坏玻璃观感（同
-  /// [_BookSearchEntry] 内部的手法）。
+  /// 整体包一层透明 [Material]：右侧两个动作按钮（导入 / 排序）是 Material
+  /// [IconButton]（水波纹与文字样式要求最近处有 Material）；搜索胶囊与 chips 已是
+  /// 玻璃控件（[GlassButton] / [GlassChip]），不需要 Material。
+  /// `MaterialType.transparency` 不绘制底色，不破坏玻璃观感。
   Widget _buildHeader() {
     return Material(
       type: MaterialType.transparency,
@@ -691,35 +693,55 @@ class _ShelfPageState extends State<ShelfPage> {
 
   /// 单个分组 chip（**单选**）：选中即筛选，再点**已选中**的回「全部」。
   ///
-  /// 胶囊形态（2026-09-29 参考图批）：`StadiumBorder` 全圆角 pill、去勾选
-  /// 角标——对齐参考图 chips（选中 = 实心亮胶囊、未选中 = 半透明玻璃胶囊，
-  /// 与搜索胶囊同一套玻璃语言）。颜色跟主题走（同封面投影的拍板口径）：
-  /// 未选中 `surfaceContainerHighest` α0.6 + `outlineVariant` 描边；
-  /// 选中 `secondaryContainer`（M3 选中态 tonal，深浅主题皆清晰）。
-  /// 文字色吃 chip 默认 `onSurfaceVariant`（两态通用，读 SDK
-  /// `_ChipDefaultsM3.labelStyle` 实证，无需自定义 labelStyle）。
+  /// ══════════════════════════════════════════════════════════════════════════════
+  /// 2026-10-12 参考图批：FilterChip → GlassChip（真玻璃胶囊）
+  /// ══════════════════════════════════════════════════════════════════════════════
+  /// 原实现是 [FilterChip] + `surfaceContainerHighest` α0.6 + `outlineVariant`
+  /// 描边——与搜索胶囊同款病灶：**不是玻璃控件**，无模糊 / 增白 / 边缘光。
+  /// 现改为 [GlassChip]（库的 pill 玻璃，内部组合 [GlassButton.custom]）：
+  ///   · `useOwnLayer: true` + `settings: GlassMaterial.settingsFor`——顶栏内无父
+  ///     玻璃层，自带层才吃得到显式材质（grouped 模式下 per-widget settings 被忽略）；
+  ///   · `quality: GlassScope.qualityOf`——**显式 standard**。chips 行是横向
+  ///     `SingleChildScrollView`，`UI-04` 红线禁 premium 进滚动区；且
+  ///     `GlassAppBar` 内部给整条面包了 `GlassIsolationScope(defaultQuality: premium)`
+  ///     （`glass_app_bar.dart:410`），不显式传就会被提成 premium；
+  ///   · 选中态 = 参考图的「实底亮胶囊」：亮模式白 α0.85 叠在玻璃上（近实底）、
+  ///     暗模式白 α0.22（只亮一档）；文字两态都用 `onSurface`（玻璃面亮 → 深字）；
+  ///   · 交互同搜索胶囊：`interactionScale: 1.0` 去放大 + `stretch: 0.15`。
+  /// 高度：padding 12/7 + labelLarge ≈ 34，落在 chips 行 40 内（行高常量不变）。
   Widget _buildGroupChip({
     required String label,
     required String? groupId,
     required bool selected,
   }) {
     final ThemeData theme = Theme.of(context);
+    final bool isDark =
+        GlassScope.brightnessOf(context) == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.only(right: 8),
-      child: FilterChip(
-        label: Text(label),
+      child: GlassChip(
+        label: label,
         selected: selected,
-        showCheckmark: false,
-        visualDensity: VisualDensity.compact,
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        shape: const StadiumBorder(),
-        side: BorderSide(color: theme.colorScheme.outlineVariant),
-        backgroundColor: theme.colorScheme.surfaceContainerHighest
-            .withValues(alpha: 0.6),
-        selectedColor: theme.colorScheme.secondaryContainer,
-        onSelected: (_) => unawaited(
+        // 选中态亮底（参考图「选中 = 实底亮胶囊」）：玻璃 + 白罩 → 近实底亮白。
+        selectedColor:
+            isDark ? const Color(0x38FFFFFF) : const Color(0xD9FFFFFF),
+        onTap: () => unawaited(
           widget.shelfPrefs.setGroup(selected ? null : groupId),
         ),
+        // 文字色：玻璃面已增白，两态都用 onSurface（亮模式深字 / 暗模式浅字）。
+        // 库默认是白 90%（为暗玻璃设计的），亮模式下会看不见。
+        labelStyle: theme.textTheme.labelLarge?.copyWith(
+          color: theme.colorScheme.onSurface,
+          fontWeight: FontWeight.w500,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        settings: GlassMaterial.settingsFor(context),
+        useOwnLayer: true,
+        // 显式滚动区档位（禁 premium，见方法注释）。
+        quality: GlassScope.qualityOf(context),
+        interactionScale: 1.0,
+        stretch: 0.15,
+        semanticLabel: label,
       ),
     );
   }
@@ -901,6 +923,22 @@ class _ShelfPageState extends State<ShelfPage> {
 /// **靠左铺满而非居中收缩**：调用方须传 `centerTitle: false`（见 `build`）。
 /// 居中档下库会把可用宽压成 `width - 2 * max(两侧)`，右侧两个动作按钮一占，
 /// 搜索框就只剩半宽且浮在中间——「看起来是个居中的小胶囊」，不是搜索框该有的样子。
+///
+/// ══════════════════════════════════════════════════════════════════════════════
+/// 2026-10-12 参考图批：半透明色块 → 真玻璃胶囊
+/// ══════════════════════════════════════════════════════════════════════════════
+/// 原实现是 `surfaceContainerHighest` α0.6 纯色填充 + outline 描边的普通
+/// [Container]——**没有模糊层**（观感全靠顶栏 edge-blur 偶然衬出）、没有增白、
+/// 没有边缘光，纯色页面背景下就是一枚灰 pill（负责人「玻璃态效果没想象中
+/// 那么好」的三处病灶之一）。现改为 [GlassButton.custom]：
+///   · `useOwnLayer: true`——顶栏内没有父玻璃层，自带层才吃得到显式 settings；
+///   · `settings: GlassMaterial.settingsFor`——控件级材质（强磨砂 + 增白纱罩
+///     + 边缘光，参考图 = HyperOS 主题商店搜索胶囊）；
+///   · `interactionScale: 1.0`——去「放大」（2026-09-29 项目口径），
+///     `stretch: 0.15` 留一丝果冻感，光晕保留（同 [GlassNavBar] 的 glowOnly 精神）；
+///   · stadium 形状（圆角 18 = 半高，36 高胶囊）。
+/// 几何契约不变：靠左贴顶栏内边距、铺满可用宽（`test/ui/shelf_page_test.dart`
+/// 的 `shelf-search-entry` 断言只换样式判据，几何判据原样）。
 class _BookSearchEntry extends StatelessWidget {
   const _BookSearchEntry({required this.onTap});
 
@@ -910,61 +948,47 @@ class _BookSearchEntry extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    // 搜索框圆角（比高度 36 的一半 18 大也只会被裁到 18，直接写 18 免歧义）。
-    const double radius = 18;
-    return SizedBox(
-      // 撑满外层 `Expanded` 给的可用宽（2026-09-29 参考图批「全宽搜索胶囊」：
-      // 原 `maxWidth: 400` 桌面上限随拍板撤销——胶囊与 chips 行同宽铺满）。
-      width: double.infinity,
-      // 玻璃库无 Material 祖先（PRD §11.4），而 `InkWell` 的水波纹由最近的
-      // Material 绘制，故需自带一层。`MaterialType.transparency` 不绘制底色，
-      // 不破坏玻璃观感。
-      child: Material(
-        type: MaterialType.transparency,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(radius),
-          child: Container(
-            // 供契约测试定位（`test/ui/shelf_page_test.dart` 断言「靠左铺满 +
-            // 描边 + 半透明玻璃底」）。
-            key: const Key('shelf-search-entry'),
-            height: 36,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              // 2026-09-29 浮动头部批：内容 edge-to-edge 后顶栏下方是**磨砂内容区**
-              // （`GlassScrollEdgeStyle.blur`），胶囊改**半透明玻璃底**（参考图 =
-              // HyperOS 主题商店的搜索胶囊，磨砂透出底下内容）；描边保留
-              // （同日上午「描边/底色区分」批次的口径不撤，半透明下更要靠它
-              // 把可点控件从磨砂区里分出来）。
-              color: theme.colorScheme.surfaceContainerHighest
-                  .withValues(alpha: 0.6),
-              borderRadius: BorderRadius.circular(radius),
-              border: Border.all(
-                color: theme.colorScheme.outlineVariant,
-                width: 1,
-              ),
+    return GlassButton.custom(
+      // 供契约测试定位（`test/ui/shelf_page_test.dart` 断言「靠左铺满 +
+      // 真玻璃参数」）。
+      key: const Key('shelf-search-entry'),
+      onTap: onTap,
+      // 36 高胶囊（与参考图搜索胶囊同档）；圆角 18 = 半高 → stadium。
+      // 比半高更大的圆角也只会被裁到半高，直接写 18 免歧义。
+      height: 36,
+      shape: const LiquidRoundedRectangle(borderRadius: 18),
+      // 控件级材质 + 自带层（顶栏无父玻璃层；settings 在 grouped 模式下会被
+      // 忽略，故必须 useOwnLayer）。
+      settings: GlassMaterial.settingsFor(context),
+      useOwnLayer: true,
+      // 交互：去放大（项目口径）+ 轻微果冻 + 保留手指高光。
+      interactionScale: 1.0,
+      stretch: 0.15,
+      // 无障碍标签（可见占位文本在 child 里，两者同文）。
+      label: '搜索书名、作者',
+      // 内容左对齐（默认 center 会把图标+文字收到胶囊中间）。
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(
+          children: <Widget>[
+            Icon(
+              Icons.search,
+              size: 18,
+              color: theme.colorScheme.onSurfaceVariant,
             ),
-            child: Row(
-              children: <Widget>[
-                Icon(
-                  Icons.search,
-                  size: 18,
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '搜索书名、作者',
+                overflow: TextOverflow.ellipsis,
+                // 仍是**占位符**口径（比正文弱一档）。
+                style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '搜索书名、作者',
-                    overflow: TextOverflow.ellipsis,
-                    // 仍是**占位符**口径（比正文弱一档），不因加边框提成正文色。
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
