@@ -1,7 +1,14 @@
 // 开书转场「先按住、就绪后再滑」（`ReaderOpenRoute`）的 widget 测试。
 //
 // 形态来源：负责人 2026-10-09 给的参考动效，逐帧量化结果见 docs/tech-usage.md §2.77；
-// 「打开书闪一下」的诊断与修法（**点书后按住、等阅读页首帧上屏再放行**）见 §2.78。
+// 「打开书闪一下」的诊断与修法（**点书后按住、等阅读页就绪再放行**）见 §2.78。
+// 放行门闸的升级（路线 A 纪律②「排到目标页才上屏」，见
+// `docs/研究-阅读页画布对照.md` §7）：分页模式的「就绪」= **目标语义坐标精确
+// 落位收敛**，不是「首帧上屏」——估算落位只是过渡帧，`_pendingLand` 二次精确
+// 落位完成前转场必须继续按住（否则滑入中视口大跳，就是「开书闪动」主链）。
+// §7②「占位换血出视口」再加一条：放行时刻视口必须是**真身**——可见区间内
+// 不许残留「载入中…」占位带（`pages.isEmpty` 的 96dp 带），否则随后邻章
+// 「占位→真」换血的高度突变发生在纸张滑入中（开书闪动链②）。
 // 本文件钉住六件事：
 //   ① **等待期绝对静止**：就绪信号到达之前，纸张恒停在屏幕右侧之外、暗化恒为 0、
 //      书架锚点一个像素都不动（这就是「闪一下」的修法本身）；
@@ -18,9 +25,11 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mreader/reader/pagination/paged_scroller.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_open_transition.dart';
 import 'package:mreader/reader/reader_page.dart';
+import 'package:mreader/reader/reading_progress.dart';
 
 import '../test_config.dart';
 import 'reader_harness.dart';
@@ -97,8 +106,10 @@ class _PaperState extends State<_Paper> {
   @override
   void initState() {
     super.initState();
-    // 与生产**同形**：`ReaderPage` 也是在「正文那一帧」的**帧后回调**里报就绪的
+    // 与生产**同形**：`ReaderPage` 也是在**帧后回调**里报就绪的
     // （`_signalOpenReady`），不是在自己建立的那一刻——那正是「闪一下」的成因。
+    // 生产侧门闸条件更严（分页模式要**精确落位收敛**才放行，见「真阅读页接线」
+    // 组的两条用例），替身只钉「帧后才报、不早于自己那一帧」的形状。
     if (!widget.busy) _armNextFrame();
   }
 
@@ -187,6 +198,63 @@ Future<void> pumpFrames(WidgetTester tester, int frames) async {
 Future<void> openAndStart(WidgetTester tester, {int readyFrames = 0}) async {
   await tester.tap(find.byKey(_kOpenKey));
   await pumpFrames(tester, readyFrames + 2);
+}
+
+/// 真阅读页宿主：书架页一个按钮 push [ReaderOpenRoute] 包着 [buildReader] 的阅读页
+/// （与「真阅读页接线」组同构；两条门闸用例共用）。
+Widget _realHost(Widget Function() buildReader) => MaterialApp(
+      home: Builder(
+        builder: (BuildContext navContext) => Scaffold(
+          body: Center(
+            child: ElevatedButton(
+              key: _kOpenKey,
+              onPressed: () => Navigator.of(navContext).push(
+                ReaderOpenRoute(builder: (_) => buildReader()),
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+/// 一轮一轮推（`runAsync` + `pump` 交替，与 [settle] 单轮同构）直到 [found] 为真。
+///
+/// 逐轮检查而不是一口气 `settle`：门闸用例要在「正文首帧上屏的那一轮」当场断言
+/// `isActive`——整批推进会让断言错过现场。
+Future<bool> pumpUntil(
+  WidgetTester tester,
+  bool Function() found, {
+  int maxRounds = 60,
+}) async {
+  for (int i = 0; i < maxRounds; i++) {
+    if (found()) return true;
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 8)));
+    await tester.pump(const Duration(milliseconds: 8));
+  }
+  return found();
+}
+
+/// 正文视口（`reader-content-area`）内**可见**的「载入中…」占位带文本 rect。
+///
+/// 判据是占位文本 rect 与视口 rect 有面积交叠（`Rect.overlaps`：贴边不算）——
+/// 「带在视口里」才是用户看得见的换血现场。逐个 `at(i)` 量 rect 而不是读
+/// widget 参数（与本文件头「测量纪律」同理：量屏幕上真的渲染出什么）。
+///
+/// 正文区还没建（开书头几轮 IO 未回）→ 返回空：冷启动前几轮无从判占位，
+/// 由调用方的「前提积累」（放行前是否**见过**带）兜住空转绿。
+List<Rect> loadingBandsInViewport(WidgetTester tester) {
+  final Finder area = find.byKey(const ValueKey<String>('reader-content-area'));
+  if (area.evaluate().isEmpty) return const <Rect>[];
+  final Rect viewport = tester.getRect(area);
+  final Finder bands = find.textContaining('载入中');
+  final List<Rect> out = <Rect>[];
+  for (int i = 0; i < bands.evaluate().length; i++) {
+    final Rect rect = tester.getRect(bands.at(i));
+    if (rect.overlaps(viewport)) out.add(rect);
+  }
+  return out;
 }
 
 void main() {
@@ -368,7 +436,9 @@ void main() {
   });
 
   // 转场的门闸要真的被阅读页推开——上面那些用例都自己发就绪信号，
-  // 只有这一条覆盖「`ReaderPage` 会不会报就绪」（拆掉 `_signalOpenReady` 就没人判红）。
+  // 这一组覆盖「`ReaderPage` 会不会报就绪、**什么时候**报就绪」
+  // （拆掉 `_signalOpenReady` 就没人判红；门闸改「精确落位收敛才放行」后，
+  // 「长章深位恢复」那条钉住放行时机——首帧上屏不许放）。
   group('开书转场 ⇄ 真阅读页接线', () {
     late Directory tempDir;
     late TestAppPaths paths;
@@ -434,6 +504,151 @@ void main() {
       expect(tester.getTopLeft(find.byType(ReaderPage)).dx,
           moreOrLessEquals(0, epsilon: 0.01),
           reason: '放行之后纸张应正常落位');
+
+      await closeBook(tester);
+    });
+
+    testWidgets('放行门闸=精确落位：估算落位期间按住不放，落位收敛后才放行',
+        (WidgetTester tester) async {
+      // 3000 段长章 + 恢复到 90%：prime 突发（kFirstPaintBudget 16ms）够不到
+      // 目标 ⇒ `_primeOpenSync` 走**估算分支**挂 `_pendingLand`（两段式落位），
+      // 二次精确落位要等空闲帧把 ~2700 段排完。这正是「开书闪动」机制链①的现场。
+      final ProgressStore progressStore = ProgressStore(paths);
+      await tester.runAsync(
+        () => progressStore.save(
+          ReadingProgress(
+            bookId: 'testbook01',
+            chapterHref: 'h1',
+            chapterIndex: 0,
+            chapterPos: 0.9,
+            updatedAt: 1,
+          ),
+        ),
+      );
+      await tester.pumpWidget(_realHost(() => ReaderPage(
+            source: FakeBookSource(paragraphCounts: const <int>[3000]),
+            record: fakeRecord(),
+            progressStore: progressStore,
+            repository: fakeRepository(paths),
+          )));
+      await tester.tap(find.byKey(_kOpenKey));
+
+      // ① 正文段落首次上屏时，二次精确落位必然还没完成（长章要排到 90% 处）——
+      // 转场必须**仍被按住**。「首帧上屏即放行」的旧门闸会在这一轮之前就放，
+      // 于是估算位置 → 精确位置的大跳发生在纸张滑入中（闪动主链）。
+      final bool seen = await pumpUntil(
+          tester, () => find.textContaining('第1章正文').evaluate().isNotEmpty);
+      expect(seen, isTrue, reason: '正文段落应已上屏（估算落位过渡帧）');
+      expect(ReaderOpenTransition.isActive, isTrue,
+          reason: '首帧上屏≠可放行：估算落位只是过渡帧，'
+              '精确落位（_pendingLand 收敛）未完成前转场必须继续按住');
+
+      // ② 放行必须来自落位收敛、不是 3s 兜底（循环上限 2.4s 假时钟 < 3s 兜底闸）。
+      for (int i = 0; i < 15 && ReaderOpenTransition.isActive; i++) {
+        await settle(tester, rounds: 20);
+      }
+      expect(ReaderOpenTransition.isActive, isFalse,
+          reason: '精确落位收敛后必须放行（拖到 3s 兜底才放行会判红）');
+
+      // ③ 放行时视口已在目标语义坐标并稳：采样贴住 0.9×总字数，之后不再跳。
+      final PagedScrollerState scroller =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+      int total = 0;
+      for (int p = 1; p <= 3000; p++) {
+        total += '第1章正文$p'.length;
+      }
+      final int targetChar = (0.9 * total).round();
+      final sample = scroller.sampleNow();
+      expect(sample, isNotNull);
+      expect(sample!.charOffset, inInclusiveRange(targetChar - 40, targetChar + 40),
+          reason: '放行时视口顶应落在目标语义坐标行'
+              '（估算位置在章头一带，与目标差约两万字符）');
+      final double landed = scroller.offset;
+      await settle(tester, rounds: 10);
+      final PagedScrollerState after =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+      expect(after.offset, moreOrLessEquals(landed, epsilon: 0.5),
+          reason: '放行后视口不允许再跳——二次精确落位必须发生在放行之前');
+
+      await closeBook(tester);
+    });
+
+    testWidgets('放行门闸=视口真身：放行帧不许残留「载入中」占位带',
+        (WidgetTester tester) async {
+      // 开书闪动机制链②：放行帧视口内残留 96dp「载入中…」占位带时，随后
+      // 邻章「占位→真」换血的高度突变就发生在纸张滑入中（诊断视频 f095-096
+      // 「占位空态」帧）。夹具刻意把**首章压到 2 段**（≈134px，远小于 572px
+      // 视口）⇒ 第 2/3 章占位带必然落进首屏；「收敛即放行」的旧门闸在它们
+      // 排完页表之前就放行（换血 pop-in 发生在滑入中）。
+      final ProgressStore progressStore = ProgressStore(paths);
+      await tester.pumpWidget(_realHost(() => ReaderPage(
+            source: FakeBookSource(paragraphCounts: const <int>[2, 20, 20]),
+            record: fakeRecord(),
+            progressStore: progressStore,
+            repository: fakeRepository(paths),
+          )));
+      await tester.tap(find.byKey(_kOpenKey));
+      // 先推 2 轮让转场 arm 起来（同「空段章」用例：`tap` 后不 pump 的话
+      // `isActive` 恒 false、「等放行」循环一次都不跑、用例空转绿）。
+      await settle(tester, rounds: 2);
+      expect(ReaderOpenTransition.isActive, isTrue,
+          reason: '转场应已 arm 并按住（本用例的前提，防断言空转）');
+
+      // 逐轮推进盯**放行的那一轮**当场量（一口气 settle 会让断言错过现场：
+      // 放行后数轮占位带就换真了）。顺带积累前提：放行前视口里真出现过
+      // 占位带——夹具几何不对时前提判红，防「什么都没测到」的空转绿。
+      // 上限 200 轮 × 8ms ≈ 1.6s 假时钟 < 3s 兜底——靠兜底放行会判红。
+      bool sawBand = false;
+      final bool released = await pumpUntil(tester, () {
+        if (loadingBandsInViewport(tester).isNotEmpty) sawBand = true;
+        return !ReaderOpenTransition.isActive;
+      }, maxRounds: 200);
+      expect(sawBand, isTrue,
+          reason: '前提：放行前视口内应出现过「载入中」占位带（夹具几何）');
+      expect(released, isTrue,
+          reason: '门闸应放行（且不是 3s 兜底——上限 1.6s 假时钟）');
+      expect(loadingBandsInViewport(tester), isEmpty,
+          reason: '放行帧视口内残留「载入中」占位带：随后「占位→真」换血的'
+              '高度突变发生在纸张滑入中（开书闪动链②）');
+
+      await closeBook(tester);
+    });
+
+    testWidgets('空段章开书：无可落位内容=已在目标位，门闸及时放行不等 3s 兜底',
+        (WidgetTester tester) async {
+      // 门闸的防回归护栏：空段章没有可滚动内容，`_pagedJumpTo` 载正文后即到
+      // 目标位（无可落位）——若门闸只认「精确落位收敛」而忘了这条空路，
+      // 空段章开书会一直按到 3s 兜底（书打开慢三秒）。
+      final ProgressStore progressStore = ProgressStore(paths);
+      await tester.runAsync(
+        () => progressStore.save(
+          ReadingProgress(
+            bookId: 'testbook01',
+            chapterHref: 'h1',
+            chapterIndex: 0,
+            chapterPos: 0.0,
+            updatedAt: 1,
+          ),
+        ),
+      );
+      await tester.pumpWidget(_realHost(() => ReaderPage(
+            source: FakeBookSource(paragraphCounts: const <int>[0]),
+            record: fakeRecord(),
+            progressStore: progressStore,
+            repository: fakeRepository(paths),
+          )));
+      await tester.tap(find.byKey(_kOpenKey));
+      // 先推 2 轮让转场 arm 起来——`tap` 后不 pump 的话 `isActive` 恒 false，
+      // 「等放行」循环一次都不跑、用例空转绿（2026-10-12 实证：0 条 perf 留痕）。
+      await settle(tester, rounds: 2);
+      expect(ReaderOpenTransition.isActive, isTrue,
+          reason: '转场应已 arm 并按住（本用例的前提，防断言空转）');
+      // 上限 15×20 轮 ≈ 2.4s 假时钟，仍短于 3s 兜底——靠兜底放行会判红。
+      for (int i = 0; i < 15 && ReaderOpenTransition.isActive; i++) {
+        await settle(tester, rounds: 20);
+      }
+      expect(ReaderOpenTransition.isActive, isFalse,
+          reason: '空段章无可落位内容（语义坐标即达），门闸必须及时放行');
 
       await closeBook(tester);
     });

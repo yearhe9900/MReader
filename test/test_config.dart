@@ -11,7 +11,13 @@
 // 用法：含 testWidgets 的测试文件在 `main()` **第一行**调用 [capTestTimeout]，
 // 把显式兜底压到 30s（与 `tool/test.sh --timeout 30s` 的排查纪律一致）。
 // 纯 `test()` 文件无需接入——CLI 默认值对它们本来就生效。
+//
+// 顺带（2026-10-12，修法③「冷缓存收口」）：注册**每用例**清空
+// `sharedPaginationSchedulers`。分页调度器按书进程级驻留（开书重入不丢
+// 缓存），但测试假书共用 bookId `testbook01` 却内容各异——不隔离会跨用例
+// 互命中旧页表。「重入不丢缓存」的语义只在**用例内**（同书关了再开）保留。
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mreader/reader/pagination/pagination_scheduler.dart';
 
 /// 把 `testWidgets` 的兜底超时压到 [seconds] 秒（默认 30s）。
 ///
@@ -23,4 +29,5 @@ void capTestTimeout({int seconds = 30}) {
   if (binding is AutomatedTestWidgetsFlutterBinding) {
     binding.defaultTestTimeout = Timeout(Duration(seconds: seconds));
   }
+  setUp(sharedPaginationSchedulers.clear);
 }

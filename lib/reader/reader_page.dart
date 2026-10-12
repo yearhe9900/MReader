@@ -609,6 +609,19 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 二次落位；`null` = 无挂起）。
   ({int index, int charOffset})? _pendingLand;
 
+  /// 开书门闸挂起中：就绪信号已具备（正文可上屏）但放行条件还没齐
+  /// ——转场继续按住，补报点（[_checkOpenGate]）复查后放行。
+  ///
+  /// 路线 A 纪律②「排到目标页才上屏」（`docs/研究-阅读页画布对照.md` §7①②）：
+  /// ① 估算落位只是过渡帧，`_pendingLand` 二次精确落位完成前不放行——否则
+  /// 「估算位置 → 精确位置」的大跳发生在纸张滑入中，就是「开书闪动」主链；
+  /// ② 放行时刻视口必须是**真身**（[_viewportReal]）——残留「载入中…」占位带
+  /// 时随后「占位→真」换血的高度突变同样发生在滑入中（闪动链②）。
+  bool _openGatePending = false;
+
+  /// [_checkOpenGate] 的复查回调已挂上（postFrame 单飞：防回调堆积）。
+  bool _openGateCheckScheduled = false;
+
   /// 程序化跳转中（`jumpTo` 同步派发的通知基于陈旧布局 → 处理器抑制）。
   bool _inPagedOp = false;
 
@@ -879,7 +892,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         _ready = true;
         _pagedMode = paged;
         if (paged) {
-          _scheduler = PaginationScheduler();
+          // 修法③「冷缓存收口」（`docs/研究-阅读页画布对照.md` §7③）：
+          // 调度器按书**进程级驻留**（[sharedPaginationSchedulers]），重开书
+          // 命中定稿页表、一次精确落位——不再随 State 新建冷缓存（开书闪动
+          // 机制链③）。`unfreeze()`：上一 State 若在翻页动画中被 dispose，
+          // 冻结态会跨开书残留（`stepIdle` 有活不动）。
+          _scheduler = sharedPaginationSchedulers
+              .forBook(widget.record.bookId)
+            ..unfreeze();
           _restoreMask = false; // 分页一次落位、无可见中间跳转
         }
       });
@@ -893,8 +913,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       widget.openTrace?.attachFirstFrameProbe();
       // 放行开书转场的纸张滑入（`ReaderOpenTransition`）。**必须等下一帧真正上屏**：
       // 此刻正文还没被 paint，提前放行会让纸张带着一张空白滑进来——那正是
-      // 「打开书闪一下」的成因。无门闸（深链 / 测试直进）时是 no-op。
-      _signalOpenReady();
+      // 「打开书闪一下」的成因。分页模式再加一道门闸（`requireLanded`）：
+      // 精确落位收敛才放行（估算落位的视口大跳不许发生在滑入中）。
+      // 无门闸（深链 / 测试直进）时是 no-op。
+      _signalOpenReady(requireLanded: paged);
       if (!paged) _scheduleEstimateRefresh(); // 估高只服务 ListView
       // **不在此处启动后台补齐**（`PERF-02` 时序修正 2026-09-28）：补齐会逐批
       // 「占位→真实」合入、改动总高，而此刻控制器还没建、首次恢复校正也还没跑
@@ -910,16 +932,80 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
   }
 
-  /// 报「阅读页首帧已真正上屏」，放行开书转场的纸张滑入。
+  /// 报「阅读页就绪」，放行开书转场的纸张滑入。
   ///
   /// 走**帧回调**而不是直接调：`_ready` 的 `setState` 之后这一帧还没绘制，
   /// 放行早了纸张会带着一张空白滑进来。也刻意不用 `Future.delayed`——
   /// `testWidgets` 跑在 `FakeAsync` 里，定时器会在页面 dispose 后留下未清挂起物。
-  void _signalOpenReady() {
+  ///
+  /// [requireLanded]：分页模式的「就绪」= **目标语义坐标精确落位收敛** 且
+  /// **视口真身**（路线 A 纪律②，`docs/研究-阅读页画布对照.md` §7①②）。
+  /// 估算落位只是过渡帧——`_pendingLand` 二次精确落位完成前不放行，挂
+  /// [_openGatePending] 等补报点（[_checkOpenGate]）复查；3s 兜底
+  /// （`kReaderOpenHoldTimeout`）仍是「漏报就绪不卡死」的最后防线。
+  void _signalOpenReady({bool requireLanded = false}) {
+    if (requireLanded && !_positionConverged) {
+      _openGatePending = true;
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
       if (!mounted || _disposed) return;
       ReaderOpenTransition.signalReady();
     });
+    // 帧回调要等**下一帧**才跑；收敛点可能在帧外（postFrame 阶段 / 微任务）
+    // 触发，不补调度帧回调会饿死到 3s 兜底（[_startPagedFrames] 同款处理）。
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// 开书门闸补报：[_openGatePending] 期间每次收敛 / 换视图都来戳一下，
+  /// **postFrame 复查**放行条件后补发就绪信号（幂等：放行过 / 未挂起时 no-op）。
+  ///
+  /// 复查放在 postFrame（而不是调用点当场判）有两个原因：
+  ///   · [_applyPagedViews] 的 setState 之后布局还没重建，当场读到的是旧视图；
+  ///   · [_jumpPaged] 超域目标的帧末 clamp 也是 postFrame 回调、注册更早
+  ///     （[_primeOpenSync] 收敛点在 `_jumpPaged` 之后才戳本方法）——本回调
+  ///     后注册后执行，读到的像素已是 clamp 后的「放行时刻现场」。
+  /// 复查不过（落位反复 / 占位带还在视口里）就保持挂起，等下一个戳点
+  /// （[_syncPagedViews] 换视图后必戳）再查；单飞标记防回调堆积。
+  void _checkOpenGate() {
+    if (!_openGatePending || _openGateCheckScheduled) return;
+    _openGateCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      _openGateCheckScheduled = false;
+      if (!mounted || _disposed || !_openGatePending) return;
+      if (!_positionConverged || !_viewportReal()) return;
+      _openGatePending = false;
+      ReaderOpenTransition.signalReady();
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// 「视口真身」判据（路线 A 纪律②，`docs/研究-阅读页画布对照.md` §7②）：
+  /// 可见区间 `[pixels, pixels + 视口高)` 内没有「载入中…」占位带。
+  ///
+  /// 占位带 = [PagedChapterView.pages] 为空的窗口视图（未分页章只占
+  /// [_placeholderBandHeight] ≈96dp 一条带，区间 `[章顶, 章顶 + headingHeight)`）。
+  /// 空段章（一张空页、`pages` **非空**）是真身，不挡放行——真身判据与
+  /// [_buildPageViews] 同源，刻意不看段落数。
+  ///
+  /// 量不到现场（滚动体 / 视口未挂）时放行（`true`）：宁可早放也不把门闸
+  /// 死等到 3s 兜底，「漏报就绪不卡死」优先。本判据只管放行时机，**不约束
+  /// 窗口形状**——`_repairReachable` 的扩窗红线（窗口不加上界）不变。
+  bool _viewportReal() {
+    final PagedScrollerState? scroller = _scroller;
+    final double vh = _viewportHeight;
+    if (scroller == null || vh <= 0) return true;
+    final PagedLayout layout = scroller.layout;
+    final List<PagedChapterView> views = _pageViews;
+    final double top = scroller.offset;
+    final double bottom = top + vh;
+    for (int i = 0; i < views.length && i < layout.chapterTops.length; i++) {
+      if (views[i].pages.isNotEmpty) continue;
+      final double bandTop = layout.chapterTops[i];
+      final double bandBottom = bandTop + views[i].headingHeight;
+      if (bandTop < bottom && bandBottom > top) return false;
+    }
+    return true;
   }
 
   /// 解析恢复用的章索引（href 优先，回退 index 并 clamp）。
@@ -2056,6 +2142,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     } else {
       _jumpPaged(landAt, why: 'prime');
     }
+    // 精确落位即收敛（上面 `landed` 分支已置 `_positionConverged`）→
+    // 开书门闸在此补报放行（估算分支挂 `_pendingLand`，等 [_syncPagedViews]）。
+    _checkOpenGate();
     return landed;
   }
 
@@ -2270,6 +2359,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         if (landOffset != null) {
           _pendingLand = null;
           _positionConverged = true;
+          // 二次精确落位收敛 → 开书门闸在此补报放行（帧回调保证落位先上屏）。
+          _checkOpenGate();
           PerfLog.mark('paged.land',
               'index=${pending.index} off=${landOffset.toStringAsFixed(0)}');
           // **分页模式的落定信号**：`paged.land` 是分页路径（`_pagedJumpTo` 一次
@@ -2281,7 +2372,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         }
       }
     }
-    if (sig == _viewsSignature && landOffset == null) return;
+    if (sig == _viewsSignature && landOffset == null) {
+      // 视图没换也可能有可放行时机（门闸还挂着）：戳一次复查，幂等。
+      _checkOpenGate();
+      return;
+    }
     // 可达性修补：章页表收缩（占位→真）或停稳 trim 后，现场 offset 可能
     // 超出新滚动域 → 不补则被 clamp 掉进上一章（身份漂移）。
     double? anchor = landOffset;
@@ -2308,6 +2403,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         if (mounted) _samplePagedNow();
       });
     }
+    // 换视图后必戳门闸：「占位→真」换血改变 [_viewportReal] 判据，
+    // 放行时机可能就差这一次复查（闪动链②的收口）。
+    _checkOpenGate();
   }
 
   /// 停稳期把窗口收敛回 `[_currentIndex±1]`（滚动中只增不移，trim 只在此做）。
@@ -2683,6 +2781,35 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       if (content == null ||
           content.imagePages != null ||
           content.paragraphList.isEmpty) {
+        if (content != null &&
+            content.imagePages == null &&
+            content.paragraphList.isEmpty) {
+          // 空段章：无可滚动内容，语义坐标**即达**（§2.82 只显章名的空章）——
+          // 按精确落位收口，开书门闸（[_checkOpenGate]）据此放行，不等 3s 兜底。
+          setState(() {
+            _positionConverged = true;
+          });
+          // 「即达」只是落位语义；视口真身还要这一章**成真**：空段章天生
+          // 「一张空页」的定稿页表（`IncrementalPaginator` 空段构造即完成，
+          // `open` 突发即定稿入缓存）——不入缓存它就永驻「载入中…」占位带，
+          // [_viewportReal] 恒假、门闸死等到 3s 兜底。**必须走 `open`**：
+          // 调度器配置（`_config`）只由它立起，在此之前 [setWindow] 是 no-op，
+          // 邻章登记会被静默吞掉（2026-10-12 空段章用例判红实证）。
+          final PaginationScheduler? scheduler = _scheduler;
+          final PaginationConfig? cfg = _pageConfig;
+          if (scheduler != null && cfg != null) {
+            scheduler.open(
+              href: chapters[target].href,
+              paragraphs: content.paragraphList,
+              config: cfg,
+              headingHeight: _headingHeightOf(target, cfg),
+            );
+          }
+          _registerWindowUnpaginated();
+          _startPagedFrames();
+          _syncPagedViews();
+          _checkOpenGate();
+        }
         return;
       }
       final int total = PagePaginator.charCountOf(content.paragraphList);

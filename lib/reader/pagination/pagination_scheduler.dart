@@ -280,3 +280,56 @@ class PaginationScheduler {
   String toString() => 'PaginationScheduler(active: $activeHref, '
       'prefetch: ${_prefetch.length}, cache: ${cache.count})';
 }
+
+/// 按书持久持有的 [PaginationScheduler] 注册表（修法③「冷缓存收口」）。
+///
+/// ## 为什么需要（`docs/研究-阅读页画布对照.md` §7③，开书闪动机制链③）
+///
+/// 改前 `ReaderPage._open` 每次 `PaginationScheduler()` 新建 ⇒ 分页结果缓存
+/// 随阅读页 State 生死，**重开书冷缓存**：目标章页表要重排，首见只有
+/// `prime` 突发（`kFirstPaintBudget` 16ms）的 5 页估算落位，二次精确落位要
+/// 等空闲帧把全章排完——「先估后跳」就是闪动链③的现场。现调度器按 `bookId`
+/// 驻留（[forBook] 同书同一只），重开书命中定稿页表、一次精确落位。
+///
+/// 「换参作废」不在这一层：排版参数（字号 / 视口）变了由
+/// [PaginationScheduler._acceptConfig] 清缓存（驻留的调度器**记得上次参数**，
+/// 跨开书比较才有效）；图片真尺寸入表走
+/// [PaginationScheduler.invalidateForImageSizes]。`bookId` 是内容哈希
+/// （`ImportService.computeBookId`）⇒ 同 id 即同内容，不存在串扰。
+///
+/// 假设同一本书同时只有一个阅读页实例（生产导航保证）：调度器的进行中任务 /
+/// 预分页队列因此可以安全跨 State 接续（[PaginationScheduler.open] 同章重开
+/// 本来就保留进度）。上一 State 若在翻页动画中被 dispose，[PaginationScheduler.frozen]
+/// 会跨开书残留——`_open` 采纳时必须 `unfreeze()` 一下。
+///
+/// 删书暂不 [evict]（每书缓存 ≤ LRU 5 章、会话内有界）；[evict] 留给删书接线。
+class PaginationSchedulerRegistry {
+  PaginationSchedulerRegistry({this.maxChapters = kPaginationCacheChapters});
+
+  /// 每书分页缓存的 LRU 上界（同 [PaginationCache.maxChapters]）。
+  final int maxChapters;
+
+  final Map<String, PaginationScheduler> _byBook =
+      <String, PaginationScheduler>{};
+
+  /// [bookId] 的调度器（没有就地新建并驻留）。
+  PaginationScheduler forBook(String bookId) => _byBook.putIfAbsent(
+        bookId,
+        () => PaginationScheduler(
+          cache: PaginationCache(maxChapters: maxChapters),
+        ),
+      );
+
+  /// 作废一本书的驻留（删书接线用）。
+  void evict(String bookId) => _byBook.remove(bookId);
+
+  /// 全部作废（测试用例间隔离）。
+  void clear() => _byBook.clear();
+
+  /// 当前驻留的书数（测试观察用）。
+  int get bookCount => _byBook.length;
+}
+
+/// 进程级共享注册表（阅读页 `_open` 的持有源；「按书持久持有」的落点）。
+final PaginationSchedulerRegistry sharedPaginationSchedulers =
+    PaginationSchedulerRegistry();
