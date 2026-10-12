@@ -5,7 +5,9 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // 参考图实测值换算出的几何（实测记录见 `nav_bar_style.dart` 文件头）：
 //   ·标签中心**严格等分**（实测间距 129 / 129 / 129）⇒ 按`可用宽 / n` 均分；
-//   · 选中块宽 =格宽的 **109%**（实测 141 / 129，略微溢出格子）；
+//   · 选中块宽 = 格宽的 **69%**（实测 x 68~164⇒ 宽 96 / 格宽 ≈140）。
+//     ⚠️ 原写 1.09（依据「141/129」）**量错了对象**——那是图标文字簇外沿；
+//     真机做成 94% 时观感是「灰白大药丸压住图标」，故真机复验后修正为 0.69；
 //   · 选中块高 = 栏体高的 0.72，圆角 = 高 / 2（胶囊）。
 //
 // 这些是「用库时拿不到」的部分（库的指示块宽度由内部计算、`spacing: 8` 还会
@@ -86,9 +88,11 @@ void main() {
       expect(NavBarStyle.tabSpacing, 0);
     });
 
-    testWidgets('选中块：宽 = 格宽 ×109%、高 = 栏高 ×0.72、圆角 = 高/2',
+    testWidgets('选中块：宽 = 格宽 ×69%、高 = 栏高 ×0.72、圆角 = 高/2',
         (WidgetTester tester) async {
-      expect(NavBarStyle.pillWidthFactor, 1.09);
+      // 69% 来自真机复验重测（见 nav_bar_style.dart 文件头）：原 1.09 量的是
+      // 图标文字簇外沿、不是选中块，真机做成 94% 时观感是"灰白大药丸压住图标"。
+      expect(NavBarStyle.pillWidthFactor, 0.69);
       expect(NavBarStyle.pillHeightFactor, 0.72);
       expect(NavBarStyle.pillRadius(68 * 0.72), closeTo(24.48, 0.01));
     });
@@ -133,9 +137,10 @@ void main() {
       }
     });
 
-    testWidgets('选中块实测：宽 = 格宽 ×1.09、高 = 栏高 ×0.72、圆角 = 高/2',
+    testWidgets('选中块实测：宽 = 格宽 ×0.69、高 = 栏高 ×0.72、圆角 = 高/2',
         (WidgetTester tester) async {
-      // 用参考图的同宽屏（592）反推：实测 141/129 ⇒ 选中块 = 格宽 ×1.09。
+      // 用参考图的同宽屏（592）反推：实测选中块 x 68~164 ⇒ 宽 96，格宽 ≈140
+      // ⇒ 69%。这是 2026-10-12 真机复验修正后的值（原 1.09 量错了对象）。
       tester.view.physicalSize = const Size(592, 1280);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -151,7 +156,13 @@ void main() {
       final double cell = tester.getSize(_shellFinder()).width / _kTabs.length;
       final Rect pill = tester.getRect(_pillFinder());
 
-      expect(pill.width, closeTo(cell * 1.09, 1.0));
+      expect(pill.width, closeTo(cell * 0.69, 1.0));
+      // ⭐ 钉住「不能回到过宽的老值」：1.09 会让选中块撑满整格。
+      expect(
+        pill.width,
+        lessThan(cell * 0.8),
+        reason: '选中块过宽（参考图实测占格宽 69%），会盖住图标观感变差',
+      );
       expect(pill.height, closeTo(68 * 0.72, 1.0));
       final BorderRadius radius = tester
           .widget<ClipRRect>(_pillFinder())
@@ -197,6 +208,81 @@ void main() {
       final double after = tester.getRect(_pillFinder()).center.dx;
 
       expect(after, greaterThan(before));
+    });
+  });
+
+  group('材质对照真机复验修正（2026-10-12）', () {
+    testWidgets('选中块描边 = 0：硬描边会把边界变成一根白线',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
+      await tester.pumpAndSettle();
+
+      // 真机实测边界柔度：参考图 4~5px 渐变(48→42→34→30→26)，原 0.34 描边
+      // 变成 2px 硬切(130→112→17)。羽化交给磨砂 + 圆角，不叠描边。
+      expect(
+        NavBarStyle.pillBorderAlpha,
+        0.0,
+        reason: '描边会与磨砂羽化叠加成白线；实测 0.34 时边界只有 2px 硬切',
+      );
+      final Iterable<double> pillBorderAlphas = tester
+          .widgetList<DecoratedBox>(find.byType(DecoratedBox))
+          .where((DecoratedBox d) => d.decoration is BoxDecoration)
+          // ⭐ 只取**选中块**那一个DecoratedBox。两者都是
+          //    `BorderRadius.circular`，光看类型分不开；而圆角值又太接近
+          //    （栏体 24 / 选中块 24.48）。改用**唯一可靠**的判据：
+          //    选中块的圆角 = `pillRadius(栏高 × 0.72)`，逐值相等；
+          //    栏体是24，不等。
+          .where((DecoratedBox d) {
+            final BoxDecoration b = d.decoration as BoxDecoration;
+            final BorderRadiusGeometry? r = b.borderRadius;
+            if (r == null) return false;
+            final BorderRadius resolved = r.resolve(TextDirection.ltr);
+            return (resolved.topLeft.x - NavBarStyle.pillRadius(68 * 0.72)).abs() < 0.01;
+          })
+          .map((DecoratedBox d) => (d.decoration as BoxDecoration).border)
+          .whereType<Border>()
+          .expand((Border b) => [b.top.color.a, b.bottom.color.a]);
+      // 先确认筛到了东西（否则上面 for 循环空转= 判绿假象）。
+      expect(pillBorderAlphas, isNotEmpty, reason: '未定位到选中块的 DecoratedBox');
+      for (final double a in pillBorderAlphas) {
+        expect(
+          a,
+          0.0,
+          reason: '选中块不得有描边',
+        );
+      }
+    });
+
+    testWidgets('暗色选中块纱罩是冷灰蓝（中性白会偏紫）', (WidgetTester tester) async {
+      // 参考图实测 rgb(47,52,58)、hue 213 / 饱和度 0.19；中性白做出来是
+      // hue 230、饱和度 0.09（偏紫），与青蓝主题不对路。
+      final Color dark = NavBarStyle.pillScrimColor(Brightness.dark);
+      // 蓝通道必须**高于**红通道（冷色），这是「不是中性白」的最小判据。
+      expect(
+        dark.b,
+        greaterThan(dark.r),
+        reason: '暗色选中块应偏冷（b > r），中性白会偏紫',
+      );
+      // 也不能过蓝——那样会变成一坨蓝。
+      expect(dark.b - dark.r, lessThan(60));
+    });
+
+    testWidgets('选中块 / 栏体亮度比 ≈ 2.7×（真机实测 60:18 偏亮）',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
+      await tester.pumpAndSettle();
+
+      // 参考图 52:19 ≈ 2.7×；原「白纱 0.16」做出来 60:18 = 3.3× 偏亮。
+      // 0.21 是**反解**值：18 + 0.21×(180−18) ≈ 52（纱罩改冷灰蓝后有效亮度
+      // 是 180 而非纯白 255 —— 这正是之前偏亮的机制）。
+      expect(
+        NavBarStyle.pillScrimAlpha(Brightness.dark),
+        0.21,
+        reason: '纱罩 alpha 是从目标亮度 52 反解出来的，不是拍的',
+      );
+      // 钉住「比栏体亮、但不能亮到3×以上」。
+      final double barA = NavBarStyle.scrimAlpha(Brightness.dark);
+      expect(NavBarStyle.pillScrimAlpha(Brightness.dark), greaterThan(barA));
     });
   });
 
