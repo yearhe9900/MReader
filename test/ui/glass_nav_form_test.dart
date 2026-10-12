@@ -88,4 +88,83 @@ void main() {
       reason: '保留手指位置的柔和高光（负责人只要求移除「放大」）',
     );
   });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 指示块形变（参考图批 2026-10-12）：切换 tab 时拉宽 + 边缘 pinch + 静置磨砂
+  // ══════════════════════════════════════════════════════════════════════════
+  // 断言读玻璃库 widget 的**公开字段**、期望值硬编码字面量（不引用
+  // `kNavPinchStrength` / `kNavRestingBlur`，否则同义反复、永远红不了）。
+  group('底栏指示块形变（参考图口径）', () {
+    testWidgets('pinch 0.75 / innerBlur 0.6：液态形变 + 静置磨砂',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(host(
+        GlassQualityTier.high,
+        Scaffold(
+          bottomNavigationBar: GlassNavBar(
+            tabs: kTabs,
+            selectedIndex: 0,
+            onTabSelected: (int _) {},
+          ),
+        ),
+      ));
+
+      final GlassTabBar bar =
+          tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+
+      // 形变强度：库默认 0.4（iOS 26 折中档），参考图要更明显的液态。
+      expect(bar.indicatorPinchStrength, 0.75);
+      // 反向断言：退回库默认 0.4 即红（「形变不够明显」回潮）。
+      expect(bar.indicatorPinchStrength, isNot(0.4));
+      // 不取 1.0：满档时 pinch 深度会啃进图标（库 doc：幅度受 thickness 约束）。
+      expect(bar.indicatorPinchStrength, lessThan(1.0));
+
+      // 静置磨砂：库默认 0.0 = 不画，参考图的选中块需与底栏本体分层。
+      expect(bar.innerBlur, 0.6);
+      expect(bar.innerBlur, isNot(0.0));
+    });
+
+    testWidgets('形变与「按下缩放」互不干涉：glowOnly 不回潮',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(host(
+        GlassQualityTier.high,
+        Scaffold(
+          bottomNavigationBar: GlassNavBar(
+            tabs: kTabs,
+            selectedIndex: 0,
+            onTabSelected: (int _) {},
+          ),
+        ),
+      ));
+
+      final GlassTabBar bar =
+          tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+      // 本组的意义就在这条：加了一整套指示块形变，**不得**把
+      // 「移除放大」（2026-09-29）一起回潮——两套机制本就独立。
+      expect(bar.interactionBehavior, GlassInteractionBehavior.glowOnly);
+      expect(bar.interactionBehavior.hasScale, isFalse);
+      // 指示块本身仍须显式开启（showIndicator 默认 true，防被误关）。
+      expect(bar.showIndicator, isTrue);
+    });
+
+    testWidgets('参数可由调用点覆盖（不必改库）', (WidgetTester tester) async {
+      await tester.pumpWidget(host(
+        GlassQualityTier.high,
+        Scaffold(
+          bottomNavigationBar: GlassNavBar(
+            tabs: kTabs,
+            selectedIndex: 0,
+            onTabSelected: (int _) {},
+            indicatorPinchStrength: 0.0,
+            indicatorInnerBlur: 0.0,
+          ),
+        ),
+      ));
+
+      final GlassTabBar bar =
+          tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+      // 传 0 = 完全关闭形变 / 磨砂（退化为纯平移），用于低端降级或调试。
+      expect(bar.indicatorPinchStrength, 0.0);
+      expect(bar.innerBlur, 0.0);
+    });
+  });
 }

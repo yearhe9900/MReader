@@ -83,6 +83,21 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
 /// **默认值**常量；运行时生效值见 [GlassKit.overlayQuality]（`UI-05` 接线后随档位变）。
 const GlassQuality kAppGlassQuality = GlassQuality.standard;
 
+/// 底栏选中指示块的**液态形变强度**（参考图批 2026-10-12）。
+///
+/// 库默认 `0.4`（iOS 26 的折中档，`glass_tab_bar.dart:802`）。参考图切换 tab
+/// 时指示块的拉宽与边缘 pinch 明显更强 ⇒提到 `0.75`：**不取 1.0**，满档在
+/// thickness 1.0 时 pinch 深度上限过大，指示块边缘会啃进图标（库 doc 明确
+/// pinch 幅度受 `thickness` 约束）。`0.0` = 关闭（退化为纯平移）。
+const double kNavPinchStrength = 0.75;
+
+/// 底栏选中指示块**静止态**的磨砂强度（参考图批 2026-10-12）。
+///
+/// 库默认 `0.0` = 不画静置磨砂（`glass_tab_bar.dart:818`）。参考图的选中块
+/// 明显比底栏本体「亮一档」，靠的正是静置磨砂 + 指示块自身的浅色玻璃叠加。
+/// `0.0` = 关闭。
+const double kNavRestingBlur = 0.6;
+
 /// 档位策略的运行时出口（生效值来自 [GlassRuntime.config]）。
 abstract final class GlassKit {
   /// 浮层 / 滚动区玻璃的**生效**档位：高档 / 中档 `standard`、低档 `minimal`。
@@ -336,6 +351,27 @@ class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
 ///
 /// **若连高光也要去掉**：改传 `GlassInteractionBehavior.none` 即可（一行，
 /// 该档 doc："fully rigid glass, no directional glow"）。
+///
+/// ══════════════════════════════════════════════════════════════════════════
+/// 指示块形变 vs 按下缩放：两套独立机制（参考图批 2026-10-12）
+/// ══════════════════════════════════════════════════════════════════════════
+/// 参考图的招牌动效是「**切换 tab 时指示块横向拉宽、边缘向内 pinch 成透镜、
+/// 静置时带磨砂**」。查库源码确认这三件事全都不在 `interactionBehavior` 管辖
+/// 范围内，而是底栏指示块自己的机制：
+///
+/// | 观感 | 库参数 | 本项目口径 |
+/// |---|---|---|
+/// | 整条胶囊被按下时膨胀/回弹 | `interactionBehavior`（`full` 含弹簧缩放） | **保持 [GlassInteractionBehavior.glowOnly]**（2026-09-29 拍板） |
+/// | 指示块切换时的拉宽 + 边缘 pinch | `indicatorPinchStrength` | [kNavPinchStrength]（库默认 0.4 → 0.75） |
+/// | 指示块静止时的磨砂 | `innerBlur`（库默认 0.0 = 关闭） | [kNavRestingBlur] |
+///
+/// 指示块滑动的回弹弹簧由库固定为 iOS 26 默认 jelly 弹簧（`bottom` 工厂**不透传**
+/// `springDescription`，`glass_tab_bar.dart:240-296` 逐参数转发可证），本封装
+/// 不暴露无效开关。
+///
+/// ⚠️「移除放大」的拍板**不需要撤销**：负责人当时指的是**按下时整个胶囊膨胀**
+/// （`tab_bar_bottom_layout.dart:390` 据此把 `interactionScale` 钉成 1.0），
+/// 与指示块在切换时的形变是两回事。两条同时成立即库文档推荐的组合。
 class GlassNavBar extends StatelessWidget {
   /// 创建玻璃底栏（默认即浮动胶囊形态）。
   const GlassNavBar({
@@ -355,6 +391,8 @@ class GlassNavBar extends StatelessWidget {
     this.indicatorColor,
     this.selectedIconColor,
     this.unselectedIconColor,
+    this.indicatorPinchStrength = kNavPinchStrength,
+    this.indicatorInnerBlur = kNavRestingBlur,
   });
 
   /// 标签页配置。
@@ -414,6 +452,25 @@ class GlassNavBar extends StatelessWidget {
   /// 未选中态图标颜色。
   final Color? unselectedIconColor;
 
+  /// 选中指示块（滑动胶囊）的**液态形变强度**。
+  ///
+  /// 参考图批（2026-10-12）：切换 tab 时指示块横向拉宽、边缘向内 pinch 成
+  /// 透镜。库默认 `0.4`（iOS 26 折中档），参考图更接近「看得见的液态」⇒ 提到
+  /// [kNavPinchStrength]。`1.0` = 库文档的 Apple 满档（`thickness == 1.0` 时
+  /// pinch 深度上限），`0.0` = 完全关闭。
+  ///
+  /// ⚠️ 与 [GlassNavBar] 的「触摸反馈口径」**互不干涉**：pinch 管指示块在
+  /// **切换/拖动**时的形变，`interactionBehavior` 管**整条胶囊被按下**时的
+  /// 缩放。前者要、后者不要（2026-09-29 拍板），两者可同时成立。
+  final double indicatorPinchStrength;
+
+  /// 指示块**静止态**的磨砂强度（`0.0` = 关闭，库默认）。
+  ///
+  /// Apple 式「frost at rest」：静置时指示块带磨砂、与背景明确分层；滑动时
+  /// 磨砂化开、morph 成液态透镜（`animated_glass_indicator.dart:135-141`）。
+  /// 参考图的选中块明显比底栏更「亮一档」，一部分来自这个参数。
+  final double indicatorInnerBlur;
+
   @override
   Widget build(BuildContext context) {
     final GlassTierConfig config = GlassScope.configOf(context);
@@ -447,6 +504,11 @@ class GlassNavBar extends StatelessWidget {
       indicatorColor: indicatorColor,
       selectedIconColor: selectedIconColor,
       unselectedIconColor: unselectedIconColor,
+      // 参考图批 2026-10-12：选中块滑动时的液态形变 + 静置磨砂。
+      // 这两项**不改按下反馈**（仍是下方glowOnly）——`interactionBehavior` 管
+      // 整条胶囊被按下的缩放，pinch / innerBlur 管指示块自身的形变，两套独立。
+      indicatorPinchStrength: indicatorPinchStrength,
+      innerBlur: indicatorInnerBlur,
       // 固定表面档位：中 / 低档由 `fixedSurfaceQualityOverride` 钉死（取消提升）；
       // 高档为 `null` —— 在 [GlassScaffold] 祖先内（默认用法）库会自动提升 `premium`
       // （§11.3 / `UI-05 ①`）；若是独立浮层（[standalone]），该祖先不存在、
