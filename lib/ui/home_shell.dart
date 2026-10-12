@@ -9,8 +9,14 @@
 // 「玻璃控件不可嵌套」。底栏因此以 `standalone: true` 使用 [GlassNavBar]
 // （脱离 `GlassScaffold` 祖先，高档需显式声明固定表面档位，见该参数文档）。
 //
-// 底栏形态 = 库原生的 **iOS 26 浮动胶囊**（左右 / 底部留边距、圆角、64 高），
-// 不是贴底通栏——与 anx-reader 的 `flutter_floating_bottom_bar` 观感一致。
+// 底栏形态 = **自磨砂伪玻璃悬浮胶囊**（左右 / 底部留边距、圆角、68 高），
+// 不是贴底通栏——与参考图（HyperOS 主题商店）实测一致。
+//
+// 2026-10-12 换实现：`GlassNavBar`（库 `GlassTabBar`）→ [FrostedNavBar]（自研
+// `BackdropFilter`）。理由见 `frosted_nav_bar.dart` / `nav_bar_style.dart` 文件头：
+// 参考图那一档玻璃无折射 / 色散，用不上库的核心着色器，却要承担它的全部代价；
+// 自研换来几何 100% 可控（实测标签严格等分，而库默认 `spacing` 会破坏等分）、
+// 选中块宽度可按实测值定、测试开销归零。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 底部避让
@@ -53,6 +59,7 @@ import '../sync/webdav_client.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
 import 'ai_page.dart';
+import 'frosted_nav_bar.dart';
 import 'glass_kit.dart';
 import 'notes_page.dart';
 import 'settings_page.dart';
@@ -62,9 +69,12 @@ import 'vocab_page.dart';
 
 /// 浮动底栏为各页内容预留的底部空白。
 ///
-/// 胶囊高 64 + 底部外边距 20 + 安全区与呼吸余量 ≈ 96。
-/// 各页把它并入自己滚动容器的 `padding.bottom`。
-const double kShellBottomInset = 96;
+/// 胶囊高 68（[NavBarStyle.barHeight]）+ 底部外边距 18（`verticalPadding`）
+/// + 安全区与呼吸余量 ≈ 100。各页把它并入自己滚动容器的 `padding.bottom`。
+///
+/// 2026-10-12 换自研底栏时由 96 调到 **100**（68 + 18 + 余量），比原值多 4：
+/// 胶囊高 64→68、浮起 20→18，净 +2，另留 2 的余量。
+const double kShellBottomInset = 100;
 
 /// 宽屏断点（超过则改用侧边导航轨）；与 anx-reader 取值一致。
 const double kShellRailBreakpoint = 600;
@@ -216,30 +226,30 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   }
 
   /// 底栏标签（顺序即下标语义，**勿任意重排**）。
-  static const List<GlassTab> _tabs = <GlassTab>[
-    GlassTab(
-      icon: Icon(Icons.menu_book_outlined),
-      activeIcon: Icon(Icons.menu_book),
+  static const List<NavTab> _tabs = <NavTab>[
+    NavTab(
+      icon: Icons.menu_book_outlined,
+      activeIcon: Icons.menu_book,
       label: '书架',
     ),
-    GlassTab(
-      icon: Icon(Icons.insights_outlined),
-      activeIcon: Icon(Icons.insights),
+    NavTab(
+      icon: Icons.insights_outlined,
+      activeIcon: Icons.insights,
       label: '统计',
     ),
-    GlassTab(
-      icon: Icon(Icons.auto_awesome_outlined),
-      activeIcon: Icon(Icons.auto_awesome),
+    NavTab(
+      icon: Icons.auto_awesome_outlined,
+      activeIcon: Icons.auto_awesome,
       label: 'AI',
     ),
-    GlassTab(
-      icon: Icon(Icons.sticky_note_2_outlined),
-      activeIcon: Icon(Icons.sticky_note_2),
+    NavTab(
+      icon: Icons.sticky_note_2_outlined,
+      activeIcon: Icons.sticky_note_2,
       label: '笔记',
     ),
-    GlassTab(
-      icon: Icon(Icons.settings_outlined),
-      activeIcon: Icon(Icons.settings),
+    NavTab(
+      icon: Icons.settings_outlined,
+      activeIcon: Icons.settings,
       label: '设置',
     ),
   ];
@@ -335,6 +345,11 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   ///
   /// [IndexedStack] 让五页都保活（切回书架时滚动位置与筛选不丢），
   /// 非当前页不绘制、不参与命中测试。
+  ///
+  /// ⚠️ **必须是 `Stack + Positioned` 而非 `Scaffold.bottomNavigationBar`**：
+  /// 自磨砂伪玻璃底栏的 [BackdropFilter] 需要采样**栏下方**的内容才能出磨砂
+  /// 效果；放进 `bottomNavigationBar` 时底栏在内容**之上**，采样不到正文，
+  /// 磨砂会退化成一块纯色（详见 `frosted_nav_bar.dart` 文件头）。
   Widget _buildBottomBarLayout(List<Widget> pages) {
     return Stack(
       children: <Widget>[
@@ -343,12 +358,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           left: 0,
           right: 0,
           bottom: 0,
-          child: GlassNavBar(
+          child: FrostedNavBar(
             tabs: _tabs,
             selectedIndex: _index,
             onTabSelected: _select,
-            // 独立浮层：没有 GlassScaffold 祖先，高档需显式声明固定表面档位。
-            standalone: true,
           ),
         ),
       ],
@@ -365,14 +378,18 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               selectedIndex: _index,
               onDestinationSelected: _select,
               labelType: NavigationRailLabelType.all,
-              destinations: <NavigationRailDestination>[
-                for (final GlassTab tab in _tabs)
-                  NavigationRailDestination(
-                    icon: tab.icon ?? const SizedBox.shrink(),
-                    selectedIcon: tab.activeIcon,
-                    label: Text(tab.label ?? ''),
-                  ),
-              ],
+destinations: <NavigationRailDestination>[
+              for (final NavTab tab in _tabs)
+                NavigationRailDestination(
+                  icon: tab.icon == null
+                      ? const SizedBox.shrink()
+                      : Icon(tab.icon),
+                  selectedIcon: tab.activeIcon == null
+                      ? null
+                      : Icon(tab.activeIcon),
+                  label: Text(tab.label),
+                ),
+            ],
             ),
           ),
           const VerticalDivider(width: 1),

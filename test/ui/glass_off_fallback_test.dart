@@ -1,5 +1,12 @@
 // `M2b-T07`：档位生效接线的**验收映射**测试（`UI-05` ③ / `UI-06` ②）。
 //
+// ⚠️ **2026-10-12：本文件只覆盖「库玻璃」那条线**。产品窄屏底栏已换成自研
+// [FrostedNavBar]（磨砂伪玻璃，不经`GlassTabBar`），其契约测试见
+// `test/ui/frosted_nav_bar_test.dart`。本文件保留的原因：`GlassNavBar` 仍在库
+// 里且仍被 `glass_nav_form_test` / `glass_material_test` 覆盖，删掉会让库的
+// 档位链失去唯一防线。**真机若见到底栏不随档位变化，以`frosted_nav_bar_test`
+// 为准**（自研底栏不依赖着色器，档位只影响「关档退化」这一件事）。
+//
 // PRD 验收条目 → 断言：
 //   · `UI-06` ②「关闭特效后 UI 仍完整可用（退化为纯色）」→ 关档下无任何玻璃控件
 //     （GlassScaffold / GlassAppBar / GlassTabBar / GlassDialog / GlassSheet），
