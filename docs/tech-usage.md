@@ -4553,3 +4553,108 @@ charOffset 减少 2~8 字、两轮可退两行（改前实测轨迹 **[168, 166,
 均匀折算看似「无害近似」，但只要它进闭环（采样→落盘→落位→采样）就变成
 复利误差源。凡成对映射（本例 `sampleNow`/`offsetFor`；`§2.82` 占位语义同理）
 必须**同一行表/同一几何**推导，并用「往返恒等」用例钉死——单测一侧不够。
+
+### 2.85 开书闪动（任务 B）修法三条：放行门闸=精确落位+视口真身、冷缓存收口（2026-10-12，`0bd96db`）
+
+**症状**（诊断存档 2026-10-10，视频 f095-096 等）：开书转场滑入过程中视口
+跳一下 / 满屏「载入中…」占位带瞬间换血，纸张带着半成品滑进来。三条独立
+机制链（`docs/研究-阅读页画布对照.md` §7 输入、§5.1 路线 A 拍板）：
+
+1. **转场放行太早**——首帧上屏即放行，但此刻常是**估算落位**过渡帧，
+   `_pendingLand` 二次精确落位的视口大跳发生在纸张滑入中；
+2. **占位带满屏换血**——放行帧视口内残留 ≈96dp「载入中…」占位带，邻章
+   「占位→真」换血的高度突变同样发生在滑入中；
+3. **冷缓存**——`PaginationScheduler()` 随 State 新建，重开书冷缓存 →
+   必然「先估后跳」，机制链①被制度性放大。
+
+修法顺序按报告 §7（先 ①收益最大风险最小，再 ②，最后 ③），每条红灯测试
+先行 + 变异判红 + 两段提交。
+
+#### 1. 修法① 放行门闸=精确落位（`_signalOpenReady(requireLanded:)`）
+
+分页模式「就绪」的定义升级为**目标语义坐标精确落位收敛**（`_positionConverged`），
+估算落位只是过渡帧：
+
+- `_open()` 放行改走 `_signalOpenReady(requireLanded: paged)`：未收敛时挂
+  `_openGatePending` 不放行，转场继续按住；失败路径保持**必放行**（纸张不能
+  永远停在屏幕右侧）；3s 兜底 `kReaderOpenHoldTimeout` 不动 = 时间防线。
+- 收敛点补报 [`_checkOpenGate`]：`_primeOpenSync` 精确分支、`_syncPagedViews`
+  的 `_pendingLand` 二次落位——每处收敛后必戳（`_pagedJumpTo` 空段章分支的
+  补报随修法②收口加入，见下）。
+- **postFrame 复查型**（不是调用点当场判）：`_applyPagedViews` 的 setState 后
+  布局未重建，当场读到旧视图；`_jumpPaged` 超域目标的帧末 clamp 也是
+  postFrame 回调、注册更早——复查回调后注册后执行，读到的像素已是 clamp 后
+  的「放行时刻现场」。`_openGateCheckScheduled` 单飞防回调堆积；复查不过
+  保持挂起，等下一个戳点（`_syncPagedViews` 换视图后必戳）再查。
+
+#### 2. 修法② 视口真身判据（`_viewportReal()`）+ 空段章收口
+
+放行时刻（不只是收敛时刻）视口必须是**真身**：可见区间 `[pixels, pixels+vh)`
+内没有占位带（`pages.isEmpty` 的窗口视图 = 占位带，区间
+`[chapterTops[i], chapterTops[i]+headingHeight)`）。
+
+- **空段章是真身**（一张空页、`pages` 非空）不挡放行——判据与 `_buildPageViews`
+  同源，刻意不看段落数；
+- **量不到现场**（scroller / vh 缺）时放行：宁可早放也不把门闸死等到 3s 兜底
+  （「漏报就绪不卡死」优先）；
+- **只管放行时机、不约束窗口形状**——`_repairReachable` 扩窗红线（窗口不
+  加上界，见 `§2.80`）不变。占位换血「出视口」由此自动成立：放行前换血
+  发生在按住期间（用户看不见），放行帧视口内已无带可换。
+
+**`setWindow` no-op 陷阱**（本批实证踩坑）：`PaginationScheduler.setWindow`
+在 `open()` 之前是 **no-op**（`_config` 只由 `open`/`_acceptConfig` 立起）。
+`_pagedJumpTo` 空段章分支原先进 `_registerWindowUnpaginated()` 走 `setWindow`
+登记——被静默吞掉 ⇒ 空段章永驻占位带 ⇒ `_viewportReal()` 恒假 ⇒ 门闸死等
+3s 兜底。收口 = 空段章分支**必须走 `scheduler.open(href, paragraphs: [], …)`**
+（空段构造即完成、`open` 突发即定稿入缓存），再登记 + `_checkOpenGate()`。
+凡「调度器还没 open 就想改窗口」的路径都要先问一句有没有立起 `_config`。
+
+#### 3. 修法③ 冷缓存收口（`PaginationSchedulerRegistry`）
+
+`PaginationScheduler` 生命周期脱离 State：按 `bookId`（= `ImportService
+.computeBookId(bytes)` 内容哈希，同 id 即同内容）**进程级驻留**整个调度器
+（含 `PaginationCache(maxChapters: 5)` 与进行中任务/队列）。
+
+- **驻留整个调度器而非只驻留 cache**：只留 cache 时 `_acceptConfig` 首开比较
+  不出「换参」会 `cache.clear()` 清掉共享缓存；整机驻留则记得上次参数、
+  `_acceptConfig` 短路，换参作废（图片尺寸走 `invalidateForImageSizes`）才有效。
+- `_open()` 采纳时 `unfreeze()`：上一 State 若在翻页动画中被 dispose，冻结态
+  会跨开书残留（`stepIdle` 有活不动）。
+- `open()` 同章重开保留任务进度 ⇒ 重开书命中定稿页表、**一次精确落位**，
+  机制链①③同时消失（红灯实证：改前开书②首见 `char=61` 估算值，改后
+  `paged.prime … landed=true` 一次落位贴住目标 23301）。
+- 删书暂不 `evict`（bookId 内容哈希，无同 id 复用风险；进程级驻留上限=书数）。
+- **测试隔离**：`capTestTimeout()` 注册每用例 `setUp(sharedPaginationSchedulers
+  .clear)`（全 testWidgets 文件惯例接入）——假书共用 bookId `testbook01`
+  而内容各异，跨用例互命中旧页表会大面积误判红；「重入不丢缓存」只在用例内保留。
+
+#### 4. 变异判红（正常态先验绿；红断言即目标断言）
+
+| 变异 | 判红用例 | 结果 |
+|---|---|---|
+| ① `_viewportReal` 恒真 | 「放行门闸=视口真身」目标断言 | **红 1**（放行帧视口内残留 2 条 96dp 带，`Rect.fromLTRB(1125.6, 182.4, …)` / `(…, 295.2, …)`） |
+| ② 空段章收口摘除（绕回 `setWindow`） | 「空段章开书」及时放行 | **红 1**（Expected false / Actual true：门闸挂到 3s 兜底） |
+| ③ 退回 `PaginationScheduler()` 随 State 新建 | 「重开书秒落位」目标断言 | **红 1**（开书②首见 `char=61` ≠ 目标 23264~23344） |
+| ④ 修法① 放行不看 `_positionConverged`（上会话复核） | 「放行门闸=精确落位」前提断言 | **红 1**（首帧上屏即放行，`isActive` false ≠ isTrue） |
+
+#### 5. 测试与验收
+
+- `test/reader/reader_open_transition_test.dart` +3 用例：「放行门闸=精确落位」
+  （3000 段 + 进度 0.9 夹具，放行时采样贴住目标 ±40 字符、放行后视口不再跳）
+  「放行门闸=视口真身」（首章压 2 段 ⇒ 第 2/3 章带落进首屏；逐轮盯放行帧
+  当场量 + `sawBand` 前提防空转绿）「空段章开书」（防回归护栏）；
+- `test/reader/reopen_pagination_cache_test.dart` +1 用例（重开书首见即目标位）；
+- `test/test_config.dart`：`capTestTimeout()` 挂注册表清理（测试隔离）；
+- `bash tool/test.sh reader` **464 条全绿**、`ui` 172（`-j 1`）、`fast` 471、
+  `dart analyze` 零问题。
+
+#### 6. 教训
+
+- **放行时机是一个「复合判据」的输出**：收敛、视口真身、时间兜底三层，任何
+  单层（首帧 / 收敛 / 兜底）都会把某种半成品送进滑入窗口。判据要 postFrame
+  读「放行时刻现场」，不能读调用点的陈旧状态。
+- **登记类 API 的静默 no-op 是门闸类判据的天敌**：`setWindow` 吞掉未 `open`
+  的登记、表现为「判据恒假死等」而不是报错。凡「先登记后判」的链路，用例
+  必须覆盖「登记生效」本身（空段章护栏即为此而设）。
+- **缓存驻留要驻留「记得参数的那个整机」**：只留数据（cache）不留状态
+  （`_config` 比较基线）会让「换参作废」逻辑反而清掉想留的东西。
