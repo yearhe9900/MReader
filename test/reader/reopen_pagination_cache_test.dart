@@ -93,8 +93,11 @@ void main() {
     );
     // 等二次精确落位收敛（顺带等全章定稿落缓存——缓存只存完整结果，
     // 收敛后多推 60 轮让 `stepIdle` 收尾；空闲链 `hasWork` 尽即自停）。
+    // 轮数预算 120：收敛点 = 页表排到「目标 + 一屏」之后（可达性验收，
+    // `§2.92`），实测 ~43 轮，但 `stepIdle` 切片粒度随机器负载浮动——
+    // 预算只影响「等多久」，不影响判据（±40 字符精确坐标）。
     bool converged = false;
-    for (int i = 0; i < 60 && !converged; i++) {
+    for (int i = 0; i < 120 && !converged; i++) {
       final PagedScrollerState st =
           tester.state<PagedScrollerState>(find.byType(PagedScroller));
       final ScrollSample? s = st.sampleNow();

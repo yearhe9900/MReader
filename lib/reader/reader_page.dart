@@ -2111,14 +2111,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       PerfLog.mark('paged.estimate',
           'index=$index char=$charOffset off=${landAt.toStringAsFixed(0)}');
     } else {
-      _pendingLand = null;
-      _positionConverged = true; // `RC1`：一次精确落位即收敛
       // 行内余量只补在**精确落位**上：估算落位（上一分支）本来就是粗的，
       // 补余量没有意义，其二次收敛（`_syncPagedViews(tryPendingLand: true)`）
       // 属程序化落位、按行顶对齐即可。
       landAt += remainder;
       // `at` = 落位**前**的现场像素：`off - at` 就是这一次落位真正造成的位移
       // （真机排查用；布局未变时二者必须相等，差 0 = 用户看不见移动）。
+      // 域外被验收拦下时本条后面**没有** `paged.move`（跳转被抑制、
+      // 等帧链补完后由 `paged.land` 收口）——排查时以此判「deferred」。
       PerfLog.mark(
           'paged.prime',
           'index=$index char=$charOffset off=${landAt.toStringAsFixed(0)}'
@@ -2137,9 +2137,24 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     views = repaired.views;
     layout = repaired.layout;
     sig = repaired.sig;
+    // 精确落位收口（可达性验收，见 [_landingReachable]）：可达 / 真书尾 →
+    // 清 pending、宣告收敛；域外且分页仍在生长 → 不收敛、不跳截短中间位，
+    // 挂回 [_pendingLand] 等帧链补完后 `_syncPagedViews` 二次收口。
+    if (landed) {
+      if (_landingReachable(landAt, layout)) {
+        _pendingLand = null;
+        _positionConverged = true; // `RC1`：一次精确落位即收敛
+      } else {
+        _pendingLand = (index: index, charOffset: charOffset);
+        _positionConverged = false;
+        _positionSampled = false;
+        landAt = null;
+        _startPagedFrames();
+      }
+    }
     if (cfgChanged || sig != _viewsSignature) {
       _applyPagedViews(views, cfg, sig, offset: landAt);
-    } else {
+    } else if (landAt != null) {
       _jumpPaged(landAt, why: 'prime');
     }
     // 精确落位即收敛（上面 `landed` 分支已置 `_positionConverged`）→
@@ -2202,6 +2217,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
   }
 
+  /// 程序化跳转序号（[`_jumpPaged`] 每次调用 +1；陈旧延迟 clamp 的作废判据）。
+  int _jumpSeq = 0;
+
   /// 单跳到 [target]：|Δ|<0.01 跳过；在旧上界内立即跳（pre-jump），
   /// 超出则帧末补跳（setState 后新布局已建，接受 1 帧滑移——
   /// 同帧先跳会被旧 `maxScrollExtent` 弹簧拉回）。
@@ -2209,31 +2227,53 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// [why] 只进日志（`paged.move`）：真机「跳动」排查需要**每一条程序化位移**
   /// 都留痕，光看 `paged.prime` 分不清「算出来的目标」与「真的跳了」。记的是
   /// **实际**前后值，故 `d` 就是用户看到的那次平移量。
+  ///
+  /// ## ⚠️ 延迟补跳必须带序号作废（2026-10-12 回归①③判红实证）
+  ///
+  /// 帧末 clamp 回调执行时，世界可能已被**更新的跳转**改写：实测
+  /// `paged.move why=views from=0 to=1544`（收敛落位，正确）之后又来
+  /// `why=views.late from=1544 to=888`——后者是更早排队的陈旧目标
+  /// （占位→真合入期 delta 重锚的 888），回调晚到一步把**已收敛的落点
+  /// 拖回旧目标**，采样从此停在错章（章 0 尾）。故回调开头先比
+  /// [`_jumpSeq`]：期间有任何更新的跳转即作废（`skip=superseded`），
+  /// 新意图永远压过旧意图，「clamp 截短/拖回 + 永不重试」的又一变体。
   void _jumpPaged(double target, {String why = 'prime'}) {
     final ScrollController? controller = _controller;
     if (controller == null || !controller.hasClients) return;
     final double pixels = controller.position.pixels;
+    final int seq = ++_jumpSeq;
     if ((target - pixels).abs() < 0.01) return;
     if (target >= 0 && target <= controller.position.maxScrollExtent) {
-      _notePagedMove(why, pixels, target);
+      _notePagedMove(why, pixels, target, seq: seq);
       _pagedOp(() => controller.jumpTo(target));
       return;
     }
+    PerfLog.mark(
+        'paged.move',
+        'why=$why.q seq=$seq tgt=${target.toStringAsFixed(1)} '
+        'px=${pixels.toStringAsFixed(1)} '
+        'max=${controller.position.maxScrollExtent.toStringAsFixed(1)}');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !controller.hasClients) return;
+      if (seq != _jumpSeq) {
+        PerfLog.mark('paged.move', 'why=$why.late seq=$seq skip=superseded');
+        return;
+      }
       final double clamped = target
           .clamp(0.0, controller.position.maxScrollExtent);
       if ((clamped - controller.position.pixels).abs() < 0.01) return;
-      _notePagedMove('$why.late', controller.position.pixels, clamped);
+      _notePagedMove('$why.late', controller.position.pixels, clamped,
+          seq: seq);
       _pagedOp(() => controller.jumpTo(clamped));
     });
   }
 
   /// 记一条程序化位移（**唯一**留痕点：`paged.move`）。
-  void _notePagedMove(String why, double from, double to) {
+  void _notePagedMove(String why, double from, double to, {int? seq}) {
     PerfLog.mark(
         'paged.move',
-        'why=$why from=${from.toStringAsFixed(1)} '
+        'why=$why${seq == null ? '' : ' seq=$seq'} '
+        'from=${from.toStringAsFixed(1)} '
         'to=${to.toStringAsFixed(1)} d=${(to - from).toStringAsFixed(1)}');
   }
 
@@ -2279,6 +2319,34 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           'anchor=${anchor.toStringAsFixed(0)}');
     }
     return (views: views, layout: layout, sig: sig);
+  }
+
+  /// 落位可达性验收（`paged.land` / `paged.prime` 的收敛前置；`RC1` 同门）：
+  /// 目标行下方必须还有 ≥ 视口高的布局内容（`landAt ≤ maxScrollExtent`）。
+  ///
+  /// ## ⚠️ 为什么必须验收（2026-10-12 探针 `_probe_landing` 实证）
+  ///
+  /// `offsetFor` 只要页表覆盖目标行就返回值，**不要求目标可滚动到位**——
+  /// 页表刚排到目标页页尾时，「目标行行顶 → 已排内容底」通常不足一屏
+  /// （实测差 60px 起步、随切片粒度放大），`_jumpPaged` 的超域目标会被
+  /// postFrame clamp **静默截短**。而收敛一旦宣告（`_pendingLand` 已清、
+  /// `_positionConverged=true`）就**永不重试**——采样从此停在截短位。
+  /// 实测现场：`paged.land off=130236` → `paged.move why=views.late
+  /// to=129744`（截 492px）→ 采样停在 23202（目标 23304，偏 102 字符）；
+  /// 竞态另一结局只截 12px、落进段间距空隙反而贴回目标行（23301）——
+  /// 同一机制两种结局，即「长章深位恢复落点偶发偏一截 / 不收敛」的根因。
+  ///
+  /// 分页排干（`scheduler.hasWork == false`）仍不可达 = **真书尾**：
+  /// 布局不会再长，诚实 clamp（`§2.70`「由 clamp 兜住」）就是终点，验收放行。
+  /// 窗口可达性（多章拼接）仍由 [_repairReachable] 负责；本验收只管
+  /// 「当前章页表把目标排到可滚到位」，两层互补，不碰扩窗红线。
+  bool _landingReachable(double landAt, PagedLayout layout) {
+    final double vh = _viewportHeight;
+    final double max = (layout.totalHeight - (vh > 0 ? vh : 0.0))
+        .clamp(0.0, double.infinity)
+        .toDouble();
+    if (landAt <= max) return true;
+    return !(_scheduler?.hasWork ?? false);
   }
 
   /// 应用新视图（**唯一**换 [_pageViews] 的入口）：先按「当前章章顶差」
@@ -2344,6 +2412,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     List<PagedChapterView> views = _buildPageViews(_window, cfg);
     String sig = _computeSignature(_window);
     double? landOffset;
+    ({int index, int charOffset})? landTarget;
     if (tryPendingLand) {
       final ({int index, int charOffset})? pending = _pendingLand;
       if (pending != null && pending.index < (_chapters?.length ?? 0)) {
@@ -2356,20 +2425,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           pending.charOffset,
           paragraphSpacing: cfg.paragraphSpacing,
         );
-        if (landOffset != null) {
-          _pendingLand = null;
-          _positionConverged = true;
-          // 二次精确落位收敛 → 开书门闸在此补报放行（帧回调保证落位先上屏）。
-          _checkOpenGate();
-          PerfLog.mark('paged.land',
-              'index=${pending.index} off=${landOffset.toStringAsFixed(0)}');
-          // **分页模式的落定信号**：`paged.land` 是分页路径（`_pagedJumpTo` 一次
-          // 落位）的终点，**不经过 [_finishRestore]**（那是 ListView 路径的收口）。
-          // 故「打开后是否还在跳」这条链路指标必须挂在这里，否则分页模式下
-          // `open.chain` / `restoreEnd` 永不出现（真机日志实证：11 次开书全部缺失）。
-          widget.openTrace?.mark('restoreEnd', 'branch=paged index=${pending.index}');
-          widget.openTrace?.reportChain();
-        }
+        // 命中 ≠ 收敛：可达性验收挪到 `_repairReachable` 之后（见下方
+        // `landTarget` 收口段）——`offsetFor` 只要页表覆盖目标行就给值，
+        // 此刻「目标行到已排内容底」常不足一屏，立即宣告收敛会被
+        // `_jumpPaged` 的超域 clamp 截短且永不重试（[_landingReachable]）。
+        if (landOffset != null) landTarget = pending;
       }
     }
     if (sig == _viewsSignature && landOffset == null) {
@@ -2396,6 +2456,30 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           cfg: cfg);
       views = repaired.views;
       sig = repaired.sig;
+    }
+    // 落位收口（可达性验收后）：可达 / 真书尾 → 清 pending、宣告收敛；
+    // 域外且分页仍在生长 → **不收敛、不跳截短中间位**，保持 [_pendingLand]
+    // 等下一切片重试（帧链保证续跑）。「clamp 截短 + 永不重试」的修复面。
+    if (landTarget != null && landOffset != null) {
+      final PagedLayout landLayout = PagedLayout.build(views,
+          paragraphSpacing: cfg.paragraphSpacing);
+      if (_landingReachable(landOffset, landLayout)) {
+        _pendingLand = null;
+        _positionConverged = true;
+        // 二次精确落位收敛 → 开书门闸在此补报放行（帧回调保证落位先上屏）。
+        _checkOpenGate();
+        PerfLog.mark('paged.land',
+            'index=${landTarget.index} off=${landOffset.toStringAsFixed(0)}');
+        // **分页模式的落定信号**：`paged.land` 是分页路径（`_pagedJumpTo` 一次
+        // 落位）的终点，**不经过 [_finishRestore]**（那是 ListView 路径的收口）。
+        // 故「打开后是否还在跳」这条链路指标必须挂在这里，否则分页模式下
+        // `open.chain` / `restoreEnd` 永不出现（真机日志实证：11 次开书全部缺失）。
+        widget.openTrace?.mark('restoreEnd', 'branch=paged index=${landTarget.index}');
+        widget.openTrace?.reportChain();
+      } else {
+        landOffset = null;
+        _startPagedFrames(); // 防帧链已停：续跑到可达 / 排干为止
+      }
     }
     _applyPagedViews(views, cfg, sig, offset: landOffset);
     if (landOffset != null) {
