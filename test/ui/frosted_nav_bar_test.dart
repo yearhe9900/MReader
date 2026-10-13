@@ -3,12 +3,17 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // 本文件钉什么
 // ══════════════════════════════════════════════════════════════════════════════
-// 参考图实测值换算出的几何（实测记录见 `nav_bar_style.dart` 文件头）：
-//   ·标签中心**严格等分**（实测间距 129 / 129 / 129）⇒ 按`可用宽 / n` 均分；
-//   · 选中块宽 = 格宽的 **69%**（实测 x 68~164⇒ 宽 96 / 格宽 ≈140）。
-//     ⚠️ 原写 1.09（依据「141/129」）**量错了对象**——那是图标文字簇外沿；
-//     真机做成 94% 时观感是「灰白大药丸压住图标」，故真机复验后修正为 0.69；
-//   · 选中块高 = 栏体高的 0.72，圆角 = 高 / 2（胶囊）。
+// 参考图**原生截图**实测值换算出的几何（实测记录见 `nav_bar_style.dart` 文件头）：
+//   · 标签中心**严格等分**（实测间距 184 / 185 / 183）⇒ 按`可用宽 / n` 均分；
+//   · 选中块宽 = 格宽的 **114%**（实测 x 57..266 ⇒ 宽 210/ 格宽 184），
+//     即**向两侧溢出**格子；选中块中心与标签中心对齐（实测差 1.5px）；
+//   · 选中块高 = 栏体高的 **0.93**（实测 115/ 124），圆角 = 高 / 2（胶囊）；
+//   · 栏体 62 高 / 左右外边距 13 / 浮起 27。
+//
+// ⚠️ 几何值在 2026-10-12 → 10-13 之间**返工过一次**：10-12 用**二次压缩的
+// 录屏帧**测得「选中块占格宽 69%」并据此判定更早的 109% 是量错对象；10-13 用
+// **原生截图**重测发现压缩帧不可靠（原生图里选中块宽 210 > 格宽 184，目视也
+// 明显是占满一格的宽块）。⇒ 测量参考图**必须用原生截图**，压缩帧会抹平边界。
 //
 // 这些是「用库时拿不到」的部分（库的指示块宽度由内部计算、`spacing: 8` 还会
 // 破坏等分），所以必须钉死——回潮即红。
@@ -36,7 +41,7 @@ const List<NavTab> _kTabs = <NavTab>[
 ///
 /// 真机是 `home_shell` 的 `Stack + Positioned(bottom: 0)`——**松约束**。若测试
 /// 直接把底栏当 `MaterialApp.home`（**紧约束**，整屏 800×600），里面的
-/// `SizedBox(height: barHeight)` 会被顶成整屏高（实测栏体 582 而非 68），
+/// `SizedBox(height: barHeight)` 会被顶成整屏高（实测栏体 582 而非 62），
 /// 几何与拖动断言全部失真。故宿主必须复刻 `Stack + Positioned`。
 ///
 /// 底栏下方垫一块深色——`BackdropFilter` 要有可采样的内容才看得出磨砂，且深色
@@ -80,37 +85,37 @@ void main() {
   tearDown(GlassRuntime.resetForTest);
 
   group('几何：实测值字面量契约', () {
-    testWidgets('栏体尺寸：68 高 / 左右 16 / 浮起 18', (WidgetTester tester) async {
-      expect(NavBarStyle.barHeight, 68);
-      expect(NavBarStyle.horizontalPadding, 16);
-      expect(NavBarStyle.verticalPadding, 18);
+    testWidgets('栏体尺寸：62 高 / 左右 13 / 浮起 27', (WidgetTester tester) async {
+      expect(NavBarStyle.barHeight, 62);
+      expect(NavBarStyle.horizontalPadding, 13);
+      expect(NavBarStyle.verticalPadding, 27);
+      expect(NavBarStyle.barRadius, 31);
       // 标签等分 ⇒ 额外间距必须是 0（库的 spacing: 8 正是破坏等分的元凶）。
       expect(NavBarStyle.tabSpacing, 0);
     });
 
-    testWidgets('选中块：宽 = 格宽 ×69%、高 = 栏高 ×0.72、圆角 = 高/2',
+    testWidgets('选中块：宽 = 格宽 ×114%、高 = 栏高 ×0.93、圆角 = 高/2',
         (WidgetTester tester) async {
-      // 69% 来自真机复验重测（见 nav_bar_style.dart 文件头）：原 1.09 量的是
-      // 图标文字簇外沿、不是选中块，真机做成 94% 时观感是"灰白大药丸压住图标"。
-      expect(NavBarStyle.pillWidthFactor, 0.69);
-      expect(NavBarStyle.pillHeightFactor, 0.72);
-      expect(NavBarStyle.pillRadius(68 * 0.72), closeTo(24.48, 0.01));
+      // 1.14 来自**原生截图**实测（宽 210 / 格宽 184），见文件头。
+      expect(NavBarStyle.pillWidthFactor, 1.14);
+      expect(NavBarStyle.pillHeightFactor, 0.93);
+      expect(NavBarStyle.pillRadius(62 * 0.93), closeTo(28.83, 0.01));
     });
 
-    testWidgets('栏体实际渲染尺寸 = 68 高（松约束下不被顶高）',
+    testWidgets('栏体实际渲染尺寸 = 62 高（松约束下不被顶高）',
         (WidgetTester tester) async {
       await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
       await tester.pumpAndSettle();
 
       // 这条正是「宿主必须镜像 Stack + Positioned」的护栏：紧约束下这里会是
-      // 582（实测踩过），松约束下才是 68。
-      expect(tester.getSize(_shellFinder()).height, 68);
+      // 582（实测踩过），松约束下才是 62。
+      expect(tester.getSize(_shellFinder()).height, 62);
       // 左右各留 16。
-      expect(tester.getSize(_shellFinder()).width, 800 - 16 * 2);
+      expect(tester.getSize(_shellFinder()).width, 800 - 13 * 2);
       // 距屏幕底边 18。
       expect(
         600 - tester.getBottomLeft(_shellFinder()).dy,
-        18,
+        27,
         reason: '底栏应浮起 18（verticalPadding）',
       );
     });
@@ -137,10 +142,10 @@ void main() {
       }
     });
 
-    testWidgets('选中块实测：宽 = 格宽 ×0.69、高 = 栏高 ×0.72、圆角 = 高/2',
+    testWidgets('选中块实测：宽 = 格宽 ×1.14、高 = 栏高 ×0.93、圆角 = 高/2',
         (WidgetTester tester) async {
-      // 用参考图的同宽屏（592）反推：实测选中块 x 68~164 ⇒ 宽 96，格宽 ≈140
-      // ⇒ 69%。这是 2026-10-12 真机复验修正后的值（原 1.09 量错了对象）。
+      // 参考图**原生截图**（881×1920@2x）实测：选中块 x 57..266 ⇒ 宽 210；
+      // 标签中心间距 184 ⇒ `210 / 184 = 1.14`。
       tester.view.physicalSize = const Size(592, 1280);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -156,14 +161,15 @@ void main() {
       final double cell = tester.getSize(_shellFinder()).width / _kTabs.length;
       final Rect pill = tester.getRect(_pillFinder());
 
-      expect(pill.width, closeTo(cell * 0.69, 1.0));
-      // ⭐ 钉住「不能回到过宽的老值」：1.09 会让选中块撑满整格。
+      expect(pill.width, closeTo(cell * 1.14, 1.0));
+      // ⭐ 钉住「选中块**向两侧溢出**格子」这个实测特征（宽 210 > 格宽 184）。
+      // 曾经的 0.69（来自二次压缩的录屏帧）会让底衬明显偏窄，与参考图不符。
       expect(
         pill.width,
-        lessThan(cell * 0.8),
-        reason: '选中块过宽（参考图实测占格宽 69%），会盖住图标观感变差',
+        greaterThan(cell),
+        reason: '参考图实测选中块宽 210 > 格宽 184，即溢出格子',
       );
-      expect(pill.height, closeTo(68 * 0.72, 1.0));
+      expect(pill.height, closeTo(62 * 0.93, 1.0));
       final BorderRadius radius = tester
           .widget<ClipRRect>(_pillFinder())
           .borderRadius
@@ -229,15 +235,15 @@ void main() {
           .where((DecoratedBox d) => d.decoration is BoxDecoration)
           // ⭐ 只取**选中块**那一个DecoratedBox。两者都是
           //    `BorderRadius.circular`，光看类型分不开；而圆角值又太接近
-          //    （栏体 24 / 选中块 24.48）。改用**唯一可靠**的判据：
-          //    选中块的圆角 = `pillRadius(栏高 × 0.72)`，逐值相等；
-          //    栏体是24，不等。
+          //    （栏体 31 / 选中块 28.83）。改用**唯一可靠**的判据：
+          //    选中块的圆角 = `pillRadius(栏高 × 0.93)`，逐值相等；
+          //    栏体是 31，不等。
           .where((DecoratedBox d) {
             final BoxDecoration b = d.decoration as BoxDecoration;
             final BorderRadiusGeometry? r = b.borderRadius;
             if (r == null) return false;
             final BorderRadius resolved = r.resolve(TextDirection.ltr);
-            return (resolved.topLeft.x - NavBarStyle.pillRadius(68 * 0.72)).abs() < 0.01;
+            return (resolved.topLeft.x - NavBarStyle.pillRadius(62 * 0.93)).abs() < 0.01;
           })
           .map((DecoratedBox d) => (d.decoration as BoxDecoration).border)
           .whereType<Border>()
@@ -253,36 +259,35 @@ void main() {
       }
     });
 
-    testWidgets('暗色选中块纱罩是冷灰蓝（中性白会偏紫）', (WidgetTester tester) async {
-      // 参考图实测 rgb(47,52,58)、hue 213 / 饱和度 0.19；中性白做出来是
-      // hue 230、饱和度 0.09（偏紫），与青蓝主题不对路。
-      final Color dark = NavBarStyle.pillScrimColor(Brightness.dark);
-      // 蓝通道必须**高于**红通道（冷色），这是「不是中性白」的最小判据。
-      expect(
-        dark.b,
-        greaterThan(dark.r),
-        reason: '暗色选中块应偏冷（b > r），中性白会偏紫',
-      );
-      // 也不能过蓝——那样会变成一坨蓝。
-      expect(dark.b - dark.r, lessThan(60));
+    testWidgets('选中块纱罩是**纯中性灰**（实测 R=G=B，无色偏）',
+        (WidgetTester tester) async {
+      // 参考图**原生截图**实测选中块 rgb(74,74,74)—— R=G=B，饱和度为 0。
+      //此前据二次压缩帧定的「冷灰蓝0x9FB4C8」是压缩色偏产物，已作废。
+      for (final Brightness b in Brightness.values) {
+        final Color c = NavBarStyle.pillScrimColor(b);
+        expect(
+          c.r,
+          c.g,
+          reason: '暗色选中块纱罩必须中性（R=G=B），实测 rgb(74,74,74)',
+        );
+        expect(c.g, c.b, reason: '中性灰：G=B');
+      }
     });
 
-    testWidgets('选中块 / 栏体亮度比 ≈ 2.7×（真机实测 60:18 偏亮）',
+    testWidgets('选中块 / 栏体亮度比 ≈ 3.2×（实测 74:23）',
         (WidgetTester tester) async {
       await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
       await tester.pumpAndSettle();
 
-      // 参考图 52:19 ≈ 2.7×；原「白纱 0.16」做出来 60:18 = 3.3× 偏亮。
-      // 0.21 是**反解**值：18 + 0.21×(180−18) ≈ 52（纱罩改冷灰蓝后有效亮度
-      // 是 180 而非纯白 255 —— 这正是之前偏亮的机制）。
+      // 原生截图实测：栏体空处 lum 23、选中块 lum 74。
+      // 0.22 是**反解**值：23 + 0.22 × (255 − 23) ≈ 73.6 ≈ 74。
       expect(
         NavBarStyle.pillScrimAlpha(Brightness.dark),
-        0.21,
-        reason: '纱罩 alpha 是从目标亮度 52 反解出来的，不是拍的',
+        0.22,
+        reason: '纱罩 alpha 由目标亮度 74 反解（栏体 23 → 74），不是拍的',
       );
-      // 钉住「比栏体亮、但不能亮到3×以上」。
       final double barA = NavBarStyle.scrimAlpha(Brightness.dark);
-      expect(NavBarStyle.pillScrimAlpha(Brightness.dark), greaterThan(barA));
+      expect(NavBarStyle.pillScrimAlpha(Brightness.dark), greaterThan(barA * 2));
     });
   });
 
