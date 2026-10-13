@@ -10,10 +10,10 @@
 // 它的核心却要承担全部重量。
 //
 // **换来的三个实质收益**（不是「更干净」这种虚话）：
-//   ① 几何 100% 可控——实测参考图标签中心**严格等分**（间距 129/129/129），
-//      而库默认 `spacing: 8` 会破坏等分；自研直接按`可用宽 / n` 均分。
-//   ② 选中块宽度可定——实测 = 格宽的 **69%**（略微内缩），库的指示块
-//      宽度由内部计算、无法按实测值定。
+//   ① 几何 100% 可控——实测参考图标签中心**严格等分**（间距 184/185/183），
+//      而库默认 `spacing: 8` 会破坏等分；自研直接按 `标签区宽 / n` 均分。
+//   ② 选中块宽度可定——实测 = 格宽的 **114%**（210px/184px，向两侧溢出格子），
+//      库的指示块宽度由内部计算、无法按实测值定。
 //   ③ 测试开销归零——库玻璃在 `flutter test` 软件光栅下每帧 620~662ms 真实
 //      异步开销（tech-usage §2.26），本控件不依赖着色器，测试可正常
 //      `pumpAndSettle`。
@@ -240,7 +240,7 @@ class _FrostedNavBarState extends State<FrostedNavBar>
   }
 }
 
-/// 栏体外壳：磨砂 + 纱罩 + 上缘高光。
+/// 栏体外壳：磨砂 + 纱罩 + 细亮边 + **左右缘高光带**。
 class _GlassShell extends StatelessWidget {
   const _GlassShell({
     required this.brightness,
@@ -260,14 +260,30 @@ class _GlassShell extends StatelessWidget {
           decoration: BoxDecoration(
             color: NavBarStyle.scrimColor(brightness),
             borderRadius: BorderRadius.circular(NavBarStyle.barRadius),
-            // 上缘一道亮边 = 「玻璃有厚度」的关键线索（参考图可见）。
+            // 上下缘一道细亮边 = 「玻璃有厚度」的线索（参考图实测 2~3px）。
             border: Border.all(
               color: Colors.white.withValues(
                 alpha: NavBarStyle.barBorderAlpha,
               ),
             ),
           ),
-          child: child,
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              // ⭐ 左右缘各一条高光带（实测 lum 117~185 vs 栏体 23），外沿锐利、
+              // 向内 15dp 柔缓淡出。**必须是 `Stack` 的直接子层**：渐变靠
+              // `DecoratedBox` 的 `foregroundDecoration` 叠在内容之上，若做成
+              // 子widget 会被 `Stack` 裁到内容后面而看不见（同 §2.88 的采样
+              // 方向纪律）。
+              return DecoratedBox(
+                position: DecorationPosition.foreground,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(NavBarStyle.barRadius),
+                  gradient: NavBarStyle.edgeGlowGradient(constraints.maxWidth),
+                ),
+                child: child,
+              );
+            },
+          ),
         ),
       ),
     );
@@ -369,13 +385,17 @@ class _TabItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme colors = Theme.of(context).colorScheme;
+    // ⚠️ 参考图实测**选中与未选中的图标/文字亮度几乎一致**（图标中位数
+    // 242~247、文字 215~223）⇒ 选中态**只靠灰底衬区分**。故两者同取
+    // `onSurface`，只留一档极小的 alpha 差供无障碍/聚焦可辨。若未选中改用
+    // `onSurfaceVariant`，未选中项会明显发灰——这正是 10-12 那版"太丑"的
+    // 另一半原因（当时把它归到选中块宽度上了，真机截图才暴露）。
     final Color labelColor = selected
         ? colors.onSurface.withValues(alpha: NavBarStyle.selectedLabelAlpha)
         : colors.onSurface.withValues(alpha: NavBarStyle.unselectedLabelAlpha);
     final Color iconColor = selected
-        ? colors.onSurface.withValues(alpha: NavBarStyle.selectedLabelAlpha)
-        : colors.onSurfaceVariant
-            .withValues(alpha: NavBarStyle.unselectedLabelAlpha);
+        ? colors.onSurface.withValues(alpha: NavBarStyle.selectedIconAlpha)
+        : colors.onSurface.withValues(alpha: NavBarStyle.unselectedIconAlpha);
 
     return Semantics(
       button: true,

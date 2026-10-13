@@ -4,22 +4,31 @@
 // 本文件钉什么
 // ══════════════════════════════════════════════════════════════════════════════
 // 参考图**原生截图**实测值换算出的几何（实测记录见 `nav_bar_style.dart` 文件头）：
-//   · 标签中心**严格等分**（实测间距 184 / 185 / 183）⇒ 按`可用宽 / n` 均分；
-//   · 选中块宽 = 格宽的 **114%**（实测 x 57..266 ⇒ 宽 210/ 格宽 184），
+//   · 标签中心**严格等分**（实测间距 184 / 185 / 183）⇒ 按 `标签区宽 / n` 均分；
+//     标签区**居中 + 左右侧留白 0.25 格宽**（实测侧留白 46/45）；
+//   · 选中块宽 = 格宽的 **114%**（实测 x 57..266 ⇒ 宽 210 / 格宽 184），
 //     即**向两侧溢出**格子；选中块中心与标签中心对齐（实测差 1.5px）；
-//   · 选中块高 = 栏体高的 **0.93**（实测 115/ 124），圆角 = 高 / 2（胶囊）；
-//   · 栏体 62 高 / 左右外边距 13 / 浮起 27。
+//   · 选中块高 = 栏体高的 **0.93**（实测 115/122），圆角 = 高 / 2（胶囊）；
+//   · 栏体 62 高 / 左右外边距 13 / 浮起 27 / **圆角 15（不是胶囊 h/2）**。
 //
 // ⚠️ 几何值在 2026-10-12 → 10-13 之间**返工过一次**：10-12 用**二次压缩的
 // 录屏帧**测得「选中块占格宽 69%」并据此判定更早的 109% 是量错对象；10-13 用
 // **原生截图**重测发现压缩帧不可靠（原生图里选中块宽 210 > 格宽 184，目视也
 // 明显是占满一格的宽块）。⇒ 测量参考图**必须用原生截图**，压缩帧会抹平边界。
 //
+// ⚠️ 另有一处**测量对象**错误：10-13 上午把屏幕**手势指示条**（x 297..578、
+// y 1887..1899）当成选中块，据此得出「通栏贴边 / 13px 细条 / 选中项是第 3 格」
+// 三个错误结论。教训：**先定位栏体的上下缘，再在栏体内部找特征**。
+//
 // 这些是「用库时拿不到」的部分（库的指示块宽度由内部计算、`spacing: 8` 还会
 // 破坏等分），所以必须钉死——回潮即红。
 //
-// 断言一律**硬编码字面量**，不引用 `NavBarStyle` 的常量：引用即同义反复、
-// 永远红不了（同 `overlay_style_test` / `glass_material_test` 的口径）。
+// ⭐ **断言一律硬编码字面量，且必须钉「实际渲染出来的值」而非仅常量**：
+// 2026-10-13 变异③ 实测——把未选中图标改回 `onSurfaceVariant` 而四个 alpha
+// 常量全部不动时，只钉常量的用例**依然全绿**。故图标/圆角/渐变三类特征都额外
+// 钉了 widget 树里的真实取值。
+// 断言不引用 `NavBarStyle` 的常量作为**唯一**判据（引用即同义反复、永远红不了，
+// 同 `overlay_style_test` / `glass_material_test` 的口径）。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/settings/perf_prefs_store.dart';
@@ -85,13 +94,32 @@ void main() {
   tearDown(GlassRuntime.resetForTest);
 
   group('几何：实测值字面量契约', () {
-    testWidgets('栏体尺寸：62 高 / 左右 13 / 浮起 27', (WidgetTester tester) async {
+    testWidgets('栏体尺寸：62 高 / 左右 13 / 浮起 27 / 圆角 15',
+        (WidgetTester tester) async {
       expect(NavBarStyle.barHeight, 62);
       expect(NavBarStyle.horizontalPadding, 13);
       expect(NavBarStyle.verticalPadding, 27);
-      expect(NavBarStyle.barRadius, 31);
       // 标签等分 ⇒ 额外间距必须是 0（库的 spacing: 8 正是破坏等分的元凶）。
       expect(NavBarStyle.tabSpacing, 0);
+    });
+
+    testWidgets('⭐ 栏体圆角 = 15，**不是胶囊**（h/2）',
+        (WidgetTester tester) async {
+      // 参考图原生截图实测：右下角剪影从 (853,1850) 内收到 (812,1864)，
+      // y1848~1855 段与 R=30px=15dp 圆弧吻合（偏差 <3px）；而栏体左右缘
+      // x26/x853 从顶到底基本直行 ⇒ 直边 + 圆角矩形，不是胶囊。
+      expect(NavBarStyle.barRadius, 15);
+      //这条是「不是胶囊」的判据：胶囊 = h/2 = 31，把圆角定成 h/2 会让栏体
+      // 两侧收成半圆，与参考图形态完全不符（10-12 那版的可见差异）。
+      expect(NavBarStyle.barRadius * 2, lessThan(NavBarStyle.barHeight));
+      // ⭐ 实际渲染的 ClipRRect 圆角也须是 15（常量改了但布局没跟上会红）。
+      await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
+      await tester.pumpAndSettle();
+      final BorderRadius shellRadius = tester
+          .widget<ClipRRect>(_shellFinder())
+          .borderRadius
+          .resolve(TextDirection.ltr);
+      expect(shellRadius.topLeft.x, 15);
     });
 
     testWidgets('选中块：宽 = 格宽 ×114%、高 = 栏高 ×0.93、圆角 = 高/2',
@@ -292,7 +320,7 @@ void main() {
     });
   });
 
-  group('材质对照真机复验修正（2026-10-12）', () {
+  group('材质对照真机复验修正（2026-10-12 / 10-13 三轮返工）', () {
     testWidgets('选中块描边 = 0：硬描边会把边界变成一根白线',
         (WidgetTester tester) async {
       await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
@@ -336,14 +364,14 @@ void main() {
 
     testWidgets('选中块纱罩是**纯中性灰**（实测 R=G=B，无色偏）',
         (WidgetTester tester) async {
-      // 参考图**原生截图**实测选中块 rgb(74,74,74)—— R=G=B，饱和度为 0。
-      //此前据二次压缩帧定的「冷灰蓝0x9FB4C8」是压缩色偏产物，已作废。
+      // 参考图**原生截图**实测选中块 rgb(73,73,73)—— R=G=B，饱和度为 0。
+      // 此前据二次压缩帧定的「冷灰蓝 0x9FB4C8」是压缩色偏产物，已作废。
       for (final Brightness b in Brightness.values) {
         final Color c = NavBarStyle.pillScrimColor(b);
         expect(
           c.r,
           c.g,
-          reason: '暗色选中块纱罩必须中性（R=G=B），实测 rgb(74,74,74)',
+          reason: '选中块纱罩必须中性（R=G=B），实测 rgb(73,73,73)',
         );
         expect(c.g, c.b, reason: '中性灰：G=B');
       }
@@ -354,15 +382,114 @@ void main() {
       await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
       await tester.pumpAndSettle();
 
-      // 原生截图实测：栏体空处 lum 23、选中块 lum 74。
-      // 0.22 是**反解**值：23 + 0.22 × (255 − 23) ≈ 73.6 ≈ 74。
+      // 原生截图实测：栏体空处 lum 23、选中块 lum 73。
+      // 0.215 是**反解**值：23 + 0.215 × (255 − 23) = 72.9 ≈ 73。
       expect(
         NavBarStyle.pillScrimAlpha(Brightness.dark),
-        0.22,
-        reason: '纱罩 alpha 由目标亮度 74 反解（栏体 23 → 74），不是拍的',
+        closeTo(0.215, 0.005),
+        reason: '纱罩 alpha 由目标亮度 73 反解（栏体 23 → 73），不是拍的',
       );
       final double barA = NavBarStyle.scrimAlpha(Brightness.dark);
       expect(NavBarStyle.pillScrimAlpha(Brightness.dark), greaterThan(barA * 2));
+    });
+
+    testWidgets('⭐ 亮色档选中块**压黑**而非加白（否则在亮色下几乎不可见）',
+        (WidgetTester tester) async {
+      // 栏体亮色档已叠白纱 0.42，若选中块再加白纱会看不见。
+      expect(
+        NavBarStyle.pillScrimColor(Brightness.light).computeLuminance(),
+        lessThan(NavBarStyle.scrimColor(Brightness.light).computeLuminance()),
+        reason: '亮色下选中块必须比栏体暗（压黑），实测参考图为暗色场景',
+      );
+    });
+
+    testWidgets('⭐ 栏体左右缘各有一条高光带（外沿锐、向内渐隐）',
+        (WidgetTester tester) async {
+      // 参考图原生截图实测：左缘 y1755 处 x26..68 宽 42px lum **185**；
+      // y1819 处 x26..52 lum 117；y1850 处 x26..60 lum 85。
+      // 栏体空处只有 lum 23 ⇒ 这条亮带是设计元素（背后内容的模糊边界
+      // 会有 ~36px 过渡，实测只有 4px 锐边）。
+      expect(NavBarStyle.edgeGlowWidth, 15);
+      expect(NavBarStyle.edgeGlowAlpha, closeTo(0.40, 0.01));
+      // 反解：栏体 23 + 0.40 × (255 − 23) = 115 ≈ 实测 117。
+      expect(23 + NavBarStyle.edgeGlowAlpha * (255 - 23), closeTo(117, 4));
+
+      await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
+      await tester.pumpAndSettle();
+
+      // 渐变必须真的挂到栏体那层 DecoratedBox 上（`foregroundDecoration`
+      // 叠在内容之上），否则高光带会被选中块/标签遮住而不可见。
+      final LinearGradient? glow = tester
+          .widgetList<DecoratedBox>(find.byType(DecoratedBox))
+          .map((DecoratedBox d) => d.decoration)
+          .whereType<BoxDecoration>()
+          .map((BoxDecoration b) => b.gradient)
+          .whereType<LinearGradient>()
+          .firstOrNull;
+      expect(glow, isNotNull, reason: '栏体未挂左右缘高光带渐变');
+      // 两端亮、中间透明。
+      final LinearGradient g = glow!;
+      expect(g.colors.length, 4);
+      expect(g.colors.first.a, closeTo(NavBarStyle.edgeGlowAlpha, 0.01));
+      expect(g.colors.last.a, closeTo(NavBarStyle.edgeGlowAlpha, 0.01));
+      expect(g.colors[1].a, 0.0);
+      expect(g.colors[2].a, 0.0);
+      // 渐变带宽 = edgeGlowWidth / 栏体宽。
+      // `LinearGradient.stops` 是可空的（null = 均分），故显式 `!`。
+      expect(g.stops, isNotNull);
+      expect(g.stops![0], 0.0);
+      expect(g.stops![1], closeTo(15 / 774, 0.01));
+      expect(g.stops![2], closeTo(1 - 15 / 774, 0.01));
+    });
+
+    testWidgets('⭐ 选中与未选中的图标/文字同色（实测亮度几乎一致）',
+        (WidgetTester tester) async {
+      // 参考图实测：四个标签的图标中位亮度 242~247、文字 215~223，选中与否
+      // 几乎无差⇒ 选中态**只靠灰底衬区分**。未选中若走 `onSurfaceVariant`
+      // 会明显发灰——这是「太丑」的另一半原因。
+      expect(NavBarStyle.selectedIconAlpha, 0.95);
+      expect(NavBarStyle.unselectedIconAlpha, 0.92);
+      // 两档差必须极小（<0.05），保证观感上「几乎同色」。
+      expect(
+        NavBarStyle.selectedIconAlpha - NavBarStyle.unselectedIconAlpha,
+        lessThan(0.05),
+      );
+      expect(
+        NavBarStyle.selectedLabelAlpha - NavBarStyle.unselectedLabelAlpha,
+        lessThan(0.05),
+      );
+
+      // ⭐ **必须钉实际渲染出来的颜色**，光钉常量是「钉了个寂寞」——2026-10-13
+      // 变异③ 实测：把未选中图标改回 `onSurfaceVariant`（四个常量全部不动），
+      // 上面这些常量断言**依然全绿**。真正的判据在这里。
+      tester.view.physicalSize = const Size(592, 1280);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(_navHost(
+        GlassQualityTier.high,
+        selectedIndex: 0,
+        onTabSelected: _noop,
+      ));
+      await tester.pumpAndSettle();
+
+      final ColorScheme colors =
+          Theme.of(tester.element(find.byType(FrostedNavBar))).colorScheme;
+      final List<Icon> icons =
+          tester.widgetList<Icon>(find.byType(Icon)).toList();
+      expect(icons.length, _kTabs.length, reason: '每个标签一个图标');
+      // 第 0 格选中、第 1 格未选中：两者 RGB 通道须**完全相同**，只有 alpha 不同。
+      // `onSurfaceVariant` 的 RGB 与 `onSurface` 不同 ⇒ 这条会红。
+      expect(icons[0].color!.r, icons[1].color!.r,
+          reason: '选中/未选中图标 RGB 必须相同（实测参考图亮度几乎一致）');
+      expect(icons[0].color!.g, icons[1].color!.g);
+      expect(icons[0].color!.b, icons[1].color!.b);
+      expect(icons[0].color!.r, colors.onSurface.r);
+      expect(icons[0].color!.g, colors.onSurface.g);
+      expect(icons[0].color!.b, colors.onSurface.b);
+      // 只有 alpha 有极小差异。
+      expect(icons[0].color!.a, greaterThan(icons[1].color!.a));
+      expect(icons[0].color!.a - icons[1].color!.a, lessThan(0.05));
     });
   });
 
