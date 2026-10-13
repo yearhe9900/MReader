@@ -32,8 +32,26 @@
 //   暗色下纱罩换**黑色**（压暗提对比），不是加白。
 // · **选中块**：`AnimatedPositioned`（[NavBarStyle.switchCurve] = `easeOutBack`
 //   提供过冲回弹）+ `Transform.scale` 做拖动跟手拉伸。
+// · **拖动**：跟手位移走 `Transform.translate`（无动画、逐帧 1:1），切换位移走
+//   `AnimatedPositioned`（过冲回弹）。松手时**吸附到最近的格子**并切换 tab，同时把
+//   手指偏离量平滑归零——归零动画刻意与 `AnimatedPositioned` **同曲线
+//   （[NavBarStyle.switchCurve]）同时长（[NavBarStyle.switchDuration]）**。
+//   两者同曲线时组合位移退化为「在曲线空间里的直线插值」：
+//
+//   ```text
+//     left(t) = lerp(旧格, 新格, c(t))   dx(t) = D × (1 − c(t))
+//     合成(t) = left(旧) + D + c(t) × (left(新) − left(旧) − D)
+//   ```
+//
+//   ⇒ 起点恒等于松手位置、终点恒等于新格，中途**不绕路**。若两条动画曲线/时长
+//   不一致，合成位移会先弹回旧格再滑向新格（参考视频里是「一边收缩一边平移」）。
+// · **左右边界**：选中块**拉伸后**的左右缘都不得越出栏体（参考视频实测：右缘顶在
+//   栏体内缘 575 / 578 就不再外扩）。`Stack.clipBehavior: Clip.none` 不做裁剪，
+//   故必须在算位置时**显式 clamp 选中块中心**。
 // · **档位退化**：「关」档退化为 Material [NavigationBar]（`UI-06` ②），
 //   中 / 低档钉 standard 口径不降级外观，仅关掉交互高光。
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import 'glass_scope.dart';
@@ -94,45 +112,143 @@ class FrostedNavBar extends StatefulWidget {
 
 class _FrostedNavBarState extends State<FrostedNavBar>
     with SingleTickerProviderStateMixin {
-  /// 拖动跟手的横向偏移（px，下一次布局结束后归零）。
+  /// 松手后的归零动画。
+  ///
+  /// 时长 / 曲线**必须**与 [_AnimatedPill] 里 `AnimatedPositioned` 用的那条一致，
+  /// 否则组合位移会绕路（见文件头）。
+  late final AnimationController _settle = AnimationController(
+    vsync: this,
+    duration: NavBarStyle.switchDuration,
+  );
+
+  /// 加了曲线的归零进度（`easeOutBack` 会给出一段 > 1 的过冲）。
+  late final CurvedAnimation _settleCurve = CurvedAnimation(
+    parent: _settle,
+    curve: NavBarStyle.switchCurve,
+  );
+
+  /// 拖动跟手的横向偏移（px，手指按下期间逐帧 1:1）。
   double _dragDx = 0;
 
-  /// 拖动是否正在进行（用于抑制点击误触）。
+  /// 松手瞬间的偏移量（归零动画的起点）。
+  double _releaseDx = 0;
+
+  /// 本次拖动的起始下标（松手时按「拖过几格」推算目标格）。
+  int _dragStartIndex = 0;
+
+  /// 拖动是否进行中（决定选中块位移的来源：手指偏移 vs 归零动画）。
   bool _dragging = false;
+
+  /// 是否吞掉紧随拖动之后的那次 tap（拖动末端的抬手会再触发一次 tap）。
+  bool _suppressTap = false;
+
+  /// 上一帧布局算出的格宽（拖动收尾在 build 之外，需缓存）。
+  double _cellWidth = 0;
+
+  /// 选中块当前的横向偏移。
+  double get _pillDx =>
+      _dragging ? _dragDx : _releaseDx * (1 - _settleCurve.value);
 
   /// 开关档（Material退化）。
   bool get _glassOff => !GlassScope.configOf(context).glassEnabled;
 
+  @override
+  void dispose() {
+    _settleCurve.dispose();
+    _settle.dispose();
+    super.dispose();
+  }
+
   void _onTap(int index) {
-    if (_dragging) {
-      // 拖动的收尾已在 `_onHorizontalDragEnd` 处理，这里吞掉拖动后的误触点击。
+    if (_suppressTap) {
+      // 拖动的收尾已在 `_onDragEnd` 处理，这里吞掉拖动后的误触点击。
       return;
     }
     widget.onTabSelected(index);
   }
 
-  /// 跟手形变：拖动时选中块跟着手指横向位移并拉伸。
-  ///
-  /// 参考图的拖动形变是「选中块被手指拽着走 + 横向拉宽」，松手弹回目标格。
-  /// 这里只做**视觉跟手**，不实现「拖到哪格就切哪格」——那是交互语义变更，
-  /// 需另行拍板（PRD 无对应验收项）。
+  /// 跟手形变：拖动时选中块跟着手指横向位移并拉伸（[NavBarStyle.dragStretchPerCell]）。
   void _onDragUpdate(DragUpdateDetails details) {
     setState(() {
+      if (!_dragging) {
+        // 首次 update：上一轮可能还有归零动画在跑，先打断并记下起始格。
+        _dragging = true;
+        _dragStartIndex = widget.selectedIndex;
+        _dragDx = 0;
+        _releaseDx = 0;
+        _settle.value = 0;
+      }
       _dragDx += details.delta.dx;
-      _dragging = true;
+      _suppressTap = true;
     });
   }
 
-  /// 松手：弹回（`_dragDx` 归零 ⇒ [AnimatedPositioned] 走弹簧曲线回位）。
+  /// 松手：**吸附到最近的格子**并把手指偏离量按同一曲线归零。
+  ///
+  /// 吸附目标按「偏移量相当于几格」四舍五入（选中块中心间距就是格宽，故
+  /// `round(dx / cellWidth)` 即步数），再夹到合法下标区间。
   void _onDragEnd(DragEndDetails details) {
-    setState(() => _dragDx = 0);
+    // ⚠️⚠️ 这条守卫是 2026-10-13 真机「无法点击」的**主修法**（变异判红实证：
+    // 把守卫摘掉、并让 `_onDragCancel` 委托到本方法，`onTap` 就会被吞掉）。
+    //
+    // `_dragging == false` ⇒ 本次拖动**一次 update 都没进过**。这有两种来路：
+    //   ① 识别器输给了 tap —— 指针抬起、未越过 slop，它 `resolve(rejected)` 后
+    //      仍会走 `onCancel`，随即同级 `InkWell` 的 `onTap` 就触发了；
+    //   ② 识别器刚接受就抬手。
+    // 两种都必须**当作无手势**：否则会顺手置 `_suppressTap` 吞掉那次 `onTap`
+    // （①），或按陈旧的 `_dragStartIndex` 把选中块跳到无关的格子（②）。
+    if (!_dragging) {
+      return;
+    }
+    final int n = widget.tabs.length;
+    final double cell = _cellWidth;
+    final int target = cell <= 0
+        ? widget.selectedIndex
+        : (_dragStartIndex + (_dragDx / cell).round()).clamp(0, n - 1);
+
+    setState(() {
+      _releaseDx = _dragDx;
+      _dragDx = 0;
+      _dragging = false;
+      _suppressTap = true;
+    });
+    _settle.forward(from: 0);
+    if (target != widget.selectedIndex) {
+      widget.onTabSelected(target);
+    }
+
     // 延后一帧再解除误触拦截：`GestureDetector` 的 tap 在 drag end 之后才判定，
-    // 立即置false 会让拖动末端的抬手误触发切换。
+    // 立即置 false 会让拖动末端的抬手误触发切换。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        setState(() => _dragging = false);
+      if (mounted && _suppressTap) {
+        setState(() => _suppressTap = false);
       }
     });
+  }
+
+  /// 手势被打断（拖动**已真正开始**后被外部手势抢占）。
+  ///
+  /// ⚠️⚠️ **这个回调「点一下」就会来**（2026-10-13 真机 + 测试双重复现）：
+  /// `HorizontalDragGestureRecognizer` 在指针抬起且未越过 slop 时走
+  /// `resolve(rejected)` → `onCancel`，**它不是「拖动松手」**。而同级 `InkWell`
+  /// 的 `onTap` 在**同一次事件派发里紧接着**执行（探针实测顺序：
+  /// `onDragCancel(_dragging=false)` → `onTap(_suppressTap=true)`）。
+  ///
+  /// 故本方法**绝不置 `_suppressTap`**：一旦置上，紧接着的 `onTap` 会看到拦截位
+  /// 已开而直接 return ⇒ **整个底栏点不动**（真机现象：「无法点击」；且因为
+  /// `onCancel` 每次点击都会来，是**每一次点击**都被吞，不是只吞第一次）。
+  void _onDragCancel() {
+    if (!_dragging) {
+      // 从没真正拖动过 ⇒ 识别器输给了 tap，状态干净，一个字都不要改。
+      return;
+    }
+    // 真的拖过又被抢占：原地吸附回当前格，**不切换、不拦截点击**。
+    setState(() {
+      _releaseDx = _dragDx;
+      _dragDx = 0;
+      _dragging = false;
+    });
+    _settle.forward(from: 0);
   }
 
   @override
@@ -189,46 +305,60 @@ class _FrostedNavBarState extends State<FrostedNavBar>
                   NavBarStyle.barHeight * NavBarStyle.pillHeightFactor;
               final double pillWidth = cellWidth * NavBarStyle.pillWidthFactor;
 
+              // 拖动收尾发生在 build 之外（手势回调），故把布局派生量缓存下来，
+              // 供 `_onDragEnd` 按「偏移量相当于几格」推算吸附目标。
+              _cellWidth = cellWidth;
+
               return _GlassShell(
                 brightness: brightness,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onHorizontalDragUpdate: _onDragUpdate,
                   onHorizontalDragEnd: _onDragEnd,
-                  onHorizontalDragCancel: () => setState(() => _dragDx = 0),
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: <Widget>[
-                      // 选中块（在下层，内容压在它上面）。
-                      //⚠️ `AnimatedPositioned` 必须是 `Stack` 的**直接**子节点，
-                      // 不能套 `Positioned.fill`（会丢父约束导致布局断言）。故侧
-                      // 内缩直接并入它的 `left`。
-                      _AnimatedPill(
-                        index: widget.selectedIndex,
-                        sideInset: sideInset,
-                        cellWidth: cellWidth,
-                        pillWidth: pillWidth,
-                        pillHeight: pillHeight,
-                        dragDx: _dragDx,
-                        brightness: brightness,
-                      ),
-                      // 标签行。
-                      Padding(
-                        padding: EdgeInsets.symmetric(horizontal: sideInset),
-                        child: Row(
-                          children: <Widget>[
-                            for (int i = 0; i < widget.tabs.length; i++)
-                              Expanded(
-                                child: _TabItem(
-                                  tab: widget.tabs[i],
-                                  selected: i == widget.selectedIndex,
-                                  onTap: () => _onTap(i),
-                                ),
-                              ),
-                          ],
+                  onHorizontalDragCancel: _onDragCancel,
+                  // 归零动画按帧驱动选中块；标签行不参与动画，作为 `child` 缓存
+                  // （否则每帧重建整行 `InkWell`）。
+                  child: AnimatedBuilder(
+                    animation: _settleCurve,
+                    builder: (BuildContext context, Widget? rowChild) => Stack(
+                      clipBehavior: Clip.none,
+                      children: <Widget>[
+                        // 选中块（在下层，内容压在它上面）。
+                        //⚠️ `AnimatedPositioned` 必须是 `Stack` 的**直接**子节点，
+                        // 不能套 `Positioned.fill`（会丢父约束导致布局断言）。故侧
+                        // 内缩直接并入它的 `left`。
+                        //⚠️ 也**不能**把它包进 `AnimatedBuilder`——那会让
+                        // `Positioned` 不再是 Stack 直接子节点而报 ParentData 断言。
+                        // 故动画器包在 Stack **外面**。
+                        _AnimatedPill(
+                          index: widget.selectedIndex,
+                          sideInset: sideInset,
+                          cellWidth: cellWidth,
+                          pillWidth: pillWidth,
+                          pillHeight: pillHeight,
+                          available: available,
+                          dragDx: _pillDx,
+                          brightness: brightness,
                         ),
+                        // 标签行。
+                        ?rowChild,
+                      ],
+                    ),
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: sideInset),
+                      child: Row(
+                        children: <Widget>[
+                          for (int i = 0; i < widget.tabs.length; i++)
+                            Expanded(
+                              child: _TabItem(
+                                tab: widget.tabs[i],
+                                selected: i == widget.selectedIndex,
+                                onTap: () => _onTap(i),
+                              ),
+                            ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
               );
@@ -285,9 +415,19 @@ class _GlassShell extends StatelessWidget {
 /// ⚠️ **位置动画与拖动跟手必须分两套机制**（本轮实测踩到）：
 /// 拖动偏移若并入 [AnimatedPositioned] 的 `left`，每一帧拖动更新都会**重启
 /// 那条 420ms 弹簧**，选中块被动画持续「拉回去」，实测表现为**完全不动**
-/// （`during == before`，不是「动得慢」）。故：
-///   · 切档位移 → [AnimatedPositioned]（`easeOutBack` 过冲回弹）；
-///   · 拖动跟手 → [Transform]（无动画，逐帧 1:1 跟手）。
+/// （`during == before`，不是「动得慢」）。故三件事各走各的通道：
+///
+/// ```text
+///   · 切档位移   → AnimatedPositioned(left)      switchCurve / switchDuration
+///   · 拖动跟手   → Transform.translate(dx)       无动画，逐帧 1:1
+///   · 拖动拉伸   → Transform.scale(scaleX)       无动画，∝ |dx|
+/// ```
+///
+/// 松手时 `dx` 由 `_FrostedNavBarState` 的归零动画驱动**衰减到 0**——那条动画与
+/// `AnimatedPositioned` **同曲线同时长**，两者叠加后合成位移是「曲线空间里的直线」，
+/// 起点 = 松手位置、终点 = 吸附格，中途不绕路（推到见文件头）。
+///
+/// ⚠️ **拉伸后的左右缘必须显式夹在栏体内**：`Stack` 是 `Clip.none`，不做裁剪。
 class _AnimatedPill extends StatelessWidget {
   const _AnimatedPill({
     required this.index,
@@ -295,6 +435,7 @@ class _AnimatedPill extends StatelessWidget {
     required this.cellWidth,
     required this.pillWidth,
     required this.pillHeight,
+    required this.available,
     required this.dragDx,
     required this.brightness,
   });
@@ -306,6 +447,9 @@ class _AnimatedPill extends StatelessWidget {
   final double cellWidth;
   final double pillWidth;
   final double pillHeight;
+
+  /// 栏体可用宽（= `Stack` 的宽）。左右边界约束按它算。
+  final double available;
   final double dragDx;
   final Brightness brightness;
 
@@ -313,13 +457,31 @@ class _AnimatedPill extends StatelessWidget {
   Widget build(BuildContext context) {
     // 动画位置：只由「选中下标」决定，不含拖动偏移。
     // `sideInset` 让首/末格的选中块不贴栏体边框（参考图实测边距 3~4dp）。
-    final double left = sideInset +
-        cellWidth * index +
-        (cellWidth - pillWidth) / 2;
-    // 拖动时横向拉伸（跟手形变），静止时 1.0。
-    final double stretch = dragDx == 0
+    final double left =
+        sideInset + cellWidth * index + (cellWidth - pillWidth) / 2;
+
+    // 拖动时横向拉伸（跟手形变），静止时 0。
+    // 比例 ∝ 拖过的格数，封顶 [NavBarStyle.dragStretchMax]。
+    final double stretch = cellWidth <= 0
         ? 0.0
-        : (dragDx.abs() / cellWidth).clamp(0.0, NavBarStyle.dragStretch);
+        : math.min(
+            (dragDx.abs() / cellWidth) * NavBarStyle.dragStretchPerCell,
+            NavBarStyle.dragStretchMax,
+          );
+
+    // ── 左右边界 ─────────────────────────────────────────────────────────────
+    // ⚠️ `Transform.scale` 以**盒中心**为原点缩放，故拉伸后的左右缘是
+    // `中心 ± 半宽`。`Stack` 是 `Clip.none`（不裁剪），若不管就会溢出栏体。
+    // 把**中心**夹到「左缘 ≥ 0 且右缘 ≤ 可用宽」的区间内 ⇒ 拖到两端就顶住
+    // （参考视频实测：右缘顶在栏体内缘 575 / 578 即不再外扩）。
+    final double restCenter = left + pillWidth / 2;
+    final double halfSpan = pillWidth * (1 + stretch) / 2;
+    final double rawCenter = restCenter + dragDx;
+    final double center = halfSpan * 2 >= available
+        // 极端窄栏（如 2 格 + 最大拉伸）：整块拉满，居中即可，否则夹取区间为空。
+        ? available / 2
+        : rawCenter.clamp(halfSpan, available - halfSpan);
+
     return AnimatedPositioned(
       duration: NavBarStyle.switchDuration,
       curve: NavBarStyle.switchCurve,
@@ -328,9 +490,9 @@ class _AnimatedPill extends StatelessWidget {
       width: pillWidth,
       height: pillHeight,
       child: Transform.translate(
-        // 拖动跟手：走 `Transform` 而非并入上面的 `left`——`Transform` 无动画，
-        // 逐帧 1:1 跟手（原因见类注释）。
-        offset: Offset(dragDx, 0),
+        // 拖动跟手 + 边界修正：走 `Transform` 而非并入上面的 `left`——`Transform`
+        // 无动画，逐帧 1:1 跟手（原因见类注释）。
+        offset: Offset(center - restCenter, 0),
         child: Transform.scale(
           scaleX: 1 + stretch,
           child: ClipRRect(

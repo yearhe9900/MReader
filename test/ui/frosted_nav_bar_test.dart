@@ -532,81 +532,257 @@ void main() {
       expect(picked, 1);
     });
 
-    testWidgets('横向拖动跟手形变 + 松手弹回', (WidgetTester tester) async {
-      await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
+    testWidgets('⭐ 拖动：1:1 跟手 + 横向拉伸（∝ 拖过格数）',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(
+        _InteractiveHost(onSelect: _noop),
+      );
       await tester.pumpAndSettle();
+
+      final Rect shell = tester.getRect(_shellFinder());
+      final Rect before = tester.getRect(_pillFinder());
+      final double cell = _cellWidthOf(shell);
 
       // 起点取栏体内、避开标签文字（从标签上起拖会先被 `InkWell` 抢走手势）。
       //
-      // ⚠️ **必须分步移动**（2026-10-12 实测）：单次 `moveBy(60, 0)` 一步跨
-      // 60px 时，`HorizontalDragGestureRecognizer` 在这一帧内无法决胜（要等下一帧
-      // 确认不是 tap），拖动回调根本没进——实测 pill 纹丝不动（探针：`-1.3` 前后
-      // 同值）。分 6 步 × 10px（贴近真实手指轨迹）即正常。
-      final Rect shell = tester.getRect(_shellFinder());
-      final Rect pillBefore = tester.getRect(_pillFinder());
+      // ⚠️ **必须分步移动**（2026-10-12 实测）：单次 `moveBy` 一步跨大步时，
+      // `HorizontalDragGestureRecognizer` 要在该帧内才决胜，而
+      // `DragStartBehavior.start` 会丢掉决胜前的位移 ⇒ 拖动回调根本没进
+      // （实测 pill 纹丝不动）。分步（贴近真实手指轨迹）即正常。
+      final double drag = cell * 1.2;
+      // ⚠️ 步数取整后**用 `步数 × 10` 反推拖动距离**：`232.5 × 1.2` 与 28 次
+      // `moveBy(10)` 的浮点累积相差 ~1e-13，直接用 `cell * 1.2` 当上界会在
+      // `279.9999999999999 > 279.0` 上假红。
+      final int steps = (drag / 10).round();
+      final double dragged = steps * 10.0;
       final TestGesture g = await tester.startGesture(
         Offset(shell.left + 8, shell.top + 8),
       );
-      for (int i = 0; i < 6; i++) {
+      for (int i = 0; i < steps; i++) {
         await g.moveBy(const Offset(10, 0));
         await tester.pump();
       }
-      final Rect pillDuring = tester.getRect(_pillFinder());
-      final double moved = pillDuring.center.dx - pillBefore.center.dx;
+      final Rect during = tester.getRect(_pillFinder());
+      final double moved = during.center.dx - before.center.dx;
 
-      // ⚠️ **钉「位移远大于拉伸的附带偏移」而非只钉「变大了」**（2026-10-12 变异
-      // 判红抓到）：`Transform.scale` 绕**中心**缩放，pill 变宽后多出的宽度一半
-      // 在左一半在右，会把中心「拉回」`(宽增量 / 2)`；`getRect` 的中心因此被拉伸
-      // 污染，只断言 `during > before` 的话把 `Transform.translate` 整个摘掉也
-      // 判绿（实测拉伸就贡献 25px，掩盖位移为 0）。
-      //
-      // 期望值按几何算：位移 60 − 拉伸回拉 (宽增量/2 ≈ 20) = **40**。
-      // 判红条件取 `>= 30`：摘掉 translate 时只剩 20 < 30 ⇒ 红；
-      // 保留 translate 时 40 ≥ 30 ⇒ 绿。阈值远离两侧真实值，不怕抖动。
-      expect(
-        moved,
-        greaterThanOrEqualTo(30),
-        reason: '选中块须跟手：位移须显著大于拉伸附带偏移（约 20），'
-            '摘掉 Transform.translate 时只剩 20 会红',
-      );
-      // 跟手的另一半：横向拉宽（液态形变）。
-      expect(
-        pillDuring.width,
-        greaterThan(pillBefore.width),
-        reason: '拖动时选中块应横向拉伸',
-      );
+      // ① 跟手：位移须与拖动距离同量级。
+      // ⚠️ **不能只钉「变大了」**（2026-10-12 变异判红抓到）：`Transform.scale` 绕
+      // **中心**缩放，中心不受影响 ⇒ 摘掉 `Transform.translate` 后位移为 0 却仍
+      // 「变大了」。故这里是**位移**断言，且给出上下界：
+      //   · 低于 1 格 ⇒ 说明位移机制失效；
+      //   · 高于拖动距离 ⇒ 说明没有边界夹取。
+      // 实测这 28 步**全部**计入了跟手位移（触摸 slop 未吃掉），故下界可收紧到
+      // `dragged − 1`：任何「位移被吃掉一半」的实现都会红。
+      expect(moved, closeTo(dragged, 1),
+          reason: '应 1:1 跟手（摘掉 Transform.translate 时为 0）');
+      expect(moved, lessThanOrEqualTo(dragged + 0.5),
+          reason: '跟手位移不得超过拖动距离（边界夹取只减不增）');
+
+      // ② 拉伸：宽度 = 静止宽 × (1 + 0.18 × 拖过格数)。
+      // 参考视频实测：静止 145px ⇒ 拖动峰值 185px（比例 1.28，见 `dragStretchMax`）。
+      // 期望值由**实测位移**推出，避免与「决胜吃掉的那 20px 触摸 slop」耦合。
+      final double expectW = before.width * (1 + 0.18 * moved / cell);
+      expect(during.width, closeTo(expectW, 2),
+          reason: '拖过 n 格应拉宽 0.18n（摘掉 Transform.scale 时为静止宽）');
+
+      // ③ 边界：拉伸后的左右缘都还在栏体内。
+      expect(during.left, greaterThanOrEqualTo(shell.left - 0.5));
+      expect(during.right, lessThanOrEqualTo(shell.right + 0.5));
 
       await g.up();
       await tester.pumpAndSettle();
-      expect(
-        tester.getRect(_pillFinder()).center.dx,
-        closeTo(pillBefore.center.dx, 1.5),
-        reason: '松手后应弹回目标格',
-      );
     });
 
-    testWidgets('拖动后的抬手不误触发切换', (WidgetTester tester) async {
-      int calls = 0;
-      await tester.pumpWidget(
-        _navHost(GlassQualityTier.high, onTabSelected: (int _) => calls++),
-      );
+    testWidgets('⭐ 松手吸附到最近的格子并切换 tab', (WidgetTester tester) async {
+      final List<int> picked = <int>[];
+      await tester.pumpWidget(_InteractiveHost(onSelect: picked.add));
       await tester.pumpAndSettle();
 
       final Rect shell = tester.getRect(_shellFinder());
+      final Rect before = tester.getRect(_pillFinder());
+      final double cell = _cellWidthOf(shell);
+
+      // 拖 1.2 格 ⇒ 四舍五入为 1 格（阈值是半格 0.5，余量充足）。
       final TestGesture g = await tester.startGesture(
         Offset(shell.left + 8, shell.top + 8),
       );
-      // 分步移动（见上方用例注释：单步大位移无法决胜手势竞技场）。
-      for (int i = 0; i < 6; i++) {
+      for (int i = 0; i < (cell * 1.2 / 10).round(); i++) {
+        await g.moveBy(const Offset(10, 0));
+        await tester.pump();
+      }
+      expect(picked, isEmpty, reason: '拖动过程中不应切换');
+
+      await g.up();
+      await tester.pumpAndSettle();
+
+      expect(picked, <int>[1], reason: '松手应吸附到最近格并切换一次');
+      // 选中块中心间距就是格宽 ⇒ 第 1 格中心 = 第 0 格中心 + 1 格。
+      expect(tester.getRect(_pillFinder()).center.dx,
+          closeTo(before.center.dx + cell, 1.5),
+          reason: '选中块应停在吸附格中心');
+    });
+
+    testWidgets('⭐ 左右边界：拖到端头时拉伸后的选中块不越出栏体',
+        (WidgetTester tester) async {
+      for (final double sign in <double>[1, -1]) {
+        final List<int> picked = <int>[];
+        // ⚠️ 换 `key` 强制重建宿主 State，否则第二轮会带着上一轮的下标起算。
+        await tester.pumpWidget(
+          _InteractiveHost(key: ValueKey<double>(sign), onSelect: picked.add),
+        );
+        await tester.pumpAndSettle();
+
+        final Rect shell = tester.getRect(_shellFinder());
+        final Rect before = tester.getRect(_pillFinder());
+        final double cell = _cellWidthOf(shell);
+
+        // 拖 8 格（远超 3 格栏宽）⇒ 无约束时选中块会整个飞出栏体。
+        final int steps = (cell * 8 / 10).round();
+        final TestGesture g = await tester.startGesture(
+          Offset(shell.left + 8, shell.top + 8),
+        );
+        for (int i = 0; i < steps; i++) {
+          await g.moveBy(Offset(10 * sign, 0));
+          await tester.pump();
+        }
+        final Rect during = tester.getRect(_pillFinder());
+        expect(during.left, greaterThanOrEqualTo(shell.left - 0.5),
+            reason: '⭐ 拉伸后的左缘不得越出栏体');
+        expect(during.right, lessThanOrEqualTo(shell.right + 0.5),
+            reason: '⭐ 拉伸后的右缘不得越出栏体');
+        // 反向断言：不能「夹过头」——拖满 8 格时须真的顶到端头
+        // （否则一个恒居中的错误实现也能过上面两条）。
+        if (sign > 0) {
+          expect(during.right, closeTo(shell.right, 1),
+              reason: '向右拖满应顶在栏体右内缘（参考视频实测 575 / 578）');
+        } else {
+          expect(during.left, closeTo(shell.left, 1),
+              reason: '向左拖满应顶在栏体左内缘');
+        }
+        // 顶住时拉伸已封顶：宽 = 静止宽 × 1.30。
+        expect(during.width, closeTo(before.width * 1.30, 2),
+            reason: '拉伸应封顶在 0.30');
+
+        await g.up();
+        await tester.pumpAndSettle();
+        // 向右拖满 ⇒ 末格；从首格向左拖 ⇒ 原地不动（夹到合法下标）。
+        expect(picked, sign > 0 ? <int>[_kTabs.length - 1] : <int>[],
+            reason: '吸附目标须夹在合法下标内');
+      }
+    });
+
+    testWidgets('拖动不足半格时松手只回弹、不切换', (WidgetTester tester) async {
+      final List<int> picked = <int>[];
+      await tester.pumpWidget(_InteractiveHost(onSelect: picked.add));
+      await tester.pumpAndSettle();
+
+      final Rect shell = tester.getRect(_shellFinder());
+      final Rect before = tester.getRect(_pillFinder());
+      final double cell = _cellWidthOf(shell);
+
+      // 拖 0.3 格 ⇒ 四舍五入为 0 格。
+      final TestGesture g = await tester.startGesture(
+        Offset(shell.left + 8, shell.top + 8),
+      );
+      for (int i = 0; i < (cell * 0.3 / 10).round(); i++) {
         await g.moveBy(const Offset(10, 0));
         await tester.pump();
       }
       await g.up();
       await tester.pumpAndSettle();
 
-      expect(calls, 0, reason: '拖动是跟手形变，不等于切换 tab');
+      expect(picked, isEmpty,
+          reason: '不足半格应回弹到原格；顺带钉住「拖动末端的抬手不误触发切换」');
+      expect(tester.getRect(_pillFinder()).center.dx,
+          closeTo(before.center.dx, 1.5),
+          reason: '应回到原格中心');
+    });
+
+    testWidgets('点一下就走（回归：拖动识别器输给 tap 时不得吞掉点击）',
+        (WidgetTester tester) async {
+      // ⚠️ 2026-10-13 真机回归「无法点击」的**根因用例**：
+      // `HorizontalDragGestureRecognizer` 在指针抬起且未越过 slop 时走
+      // `resolve(rejected)` → `onCancel`（**不是**「拖动松手」），而同级 `InkWell`
+      // 的 `onTap` 在同一次事件派发里紧接着执行。若 `onHorizontalDragCancel` 里置
+      // 了点击拦截位，`onTap` 会被吞掉 ⇒ 整个底栏点不动。
+      //
+      // 本用例**必须连续点两次**：`onCancel` 在**每一次**点击时都会来，故退回旧
+      // 写法时是「每一次点击都被吞」（真机现象就是这个「完全点不动」），连续两次
+      // 才能把「偶发 / 仅首帧」这类误判排除掉。变异判红实证：退回旧写法后
+      // 红在「首次点击就必须生效」（Actual: []）。
+      final List<int> picked = <int>[];
+      await tester.pumpWidget(_InteractiveHost(onSelect: picked.add));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('收藏'));
+      await tester.pumpAndSettle();
+      expect(picked, <int>[2], reason: '首次点击就必须生效');
+
+      await tester.tap(find.text('目录'));
+      await tester.pumpAndSettle();
+      expect(picked, <int>[2, 0], reason: '后续点击同样必须生效');
     });
   });
 }
 
 void _noop(int _) {}
+
+/// 由栏体可用宽解出格宽。
+///
+/// 口径同 `FrostedNavBar` 的 `LayoutBuilder`：标签区宽 `W = 可用宽 / (1 + 2k/n)`，
+/// 格宽 `= W / n`。`k` 硬编码 0.10 字面量（不引用 `NavBarStyle` 常量当唯一判据）。
+///
+/// 3 格 + 测试面 800 宽 ⇒ 可用宽 744 ⇒ 格宽 **232.5**、静止选中块宽 **260.4**。
+double _cellWidthOf(Rect shell) {
+  const int n = 3;
+  const double k = 0.10;
+  return (shell.width / (1 + 2 * k / n)) / n;
+}
+
+/// 会**真的换选中下标**的宿主（镜像 `home_shell` 的受控用法）。
+///
+/// ⚠️ 吸附类用例必须用它：`_navHost` 的 `selectedIndex` 是定值，松手后
+/// [FrostedNavBar] 仍会按旧下标把选中块动画拉回去，「停在吸附格」必红。
+///
+/// ⚠️ 同一用例里反复 `pumpWidget` 时**必须换 `key`**——同位置同类型的 widget 会
+/// 复用同一个 `State`，`_index` 不会重置（实测：边界用例的第二轮直接从上一轮的
+/// 下标 2 起算，把「原地不动」判成「切到 0」）。
+class _InteractiveHost extends StatefulWidget {
+  const _InteractiveHost({super.key, required this.onSelect});
+
+  final void Function(int) onSelect;
+
+  @override
+  State<_InteractiveHost> createState() => _InteractiveHostState();
+}
+
+class _InteractiveHostState extends State<_InteractiveHost> {
+  int _index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: GlassScopeProvider(
+        config: glassTierConfigFor(GlassQualityTier.high),
+        child: Stack(
+          children: <Widget>[
+            const Positioned.fill(child: ColoredBox(color: Color(0xFF303030))),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: FrostedNavBar(
+                tabs: _kTabs,
+                selectedIndex: _index,
+                onTabSelected: (int i) {
+                  widget.onSelect(i);
+                  setState(() => _index = i);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
