@@ -10,9 +10,9 @@
 // 它的核心却要承担全部重量。
 //
 // **换来的三个实质收益**（不是「更干净」这种虚话）：
-//   ① 几何 100% 可控——实测参考图标签中心**严格等分**（间距 184/185/183），
+//   ① 几何 100% 可控——实测参考图标签中心**严格等分**（间距 254/254.5/254.5），
 //      而库默认 `spacing: 8` 会破坏等分；自研直接按 `标签区宽 / n` 均分。
-//   ② 选中块宽度可定——实测 = 格宽的 **114%**（210px/184px，向两侧溢出格子），
+//   ② 选中块宽度可定——实测 = 格宽的 **112%**（286px/255px，向两侧溢出格子），
 //      库的指示块宽度由内部计算、无法按实测值定。
 //   ③ 测试开销归零——库玻璃在 `flutter test` 软件光栅下每帧 620~662ms 真实
 //      异步开销（tech-usage §2.26），本控件不依赖着色器，测试可正常
@@ -175,9 +175,9 @@ class _FrostedNavBarState extends State<FrostedNavBar>
           height: NavBarStyle.barHeight,
           child: LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
-              // ⭐ 标签区**居中 + 左右侧内缩**（参考图实测：侧留白 = 0.25 格宽）。
-              // 严格等分指标签中心间距均匀（实测 184/185/183），**不是**标签占满
-              // 栏体——不内缩的话，114% 宽的选中块在首/末格会贴到栏体边框
+              // ⭐ 标签区**居中 + 左右侧内缩**（参考图实测：侧留白 ≈ 0.10 格宽）。
+              // 严格等分指标签中心间距均匀（实测 254/254.5/254.5），**不是**标签占满
+              // 栏体——不内缩的话，112% 宽的选中块在首/末格会贴到栏体边框
               // （见 [NavBarStyle.sideInsetCellFactor]）。
               final int n = widget.tabs.length;
               final double available = constraints.maxWidth;
@@ -240,7 +240,12 @@ class _FrostedNavBarState extends State<FrostedNavBar>
   }
 }
 
-/// 栏体外壳：磨砂 + 纱罩 + 细亮边 + **左右缘高光带**。
+/// 栏体外壳：磨砂 + 纱罩 + 四周细亮边。
+///
+/// ⚠️ **不做左右缘高光带**（2026-10-13 第二轮实测更正）：参考图栏体从边缘内侧
+/// 第 2px 起就稳定在 `lum 20~21`，一路到标签都是平坦的；只有四周一道 1~2px 的
+/// 亮描边（[NavBarStyle.barBorderAlpha] 已覆盖）。上一版凭压缩帧测到的
+/// 「左缘 42px 宽、lum 185 的亮带」是压缩 / 边缘混淆的产物，已删除。
 class _GlassShell extends StatelessWidget {
   const _GlassShell({
     required this.brightness,
@@ -260,30 +265,15 @@ class _GlassShell extends StatelessWidget {
           decoration: BoxDecoration(
             color: NavBarStyle.scrimColor(brightness),
             borderRadius: BorderRadius.circular(NavBarStyle.barRadius),
-            // 上下缘一道细亮边 = 「玻璃有厚度」的线索（参考图实测 2~3px）。
+            // 四周一道细亮边 = 「玻璃有厚度」的线索（参考图实测 1~2px，
+            // 栏体上缘 lum 46 vs 本体 21 ⇒ alpha ≈ 0.11）。
             border: Border.all(
               color: Colors.white.withValues(
                 alpha: NavBarStyle.barBorderAlpha,
               ),
             ),
           ),
-          child: LayoutBuilder(
-            builder: (BuildContext context, BoxConstraints constraints) {
-              // ⭐ 左右缘各一条高光带（实测 lum 117~185 vs 栏体 23），外沿锐利、
-              // 向内 15dp 柔缓淡出。**必须是 `Stack` 的直接子层**：渐变靠
-              // `DecoratedBox` 的 `foregroundDecoration` 叠在内容之上，若做成
-              // 子widget 会被 `Stack` 裁到内容后面而看不见（同 §2.88 的采样
-              // 方向纪律）。
-              return DecoratedBox(
-                position: DecorationPosition.foreground,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(NavBarStyle.barRadius),
-                  gradient: NavBarStyle.edgeGlowGradient(constraints.maxWidth),
-                ),
-                child: child,
-              );
-            },
-          ),
+          child: child,
         ),
       ),
     );
@@ -322,7 +312,7 @@ class _AnimatedPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 动画位置：只由「选中下标」决定，不含拖动偏移。
-    // `sideInset` 让首/末格的选中块不贴栏体边框（参考图实测边距 11~14dp）。
+    // `sideInset` 让首/末格的选中块不贴栏体边框（参考图实测边距 3~4dp）。
     final double left = sideInset +
         cellWidth * index +
         (cellWidth - pillWidth) / 2;

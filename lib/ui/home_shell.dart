@@ -9,8 +9,8 @@
 // 「玻璃控件不可嵌套」。底栏因此以 `standalone: true` 使用 [GlassNavBar]
 // （脱离 `GlassScaffold` 祖先，高档需显式声明固定表面档位，见该参数文档）。
 //
-// 底栏形态 = **自磨砂伪玻璃悬浮胶囊**（左右 / 底部留边距、圆角、68 高），
-// 不是贴底通栏——与参考图（HyperOS 主题商店）实测一致。
+// 底栏形态 = **自磨砂伪玻璃悬浮胶囊**（左右外边距 28 / 浮起 27 / 圆角 = 高/2、
+// 62 高），不是贴底通栏——与参考图（HyperOS 主题商店）实测一致。
 //
 // 2026-10-12 换实现：`GlassNavBar`（库 `GlassTabBar`）→ [FrostedNavBar]（自研
 // `BackdropFilter`）。理由见 `frosted_nav_bar.dart` / `nav_bar_style.dart` 文件头：
@@ -226,32 +226,17 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   }
 
   /// 底栏标签（顺序即下标语义，**勿任意重排**）。
+  ///
+  /// ⚠️ 2026-10-13：`icon` 一律取**实心（filled）**版本，不再走
+  /// `outlined → filled` 的选中态切换——参考图 4 个 tab 的图标全部是实心风格，
+  /// 且选中态**只靠底衬区分**（实测两类图标/文字亮度一致）。`activeIcon` 因此
+  /// 留空（[NavTab.iconFor] 缺省回落到 `icon`）。
   static const List<NavTab> _tabs = <NavTab>[
-    NavTab(
-      icon: Icons.menu_book_outlined,
-      activeIcon: Icons.menu_book,
-      label: '书架',
-    ),
-    NavTab(
-      icon: Icons.insights_outlined,
-      activeIcon: Icons.insights,
-      label: '统计',
-    ),
-    NavTab(
-      icon: Icons.auto_awesome_outlined,
-      activeIcon: Icons.auto_awesome,
-      label: 'AI',
-    ),
-    NavTab(
-      icon: Icons.sticky_note_2_outlined,
-      activeIcon: Icons.sticky_note_2,
-      label: '笔记',
-    ),
-    NavTab(
-      icon: Icons.settings_outlined,
-      activeIcon: Icons.settings,
-      label: '设置',
-    ),
+    NavTab(icon: Icons.menu_book, label: '书架'),
+    NavTab(icon: Icons.insights, label: '统计'),
+    NavTab(icon: Icons.auto_awesome, label: 'AI'),
+    NavTab(icon: Icons.sticky_note_2, label: '笔记'),
+    NavTab(icon: Icons.settings, label: '设置'),
   ];
 
   /// 五个 tab 的内容页。

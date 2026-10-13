@@ -4,21 +4,25 @@
 // 本文件钉什么
 // ══════════════════════════════════════════════════════════════════════════════
 // 参考图**原生截图**实测值换算出的几何（实测记录见 `nav_bar_style.dart` 文件头）：
-//   · 标签中心**严格等分**（实测间距 184 / 185 / 183）⇒ 按 `标签区宽 / n` 均分；
-//     标签区**居中 + 左右侧留白 0.25 格宽**（实测侧留白 46/45）；
-//   · 选中块宽 = 格宽的 **114%**（实测 x 57..266 ⇒ 宽 210 / 格宽 184），
-//     即**向两侧溢出**格子；选中块中心与标签中心对齐（实测差 1.5px）；
-//   · 选中块高 = 栏体高的 **0.93**（实测 115/122），圆角 = 高 / 2（胶囊）；
-//   · 栏体 62 高 / 左右外边距 13 / 浮起 27 / **圆角 15（不是胶囊 h/2）**。
+//   · 标签中心**严格等分**（实测间距 254 / 254.5 / 254.5）⇒ 按 `标签区宽 / n` 均分；
+//     标签区**居中 + 左右侧留白 0.10 格宽**（实测侧留白 25.75/25.75）；
+//   · 选中块宽 = 格宽的 **112%**（实测 x 850..1135 ⇒ 宽 286 / 格宽 255），
+//     即**向两侧溢出**格子；选中块中心与标签中心对齐；
+//   · 选中块高 = 栏体高的 **0.89**（实测 152/171），圆角 = 高 / 2（胶囊）；
+//   · 栏体 62 高 / 左右外边距 28 / 浮起 27 / **圆角 31 = 高/2（胶囊）**。
 //
-// ⚠️ 几何值在 2026-10-12 → 10-13 之间**返工过一次**：10-12 用**二次压缩的
-// 录屏帧**测得「选中块占格宽 69%」并据此判定更早的 109% 是量错对象；10-13 用
-// **原生截图**重测发现压缩帧不可靠（原生图里选中块宽 210 > 格宽 184，目视也
-// 明显是占满一格的宽块）。⇒ 测量参考图**必须用原生截图**，压缩帧会抹平边界。
-//
-// ⚠️ 另有一处**测量对象**错误：10-13 上午把屏幕**手势指示条**（x 297..578、
-// y 1887..1899）当成选中块，据此得出「通栏贴边 / 13px 细条 / 选中项是第 3 格」
-// 三个错误结论。教训：**先定位栏体的上下缘，再在栏体内部找特征**。
+// ⚠️ 测量口径的教训（三轮返工，**各有不同的坑**）：
+//   ① 10-12 用**二次压缩的录屏帧**测得「选中块占格宽 69%」⇒ 压缩会抹平低对比度
+//      色块边界，必须用原生截图。
+//   ② 10-13 上午把屏幕**手势指示条**（x 297..578、y 1887..1899）当成选中块，
+//      据此得出「通栏贴边 / 13px 细条 / 选中项是第 3 格」三个错误结论。
+//      教训：**先定位栏体的上下缘，再在栏体内部找特征**。
+//   ③ 10-13 下午**把栏体左右缘测错**（把 881 宽图上的 x26/x853 当成栏体边缘，
+//      实际应是 x54/x826），据此得出「圆角 15（不是胶囊）」「侧内缩 0.25」两个
+//      错误结论。识别方法是**交叉验证**：同一张图的栏体上下缘、标签中心、格宽
+//      在本轮（1220×2656 源图）与上一轮（881×1920）**逐像素吻合**，只有左右缘
+//      一项对不上 ⇒ 错的就是那一项。教训：**同一份素材的不同分辨率版本必须
+//      交叉验证，单项异常先怀疑该项测量而非推翻整份结论**。
 //
 // 这些是「用库时拿不到」的部分（库的指示块宽度由内部计算、`spacing: 8` 还会
 // 破坏等分），所以必须钉死——回潮即红。
@@ -94,40 +98,40 @@ void main() {
   tearDown(GlassRuntime.resetForTest);
 
   group('几何：实测值字面量契约', () {
-    testWidgets('栏体尺寸：62 高 / 左右 13 / 浮起 27 / 圆角 15',
+    testWidgets('栏体尺寸：62 高 / 左右 28 / 浮起 27 / 圆角 31',
         (WidgetTester tester) async {
       expect(NavBarStyle.barHeight, 62);
-      expect(NavBarStyle.horizontalPadding, 13);
+      expect(NavBarStyle.horizontalPadding, 28);
       expect(NavBarStyle.verticalPadding, 27);
       // 标签等分 ⇒ 额外间距必须是 0（库的 spacing: 8 正是破坏等分的元凶）。
       expect(NavBarStyle.tabSpacing, 0);
     });
 
-    testWidgets('⭐ 栏体圆角 = 15，**不是胶囊**（h/2）',
+    testWidgets('⭐ 栏体圆角 = 31 = 高/2 ⇒ **是胶囊**',
         (WidgetTester tester) async {
-      // 参考图原生截图实测：右下角剪影从 (853,1850) 内收到 (812,1864)，
-      // y1848~1855 段与 R=30px=15dp 圆弧吻合（偏差 <3px）；而栏体左右缘
-      // x26/x853 从顶到底基本直行 ⇒ 直边 + 圆角矩形，不是胶囊。
-      expect(NavBarStyle.barRadius, 15);
-      //这条是「不是胶囊」的判据：胶囊 = h/2 = 31，把圆角定成 h/2 会让栏体
-      // 两侧收成半圆，与参考图形态完全不符（10-12 那版的可见差异）。
-      expect(NavBarStyle.barRadius * 2, lessThan(NavBarStyle.barHeight));
-      // ⭐ 实际渲染的 ClipRRect 圆角也须是 15（常量改了但布局没跟上会红）。
+      // 参考图 1220×2656 实测：左缘剪影逐行拟合，圆心 (161.5, 2495.5)、R=85.5px；
+      // y2410/2444/2476/2514/2574 处预测 158/93/78/80/128 vs 实测 158/92/77/78/129
+      // （偏差 ≤2px）⇒ 栏体左右缘是**圆弧**，形态是胶囊。
+      expect(NavBarStyle.barRadius, 31);
+      //这条是「是胶囊」的判据：圆角必须等于高的一半。上一版把它定成 15
+      // （圆角矩形），栏体两侧收不成半圆，正是「还是没一比一复刻」的主因。
+      expect(NavBarStyle.barRadius * 2, closeTo(NavBarStyle.barHeight, 0.01));
+      // ⭐ 实际渲染的 ClipRRect 圆角也须是 31（常量改了但布局没跟上会红）。
       await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
       await tester.pumpAndSettle();
       final BorderRadius shellRadius = tester
           .widget<ClipRRect>(_shellFinder())
           .borderRadius
           .resolve(TextDirection.ltr);
-      expect(shellRadius.topLeft.x, 15);
+      expect(shellRadius.topLeft.x, 31);
     });
 
-    testWidgets('选中块：宽 = 格宽 ×114%、高 = 栏高 ×0.93、圆角 = 高/2',
+    testWidgets('选中块：宽 = 格宽 ×112%、高 = 栏高 ×0.89、圆角 = 高/2',
         (WidgetTester tester) async {
-      // 1.14 来自**原生截图**实测（宽 210 / 格宽 184），见文件头。
-      expect(NavBarStyle.pillWidthFactor, 1.14);
-      expect(NavBarStyle.pillHeightFactor, 0.93);
-      expect(NavBarStyle.pillRadius(62 * 0.93), closeTo(28.83, 0.01));
+      // 1.12 来自实测（宽 286 / 格宽 255），见文件头。
+      expect(NavBarStyle.pillWidthFactor, 1.12);
+      expect(NavBarStyle.pillHeightFactor, 0.89);
+      expect(NavBarStyle.pillRadius(62 * 0.89), closeTo(27.59, 0.01));
     });
 
     testWidgets('栏体实际渲染尺寸 = 62 高（松约束下不被顶高）',
@@ -138,31 +142,31 @@ void main() {
       // 这条正是「宿主必须镜像 Stack + Positioned」的护栏：紧约束下这里会是
       // 582（实测踩过），松约束下才是 62。
       expect(tester.getSize(_shellFinder()).height, 62);
-      // 左右各留 16。
-      expect(tester.getSize(_shellFinder()).width, 800 - 13 * 2);
-      // 距屏幕底边 18。
+      // 左右各留 28。
+      expect(tester.getSize(_shellFinder()).width, 800 - 28 * 2);
+      // 距屏幕底边 27。
       expect(
         600 - tester.getBottomLeft(_shellFinder()).dy,
         27,
-        reason: '底栏应浮起 18（verticalPadding）',
+        reason: '底栏应浮起 27（verticalPadding）',
       );
     });
 
-    testWidgets('标签区侧内缩 = 0.25 格宽（参考图实测侧留白/格宽 = 0.2446/0.25）',
+    testWidgets('标签区侧内缩 = 0.10 格宽（参考图实测侧留白/格宽 = 26.25/255）',
         (WidgetTester tester) async {
-      // 参考图原生截图：栏体 x 26..853（828）、标签区 x 71..807（736）
-      // ⇒ 侧留白 45/46，除以格宽 184 得0.2446 / 0.2500。
+      // 参考图实测：栏体 x 75..1144（1070）、标签区 x 100.75..1118.25（1017.5）
+      // ⇒ 侧留白 26.25，除以格宽 255 得 0.1029。
       expect(
         NavBarStyle.sideInsetCellFactor,
-        0.25,
-        reason: '侧内缩是参考图真实特征；缺了它 114% 宽的选中块会贴栏体边框',
+        0.10,
+        reason: '侧内缩是参考图真实特征；缺了它 112% 宽的选中块会贴栏体边框',
       );
       // 解方程：标签区宽 W = 可用宽 / (1 + 2k/n)
       const int n = 4;
-      const double available = 828;
-      final double w = available / (1 + 2 * 0.25 / n);
-      expect(w, closeTo(736, 1));   // 实测标签区宽 736
-      expect(w / n, closeTo(184, 1)); // 实测格宽 184
+      const double available = 1070;
+      final double w = available / (1 + 2 * 0.10 / n);
+      expect(w, closeTo(1017.5, 3)); // 实测标签区宽 1017.5
+      expect(w / n, closeTo(255, 1)); // 实测格宽 255
     });
 
     testWidgets('标签区居中 + 严格等分：第 N 格中心 = 标签区左缘 + 格宽×(N+0.5)',
@@ -200,7 +204,7 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      // 选第 1 格：114% 宽的选中块向两侧溢出，若无侧内缩就会贴到栏体边框。
+      // 选第 1 格：112% 宽的选中块向两侧溢出，若无侧内缩就会贴到栏体边框。
       await tester.pumpWidget(_navHost(
         GlassQualityTier.high,
         selectedIndex: 0,
@@ -214,7 +218,7 @@ void main() {
       expect(
         pill.left - shell.left,
         greaterThan(4.0),
-        reason: '首格选中块左缘须离栏体边框留距离（实测参考图 15.5dp）',
+        reason: '首格选中块左缘须离栏体边框留距离（实测参考图 9px = 3.3dp）',
       );
       // 首格选中块右缘也不该越过栏体中线太多（保证没跑偏）。
       expect(pill.left - shell.left, lessThan(shell.width / 4));
@@ -240,10 +244,10 @@ void main() {
       );
     });
 
-    testWidgets('选中块实测：宽 = 格宽 ×1.14、高 = 栏高 ×0.93、圆角 = 高/2',
+    testWidgets('选中块实测：宽 = 格宽 ×1.12、高 = 栏高 ×0.89、圆角 = 高/2',
         (WidgetTester tester) async {
-      // 参考图**原生截图**（881×1920@2x）实测：选中块 x 57..266 ⇒ 宽 210；
-      // 标签中心间距 184 ⇒ `210 / 184 = 1.14`。
+      // 参考图（1220×2656@2.75）实测：选中块 x 850..1135 ⇒ 宽 286；
+      // 标签中心间距 255 ⇒ `286 / 255 = 1.12`。
       tester.view.physicalSize = const Size(592, 1280);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -256,7 +260,7 @@ void main() {
       await tester.pumpAndSettle();
 
       final double shellLeft = tester.getTopLeft(_shellFinder()).dx;
-      // 标签区有侧内缩（0.25 格宽），格宽按标签区宽算，不是栏宽。
+      // 标签区有侧内缩（0.10 格宽），格宽按标签区宽算，不是栏宽。
       final double shellWidth = tester.getSize(_shellFinder()).width;
       final double labelAreaWidth = shellWidth /
           (1 + 2 * NavBarStyle.sideInsetCellFactor / _kTabs.length);
@@ -264,15 +268,15 @@ void main() {
       final double cell = labelAreaWidth / _kTabs.length;
       final Rect pill = tester.getRect(_pillFinder());
 
-      expect(pill.width, closeTo(cell * 1.14, 1.0));
-      // ⭐ 钉住「选中块**向两侧溢出**格子」这个实测特征（宽 210 > 格宽 184）。
+      expect(pill.width, closeTo(cell * 1.12, 1.0));
+      // ⭐ 钉住「选中块**向两侧溢出**格子」这个实测特征（宽 286 > 格宽 255）。
       // 曾经的 0.69（来自二次压缩的录屏帧）会让底衬明显偏窄，与参考图不符。
       expect(
         pill.width,
         greaterThan(cell),
-        reason: '参考图实测选中块宽 210 > 格宽 184，即溢出格子',
+        reason: '参考图实测选中块宽 286 > 格宽 255，即溢出格子',
       );
-      expect(pill.height, closeTo(62 * 0.93, 1.0));
+      expect(pill.height, closeTo(62 * 0.89, 1.0));
       final BorderRadius radius = tester
           .widget<ClipRRect>(_pillFinder())
           .borderRadius
@@ -338,15 +342,15 @@ void main() {
           .where((DecoratedBox d) => d.decoration is BoxDecoration)
           // ⭐ 只取**选中块**那一个DecoratedBox。两者都是
           //    `BorderRadius.circular`，光看类型分不开；而圆角值又太接近
-          //    （栏体 31 / 选中块 28.83）。改用**唯一可靠**的判据：
-          //    选中块的圆角 = `pillRadius(栏高 × 0.93)`，逐值相等；
+          //    （栏体 31 / 选中块 27.59）。改用**唯一可靠**的判据：
+          //    选中块的圆角 = `pillRadius(栏高 × 0.89)`，逐值相等；
           //    栏体是 31，不等。
           .where((DecoratedBox d) {
             final BoxDecoration b = d.decoration as BoxDecoration;
             final BorderRadiusGeometry? r = b.borderRadius;
             if (r == null) return false;
             final BorderRadius resolved = r.resolve(TextDirection.ltr);
-            return (resolved.topLeft.x - NavBarStyle.pillRadius(62 * 0.93)).abs() < 0.01;
+            return (resolved.topLeft.x - NavBarStyle.pillRadius(62 * 0.89)).abs() < 0.01;
           })
           .map((DecoratedBox d) => (d.decoration as BoxDecoration).border)
           .whereType<Border>()
@@ -364,33 +368,43 @@ void main() {
 
     testWidgets('选中块纱罩是**纯中性灰**（实测 R=G=B，无色偏）',
         (WidgetTester tester) async {
-      // 参考图**原生截图**实测选中块 rgb(73,73,73)—— R=G=B，饱和度为 0。
-      // 此前据二次压缩帧定的「冷灰蓝 0x9FB4C8」是压缩色偏产物，已作废。
+      // 参考图实测选中块 rgb(49,49,49)—— R=G=B，饱和度为 0。
+      // 更早据二次压缩帧定的「冷灰蓝 0x9FB4C8」是压缩色偏产物，已作废。
       for (final Brightness b in Brightness.values) {
         final Color c = NavBarStyle.pillScrimColor(b);
         expect(
           c.r,
           c.g,
-          reason: '选中块纱罩必须中性（R=G=B），实测 rgb(73,73,73)',
+          reason: '选中块纱罩必须中性（R=G=B），实测 rgb(49,49,49)',
         );
         expect(c.g, c.b, reason: '中性灰：G=B');
       }
     });
 
-    testWidgets('选中块 / 栏体亮度比 ≈ 3.2×（实测 74:23）',
+    testWidgets('选中块 / 栏体亮度比 ≈ 2.3×（实测 49:21）',
         (WidgetTester tester) async {
       await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
       await tester.pumpAndSettle();
 
-      // 原生截图实测：栏体空处 lum 23、选中块 lum 73。
-      // 0.215 是**反解**值：23 + 0.215 × (255 − 23) = 72.9 ≈ 73。
+      // 参考图实测：栏体背后全黑、栏体空处 lum 21、选中块内 lum 49。
+      // 0.12 是**反解**值：21 + 0.12 × (255 − 21) = 49.1 ≈ 49。
+      const double barLum = 21;
+      const double pillLum = 49;
+      final double pillA = NavBarStyle.pillScrimAlpha(Brightness.dark);
       expect(
-        NavBarStyle.pillScrimAlpha(Brightness.dark),
-        closeTo(0.215, 0.005),
-        reason: '纱罩 alpha 由目标亮度 73 反解（栏体 23 → 73），不是拍的',
+        pillA,
+        closeTo(0.12, 0.005),
+        reason: '纱罩 alpha 由目标亮度 49 反解（栏体 21 → 49），不是拍的',
       );
+      expect(
+        barLum + pillA * (255 - barLum),
+        closeTo(pillLum, 1),
+        reason: '反解式必须能还原实测亮度 49',
+      );
+      // 同一条反解式对栏体纱罩也成立（栏体 21 = 黑底 + 白纱）。
       final double barA = NavBarStyle.scrimAlpha(Brightness.dark);
-      expect(NavBarStyle.pillScrimAlpha(Brightness.dark), greaterThan(barA * 2));
+      expect(barA * 255, closeTo(barLum, 2), reason: '栏体纱罩反解回 lum 21');
+      expect(pillA, greaterThan(barA), reason: '选中块必须比栏体更亮一档');
     });
 
     testWidgets('⭐ 亮色档选中块**压黑**而非加白（否则在亮色下几乎不可见）',
@@ -403,43 +417,42 @@ void main() {
       );
     });
 
-    testWidgets('⭐ 栏体左右缘各有一条高光带（外沿锐、向内渐隐）',
+    testWidgets('⭐ 栏体**没有**左右缘高光带（栏体内侧亮度平坦）',
         (WidgetTester tester) async {
-      // 参考图原生截图实测：左缘 y1755 处 x26..68 宽 42px lum **185**；
-      // y1819 处 x26..52 lum 117；y1850 处 x26..60 lum 85。
-      // 栏体空处只有 lum 23 ⇒ 这条亮带是设计元素（背后内容的模糊边界
-      // 会有 ~36px 过渡，实测只有 4px 锐边）。
-      expect(NavBarStyle.edgeGlowWidth, 15);
-      expect(NavBarStyle.edgeGlowAlpha, closeTo(0.40, 0.01));
-      // 反解：栏体 23 + 0.40 × (255 − 23) = 115 ≈ 实测 117。
-      expect(23 + NavBarStyle.edgeGlowAlpha * (255 - 23), closeTo(117, 4));
-
+      // 参考图实测：把栏体左缘 x60..160 逐点打出来，栏体从边缘内侧第 2px 起就
+      // 稳定在 lum 20~21，一路平坦到标签；只有四周一道 1~2px 的亮描边
+      // （左缘 x85 lum 49 / 右缘 x1135 lum 47 vs 本体 21）。
+      //
+      // ⚠️ 更早一版据**二次压缩帧**测到「左缘 42px 宽、lum 185 的亮带」并据此
+      // 加了一层 15dp 渐变。压缩会抹平/偏移低对比度边界，这条特征是产物。
       await tester.pumpWidget(_navHost(GlassQualityTier.high, onTabSelected: _noop));
       await tester.pumpAndSettle();
 
-      // 渐变必须真的挂到栏体那层 DecoratedBox 上（`foregroundDecoration`
-      // 叠在内容之上），否则高光带会被选中块/标签遮住而不可见。
-      final LinearGradient? glow = tester
+      // 判据：栏体装饰里**不得**出现任何 LinearGradient（加回来即红）。
+      final Iterable<LinearGradient> grads = tester
           .widgetList<DecoratedBox>(find.byType(DecoratedBox))
           .map((DecoratedBox d) => d.decoration)
           .whereType<BoxDecoration>()
           .map((BoxDecoration b) => b.gradient)
-          .whereType<LinearGradient>()
-          .firstOrNull;
-      expect(glow, isNotNull, reason: '栏体未挂左右缘高光带渐变');
-      // 两端亮、中间透明。
-      final LinearGradient g = glow!;
-      expect(g.colors.length, 4);
-      expect(g.colors.first.a, closeTo(NavBarStyle.edgeGlowAlpha, 0.01));
-      expect(g.colors.last.a, closeTo(NavBarStyle.edgeGlowAlpha, 0.01));
-      expect(g.colors[1].a, 0.0);
-      expect(g.colors[2].a, 0.0);
-      // 渐变带宽 = edgeGlowWidth / 栏体宽。
-      // `LinearGradient.stops` 是可空的（null = 均分），故显式 `!`。
-      expect(g.stops, isNotNull);
-      expect(g.stops![0], 0.0);
-      expect(g.stops![1], closeTo(15 / 774, 0.01));
-      expect(g.stops![2], closeTo(1 - 15 / 774, 0.01));
+          .whereType<LinearGradient>();
+      expect(grads, isEmpty, reason: '栏体不应再有左右缘高光带渐变');
+
+      // 描边仍在（那是真实特征：栏体亮度 21 → 上缘亮边 46 ⇒ alpha ≈ 0.11）。
+      expect(NavBarStyle.barBorderAlpha, closeTo(0.12, 0.005));
+      // ⚠️ 判据取「alpha > 0 的那些」：选中块的 `pillBorderAlpha` 是 0，
+      // 直接全取会混进一条假的 0.0 断言失败（本轮踩过）；而按圆角值筛会与
+      // `barRadius` 耦合成同义反复。只有栏体这一层有描边。
+      final Iterable<double> barBorders = tester
+          .widgetList<DecoratedBox>(find.byType(DecoratedBox))
+          .where((DecoratedBox d) => d.decoration is BoxDecoration)
+          .map((DecoratedBox d) => (d.decoration as BoxDecoration).border)
+          .whereType<Border>()
+          .expand((Border b) => <double>[b.top.color.a, b.bottom.color.a])
+          .where((double a) => a > 0);
+      expect(barBorders, isNotEmpty, reason: '未定位到栏体的描边');
+      for (final double a in barBorders) {
+        expect(a, closeTo(0.12, 0.001), reason: '栏体四周亮描边实测反解 ≈ 0.11');
+      }
     });
 
     testWidgets('⭐ 选中与未选中的图标/文字同色（实测亮度几乎一致）',
