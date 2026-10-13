@@ -175,10 +175,16 @@ class _FrostedNavBarState extends State<FrostedNavBar>
           height: NavBarStyle.barHeight,
           child: LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
-              // 严格等分：实测参考图标签中心间距 129/129/129，完全均匀。
-              // 这是自研相对库（默认 spacing: 8 会破坏等分）的直接收益。
-              final double cellWidth =
-                  constraints.maxWidth / widget.tabs.length;
+              // ⭐ 标签区**居中 + 左右侧内缩**（参考图实测：侧留白 = 0.25 格宽）。
+              // 严格等分指标签中心间距均匀（实测 184/185/183），**不是**标签占满
+              // 栏体——不内缩的话，114% 宽的选中块在首/末格会贴到栏体边框
+              // （见 [NavBarStyle.sideInsetCellFactor]）。
+              final int n = widget.tabs.length;
+              final double available = constraints.maxWidth;
+              final double labelAreaWidth =
+                  available / (1 + 2 * NavBarStyle.sideInsetCellFactor / n);
+              final double sideInset = (available - labelAreaWidth) / 2;
+              final double cellWidth = labelAreaWidth / n;
               final double pillHeight =
                   NavBarStyle.barHeight * NavBarStyle.pillHeightFactor;
               final double pillWidth = cellWidth * NavBarStyle.pillWidthFactor;
@@ -194,8 +200,12 @@ class _FrostedNavBarState extends State<FrostedNavBar>
                     clipBehavior: Clip.none,
                     children: <Widget>[
                       // 选中块（在下层，内容压在它上面）。
+                      //⚠️ `AnimatedPositioned` 必须是 `Stack` 的**直接**子节点，
+                      // 不能套 `Positioned.fill`（会丢父约束导致布局断言）。故侧
+                      // 内缩直接并入它的 `left`。
                       _AnimatedPill(
                         index: widget.selectedIndex,
+                        sideInset: sideInset,
                         cellWidth: cellWidth,
                         pillWidth: pillWidth,
                         pillHeight: pillHeight,
@@ -203,17 +213,20 @@ class _FrostedNavBarState extends State<FrostedNavBar>
                         brightness: brightness,
                       ),
                       // 标签行。
-                      Row(
-                        children: <Widget>[
-                          for (int i = 0; i < widget.tabs.length; i++)
-                            Expanded(
-                              child: _TabItem(
-                                tab: widget.tabs[i],
-                                selected: i == widget.selectedIndex,
-                                onTap: () => _onTap(i),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: sideInset),
+                        child: Row(
+                          children: <Widget>[
+                            for (int i = 0; i < widget.tabs.length; i++)
+                              Expanded(
+                                child: _TabItem(
+                                  tab: widget.tabs[i],
+                                  selected: i == widget.selectedIndex,
+                                  onTap: () => _onTap(i),
+                                ),
                               ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -272,6 +285,7 @@ class _GlassShell extends StatelessWidget {
 class _AnimatedPill extends StatelessWidget {
   const _AnimatedPill({
     required this.index,
+    required this.sideInset,
     required this.cellWidth,
     required this.pillWidth,
     required this.pillHeight,
@@ -280,6 +294,9 @@ class _AnimatedPill extends StatelessWidget {
   });
 
   final int index;
+
+  /// 标签区相对栏体的左右内缩（由调用方从 `sideInsetCellFactor` 解出）。
+  final double sideInset;
   final double cellWidth;
   final double pillWidth;
   final double pillHeight;
@@ -289,7 +306,10 @@ class _AnimatedPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 动画位置：只由「选中下标」决定，不含拖动偏移。
-    final double left = cellWidth * index + (cellWidth - pillWidth) / 2;
+    // `sideInset` 让首/末格的选中块不贴栏体边框（参考图实测边距 11~14dp）。
+    final double left = sideInset +
+        cellWidth * index +
+        (cellWidth - pillWidth) / 2;
     // 拖动时横向拉伸（跟手形变），静止时 1.0。
     final double stretch = dragDx == 0
         ? 0.0

@@ -120,7 +120,24 @@ void main() {
       );
     });
 
-    testWidgets('标签严格等分：第 N 格中心 = 内容左缘 + 格宽 ×(N+0.5)',
+    testWidgets('标签区侧内缩 = 0.25 格宽（参考图实测侧留白/格宽 = 0.2446/0.25）',
+        (WidgetTester tester) async {
+      // 参考图原生截图：栏体 x 26..853（828）、标签区 x 71..807（736）
+      // ⇒ 侧留白 45/46，除以格宽 184 得0.2446 / 0.2500。
+      expect(
+        NavBarStyle.sideInsetCellFactor,
+        0.25,
+        reason: '侧内缩是参考图真实特征；缺了它 114% 宽的选中块会贴栏体边框',
+      );
+      // 解方程：标签区宽 W = 可用宽 / (1 + 2k/n)
+      const int n = 4;
+      const double available = 828;
+      final double w = available / (1 + 2 * 0.25 / n);
+      expect(w, closeTo(736, 1));   // 实测标签区宽 736
+      expect(w / n, closeTo(184, 1)); // 实测格宽 184
+    });
+
+    testWidgets('标签区居中 + 严格等分：第 N 格中心 = 标签区左缘 + 格宽×(N+0.5)',
         (WidgetTester tester) async {
       tester.view.physicalSize = const Size(592, 1280);
       tester.view.devicePixelRatio = 1.0;
@@ -130,16 +147,69 @@ void main() {
       await tester.pumpAndSettle();
 
       final double shellLeft = tester.getTopLeft(_shellFinder()).dx;
-      final double cell =
-          tester.getSize(_shellFinder()).width / _kTabs.length;
-      for (int i = 0; i < _kTabs.length; i++) {
+      final double shellWidth = tester.getSize(_shellFinder()).width;
+      final int n = _kTabs.length;
+      // ⚠️ 标签区**不是**占满栏体：实测参考图标签区居中 + 侧留白 0.25 格宽。
+      // 用`可用宽 / n` 当格宽会算错中心（这一条曾按旧公式写，漏掉了内缩）。
+      final double labelAreaWidth =
+          shellWidth / (1 + 2 * NavBarStyle.sideInsetCellFactor / n);
+      final double sideInset = (shellWidth - labelAreaWidth) / 2;
+      final double cell = labelAreaWidth / n;
+
+      for (int i = 0; i < n; i++) {
         final Rect r = tester.getRect(find.text(_kTabs[i].label));
         expect(
           r.center.dx,
-          closeTo(shellLeft + cell * (i + 0.5), 1.5),
+          closeTo(shellLeft + sideInset + cell * (i + 0.5), 1.5),
           reason: '第 $i 格标签未落在等分中心（实测要求严格等分）',
         );
       }
+    });
+
+    testWidgets('⭐ 首/末格选中块与栏体边框有间距（不触边）',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(592, 1280);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      // 选第 1 格：114% 宽的选中块向两侧溢出，若无侧内缩就会贴到栏体边框。
+      await tester.pumpWidget(_navHost(
+        GlassQualityTier.high,
+        selectedIndex: 0,
+        onTabSelected: _noop,
+      ));
+      await tester.pumpAndSettle();
+
+      final Rect shell = tester.getRect(_shellFinder());
+      final Rect pill = tester.getRect(_pillFinder());
+
+      expect(
+        pill.left - shell.left,
+        greaterThan(4.0),
+        reason: '首格选中块左缘须离栏体边框留距离（实测参考图 15.5dp）',
+      );
+      // 首格选中块右缘也不该越过栏体中线太多（保证没跑偏）。
+      expect(pill.left - shell.left, lessThan(shell.width / 4));
+
+      // 末格同样。
+      await tester.pumpWidget(_navHost(
+        GlassQualityTier.high,
+        selectedIndex: _kTabs.length - 1,
+        onTabSelected: _noop,
+      ));
+      await tester.pumpAndSettle();
+      final Rect lastPill = tester.getRect(_pillFinder());
+      expect(
+        shell.right - lastPill.right,
+        greaterThan(4.0),
+        reason: '末格选中块右缘须离栏体边框留距离',
+      );
+      // 左右边距应对称（标签区居中）。
+      expect(
+        (pill.left - shell.left) - (shell.right - lastPill.right),
+        closeTo(0, 1.5),
+        reason: '标签区居中 ⇒ 首末边距对称',
+      );
     });
 
     testWidgets('选中块实测：宽 = 格宽 ×1.14、高 = 栏高 ×0.93、圆角 = 高/2',
@@ -158,7 +228,12 @@ void main() {
       await tester.pumpAndSettle();
 
       final double shellLeft = tester.getTopLeft(_shellFinder()).dx;
-      final double cell = tester.getSize(_shellFinder()).width / _kTabs.length;
+      // 标签区有侧内缩（0.25 格宽），格宽按标签区宽算，不是栏宽。
+      final double shellWidth = tester.getSize(_shellFinder()).width;
+      final double labelAreaWidth = shellWidth /
+          (1 + 2 * NavBarStyle.sideInsetCellFactor / _kTabs.length);
+      final double sideInset = (shellWidth - labelAreaWidth) / 2;
+      final double cell = labelAreaWidth / _kTabs.length;
       final Rect pill = tester.getRect(_pillFinder());
 
       expect(pill.width, closeTo(cell * 1.14, 1.0));
@@ -175,8 +250,8 @@ void main() {
           .borderRadius
           .resolve(TextDirection.ltr);
       expect(radius.topLeft.x, closeTo(pill.height / 2, 0.5));
-      // 中心与第 2 格（index 1）对齐。
-      expect(pill.center.dx, closeTo(shellLeft + cell * 1.5, 1.5));
+      // 中心与第 2 格（index 1）对齐（须含侧内缩）。
+      expect(pill.center.dx, closeTo(shellLeft + sideInset + cell * 1.5, 1.5));
     });
   });
 
