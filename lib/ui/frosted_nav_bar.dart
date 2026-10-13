@@ -30,24 +30,29 @@
 //   故调用点必须保持 `Stack + Positioned`。
 // · **两层纱罩**：磨砂之上再叠半透明白层，模拟参考图「磨砂 + 增白」的观感。
 //   暗色下纱罩换**黑色**（压暗提对比），不是加白。
-// · **选中块**：`AnimatedPositioned`（[NavBarStyle.switchCurve] = `easeOutBack`
-//   提供过冲回弹）+ `Transform.scale` 做拖动跟手拉伸。
-// · **拖动**：跟手位移走 `Transform.translate`（无动画、逐帧 1:1），切换位移走
-//   `AnimatedPositioned`（过冲回弹）。松手时**吸附到最近的格子**并切换 tab，同时把
-//   手指偏离量平滑归零——归零动画刻意与 `AnimatedPositioned` **同曲线
-//   （[NavBarStyle.switchCurve]）同时长（[NavBarStyle.switchDuration]）**。
-//   两者同曲线时组合位移退化为「在曲线空间里的直线插值」：
+// · **选中块的位置**由两条 `AnimationController` **手算**，不用 `AnimatedPositioned`：
+//   ① `_slide` 切档（[NavBarStyle.switchCurve] = `easeOutBack` 提供过冲回弹）；
+//   ② `_settle` 松手后把手指偏移量归零。
+//   两者同曲线（[NavBarStyle.switchCurve]）同时长（[NavBarStyle.switchDuration]），
+//   叠加后组合位移退化为「在曲线空间里的直线插值」：
 //
 //   ```text
-//     left(t) = lerp(旧格, 新格, c(t))   dx(t) = D × (1 − c(t))
-//     合成(t) = left(旧) + D + c(t) × (left(新) − left(旧) − D)
+//     位置(t) = lerp(旧格, 新格, c(t))     dx(t) = D × (1 − c(t))
+//     合成(t)  = 旧格 + D + c(t) × (新格 − 旧格 − D)
 //   ```
 //
 //   ⇒ 起点恒等于松手位置、终点恒等于新格，中途**不绕路**。若两条动画曲线/时长
 //   不一致，合成位移会先弹回旧格再滑向新格（参考视频里是「一边收缩一边平移」）。
+// · **为什么位置必须手算**（2026-10-13 真机回归「点击时最左 / 最右边界溢出」）：
+//   `easeOutBack` 会冲过终点一次（峰值 ≈ 终点的 1.096 倍）。若位置交给
+//   `AnimatedPositioned`，它的 `left` 是**动画内部**的值、外面拿不到 ⇒ 边界夹取
+//   只能夹「静止位 + 手指偏移」，**动画途中那一冲完全夹不住**（实测 3 格面上越出
+//   4.4px、5 格手机上按同比例 ≈ 20dp）。手算才能逐帧把「动画位置 + 手指偏移」
+//   一起夹。`Transform.scale` 只留作拉伸，不参与定位。
 // · **左右边界**：选中块**拉伸后**的左右缘都不得越出栏体（参考视频实测：右缘顶在
 //   栏体内缘 575 / 578 就不再外扩）。`Stack.clipBehavior: Clip.none` 不做裁剪，
-//   故必须在算位置时**显式 clamp 选中块中心**。
+//   故算位置时必须**显式 clamp 选中块中心**（`Transform.scale` 绕盒中心缩放，
+//   故拉伸后的左右缘是 `中心 ± 半宽`）。
 // · **档位退化**：「关」档退化为 Material [NavigationBar]（`UI-06` ②），
 //   中 / 低档钉 standard 口径不降级外观，仅关掉交互高光。
 import 'dart:math' as math;
@@ -111,11 +116,27 @@ class FrostedNavBar extends StatefulWidget {
 }
 
 class _FrostedNavBarState extends State<FrostedNavBar>
-    with SingleTickerProviderStateMixin {
-  /// 松手后的归零动画。
+    with TickerProviderStateMixin {
+  /// 切档滑动的进度（0 → 1）。
   ///
-  /// 时长 / 曲线**必须**与 [_AnimatedPill] 里 `AnimatedPositioned` 用的那条一致，
-  /// 否则组合位移会绕路（见文件头）。
+  /// ⚠️ **不用 `AnimatedPositioned`**（2026-10-13 真机回归「点击时最左 / 最右
+  /// 边界溢出」）：`easeOutBack` 会冲过终点一次（峰值 ≈ 终点的 **1.096 倍**），
+  /// 而 `AnimatedPositioned` 的 `left` 是**动画内部**的值，外面拿不到 ⇒ 边界夹取
+  /// 只能夹「静止位 + 手指偏移」，**动画途中那一冲完全夹不住**（实测 3 格面上
+  /// 越出 4.4px、5 格手机上按同比例 ≈ 20dp）。改成手算即可**逐帧**一起夹。
+  late final AnimationController _slide = AnimationController(
+    vsync: this,
+    duration: NavBarStyle.switchDuration,
+  );
+
+  late final CurvedAnimation _slideCurve = CurvedAnimation(
+    parent: _slide,
+    curve: NavBarStyle.switchCurve,
+  );
+
+  /// 松手后的归零动画（起点 = 松手瞬间的手指偏移）。
+  ///
+  /// 时长 / 曲线**必须**与 [_slide] 一致，否则两段位移叠加会绕路（见文件头）。
   late final AnimationController _settle = AnimationController(
     vsync: this,
     duration: NavBarStyle.switchDuration,
@@ -126,6 +147,14 @@ class _FrostedNavBarState extends State<FrostedNavBar>
     parent: _settle,
     curve: NavBarStyle.switchCurve,
   );
+
+  /// 切档动画的起点 / 终点，单位是**格**（可为小数）。
+  ///
+  /// ⭐ 用「格」而不是像素当坐标：选中块左缘是下标的**仿射**函数
+  /// （`left = 侧内缩 + 格宽 × i + 常数`），故在格空间里插值再换算成像素等价于
+  /// 在像素空间里插值，同时与布局解耦——`格宽` 只在 `LayoutBuilder` 里才知道。
+  late double _slideFrom;
+  late double _slideTo;
 
   /// 拖动跟手的横向偏移（px，手指按下期间逐帧 1:1）。
   double _dragDx = 0;
@@ -149,11 +178,42 @@ class _FrostedNavBarState extends State<FrostedNavBar>
   double get _pillDx =>
       _dragging ? _dragDx : _releaseDx * (1 - _settleCurve.value);
 
+  /// 选中块当前的**视觉**位置（单位 = 格）= 切档插值 + 手指偏移。
+  ///
+  /// 拖动期间 [_settleCurve] 恒为 1（[_settle] 要么没跑、要么已跑完），故
+  /// [_pillDx] 的拖动支路不会被切档那条曲线污染。
+  double get _pillIndex =>
+      _slideFrom + (_slideTo - _slideFrom) * _slideCurve.value;
+
   /// 开关档（Material退化）。
   bool get _glassOff => !GlassScope.configOf(context).glassEnabled;
 
   @override
+  void initState() {
+    super.initState();
+    _slideFrom = widget.selectedIndex.toDouble();
+    _slideTo = _slideFrom;
+  }
+
+  @override
+  void didUpdateWidget(FrostedNavBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedIndex == widget.selectedIndex) {
+      return;
+    }
+    // 起点 = **当前视觉位置**（不是旧下标！）：
+    //   · 上一次切档若被打断（连点两格），从被打断处接着走，不跳回旧格；
+    //   · 若这次换档是「拖动松手吸附」触发的，还要把松手瞬间的手指偏移折算成
+    //     格数加进去——否则选中块会先从手指位置跳回原地、再滑向新格。
+    _slideFrom = _pillIndex + (_cellWidth > 0 ? _pillDx / _cellWidth : 0);
+    _slideTo = widget.selectedIndex.toDouble();
+    _slide.forward(from: 0);
+  }
+
+  @override
   void dispose() {
+    _slideCurve.dispose();
+    _slide.dispose();
     _settleCurve.dispose();
     _settle.dispose();
     super.dispose();
@@ -316,34 +376,66 @@ class _FrostedNavBarState extends State<FrostedNavBar>
                   onHorizontalDragUpdate: _onDragUpdate,
                   onHorizontalDragEnd: _onDragEnd,
                   onHorizontalDragCancel: _onDragCancel,
-                  // 归零动画按帧驱动选中块；标签行不参与动画，作为 `child` 缓存
-                  // （否则每帧重建整行 `InkWell`）。
+                  // 切档（[_slideCurve]）+ 归零（[_settleCurve]）两条按帧驱动选中块；
+                  // 标签行不参与动画，作为 `child` 缓存（否则每帧重建整行 `InkWell`）。
                   child: AnimatedBuilder(
-                    animation: _settleCurve,
-                    builder: (BuildContext context, Widget? rowChild) => Stack(
-                      clipBehavior: Clip.none,
-                      children: <Widget>[
-                        // 选中块（在下层，内容压在它上面）。
-                        //⚠️ `AnimatedPositioned` 必须是 `Stack` 的**直接**子节点，
-                        // 不能套 `Positioned.fill`（会丢父约束导致布局断言）。故侧
-                        // 内缩直接并入它的 `left`。
-                        //⚠️ 也**不能**把它包进 `AnimatedBuilder`——那会让
-                        // `Positioned` 不再是 Stack 直接子节点而报 ParentData 断言。
-                        // 故动画器包在 Stack **外面**。
-                        _AnimatedPill(
-                          index: widget.selectedIndex,
-                          sideInset: sideInset,
-                          cellWidth: cellWidth,
-                          pillWidth: pillWidth,
-                          pillHeight: pillHeight,
-                          available: available,
-                          dragDx: _pillDx,
-                          brightness: brightness,
-                        ),
-                        // 标签行。
-                        ?rowChild,
-                      ],
-                    ),
+                    animation: Listenable.merge(<Listenable>[
+                      _slideCurve,
+                      _settleCurve,
+                    ]),
+                    builder: (BuildContext context, Widget? rowChild) {
+                      // ⚠️ `Positioned` 必须是 `Stack` 的**直接**子节点（套一层独立
+                      // widget 会丢 `ParentData`、报布局断言），故几何直接在这里算。
+                      final double dragDx = _pillDx;
+                      final double left = sideInset +
+                          cellWidth * _pillIndex +
+                          (cellWidth - pillWidth) / 2;
+                      // 拖动时横向拉伸（跟手形变），静止时 0。
+                      // 比例 ∝ 拖过的格数，封顶 [NavBarStyle.dragStretchMax]。
+                      final double stretch = cellWidth <= 0
+                          ? 0.0
+                          : math.min(
+                              (dragDx.abs() / cellWidth) *
+                                  NavBarStyle.dragStretchPerCell,
+                              NavBarStyle.dragStretchMax,
+                            );
+                      // ── 左右边界 ───────────────────────────────────────────
+                      // ⚠️ 两个要点缺一不可：
+                      //   ① 夹的是**中心**——[Transform.scale] 绕盒中心缩放，故拉伸
+                      //      后的左右缘是 `中心 ± 半宽`；
+                      //   ② 夹的**对象**必须是「当前动画位置 + 手指偏移」，不能是
+                      //      「静止位 + 手指偏移」。否则切档曲线 `easeOutBack` 那一次
+                      //      过冲（峰值 ≈ 终点的 1.096 倍）会整体漏夹，切到首 / 末格
+                      //      时选中块直接冲出去。
+                      // ⇒ 拖到两端、以及切到两端，都「顶住」不再外扩。
+                      final double halfSpan = pillWidth * (1 + stretch) / 2;
+                      final double center = halfSpan * 2 >= available
+                          // 极端窄栏（如 2 格 + 最大拉伸）：整块拉满就居中，否则
+                          // 夹取区间为空、`clamp` 会抛断言。
+                          ? available / 2
+                          : (left + pillWidth / 2 + dragDx)
+                              .clamp(halfSpan, available - halfSpan);
+
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        children: <Widget>[
+                          // 选中块（在下层，内容压在它上面）。
+                          Positioned(
+                            left: center - pillWidth / 2,
+                            top: (NavBarStyle.barHeight - pillHeight) / 2,
+                            width: pillWidth,
+                            height: pillHeight,
+                            child: _Pill(
+                              height: pillHeight,
+                              stretch: stretch,
+                              brightness: brightness,
+                            ),
+                          ),
+                          // 标签行。
+                          ?rowChild,
+                        ],
+                      );
+                    },
                     child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: sideInset),
                       child: Row(
@@ -410,108 +502,47 @@ class _GlassShell extends StatelessWidget {
   }
 }
 
-/// 滑动选中块。
+/// 选中块的外观（磨砂 + 纱罩 + 胶囊圆角 + 横向拉伸）。
 ///
-/// ⚠️ **位置动画与拖动跟手必须分两套机制**（本轮实测踩到）：
-/// 拖动偏移若并入 [AnimatedPositioned] 的 `left`，每一帧拖动更新都会**重启
-/// 那条 420ms 弹簧**，选中块被动画持续「拉回去」，实测表现为**完全不动**
-/// （`during == before`，不是「动得慢」）。故三件事各走各的通道：
+/// ⚠️ **位置与外观必须分开**（2026-10-13 实测两次踩到）：
 ///
-/// ```text
-///   · 切档位移   → AnimatedPositioned(left)      switchCurve / switchDuration
-///   · 拖动跟手   → Transform.translate(dx)       无动画，逐帧 1:1
-///   · 拖动拉伸   → Transform.scale(scaleX)       无动画，∝ |dx|
-/// ```
+/// 1. 拖动偏移若并入 `AnimatedPositioned` 的 `left`，每一帧拖动更新都会**重启那条
+///    420ms 弹簧**，选中块被动画持续「拉回去」，实测表现为**完全不动**
+///    （`during == before`，不是「动得慢」）。
+/// 2. 位置若交给 `AnimatedPositioned`，切档时那条 `easeOutBack` 的**过冲就夹不住**
+///    （`left` 是动画内部的值，外面拿不到）⇒ 切到首 / 末格时选中块冲出去。
 ///
-/// 松手时 `dx` 由 `_FrostedNavBarState` 的归零动画驱动**衰减到 0**——那条动画与
-/// `AnimatedPositioned` **同曲线同时长**，两者叠加后合成位移是「曲线空间里的直线」，
-/// 起点 = 松手位置、终点 = 吸附格，中途不绕路（推到见文件头）。
-///
-/// ⚠️ **拉伸后的左右缘必须显式夹在栏体内**：`Stack` 是 `Clip.none`，不做裁剪。
-class _AnimatedPill extends StatelessWidget {
-  const _AnimatedPill({
-    required this.index,
-    required this.sideInset,
-    required this.cellWidth,
-    required this.pillWidth,
-    required this.pillHeight,
-    required this.available,
-    required this.dragDx,
+/// ⇒ 位置由 [_FrostedNavBarState] 的两条 `AnimationController` 手算并**逐帧夹取**
+/// （见 `build`），本类只负责外观：唯一的动态量是横向拉伸 [stretch]
+/// （`Transform.scale` 绕盒中心缩放，故调用方按「中心 ± 半宽」算边界）。
+class _Pill extends StatelessWidget {
+  const _Pill({
+    required this.height,
+    required this.stretch,
     required this.brightness,
   });
 
-  final int index;
+  final double height;
 
-  /// 标签区相对栏体的左右内缩（由调用方从 `sideInsetCellFactor` 解出）。
-  final double sideInset;
-  final double cellWidth;
-  final double pillWidth;
-  final double pillHeight;
-
-  /// 栏体可用宽（= `Stack` 的宽）。左右边界约束按它算。
-  final double available;
-  final double dragDx;
+  /// 横向拉宽的比例（0 = 静止）。
+  final double stretch;
   final Brightness brightness;
 
   @override
   Widget build(BuildContext context) {
-    // 动画位置：只由「选中下标」决定，不含拖动偏移。
-    // `sideInset` 让首/末格的选中块不贴栏体边框（参考图实测边距 3~4dp）。
-    final double left =
-        sideInset + cellWidth * index + (cellWidth - pillWidth) / 2;
-
-    // 拖动时横向拉伸（跟手形变），静止时 0。
-    // 比例 ∝ 拖过的格数，封顶 [NavBarStyle.dragStretchMax]。
-    final double stretch = cellWidth <= 0
-        ? 0.0
-        : math.min(
-            (dragDx.abs() / cellWidth) * NavBarStyle.dragStretchPerCell,
-            NavBarStyle.dragStretchMax,
-          );
-
-    // ── 左右边界 ─────────────────────────────────────────────────────────────
-    // ⚠️ `Transform.scale` 以**盒中心**为原点缩放，故拉伸后的左右缘是
-    // `中心 ± 半宽`。`Stack` 是 `Clip.none`（不裁剪），若不管就会溢出栏体。
-    // 把**中心**夹到「左缘 ≥ 0 且右缘 ≤ 可用宽」的区间内 ⇒ 拖到两端就顶住
-    // （参考视频实测：右缘顶在栏体内缘 575 / 578 即不再外扩）。
-    final double restCenter = left + pillWidth / 2;
-    final double halfSpan = pillWidth * (1 + stretch) / 2;
-    final double rawCenter = restCenter + dragDx;
-    final double center = halfSpan * 2 >= available
-        // 极端窄栏（如 2 格 + 最大拉伸）：整块拉满，居中即可，否则夹取区间为空。
-        ? available / 2
-        : rawCenter.clamp(halfSpan, available - halfSpan);
-
-    return AnimatedPositioned(
-      duration: NavBarStyle.switchDuration,
-      curve: NavBarStyle.switchCurve,
-      left: left,
-      top: (NavBarStyle.barHeight - pillHeight) / 2,
-      width: pillWidth,
-      height: pillHeight,
-      child: Transform.translate(
-        // 拖动跟手 + 边界修正：走 `Transform` 而非并入上面的 `left`——`Transform`
-        // 无动画，逐帧 1:1 跟手（原因见类注释）。
-        offset: Offset(center - restCenter, 0),
-        child: Transform.scale(
-          scaleX: 1 + stretch,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(
-              NavBarStyle.pillRadius(pillHeight),
-            ),
-            child: BackdropFilter(
-              filter: NavBarStyle.pillFilter(brightness),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: NavBarStyle.pillScrimColor(brightness),
-                  borderRadius: BorderRadius.circular(
-                    NavBarStyle.pillRadius(pillHeight),
-                  ),
-                  border: Border.all(
-                    color: Colors.white.withValues(
-                      alpha: NavBarStyle.pillBorderAlpha,
-                    ),
-                  ),
+    return Transform.scale(
+      scaleX: 1 + stretch,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(NavBarStyle.pillRadius(height)),
+        child: BackdropFilter(
+          filter: NavBarStyle.pillFilter(brightness),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: NavBarStyle.pillScrimColor(brightness),
+              borderRadius: BorderRadius.circular(NavBarStyle.pillRadius(height)),
+              border: Border.all(
+                color: Colors.white.withValues(
+                  alpha: NavBarStyle.pillBorderAlpha,
                 ),
               ),
             ),

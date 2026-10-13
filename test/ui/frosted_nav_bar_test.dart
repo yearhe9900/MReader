@@ -566,15 +566,15 @@ void main() {
       final double moved = during.center.dx - before.center.dx;
 
       // ① 跟手：位移须与拖动距离同量级。
-      // ⚠️ **不能只钉「变大了」**（2026-10-12 变异判红抓到）：`Transform.scale` 绕
-      // **中心**缩放，中心不受影响 ⇒ 摘掉 `Transform.translate` 后位移为 0 却仍
-      // 「变大了」。故这里是**位移**断言，且给出上下界：
+      // ⚠️ **不能只钉「变大了」**（2026-10-12 变异判红抓到）：拉伸走
+      // `Transform.scale`、且绕**中心**缩放，中心不受影响 ⇒ 把跟手位移那一项摘掉
+      // 后位移为 0 却仍「变大了」。故这里是**位移**断言，且给出上下界：
       //   · 低于 1 格 ⇒ 说明位移机制失效；
       //   · 高于拖动距离 ⇒ 说明没有边界夹取。
-      // 实测这 28 步**全部**计入了跟手位移（触摸 slop 未吃掉），故下界可收紧到
-      // `dragged − 1`：任何「位移被吃掉一半」的实现都会红。
+      // 实测这 28 步**全部**计入了跟手位移（触摸 slop 未吃掉），故容差可收紧到 1px：
+      // 任何「位移被吃掉一半」的实现都会红。
       expect(moved, closeTo(dragged, 1),
-          reason: '应 1:1 跟手（摘掉 Transform.translate 时为 0）');
+          reason: '应 1:1 跟手（摘掉跟手位移项时为 0）');
       expect(moved, lessThanOrEqualTo(dragged + 0.5),
           reason: '跟手位移不得超过拖动距离（边界夹取只减不增）');
 
@@ -696,6 +696,60 @@ void main() {
       expect(tester.getRect(_pillFinder()).center.dx,
           closeTo(before.center.dx, 1.5),
           reason: '应回到原格中心');
+    });
+
+    testWidgets('⭐ 点首 / 末格时选中块**全程**不越出栏体（含过冲回弹）',
+        (WidgetTester tester) async {
+      // 2026-10-13 真机回归「点击时最左 / 最右边界溢出」。
+      //
+      // 切档走 `_slide` + `easeOutBack`：那条曲线会冲过终点一次
+      // （峰值 ≈ 终点的 1.096 倍）。边界夹取若只算「静止位 + 手指偏移」，**动画
+      // 途中那一冲完全没被夹到**——切到末格时选中块右缘会越出栏体
+      // （3 格测试面实测越出 4.4px；5 格手机上按同比例 ≈ 20dp）。
+      //
+      // 故本用例必须**逐帧**取样整段动画，不能只看首末两帧。
+      // 变异判红实证：把夹取对象退回「静止位 + 手指偏移」⇒ 红在
+      // 「收藏 第 11 帧：右缘越出栏体」（776.89 > 772.5）。
+      final List<int> picked = <int>[];
+      await tester.pumpWidget(_InteractiveHost(onSelect: picked.add));
+      await tester.pumpAndSettle();
+
+      final Rect shell = tester.getRect(_shellFinder());
+      final Rect before = tester.getRect(_pillFinder());
+      final double cell = _cellWidthOf(shell);
+
+      Future<void> tapAndWatch(String label, int targetIndex) async {
+        await tester.tap(find.text(label));
+        // 420ms 的切档动画按 ~16ms 逐帧走满。
+        final List<double> centers = <double>[];
+        for (int i = 0; i < 32; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+          final Rect p = tester.getRect(_pillFinder());
+          expect(p.left, greaterThanOrEqualTo(shell.left - 0.5),
+              reason: '$label 第 $i 帧：左缘越出栏体');
+          expect(p.right, lessThanOrEqualTo(shell.right + 0.5),
+              reason: '$label 第 $i 帧：右缘越出栏体');
+          centers.add(p.center.dx);
+        }
+        // ⚠️ **必须同时钉「真的在动」**（2026-10-13 变异判红抓到）：
+        // 只查「不越界」的话，把位置换成「目标下标的静止位」会让选中块**瞬间跳到
+        // 终点、压根没有动画**——而它显然不越界，用例照样判绿。
+        final double target = before.center.dx + targetIndex * cell;
+        expect(centers.first, isNot(closeTo(target, 1)),
+            reason: '$label 第一帧就停在终点 ⇒ 切档动画根本没跑');
+        expect(centers.last, closeTo(target, 1.5),
+            reason: '$label 动画结束应停在目标格中心');
+        expect(
+          centers.any((double c) => (c - target).abs() > cell * 0.2),
+          isTrue,
+          reason: '$label 全程都在终点附近 ⇒ 没有中间的滑动过程',
+        );
+        await tester.pumpAndSettle();
+      }
+
+      await tapAndWatch('收藏', 2); // 首格 → 末格
+      await tapAndWatch('目录', 0); // 末格 → 首格
+      expect(picked, <int>[2, 0]);
     });
 
     testWidgets('点一下就走（回归：拖动识别器输给 tap 时不得吞掉点击）',
