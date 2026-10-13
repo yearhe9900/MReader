@@ -18,7 +18,7 @@ import '../settings/settings_store.dart';
 /// 主题色种子：玻璃卡片、合成封面、强调色的统一来源。
 const Color kAppSeedColor = Colors.indigo;
 
-/// 正文默认字号（逻辑像素，= `TYP-01` 默认值 18）。
+/// 正文默认字号（逻辑像素，= `TYP-01` 默认值 20）。
 const double kBodyFontSize = Settings.defaultFontSize;
 
 /// 正文默认行距倍数（= `TYP-01` 默认值 1.6）。

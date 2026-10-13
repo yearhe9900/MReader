@@ -35,7 +35,7 @@ class ReaderSettings {
   });
 
   // — 取值常量（与 PRD `TYP-01` / `Settings` 口径一致） —
-  static const double _defaultFontSize = 18;
+  static const double _defaultFontSize = 20;
   static const double _defaultLineHeight = 1.6;
   static const double minFontSize = 12;
   static const double maxFontSize = 36;

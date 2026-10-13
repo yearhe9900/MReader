@@ -85,11 +85,12 @@ void main() {
       expect(views[1].pages, isNotEmpty, reason: '第 2 章应是真页表');
       expect(views[2].pages, isEmpty, reason: '第 3 章被闸门挂住 ⇒ 占位块');
 
-      // ① 占位块高：改前 = `cfg.pageHeight`（572.0 = 整屏）。现 = 112.8
-      //    （标题 60.0 + 正文一行 18×1.6 = 28.8 + 24 呼吸）。
+      // ① 占位块高：改前 = `cfg.pageHeight`（572.0 = 整屏）。现 = 116.0
+      //    （标题 60.0 + 正文一行 20×1.6 = 32 + 24 呼吸；默认字号 20，
+      //    `TYP-01` 2026-10-13 起）。
       //    标题占高 60.0 = 文本 24 + `_kHeadingGapTop` 24 + `_kHeadingGapBottom` 12
       //    （章标题改版后留白链 19→36，`§2.82`）。
-      expect(views[2].headingHeight, 112.8);
+      expect(views[2].headingHeight, 116.0);
       expect(views[0].headingHeight, 60.0, reason: '真章标题占高仍是实测值');
       // 与「整页高」的对比断言：占位块必须**远小于**一页。
       expect(views[2].headingHeight, lessThan(sc.config.pageHeight / 2),
@@ -97,10 +98,12 @@ void main() {
               '${sc.config.pageHeight}）');
       expect(sc.config.pageHeight, 572.0);
 
-      // ② 布局总高 = 两章真内容 + 一个占位块（不是三章整屏）
+      // ② 布局总高 = 两章真内容 + 一个占位块（不是三章整屏）。
+      //    默认字号 20 的章几何：标题 60 + 内容 2864（页 0 = 11 段 512 +
+      //    4×12 段 560 + 尾页 1 段 32 + 5×16 跨页段距）= 2924/章。
       final PagedLayout layout = scrollerState(tester).layout;
-      expect(layout.chapterTops[2], 5488.0); // 旧 5454.0 + 两章标题各 17
-      expect(layout.totalHeight, 5600.8); // 5488.0 + 占位块 112.8
+      expect(layout.chapterTops[2], 5848.0); // 2924 × 2 章
+      expect(layout.totalHeight, 5964.0); // 5848.0 + 占位块 116.0
     });
 
     testWidgets('占位块→真实章合入不许移动视口（Δ ≤ 2dp）',
@@ -125,7 +128,7 @@ void main() {
           reason: '必须真的顶到滚动域下界（否则测不到占位块→真实的合入）；'
               'allow 4dp：drag 惯性停在物理余量处（实测 4975.0 / max 4977.8）');
 
-      // 放行第 3 章：占位块（112.8）→ 真实章（2727.0 + 17 标题，5 页）。
+      // 放行第 3 章：占位块（116.0）→ 真实章（2924.0 = 标题 60 + 6 页 60 段）。
       gate.complete();
       await settle(tester, rounds: 40);
 

@@ -3,7 +3,7 @@
 //
 // 预期值人工推演：
 //   · 默认值即 [ReaderSettings] 默认 + 不加亮度遮罩 + 白色背景：
-//     `fontSize = 18`、`lineHeight = 1.6`、`fontFamily = null`、
+//     `fontSize = 20`、`lineHeight = 1.6`、`fontFamily = null`、
 //     `themeMode = system`、`pageMargin = normal`、`brightness = 1.0`、
 //     `background = white`；
 //   · 亮度构造 clamp 到 `[0.2, 1.0]`：传 0.05 → 0.2，传 3.0 → 1.0；
@@ -38,9 +38,9 @@ class _TestAppPaths implements AppPaths {
 
 void main() {
   group('ReadingPrefs（值对象）', () {
-    test('默认值：18 / 1.6 / 系统默认字体 / 亮度 1.0 / 白色背景', () {
+    test('默认值：20 / 1.6 / 系统默认字体 / 亮度 1.0 / 白色背景', () {
       final ReadingPrefs prefs = ReadingPrefs();
-      expect(prefs.settings.fontSize, 18);
+      expect(prefs.settings.fontSize, 20);
       expect(prefs.settings.lineHeight, 1.6);
       expect(prefs.settings.fontFamily, isNull);
       expect(prefs.settings.themeMode, AppThemeMode.system);
@@ -91,7 +91,7 @@ void main() {
 
       // 单项坏不连坐：坏的回退默认，好的保留。
       final ReadingPrefs partial = ReadingPrefs.fromJson(<String, Object?>{
-        'fontSize': 'x', // 类型错 → 18
+        'fontSize': 'x', // 类型错 → 20
         'lineHeight': 2.0, // 合法 → 2.0
         'fontFamily': 'serif',
         'themeMode': 'bogus', // 未知 → system
@@ -100,7 +100,7 @@ void main() {
         'background': 'bogus', // 未知 → white
         'pageMode': 'bogus', // 未知 → scroll
       });
-      expect(partial.settings.fontSize, 18);
+      expect(partial.settings.fontSize, 20);
       expect(partial.settings.lineHeight, 2.0);
       expect(partial.settings.fontFamily, 'serif');
       expect(partial.settings.themeMode, AppThemeMode.system);

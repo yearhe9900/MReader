@@ -10,7 +10,7 @@ void main() {
   group('ReaderSettings 默认值', () {
     test('默认值符合 TYP-01', () {
       const ReaderSettings s = ReaderSettings();
-      expect(s.fontSize, 18);
+      expect(s.fontSize, 20);
       expect(s.lineHeight, 1.6);
       expect(s.fontFamily, isNull);
       expect(s.themeMode, AppThemeMode.system);
@@ -46,7 +46,7 @@ void main() {
       const ReaderSettings s = ReaderSettings();
       final ReaderSettings s2 = s.copyWith(lineHeight: 2.0);
       expect(s2.lineHeight, 2.0);
-      expect(s2.fontSize, 18);
+      expect(s2.fontSize, 20);
     });
 
     test('只改 fontFamily', () {

@@ -19,10 +19,10 @@
 //      `^(\d+)/(\d+) (\d+\.\d)%$` **钉死**（掉页读数 / 回退整数百分比都会判红），
 //      并单独验证长距离滚动后左读数换成下一章标题。
 //
-// 预期值人工推演（3 章 × 20 段假书，默认字号 18 / 行距 1.6）：
-//   · 单段行高 = 18 × 1.6 = 28.8，段底 padding 16 → 每段 44.8；
-//   · 章块 ≈ 标题块 57 + 20 × 44.8 ≈ 953；拖 150px（扣约 18px 手势阈值）→
-//     offset ≈ 132 → 章内 ≈ 0.14 → 全书 = 0.14 / 3 ≈ 4%。
+// 预期值人工推演（3 章 × 20 段假书，默认字号 20 / 行距 1.6，`TYP-01` 2026-10-13 起）：
+//   · 单段行高 = 20 × 1.6 = 32，段底 padding 16 → 每段 48；
+//   · 章块 ≈ 标题块 60 + 20 × 48 ≈ 1020；拖 150px（扣约 18px 手势阈值）→
+//     offset ≈ 132 → 章内 ≈ 0.13 → 全书 = 0.13 / 3 ≈ 4%。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -169,9 +169,9 @@ void main() {
       expect(scrolled.percent, greaterThan(0.0),
           reason: '真实滚动 150px 后进度必须为正');
       expect(scrolled.percent, lessThanOrEqualTo(25.0),
-          reason: '推演：约 150px / 章高约 927 → 全书约 5%');
+          reason: '推演：约 150px / 章高约 1020 → 全书约 4%');
       expect(scrolled.chapter, '第一章',
-          reason: '推演：约 193px 仍在第 1 章内（章高约 927）');
+          reason: '推演：约 193px 仍在第 1 章内（章高约 1020）');
       expect(scrolled.page, lessThanOrEqualTo(scrolled.pages),
           reason: '页码必须落在 1..本章总页数 内');
 
@@ -186,7 +186,7 @@ void main() {
 
       expect(_progressOf(tester).chapter, '第一章');
 
-      // 章块 ≈ 953（推演见文件头）；拖足 ~1500px 保证越过章边界。
+      // 章块 ≈ 1020（推演见文件头）；拖足 ~1500px 保证越过章边界。
       final TestGesture gesture = await tester
           .startGesture(tester.getCenter(find.byType(PagedScroller)));
       for (int i = 0; i < 10; i++) {
@@ -194,9 +194,9 @@ void main() {
         await tester.pump();
       }
       expect(_progressOf(tester).chapter, '第二章',
-          reason: '滚过约 1500px 后应进入第 2 章（章高约 953）');
+          reason: '滚过约 1500px 后应进入第 2 章（章高约 1020）');
       expect(_progressOf(tester).percent, greaterThan(25.0),
-          reason: '推演：约 1320px / 全书约 2860px ≈ 46%');
+          reason: '推演：约 1320px / 全书约 3060px ≈ 43%');
 
       await gesture.up();
       await settle(tester);

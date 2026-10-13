@@ -13,7 +13,7 @@ void main() {
     test('默认设置', () {
       const ReaderSettings s = ReaderSettings();
       final TextStyle style = resolveTextStyle(s, theme: lightTheme);
-      expect(style.fontSize, 18);
+      expect(style.fontSize, 20);
       expect(style.height, 1.6);
       expect(style.fontFamily, isNull);
     });

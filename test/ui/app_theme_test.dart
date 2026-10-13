@@ -66,10 +66,10 @@ void main() {
       expect(AppTheme.seed, kAppSeedColor);
     });
 
-    test('正文默认口径与 TYP-01 一致（字号 18 / 行距 1.6）', () {
+    test('正文默认口径与 TYP-01 一致（字号 20 / 行距 1.6）', () {
       expect(AppTheme.bodyTextStyle.fontSize, Settings.defaultFontSize);
       expect(AppTheme.bodyTextStyle.height, Settings.defaultLineHeight);
-      expect(AppTheme.bodyTextStyle.fontSize, 18.0);
+      expect(AppTheme.bodyTextStyle.fontSize, 20.0);
       expect(AppTheme.bodyTextStyle.height, 1.6);
     });
   });

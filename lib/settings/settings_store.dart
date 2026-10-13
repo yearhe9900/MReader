@@ -42,7 +42,7 @@ class Settings {
   });
 
   /// 字号默认值（逻辑像素），与 PRD `TYP-01` 一致。
-  static const double defaultFontSize = 18;
+  static const double defaultFontSize = 20;
 
   /// 行距默认倍数，与 PRD `TYP-01` 一致。
   static const double defaultLineHeight = 1.6;
