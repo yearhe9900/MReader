@@ -5199,3 +5199,62 @@ x=600..700  lum 28~39       ← 偏暗
   单看「左右数值不等」无法区分，必须**同时核对两侧的绝对量与中心点**。
 - **报「触边 / 出界」这类现象时，先问溢出量从哪来**：本例是 `factor > 1` 与
   「占满等分」两条规则叠加的**交互**，单看任一条都正常。
+
+### 2.92 重开书落点漂移：落位可达性验收 + 陈旧延迟跳转作废（2026-10-13）
+
+两笔同族修复（`29bdc84` 字号批连带暴露、`552d98e` 收口），都属
+「clamp 截短 / 拖回 + 永不重试」缺陷族（`§2.80` 同族）的变体。
+
+#### 根因 A：落位「命中」≠可滚动到位（`_landingReachable`）
+
+`offsetFor` 给出的落位目标可能超出 `maxScrollExtent`——`_jumpPaged` 超域目标走
+postFrame clamp **静默截短**，而落位收敛**宣告后永不重试** ⇒ 进度停在半路。
+修法：落位可达性验收——`landAt ≤ totalHeight − vh`（或已排干=真书尾）才收敛，
+否则挂回 `_pendingLand` 随排页表续跑；`reopen_pagination_cache_test` 轮数预算
+60→120（收敛点=页表排到「目标 + 一屏」之后，实测 ~43 轮）。
+**红线不动**：`_repairReachable` 不给窗口加上界、`PaginationCache.setProtected` 口径不动。
+
+#### 根因 B：陈旧延迟跳转把已收敛落点拖回（`_jumpSeq`）
+
+开书链路同一帧产生**两个跳转**：seq=1 来自 `_applyPagedViews` pre-jump 的
+delta 重锚（占位→真合入期章顶移动 888px，`why=views`），seq=2 来自落位收敛
+（`paged.land off=1544` 后立即跳）。seq=1 的 postFrame clamp 回调执行**晚于**
+seq=2 的立即跳，把视口从 1544 拖回 888（h1 尾部）⇒ 采样停在第 1 章正文 ⇒
+回归①「章不得漂移」（Expected 1 / Actual 0）与回归③「第 1 章正文应完全在
+视口外」判红。**同一竞态解释此前 flaky 两结局**。
+
+修法：跳转序号作废——`_jumpPaged` 每次调用 `final int seq = ++_jumpSeq`，
+postFrame 回调开头 `if (seq != _jumpSeq)` 判「期间已有更新跳转」→ 作废
+（`skip=superseded` 留痕）；**新意图永远压过旧意图**。
+留痕升级：`paged.move` 带 `seq=`；补跳入队记 `why=$why.q seq= tgt= px= max=`，
+作废记 `why=$why.late seq= skip=superseded`。
+
+#### 像素级 decode 实锤（判红跑次，单测隔离）
+
+```
+views.q seq=1 tgt=888.0 px=0.0 max=664.0     ← delta 重锚（占位→真合入）
+paged.land index=1 off=1544                  ← 落位收敛
+views seq=2 from=0.0 to=1544.0               ← 收敛后立即跳
+修复前：views.late seq=1 from=1544.0 to=888.0 d=-656.0   ← 陈旧回调拖回
+修复后：views.late seq=1 skip=superseded               ← 序号作废
+```
+
+888px = h1 尾部，与回归③判红现场「Found 3 widgets…第1章正文 18/19/20」
+逐像素吻合。并发跑次输出搅混无从 decode，**先单测隔离跑拿干净留痕**，
+再加 seq 留痕二次实证（修复前后两态对照）。
+
+#### 变异判红（2 处，均先验正常态绿、红断言=目标断言）
+
+| 变异 | 判红用例 | 红断言 |
+|---|---|---|
+| 序号判据改 `if (false)` | 回归① + 回归③（`reader_page_test`） | 「章不得漂移」+「第1章正文 18/19/20 在视口内」，`views.late seq=1 from=1544.0 to=888.0` 原样重现 |
+| `_landingReachable` 恒 `false` | `reopen_pagination_cache_test:110` | 「开书①的二次精确落位应收敛到目标语义坐标」 |
+
+#### 教训
+
+- **flaky 测试的两结局先找竞态，别急着加大容差**：回归①③红/绿两结局由
+  「两个跳转的回调执行顺序」决定，固定时序后 flaky 消失。
+- **延迟回调必须带序号作废**：postFrame 补跳这类「迟到的旧意图」与新意图
+  同帧竞争时，序号是唯一可靠的作废判据；`mounted`/`hasClients` 挡不住陈旧值。
+- **decode 顺序**：并发输出搅混 → 单测隔离 → 加 seq 字段 → 修复前后对照。
+  跳过任何一步都可能把「拖回」误读成「落位算错」（假归因）。
