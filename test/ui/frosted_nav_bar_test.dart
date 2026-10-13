@@ -698,18 +698,23 @@ void main() {
           reason: '应回到原格中心');
     });
 
-    testWidgets('⭐ 点首 / 末格时选中块**全程**不越出栏体（含过冲回弹）',
+    testWidgets('⭐ 点首 / 末格时选中块**全程**不越出栏体（逐帧）',
         (WidgetTester tester) async {
-      // 2026-10-13 真机回归「点击时最左 / 最右边界溢出」。
+      // 2026-10-13 真机回归「点击时最左 / 最右边界溢出」的**回归护栏**。
       //
-      // 切档走 `_slide` + `easeOutBack`：那条曲线会冲过终点一次
-      // （峰值 ≈ 终点的 1.096 倍）。边界夹取若只算「静止位 + 手指偏移」，**动画
-      // 途中那一冲完全没被夹到**——切到末格时选中块右缘会越出栏体
-      // （3 格测试面实测越出 4.4px；5 格手机上按同比例 ≈ 20dp）。
+      // 当时的越出来自切档曲线 `easeOutBack` 冲过终点一次（峰值 ≈ 终点的
+      // 1.096 倍），而边界夹取只算「静止位 + 手指偏移」⇒ **动画途中那一冲完全
+      // 没被夹到**（3 格测试面实测越出 4.4px；5 格手机按同比例 ≈ 20dp）。
+      // 同日已把 `switchCurve` 换成**无过冲**的 `easeOutCubic`（负责人反馈
+      // 「视频里没有明显回弹」），故点击切档如今天然不越界。
       //
-      // 故本用例必须**逐帧**取样整段动画，不能只看首末两帧。
-      // 变异判红实证：把夹取对象退回「静止位 + 手指偏移」⇒ 红在
-      // 「收藏 第 11 帧：右缘越出栏体」（776.89 > 772.5）。
+      // ⚠️ **本用例仍必须保留并逐帧取样**（不能只看首末两帧），理由有两条：
+      //   ① 它钉的是「**任何时候**都不越界」这一不变量——谁再把曲线换回带过冲的、
+      //      或把夹取对象退回「静止位 + 手指偏移」，这里立刻红；
+      //   ② 它同时钉「**真的在动**」，挡住「干脆不动 / 直接跳终点」这类假绿。
+      // ⚠️ 如实记录一处**判别力变化**：换了无过冲曲线后，「夹取对象退回静止位」
+      //    这个变异在**点击**场景下已不再判红（没有过冲就没有漏夹）——判别它的是
+      //    下面那条**拖动**边界用例（拖动会把选中块一路推过端头，与曲线无关）。
       final List<int> picked = <int>[];
       await tester.pumpWidget(_InteractiveHost(onSelect: picked.add));
       await tester.pumpAndSettle();
@@ -749,6 +754,47 @@ void main() {
 
       await tapAndWatch('收藏', 2); // 首格 → 末格
       await tapAndWatch('目录', 0); // 末格 → 首格
+      expect(picked, <int>[2, 0]);
+    });
+
+    testWidgets('⭐ 切档全程**不得越过目标格**（无回弹）', (WidgetTester tester) async {
+      // 2026-10-13 第三次反馈：「滑动动画和示例中的视频不一致，视频中**没有明显
+      // 的回弹效果**，本项目非常明显」⇒ `switchCurve` 由 `easeOutBack` 换成
+      // `easeOutCubic`（值域恒 ≤ 1，不越过终点）。
+      //
+      // ⚠️ **这条是那个改动的唯一判别用例**：换掉过冲之后，上面那条「点首 / 末格
+      // 不越界」对「把曲线改回 `easeOutBack`」已经**不再判红**——有逐帧夹取兜着，
+      // 过冲只是被夹住、不再越出栏体。不补这条的话，「无回弹」这个行为就没人钉。
+      // 变异判红实证：把 `switchCurve` 改回 `Curves.easeOutBack` ⇒ 红在
+      // 「越过目标格」（`easeOutBack` 峰值 ≈ 行程的 1.096 倍）。
+      final List<int> picked = <int>[];
+      await tester.pumpWidget(_InteractiveHost(onSelect: picked.add));
+      await tester.pumpAndSettle();
+
+      final Rect shell = tester.getRect(_shellFinder());
+      final Rect before = tester.getRect(_pillFinder());
+      final double cell = _cellWidthOf(shell);
+
+      Future<void> watch(String label, int targetIndex) async {
+        await tester.tap(find.text(label));
+        final double target = before.center.dx + targetIndex * cell;
+        final bool rightward = targetIndex > 0;
+        for (int i = 0; i < 32; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+          final double c = tester.getRect(_pillFinder()).center.dx;
+          if (rightward) {
+            expect(c, lessThanOrEqualTo(target + 0.5),
+                reason: '$label 第 $i 帧：越过目标格（回弹）');
+          } else {
+            expect(c, greaterThanOrEqualTo(target - 0.5),
+                reason: '$label 第 $i 帧：越过目标格（回弹）');
+          }
+        }
+        await tester.pumpAndSettle();
+      }
+
+      await watch('收藏', 2); // 首格 → 末格（向右）
+      await watch('目录', 0); // 末格 → 首格（向左）
       expect(picked, <int>[2, 0]);
     });
 

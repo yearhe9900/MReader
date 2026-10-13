@@ -150,10 +150,19 @@ abstract final class NavBarStyle {
   /// 切换动画时长（设计值；实测切换在 5.0s 前完成，视频 24fps 无法定毫秒级）。
   static const Duration switchDuration = Duration(milliseconds: 420);
 
-  /// 切换曲线：`easeOutBack` 尾段回弹 ⇒ 选中块到位时有一次轻微过冲。
+  /// 切换曲线：**无过冲**的减速曲线（`easeOutCubic`）。
   ///
-  /// 这是参考图「弹一下」的手感来源；纯 `easeOutCubic` 会显得死板。
-  static const Curve switchCurve = Curves.easeOutBack;
+  /// ⚠️ 2026-10-13 第三次反馈：「滑动动画和示例中的视频不一致，视频中**没有明显的
+  /// 回弹效果**，本项目非常明显」⇒ 把原来的 `easeOutBack` **整条**换掉。
+  ///
+  /// **不是只改首末两格**：`easeOutBack` 在**任何**一格上都会冲过终点一次
+  /// （峰值 ≈ 终点的 1.096 倍），首/末格只是因为撞上边界夹取才额外多一段
+  /// 「顶住再回弹」。要「完全无回弹」只能换曲线，不能靠夹取掩盖。
+  ///
+  /// 选取口径 = **值域恒 ≤ 1**（不得越过终点）。`Curves` 里带 `Back` / `Elastic` /
+  /// `Bounce` 的几条都会冲过终点，其余候选里取 `easeOutCubic`：起步快、尾段平滑
+  /// 收住，形状与参考视频「选中块一路滑到目标格后即停」一致。
+  static const Curve switchCurve = Curves.easeOutCubic;
 
   /// 拖动跟手形变：**每拖过一格**，选中块横向拉宽的额外比例。
   ///

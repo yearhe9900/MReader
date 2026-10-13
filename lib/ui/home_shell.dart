@@ -1,4 +1,4 @@
-// 应用主壳层：五 tab（书架 / 统计 / AI / 笔记 / 设置）+ 玻璃浮动底栏。
+// 应用主壳层：四 tab（书架 / 统计 / 笔记 / 设置）+ 玻璃浮动底栏。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 结构（2026-09-28 定；参考 anx-reader 的 `page/home_page.dart`）
@@ -58,7 +58,6 @@ import '../sync/sync_trigger.dart';
 import '../sync/webdav_client.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
-import 'ai_page.dart';
 import 'frosted_nav_bar.dart';
 import 'glass_kit.dart';
 import 'notes_page.dart';
@@ -231,15 +230,20 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   /// `outlined → filled` 的选中态切换——参考图 4 个 tab 的图标全部是实心风格，
   /// 且选中态**只靠底衬区分**（实测两类图标/文字亮度一致）。`activeIcon` 因此
   /// 留空（[NavTab.iconFor] 缺省回落到 `icon`）。
+  ///
+  /// ⚠️ 2026-10-13（负责人拍板）：**移除「AI」tab**（原第 3 格）——导航栏不设
+  /// AI 入口。AI 能力本身不受影响：划词问答 / 章节摘要 / 全书问答 / 生词本仍从
+  /// 书架、阅读页、设置页各自的入口进入（`AI-01`~`AI-06` 接线未动）；被删的只是
+  /// `lib/ui/ai_page.dart` 那个**占位骨架页**（M4 之前无功能，且无其它入口）。
+  /// 与参考图/参考视频的 **4 格** 形态一致。
   static const List<NavTab> _tabs = <NavTab>[
     NavTab(icon: Icons.menu_book, label: '书架'),
     NavTab(icon: Icons.insights, label: '统计'),
-    NavTab(icon: Icons.auto_awesome, label: 'AI'),
     NavTab(icon: Icons.sticky_note_2, label: '笔记'),
     NavTab(icon: Icons.settings, label: '设置'),
   ];
 
-  /// 五个 tab 的内容页。
+  /// 四个 tab 的内容页。
   ///
   /// 每页**自带** [GlassNavScaffold]（顶栏 + 不透明正文），本壳层只负责
   /// 「选哪一页」与「底栏」。
@@ -263,7 +267,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           syncTrigger: widget.syncTrigger,
         ),
         StatsPage(service: widget.statsService, repository: widget.repository),
-        const AiPage(),
         NotesPage(
           vocabStore: widget.vocabStore,
           // 生词本页依赖全在壳层（仓库 / 进度 / AI / 统计），由回调就地组装——
@@ -328,7 +331,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   /// 窄屏（手机 / 窄窗）：内容 + 浮动胶囊底栏。
   ///
-  /// [IndexedStack] 让五页都保活（切回书架时滚动位置与筛选不丢），
+  /// [IndexedStack] 让四页都保活（切回书架时滚动位置与筛选不丢），
   /// 非当前页不绘制、不参与命中测试。
   ///
   /// ⚠️ **必须是 `Stack + Positioned` 而非 `Scaffold.bottomNavigationBar`**：

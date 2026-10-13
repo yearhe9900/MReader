@@ -31,7 +31,8 @@
 // · **两层纱罩**：磨砂之上再叠半透明白层，模拟参考图「磨砂 + 增白」的观感。
 //   暗色下纱罩换**黑色**（压暗提对比），不是加白。
 // · **选中块的位置**由两条 `AnimationController` **手算**，不用 `AnimatedPositioned`：
-//   ① `_slide` 切档（[NavBarStyle.switchCurve] = `easeOutBack` 提供过冲回弹）；
+//   ① `_slide` 切档（[NavBarStyle.switchCurve]，2026-10-13 起为**无过冲**的
+//      `easeOutCubic`——负责人反馈「视频里没有明显回弹，本项目非常明显」）；
 //   ② `_settle` 松手后把手指偏移量归零。
 //   两者同曲线（[NavBarStyle.switchCurve]）同时长（[NavBarStyle.switchDuration]），
 //   叠加后组合位移退化为「在曲线空间里的直线插值」：
@@ -43,12 +44,14 @@
 //
 //   ⇒ 起点恒等于松手位置、终点恒等于新格，中途**不绕路**。若两条动画曲线/时长
 //   不一致，合成位移会先弹回旧格再滑向新格（参考视频里是「一边收缩一边平移」）。
-// · **为什么位置必须手算**（2026-10-13 真机回归「点击时最左 / 最右边界溢出」）：
-//   `easeOutBack` 会冲过终点一次（峰值 ≈ 终点的 1.096 倍）。若位置交给
-//   `AnimatedPositioned`，它的 `left` 是**动画内部**的值、外面拿不到 ⇒ 边界夹取
-//   只能夹「静止位 + 手指偏移」，**动画途中那一冲完全夹不住**（实测 3 格面上越出
-//   4.4px、5 格手机上按同比例 ≈ 20dp）。手算才能逐帧把「动画位置 + 手指偏移」
-//   一起夹。`Transform.scale` 只留作拉伸，不参与定位。
+// · **为什么位置必须手算**：边界约束要夹的是「**当前动画位置** + 手指偏移」，而
+//   `AnimatedPositioned` 的 `left` 是隐式动画**内部**的值、外面拿不到 ⇒ 只能夹
+//   「静止位 + 手指偏移」，**动画途中漏夹**（2026-10-13 曾据此在切到首 / 末格时
+//   越出栏体：3 格测试面上越出 4.4px、5 格手机按同比例 ≈ 20dp）。手算才能逐帧
+//   把两者一起夹。`Transform.scale` 只留作拉伸，不参与定位。
+//   ⚠️ **这条纪律与「曲线是否过冲」无关**：`switchCurve` 已换成不过冲的
+//   `easeOutCubic`，但**拖动**过程中选中块仍会被手指一路推过端头，逐帧夹取
+//   照样不可省（那才是它真正的用武之地，见下面「左右边界」）。
 // · **左右边界**：选中块**拉伸后**的左右缘都不得越出栏体（参考视频实测：右缘顶在
 //   栏体内缘 575 / 578 就不再外扩）。`Stack.clipBehavior: Clip.none` 不做裁剪，
 //   故算位置时必须**显式 clamp 选中块中心**（`Transform.scale` 绕盒中心缩放，
@@ -119,11 +122,10 @@ class _FrostedNavBarState extends State<FrostedNavBar>
     with TickerProviderStateMixin {
   /// 切档滑动的进度（0 → 1）。
   ///
-  /// ⚠️ **不用 `AnimatedPositioned`**（2026-10-13 真机回归「点击时最左 / 最右
-  /// 边界溢出」）：`easeOutBack` 会冲过终点一次（峰值 ≈ 终点的 **1.096 倍**），
-  /// 而 `AnimatedPositioned` 的 `left` 是**动画内部**的值，外面拿不到 ⇒ 边界夹取
-  /// 只能夹「静止位 + 手指偏移」，**动画途中那一冲完全夹不住**（实测 3 格面上
-  /// 越出 4.4px、5 格手机上按同比例 ≈ 20dp）。改成手算即可**逐帧**一起夹。
+  /// ⚠️ **不用 `AnimatedPositioned`**：它的 `left` 是隐式动画**内部**的值，外面
+  /// 拿不到 ⇒ 边界夹取只能夹「静止位 + 手指偏移」，**动画途中漏夹**（2026-10-13
+  /// 曾因此在切到首 / 末格时越出栏体：3 格面上越出 4.4px、5 格手机按同比例
+  /// ≈ 20dp）。改成手算即可**逐帧**一起夹。
   late final AnimationController _slide = AnimationController(
     vsync: this,
     duration: NavBarStyle.switchDuration,
@@ -142,7 +144,7 @@ class _FrostedNavBarState extends State<FrostedNavBar>
     duration: NavBarStyle.switchDuration,
   );
 
-  /// 加了曲线的归零进度（`easeOutBack` 会给出一段 > 1 的过冲）。
+  /// 加了曲线的归零进度（与 [_slide] **同曲线同时长**，保证合成位移不绕路）。
   late final CurvedAnimation _settleCurve = CurvedAnimation(
     parent: _settle,
     curve: NavBarStyle.switchCurve,
@@ -404,9 +406,8 @@ class _FrostedNavBarState extends State<FrostedNavBar>
                       //   ① 夹的是**中心**——[Transform.scale] 绕盒中心缩放，故拉伸
                       //      后的左右缘是 `中心 ± 半宽`；
                       //   ② 夹的**对象**必须是「当前动画位置 + 手指偏移」，不能是
-                      //      「静止位 + 手指偏移」。否则切档曲线 `easeOutBack` 那一次
-                      //      过冲（峰值 ≈ 终点的 1.096 倍）会整体漏夹，切到首 / 末格
-                      //      时选中块直接冲出去。
+                      //      「静止位 + 手指偏移」——后者在动画途中与拖动中都会
+                      //      整体漏夹，选中块照样冲出栏体。
                       // ⇒ 拖到两端、以及切到两端，都「顶住」不再外扩。
                       final double halfSpan = pillWidth * (1 + stretch) / 2;
                       final double center = halfSpan * 2 >= available
@@ -509,8 +510,8 @@ class _GlassShell extends StatelessWidget {
 /// 1. 拖动偏移若并入 `AnimatedPositioned` 的 `left`，每一帧拖动更新都会**重启那条
 ///    420ms 弹簧**，选中块被动画持续「拉回去」，实测表现为**完全不动**
 ///    （`during == before`，不是「动得慢」）。
-/// 2. 位置若交给 `AnimatedPositioned`，切档时那条 `easeOutBack` 的**过冲就夹不住**
-///    （`left` 是动画内部的值，外面拿不到）⇒ 切到首 / 末格时选中块冲出去。
+/// 2. 位置若交给 `AnimatedPositioned`，**动画途中的位置外面拿不到**（`left` 是动画
+///    内部的值）⇒ 边界夹取管不到途中，切到首 / 末格、或拖动越过端头时选中块冲出去。
 ///
 /// ⇒ 位置由 [_FrostedNavBarState] 的两条 `AnimationController` 手算并**逐帧夹取**
 /// （见 `build`），本类只负责外观：唯一的动态量是横向拉伸 [stretch]
