@@ -10,6 +10,9 @@
 //     即**向两侧溢出**格子；选中块中心与标签中心对齐；
 //   · 选中块高 = 栏体高的 **0.89**（实测 152/171），圆角 = 高 / 2（胶囊）；
 //   · 栏体 62 高 / 左右外边距 28 / 浮起 27 / **圆角 31 = 高/2（胶囊）**。
+//   · 形变（2026-10-13 视频 282 帧复测定案）：按压缩小 **0.85**（宽高同步、
+//     80ms 收缩 / 120ms 复原）、拉伸 ∝ **速度**（8 格/s 拉满 0.50、停手 150ms
+//     松弛）——旧距离型（0.18/格）与实测矛盾已作废，回潮即红。
 //
 // ⚠️ 测量口径的教训（三轮返工，**各有不同的坑**）：
 //   ① 10-12 用**二次压缩的录屏帧**测得「选中块占格宽 69%」⇒ 压缩会抹平低对比度
@@ -532,7 +535,7 @@ void main() {
       expect(picked, 1);
     });
 
-    testWidgets('⭐ 拖动：1:1 跟手 + 横向拉伸（∝ 拖过格数）',
+    testWidgets('⭐ 拖动：1:1 跟手 + 速度型拉伸（净宽 = (1+stretch)×press）',
         (WidgetTester tester) async {
       await tester.pumpWidget(
         _InteractiveHost(onSelect: _noop),
@@ -558,9 +561,11 @@ void main() {
       final TestGesture g = await tester.startGesture(
         Offset(shell.left + 8, shell.top + 8),
       );
+      // ⚠️ 每步必须 `pump(16ms)`（不是 `pump()`）：速度型拉伸取**帧差分**，
+      // 零时长 pump 的帧时间戳不动 ⇒ dt=0、速度恒 0（曾用 `pump()` 时拉伸全无）。
       for (int i = 0; i < steps; i++) {
         await g.moveBy(const Offset(10, 0));
-        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 16));
       }
       final Rect during = tester.getRect(_pillFinder());
       final double moved = during.center.dx - before.center.dx;
@@ -578,14 +583,19 @@ void main() {
       expect(moved, lessThanOrEqualTo(dragged + 0.5),
           reason: '跟手位移不得超过拖动距离（边界夹取只减不增）');
 
-      // ② 拉伸：宽度 = 静止宽 × (1 + 0.18 × 拖过格数)。
-      // 参考视频实测：静止 145px ⇒ 拖动峰值 185px（比例 1.28，见 `dragStretchMax`）。
-      // 期望值由**实测位移**推出，避免与「决胜吃掉的那 20px 触摸 slop」耦合。
-      final double expectW = before.width * (1 + 0.18 * moved / cell);
-      expect(during.width, closeTo(expectW, 2),
-          reason: '拖过 n 格应拉宽 0.18n（摘掉 Transform.scale 时为静止宽）');
+      // ② 拉伸：**速度型**（2026-10-13 视频定案，距离型 0.18/格 作废）。
+      // 每帧 10px / 16ms = 625px/s ⇒ 625/232.5 ≈ 2.688 格/s ⇒
+      // stretch = min(2.688/8, 1) × 0.50 = **0.168**；手指一直按下 ⇒ 按压
+      // 全程生效 0.85 ⇒ 净宽 = (1 + 0.168) × 0.85 = 0.993 × 静止（视频「慢拖
+      // 净宽 ≈0.85×」的口径）。**两类变异都红**：去拉伸 ⇒ 0.85×；去按压 ⇒ 1.168×。
+      expect(during.width, closeTo(before.width * 1.168 * 0.85, 2),
+          reason: '慢速拖：拉伸 0.168 × 按压 0.85（摘掉 Transform.scale 时为静止宽）');
+      // ③ 高度只吃按压（拉伸不动高度）⇒ 顺带钉「拖动中按压全程生效」
+      //（视频「拖动停住未松手同样收缩」）。去掉 scaleY 即红。
+      expect(during.height, closeTo(before.height * 0.85, 2),
+          reason: '拖动期间手指按下 ⇒ 均匀收缩 0.85');
 
-      // ③ 边界：拉伸后的左右缘都还在栏体内。
+      // ④ 边界：拉伸后的左右缘都还在栏体内。
       expect(during.left, greaterThanOrEqualTo(shell.left - 0.5));
       expect(during.right, lessThanOrEqualTo(shell.right + 0.5));
 
@@ -622,7 +632,7 @@ void main() {
           reason: '选中块应停在吸附格中心');
     });
 
-    testWidgets('⭐ 左右边界：拖到端头时拉伸后的选中块不越出栏体',
+    testWidgets('⭐ 左右边界：快拖到端头（拉伸拉满）时选中块不越出栏体',
         (WidgetTester tester) async {
       for (final double sign in <double>[1, -1]) {
         final List<int> picked = <int>[];
@@ -637,13 +647,16 @@ void main() {
         final double cell = _cellWidthOf(shell);
 
         // 拖 8 格（远超 3 格栏宽）⇒ 无约束时选中块会整个飞出栏体。
+        // ⚠️ 步进 10px 但 pump 只走 **4ms**：速度 = 10px/4ms = 2500px/s ≈
+        // 10.8 格/s ⇒ 速度型拉伸**拉满** 0.50（阈值 8 格/s）。零时长 pump 会让
+        // 帧差分 dt=0、拉伸恒 0（见上一用例的注释）。
         final int steps = (cell * 8 / 10).round();
         final TestGesture g = await tester.startGesture(
           Offset(shell.left + 8, shell.top + 8),
         );
         for (int i = 0; i < steps; i++) {
           await g.moveBy(Offset(10 * sign, 0));
-          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 4));
         }
         final Rect during = tester.getRect(_pillFinder());
         expect(during.left, greaterThanOrEqualTo(shell.left - 0.5),
@@ -659,9 +672,10 @@ void main() {
           expect(during.left, closeTo(shell.left, 1),
               reason: '向左拖满应顶在栏体左内缘');
         }
-        // 顶住时拉伸已封顶：宽 = 静止宽 × 1.30。
-        expect(during.width, closeTo(before.width * 1.30, 2),
-            reason: '拉伸应封顶在 0.30');
+        // 顶住时净宽 = 静止宽 × 1.50（速度拉满）× 0.85（按压全程生效）
+        // = 1.275×（视频快拖实测净宽 1.28×）。旧距离型 1.30 即红。
+        expect(during.width, closeTo(before.width * 1.5 * 0.85, 2),
+            reason: '快拖拉伸封顶 0.50 × 按压 0.85');
 
         await g.up();
         await tester.pumpAndSettle();
@@ -696,6 +710,139 @@ void main() {
       expect(tester.getRect(_pillFinder()).center.dx,
           closeTo(before.center.dx, 1.5),
           reason: '应回到原格中心');
+    });
+
+    testWidgets('⭐ 按下即均匀收缩、松手复原（含中间帧；宽高同步 ×0.85）',
+        (WidgetTester tester) async {
+      // 视频实测（592×1280 / 24fps，f33 起）：按下 → 均匀收缩 ~0.85（宽高同步
+      // 变小），起效 ≤ 1 帧；松手 2-4 帧（83-165ms）复原、无过冲。
+      // 实现口径：pressScale 0.85 / 80ms 收缩 / 120ms 复原（`NavBarStyle`）。
+      await tester.pumpWidget(_InteractiveHost(onSelect: _noop));
+      await tester.pumpAndSettle();
+
+      final Rect shell = tester.getRect(_shellFinder());
+      final Rect before = tester.getRect(_pillFinder());
+
+      // 按在栏体留白处（非标签）⇒ 不触发切换，只测按压本身。
+      final TestGesture g = await tester.startGesture(
+        Offset(shell.left + 8, shell.center.dy),
+      );
+      // 起跑帧（ticker 首拍 elapsed=0）+ 40ms ⇒ 收缩过半（easeOutCubic(0.5)）。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 40));
+      final Rect mid = tester.getRect(_pillFinder());
+      // ⭐「有动画」：中间帧必须落在 0.85× 与 1.0× 之间。
+      //   · 瞬变到底（没有 80ms 过程）⇒ 低于下界红；
+      //   · 根本没收缩 ⇒ 高于上界红。
+      expect(mid.width, greaterThan(before.width * 0.86),
+          reason: '收缩应有 80ms 过程（瞬变到底即红）');
+      expect(mid.width, lessThan(before.width * 0.95),
+          reason: '按下应已开始收缩（不收缩即红）');
+
+      // 再走 80ms ⇒ 满收缩（80ms 走完）。
+      await tester.pump(const Duration(milliseconds: 80));
+      final Rect pressed = tester.getRect(_pillFinder());
+      expect(pressed.width, closeTo(before.width * 0.85, 2),
+          reason: '满收缩 = 0.85×（视频宽 104-118/136）');
+      // ⭐ 均匀收缩：高度同步 0.85（只写 scaleX 时这条红）。
+      expect(pressed.height, closeTo(before.height * 0.85, 2),
+          reason: '宽高同步均匀收缩（scaleY）');
+
+      // 松手复原（120ms，无过冲）。
+      await g.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 160));
+      final Rect after = tester.getRect(_pillFinder());
+      expect(after.width, closeTo(before.width, 1), reason: '松手复原');
+      expect(after.height, closeTo(before.height, 1));
+    });
+
+    testWidgets('⭐ 按下未选中格：先收缩，松手才切换（按压与切换解耦）',
+        (WidgetTester tester) async {
+      // 视频实测：按住未选中格时选中块**先**收缩，松手才滑向新格——
+      // 按压反馈与切换是两件事，收缩不能等切换才出现。
+      final List<int> picked = <int>[];
+      await tester.pumpWidget(_InteractiveHost(onSelect: picked.add));
+      await tester.pumpAndSettle();
+
+      final Rect shell = tester.getRect(_shellFinder());
+      final Rect before = tester.getRect(_pillFinder());
+      final double cell = _cellWidthOf(shell);
+
+      final TestGesture g = await tester.startGesture(
+        tester.getCenter(find.text('设置')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 120)); // 满收缩（80ms）
+      expect(picked, isEmpty, reason: '未松手不得切换');
+      final Rect pressed = tester.getRect(_pillFinder());
+      expect(pressed.width, closeTo(before.width * 0.85, 2),
+          reason: '按住未选中格时，选中块先收缩');
+      expect(pressed.center.dx, closeTo(before.center.dx, 0.5),
+          reason: '未松手时选中块不得移动');
+
+      await g.up();
+      await tester.pumpAndSettle();
+      expect(picked, <int>[1], reason: '松手才切换');
+      final Rect after = tester.getRect(_pillFinder());
+      expect(after.width, closeTo(before.width, 1), reason: '松手复原');
+      expect(after.center.dx, closeTo(before.center.dx + cell, 1.5),
+          reason: '选中块停在新格中心');
+    });
+
+    testWidgets('⭐ 拖动停住即收缩（速度型拉伸；距离型回潮即红）',
+        (WidgetTester tester) async {
+      // 视频实测（f234-238）：拖动中拉宽，**停住未松手**就收缩回按压值——
+      // 距离型（∝ 拖过格数）在此处必然是最大拉宽（已拖过 ~0.3 格还在涨），
+      // 与实测直接矛盾；速度型则天然「停住即收缩」。
+      final List<int> picked = <int>[];
+      await tester.pumpWidget(_InteractiveHost(onSelect: picked.add));
+      await tester.pumpAndSettle();
+
+      final Rect shell = tester.getRect(_shellFinder());
+      final Rect before = tester.getRect(_pillFinder());
+
+      final TestGesture g = await tester.startGesture(
+        Offset(shell.left + 8, shell.center.dy),
+      );
+      // 先让按压走完（80ms），把「按压缩小」与「拉伸」分离。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 120));
+      expect(tester.getRect(_pillFinder()).width, closeTo(before.width * 0.85, 2),
+          reason: '前置：满收缩 = 0.85×');
+
+      // 快拖 6 步：10px/4ms = 2500px/s ≈ 10.8 格/s ⇒ 拉伸拉满 0.50。
+      for (int i = 0; i < 6; i++) {
+        await g.moveBy(const Offset(10, 0));
+        await tester.pump(const Duration(milliseconds: 4));
+      }
+      final Rect fast = tester.getRect(_pillFinder());
+      expect(fast.width, closeTo(before.width * 1.5 * 0.85, 2),
+          reason: '快拖：拉满 0.50 × 按压 0.85 ⇒ 净宽 1.275×');
+      expect(fast.height, closeTo(before.height * 0.85, 2),
+          reason: '拉伸不动高度（高度只吃按压）');
+
+      // 停住（不松手）：150ms 松弛走完 ⇒ 收缩回 0.85×。
+      await tester.pump(const Duration(milliseconds: 16));
+      final Rect relaxing = tester.getRect(_pillFinder());
+      expect(relaxing.width, greaterThan(before.width * 0.85 + 2),
+          reason: '松弛应是渐变（瞬变即红）');
+      expect(relaxing.width, lessThan(before.width * 1.275 - 2),
+          reason: '停住即开始收缩（维持拉满即红）');
+      for (int i = 0; i < 16; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final Rect still = tester.getRect(_pillFinder());
+      expect(still.width, closeTo(before.width * 0.85, 2),
+          reason: '拖动停住未松手 ⇒ 收缩回按压值（视频 f234-238）');
+      expect(still.height, closeTo(before.height * 0.85, 2));
+      expect(picked, isEmpty, reason: '停住不松手不应切换');
+
+      await g.up();
+      await tester.pumpAndSettle();
+      expect(tester.getRect(_pillFinder()).width, closeTo(before.width, 1),
+          reason: '松手复原');
+      expect(picked, isEmpty, reason: '拖 0.26 格松手回弹、不切换');
     });
 
     testWidgets('⭐ 点首 / 末格时选中块**全程**不越出栏体（逐帧）',

@@ -48,7 +48,7 @@
 //   `AnimatedPositioned` 的 `left` 是隐式动画**内部**的值、外面拿不到 ⇒ 只能夹
 //   「静止位 + 手指偏移」，**动画途中漏夹**（2026-10-13 曾据此在切到首 / 末格时
 //   越出栏体：3 格测试面上越出 4.4px、5 格手机按同比例 ≈ 20dp）。手算才能逐帧
-//   把两者一起夹。`Transform.scale` 只留作拉伸，不参与定位。
+//   把两者一起夹。`Transform.scale` 只留作拉伸 / 按压缩小，不参与定位。
 //   ⚠️ **这条纪律与「曲线是否过冲」无关**：`switchCurve` 已换成不过冲的
 //   `easeOutCubic`，但**拖动**过程中选中块仍会被手指一路推过端头，逐帧夹取
 //   照样不可省（那才是它真正的用武之地，见下面「左右边界」）。
@@ -61,6 +61,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import 'glass_scope.dart';
 import 'nav_bar_style.dart';
@@ -176,6 +177,34 @@ class _FrostedNavBarState extends State<FrostedNavBar>
   /// 上一帧布局算出的格宽（拖动收尾在 build 之外，需缓存）。
   double _cellWidth = 0;
 
+  /// 按压缩小的进度（0 = 未按，1 = 满收缩 [NavBarStyle.pressScale]）。
+  ///
+  /// 按下 / 松手**时长不同**（80 / 120ms），故不设 `duration`、每次
+  /// [AnimationController.animateTo] 显式带时长（视频实测：起效 ≤ 1 帧、
+  /// 松手 2-4 帧复原无过冲）。
+  late final AnimationController _press = AnimationController(
+    vsync: this,
+    duration: NavBarStyle.pressDuration,
+  );
+
+  /// 当前按下的指针数（多指并按互不干扰：全部抬起 / 取消才复原）。
+  int _pressedCount = 0;
+
+  /// 速度型拉伸的当前值（运动帧 = 速度即时映射；停手后从此值线性松弛到 0）。
+  double _stretchBase = 0;
+
+  /// 上一帧的「虚拟中心」（**未夹取**的 `left + 半宽 + dragDx`，px）。
+  ///
+  /// ⚠️ 用未夹取值做差分：选中块顶在端头时手指还在走，夹取后的中心不动、
+  /// 速度会掉 0，而观感应是「顶住但仍在拉伸」。
+  double? _lastVirtualCenter;
+
+  /// 上一帧的帧时间戳（速度差分的 `dt`）。
+  Duration? _lastSampleTs;
+
+  /// 最后一次观测到运动的帧时间戳（松弛计时起点）。
+  Duration? _lastMotionTs;
+
   /// 选中块当前的横向偏移。
   double get _pillDx =>
       _dragging ? _dragDx : _releaseDx * (1 - _settleCurve.value);
@@ -218,8 +247,59 @@ class _FrostedNavBarState extends State<FrostedNavBar>
     _slide.dispose();
     _settleCurve.dispose();
     _settle.dispose();
+    _press.dispose();
     super.dispose();
   }
+
+  /// 指针按下：选中块**均匀收缩**（[NavBarStyle.pressScale]），与切换 / 拖动正交。
+  ///
+  /// 视频实测「按下未选中格先收缩、松手才切换」⇒ 接线走 `Listener` 原始指针
+  /// 事件，**不走手势竞技场**（`InkWell` 的 tap 要等竞技场决胜，晚 ~100ms，
+  /// 达不到「瞬间」）。
+  void _onPressStart() {
+    _pressedCount += 1;
+    if (_pressedCount == 1) {
+      _press.animateTo(
+        1.0,
+        duration: NavBarStyle.pressDuration,
+        curve: NavBarStyle.pressCurve,
+      );
+    }
+  }
+
+  /// 指针抬起 / 取消：**全部**抬起才复原（多指并按互不打断）。
+  void _onPressEnd() {
+    if (_pressedCount == 0) {
+      return;
+    }
+    _pressedCount -= 1;
+    if (_pressedCount == 0) {
+      _press.animateTo(
+        0.0,
+        duration: NavBarStyle.releaseDuration,
+        curve: NavBarStyle.pressCurve,
+      );
+    }
+  }
+
+  /// 按压接线层：把原始指针事件接到 [_onPressStart] / [_onPressEnd]。
+  ///
+  /// ⚠️ 走 `Listener` 原始指针事件、**不进手势竞技场**：
+  ///   · 竞技场路径（`InkWell.onTap` / 手势识别器）决胜晚 ~100ms，做不到
+  ///     「按下**瞬间**收缩」（视频实测起效 ≤ 1 帧）；
+  ///   · 原始指针事件与拖动 / 点击互不干扰——拖动期间手指仍按下 ⇒ 按压缩小
+  ///     全程生效（视频「拖动停住未松手同样收缩」）。
+  ///
+  /// `deferToChild`：命中得走到栏体内部（最深的 `GestureDetector` 是
+  /// `HitTestBehavior.opaque`、盖满栏体），所以按在**栏体上任意处**（含标签
+  /// 之间的留白）都算按压，而按在栏外的浮起留白不算。
+  Widget _pressScope(Widget child) => Listener(
+        behavior: HitTestBehavior.deferToChild,
+        onPointerDown: (_) => _onPressStart(),
+        onPointerUp: (_) => _onPressEnd(),
+        onPointerCancel: (_) => _onPressEnd(),
+        child: child,
+      );
 
   void _onTap(int index) {
     if (_suppressTap) {
@@ -229,7 +309,8 @@ class _FrostedNavBarState extends State<FrostedNavBar>
     widget.onTabSelected(index);
   }
 
-  /// 跟手形变：拖动时选中块跟着手指横向位移并拉伸（[NavBarStyle.dragStretchPerCell]）。
+  /// 跟手形变：拖动时选中块跟着手指横向位移；拉伸由**速度**驱动（见 `build`
+  /// 中的帧差分，[NavBarStyle.stretchVelocityFull]），与拖过几格无关。
   void _onDragUpdate(DragUpdateDetails details) {
     setState(() {
       if (!_dragging) {
@@ -341,7 +422,9 @@ class _FrostedNavBarState extends State<FrostedNavBar>
     // `Scaffold.bottomNavigationBar`），故自带一层透明 Material 地基——
     // `MaterialType.transparency` 不绘制底色，不破坏磨砂观感（同
     // `GlassKit` 内既有的手法）。
-    return Material(
+    // 按压接线（[_pressScope]）套在最外层：只按栏体（`deferToChild`，栏外的
+    // 浮起留白不算），不影响子树的命中与手势。
+    return _pressScope(Material(
       type: MaterialType.transparency,
       child: Padding(
         padding: EdgeInsets.only(
@@ -378,12 +461,14 @@ class _FrostedNavBarState extends State<FrostedNavBar>
                   onHorizontalDragUpdate: _onDragUpdate,
                   onHorizontalDragEnd: _onDragEnd,
                   onHorizontalDragCancel: _onDragCancel,
-                  // 切档（[_slideCurve]）+ 归零（[_settleCurve]）两条按帧驱动选中块；
-                  // 标签行不参与动画，作为 `child` 缓存（否则每帧重建整行 `InkWell`）。
+                  // 切档（[_slideCurve]）+ 归零（[_settleCurve]）+ 按压（[_press]）
+                  // 按帧驱动选中块；标签行不参与动画，作为 `child` 缓存
+                  // （否则每帧重建整行 `InkWell`）。
                   child: AnimatedBuilder(
                     animation: Listenable.merge(<Listenable>[
                       _slideCurve,
                       _settleCurve,
+                      _press,
                     ]),
                     builder: (BuildContext context, Widget? rowChild) {
                       // ⚠️ `Positioned` 必须是 `Stack` 的**直接**子节点（套一层独立
@@ -392,24 +477,81 @@ class _FrostedNavBarState extends State<FrostedNavBar>
                       final double left = sideInset +
                           cellWidth * _pillIndex +
                           (cellWidth - pillWidth) / 2;
-                      // 拖动时横向拉伸（跟手形变），静止时 0。
-                      // 比例 ∝ 拖过的格数，封顶 [NavBarStyle.dragStretchMax]。
-                      final double stretch = cellWidth <= 0
-                          ? 0.0
-                          : math.min(
-                              (dragDx.abs() / cellWidth) *
-                                  NavBarStyle.dragStretchPerCell,
-                              NavBarStyle.dragStretchMax,
-                            );
+                      // ── 速度型拉伸（视频实测：拉宽 ∝ 速度，停住即收缩）──
+                      // ⚠️ 距离型已作废（`NavBarStyle.stretchVelocityFull` 有定案
+                      // 记录）：拖动停在离起点 2 格处未松手，实测选中块已收缩。
+                      // 帧差分「**虚拟**中心」（未夹取的 中心 = left + 半宽 + dragDx）
+                      // 除以 `dt` 得格/秒，映射 `min(|v|/8.0, 1.0) × 0.50`。
+                      final Duration now =
+                          SchedulerBinding.instance.currentFrameTimeStamp;
+                      final double virtualCenter = left + pillWidth / 2 + dragDx;
+                      final double stretch;
+                      final Duration? lastSample = _lastSampleTs;
+                      if (lastSample == null || _lastVirtualCenter == null) {
+                        // 首帧无样本：沿用现值。
+                        stretch = _stretchBase;
+                      } else {
+                        final double dt =
+                            (now - lastSample).inMicroseconds / 1e6;
+                        if (dt <= 0) {
+                          // 同一帧被多次驱动（多个动画同帧通知）：不动。
+                          stretch = _stretchBase;
+                        } else {
+                          final double vCells = cellWidth <= 0
+                              ? 0.0
+                              : ((virtualCenter - _lastVirtualCenter!) /
+                                      cellWidth) /
+                                  dt;
+                          if (vCells.abs() > 1e-6) {
+                            _stretchBase = math.min(
+                                  vCells.abs() /
+                                      NavBarStyle.stretchVelocityFull,
+                                  1.0,
+                                ) *
+                                NavBarStyle.dragStretchMax;
+                            _lastMotionTs = now;
+                            stretch = _stretchBase;
+                          } else {
+                            // 静止帧：从最后一次运动值起**线性**松弛到 0。
+                            final Duration restFrom = _lastMotionTs ?? now;
+                            final double t =
+                                ((now - restFrom).inMicroseconds /
+                                        NavBarStyle.stretchRelaxDuration
+                                            .inMicroseconds)
+                                    .clamp(0.0, 1.0);
+                            stretch = _stretchBase * (1 - t);
+                            if (t >= 1.0) {
+                              _stretchBase = 0;
+                            }
+                          }
+                        }
+                      }
+                      _lastVirtualCenter = virtualCenter;
+                      _lastSampleTs = now;
+                      if (stretch > 0) {
+                        // 松弛进行中：手势 / 动画未必还在驱动帧（如拖动中停住），
+                        // 自续重建把衰减跑完。⚠️ 不得在 build 里 setState
+                        // （setState-during-build），故挂帧末回调驱动下一帧；
+                        // 衰减到 0 后不再排帧，循环自然终止。
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted) {
+                            setState(() {});
+                          }
+                        });
+                      }
+                      // 按压缩小：1 → [NavBarStyle.pressScale]（宽高同步）。
+                      final double press = 1 -
+                          (1 - NavBarStyle.pressScale) * _press.value;
                       // ── 左右边界 ───────────────────────────────────────────
                       // ⚠️ 两个要点缺一不可：
                       //   ① 夹的是**中心**——[Transform.scale] 绕盒中心缩放，故拉伸
-                      //      后的左右缘是 `中心 ± 半宽`；
+                      //      （含按压缩小）后的左右缘是 `中心 ± 半宽`；
                       //   ② 夹的**对象**必须是「当前动画位置 + 手指偏移」，不能是
                       //      「静止位 + 手指偏移」——后者在动画途中与拖动中都会
                       //      整体漏夹，选中块照样冲出栏体。
                       // ⇒ 拖到两端、以及切到两端，都「顶住」不再外扩。
-                      final double halfSpan = pillWidth * (1 + stretch) / 2;
+                      final double halfSpan =
+                          pillWidth * (1 + stretch) * press / 2;
                       final double center = halfSpan * 2 >= available
                           // 极端窄栏（如 2 格 + 最大拉伸）：整块拉满就居中，否则
                           // 夹取区间为空、`clamp` 会抛断言。
@@ -429,6 +571,7 @@ class _FrostedNavBarState extends State<FrostedNavBar>
                             child: _Pill(
                               height: pillHeight,
                               stretch: stretch,
+                              press: press,
                               brightness: brightness,
                             ),
                           ),
@@ -459,7 +602,7 @@ class _FrostedNavBarState extends State<FrostedNavBar>
           ),
         ),
       ),
-    );
+    ));
   }
 }
 
@@ -503,7 +646,7 @@ class _GlassShell extends StatelessWidget {
   }
 }
 
-/// 选中块的外观（磨砂 + 纱罩 + 胶囊圆角 + 横向拉伸）。
+/// 选中块的外观（磨砂 + 纱罩 + 胶囊圆角 + 横向拉伸 + 按压缩小）。
 ///
 /// ⚠️ **位置与外观必须分开**（2026-10-13 实测两次踩到）：
 ///
@@ -514,12 +657,13 @@ class _GlassShell extends StatelessWidget {
 ///    内部的值）⇒ 边界夹取管不到途中，切到首 / 末格、或拖动越过端头时选中块冲出去。
 ///
 /// ⇒ 位置由 [_FrostedNavBarState] 的两条 `AnimationController` 手算并**逐帧夹取**
-/// （见 `build`），本类只负责外观：唯一的动态量是横向拉伸 [stretch]
-/// （`Transform.scale` 绕盒中心缩放，故调用方按「中心 ± 半宽」算边界）。
+/// （见 `build`），本类只负责外观：动态量是横向拉伸 [stretch] 与按压缩小 [press]
+/// （[Transform.scale] 绕盒中心缩放，故调用方按「中心 ± 半宽」算边界）。
 class _Pill extends StatelessWidget {
   const _Pill({
     required this.height,
     required this.stretch,
+    required this.press,
     required this.brightness,
   });
 
@@ -527,12 +671,19 @@ class _Pill extends StatelessWidget {
 
   /// 横向拉宽的比例（0 = 静止）。
   final double stretch;
+
+  /// 均匀缩放系数（1 = 未按，[NavBarStyle.pressScale] = 满收缩）。
+  ///
+  /// 净宽 = `(1 + stretch) × press`（**乘法叠加**，快拖上限 1.50 × 0.85 = 1.275），
+  /// 高度同步 × `press`。
+  final double press;
   final Brightness brightness;
 
   @override
   Widget build(BuildContext context) {
     return Transform.scale(
-      scaleX: 1 + stretch,
+      scaleX: (1 + stretch) * press,
+      scaleY: press,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(NavBarStyle.pillRadius(height)),
         child: BackdropFilter(
