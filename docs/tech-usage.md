@@ -5732,4 +5732,77 @@ lum 20~21，一路平坦到标签。只有一处 `x85:49`，那是**四周细亮
 交付：`20630bd`。底栏契约测试 **25 → 28** 条、ui 组 **209 → 212** 条全绿（`-j 1`）、
 `dart analyze` 无问题。
 
+### 2.99 底栏整组换参考项目：mi_like_ui 一比一移植 + 3 tab 接线（2026-10-15）
+
+负责人一次提 5 点：① 完整替换当前底部导航栏；② 移除统计 tab；③「设置」改「我的」
+并用参考项目 logo（笑脸贝雷帽）；④ 书架 / 笔记 logo 按参考项目风格重新设计；
+⑤ 底栏支持暗色与亮色切换。追加指令「**一比一移植代码**」；两处拍板（AskUserQuestion）：
+统计入口**收进「我的」页**（绿色圆钮保留但无功能、仅还原视觉）、切换动效**跟参考
+项目一致**（果冻飞行 + 末端沉降，不改写）。参考项目 = `D:\WorkBuddy\FlutterTest\
+bottom_nav_demo`（mi_like_ui 玻璃悬浮底栏）。
+
+#### 一、一比一移植：`diff -r` 零差异是唯一准绳
+
+移植体 `lib/ui/mi_like_ui/`（11 文件：`glass_nav_bar/` 3 件 + `nav_icons.dart` +
+`theme/` 5 件 + `cell_grid.dart` + barrel），与上游 `lib/src/` 对应树 **`diff -r`
+零差异**；测试树 `test/ui/mi_like_ui/`（4 测试 + 10 张 goldens）唯一改动 = import
+`package:mi_like_ui/` → `package:mreader/ui/mi_like_ui/`（sed 批量换），另删
+`light_mode_golden_test` 的 2 条 **demo 层**用例（DemoApp 未随移植）。
+
+- **MReader 扩展一律放移植树之外**：`glass_nav_host.dart`（档位退化 + 明暗映射）、
+  `reader_nav_icons.dart`（书架 / 笔记 painter，含私有 `_fit` 副本）、`home_shell`
+  接线。改上游 = 改参考项目再整树重拷，不在移植体内做本地化。
+- 代价如实记录：barrel 的 `library mi_like_ui;` 刻意保留原样 ⇒ `dart analyze` 基线
+  多 1 条 info（`unnecessary_library_name`），**不修**（修了就破零差异）。
+- **黄金图 14 条全绿（与参考项目像素级一致）本身就是「一比一」的直接证明**——
+  移植体渲染出的果冻中态 / 按压缩圈 / 明暗两套配方与上游 golden 逐像素相同。
+
+#### 二、MReader 接线只做两件参考项目不管的事（`glass_nav_host.dart`）
+
+1. **「关」档退化**（`UI-06` ②）：`GlassScope.configOf.glassEnabled == false` 时换
+   Material `NavigationBar` 纯色形态——与旧 `FrostedNavBar` 退化口径一致；
+2. **明暗映射**（`UI-01` ②）：`GlassScope` 级联亮度 → `MiThemeMode`（跟随应用主题
+   三态而非只跟系统亮度）；标签墨色 `MiColors.foregroundFor(mode)` 与栏体配方同源。
+
+壳层接线（`home_shell.dart`）：tab = 书架 / 笔记 / **我的**（4 → 3 格），「统计」
+移出底栏、入口收进「我的」页 `_buildStatsGroup()` 的「阅读统计」行（`onOpenStats`
+回调 push `StatsPage`，`canPop` 时补返回箭头）；`MiGlassNavFab(tabIndex: 0)` 绿色
+圆钮**无 `onTap`**——选「书架」弹出 / 切走收起，仅还原参考项目视觉，功能待拍板。
+图标三枚：`ShelfBooksIconPainter`（两本平放 + 一本 −14° 斜靠的实心书堆）、
+`NotesIconPainter`（圆角便签右上 28×28 三角切角 + 两条挖空字行）、参考项目自带
+`SmileyBeretIconPainter`（「我的」）；画法遵循参考 `nav_icons.dart` 规范（归一化
+100 单位高、实心剪影、`PathOperation` 挖空）。
+
+#### 三、测试与两个用例坑
+
+- 移植套件 **14** 条（golden 5 / fab 5 / drag 2 / light 2）+ `glass_nav_host_test`
+  **7** 条（关档退化 / 明暗映射 / 标签形态 / §2.98 ④ 点按坑位回归）+ `settings_page`
+  11 → **13** 条（统计入口 2 条）= 三文件 34 条；ui 组整组 `-j 1` **207 条全绿**
+  （212 − 28 旧 frosted + 14 + 7 + 2），`test/stats` 45 条全绿。
+- ⚠️ **短拖用例先看红再钉断言**：期望「点按一次」的短拖用例实际收到 `[0, 1]`——
+  短拖松手本身被判为 tap（识别器输给 `InkWell` 的**正常路径**），两次点击都没被吞。
+  旧 bug（`onDragCancel` 置拦截位）的判别点是「**两次都被吞**」，故断言钉 `[0, 1]`
+  并注明理由——直接照期望值写 `[1]` 会得到一条永远红的假契约。
+- ⚠️ 明暗断言取 painter 按 **类型筛**（`shelfPainterOf()` 遍历 `CustomPaint` 找
+  `ShelfBooksIconPainter`），别用 `find.byType(CustomPaint).first`（会捞到别的）。
+
+#### 四、视觉验收探针四个坑（图标 / 明暗形态目检）
+
+像素探针渲染 PNG 目检（测试环境无 CJK 字体、标签方块属已知）：① `ByteData` 未定义
+要补 `dart:typed_data`；② `toImage` 在 FakeAsync 区**真异步完不成**（探针挂死 9 分钟）
+⇒ 快照包 `tester.runAsync` + `Future.delayed`；③ `RepaintBoundary` 定位别靠类型
+cast（`RenderConstrainedBox` is not `RenderRepaintBoundary`）⇒ 挂 `ValueKey('snap')`
+精确定位；④ 默认视口 393 宽会把并排图标段裁掉 ⇒ 图标段前重设
+`physicalSize = Size(700*3, 220*3)`。
+
+#### 五、事实源变更与遗留
+
+- **底栏几何 / 材质事实源换主**：`lib/ui/nav_bar_style.dart`（§2.88~§2.98 的自磨砂
+  复刻体）随本批删除 → **`MiGlassNavMetrics` / `MiGlassPalette`**（移植树内，
+  barHeight 55.4 / cellWidth 82.2 / pill 89.3×49.3 / barInnerPad 6.6，一比一禁改）；
+  `notes-pitfalls.md` §1.4 已同步。§2.88~§2.98 的复刻实测值转为历史留证。
+- 旧挂账「底栏高度 / 长度口径（固定 dp vs 按屏比例）」随整组替换**自然定案**：
+  跟随参考项目固定 dp。**仍待真机复验**；绿色圆钮功能待拍板。
+- 交付：`d0dc675`（代码与测试）。
+
 

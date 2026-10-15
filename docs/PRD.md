@@ -53,6 +53,7 @@
 | **v2.8** | 2026-09-22 | **M1-T04 / M1-T07 交付 + `PERF-01` 前提勘误（无需求条目增减，P0 29 / P1 56 / P2 31 = 116 不变）**：① **M1-T04 交付**（`d082c6a` / `f196d39` / `1d514dc`）：阅读页**章节连续滚动**（全部章节进一个 `ListView`，每章块挂 `GlobalKey`，滚动停止从上次索引 ±4 探测「覆盖视口顶部」的章块得「章索引 + 章内 0.0~1.0」）；`ReadingProgress`（以 `Chapter.href` 为稳定身份、`chapterIndex` 仅作回退提示、`chapterPos` clamp）+ `LocalLayoutHint`（设备本地版面快照，**不参与跨设备同步**）；`ProgressStore`（每本一文件 `progress/<bookId>.json` + `bookId` 白名单防路径穿越）；`NAV-01` 目录 `TocSheet`；副标题「第N章 · X%」去除 `implId` 诊断（`RD-03`）。② **`PERF-01` 前提勘误**：v2.7 ② 把「`DartEpubSource` 已声明纯 Dart 形状可进 `compute()`」列为前移依据之一，**该依据不成立**——`parseEpubResult` 的返回值内含 `loadBytes` / `readEntry` **闭包**，`SendPort` 直接拒收（M1-T07 实证）。**未被推翻的部分**：`PERF-01` 前移至 M2a 的决定、人天 +1.5、「解析必须移出主 isolate」这一需求本身，全部不变。**正确改法**：后台 isolate 跑 **`parseEpubStructure(bytes)`**（M1-T07 新增的**无闭包纯数据**入口）→ 纯数据结构传回主 isolate → 由持有 `bytes` 的主 isolate 绑定闭包。`docs/schedule.md` M2a-T06 已加同日勘误，`dart_epub_source.dart` 顶部误导性注释已更正。③ **`PERF-02` 内存收敛交付**（`e16da96` / `f84b470` / `f7367a9`）：EPUB 结构解析不再预解压全书（`Map<String,Uint8List> files` 改为条目名索引 + **压缩态**惰性解压，绕开 archive 3.x `ArchiveFile.content` 对解压结果的永久 `_content` 缓存）；阅读页正文增量加载（首帧只等目标章 ±1 + 有界 LRU 30 章 + 按已加载章中位数估算占位高度）；封面候选改为按需读。实测（`docs/perf-baseline/README.md`）：320 章 / 80MB 图样本**稳态** RSS 497.9 → 429.8 MB、首屏中位 148 → 58 ms；≈48MB 正文样本读 100 章 562.5 → 426.8 MB。④ **`PERF-03` 验收**：10 万+ 字符单章逐段渲染而非单条巨型 `Text`（M1-T04 已落地，M1-T07 补断言）。⑤ **仍未交付**：`PERF-01` 真正接线（M1-T07 只交 `IsolateRunner` 底座）→ M2a-T06；TXT 8MB 滑动缓冲 → M2 |
 | **v2.9** | 2026-09-29 | **书架点书卡改「直接进阅读页」+ 详情页入口改道（无需求条目增减，计数仍为 P0 29 / P1 56 / P2 31 = 116）**：① **行为改道**（来源：负责人决定「点击图书直接进入阅读页」）——书架**点书卡**不再进详情页，而是**直接打开阅读页**，与参考实现一致（anx-reader `book_item.dart:51-53` 的 `onTap` 即 `pushToReadingPage`）；**顶栏搜索页选中结果同改**（其 `search_page.dart:204` 复用同一个 `BookItem`，同一手势给同一结果）。② **顺带消除一处长期矛盾**：§12.2 `F2` 原文即「点书架项 → 读索引取进度」，而 `META-08 ①` 写「从书架点一本书进入详情页」——同一手势两个定义；本次**以 `F2` 为准**收敛为「点卡 = 开书」，故这是**消除矛盾**而非引入矛盾。③ **`META-08` 条文与验收 ① 同步改文**：「从书架点击进入」→「从书架**长按书卡 → 操作单「书籍详情」**进入」，验收 ① 同改。④ **§12.2 `F9` 流程图**首行同步为「点书卡 = 直接进阅读页；长按书卡 → 操作单「书籍详情」→ 进入书籍详情页」。⑤ **详情页保留**（长按操作单为**唯一**入口，与 anx-reader 的 `book_bottom_sheet` 同构），故 `META-08` 展示项、`META-09` 编辑链路、分组入口（`P2-02`）、单书统计入口（`STAT-09`）全部不受影响 |
 | **v2.10** | 2026-09-29 | **设置页视觉重做（参考 HyperOS 设置页）+ §11.2 两行改文（无需求条目增减，计数仍为 P0 29 / P1 56 / P2 31 = 116）**：来源 = 负责人指令「参考这种风格，修改设置布局」（附 HyperOS 深色设置页截图）。① **§11.2 两行改文（本版唯一契约变更）**：「控制组件 · 设置页内的按钮 / 滑块 / 分段控件 / 开关 / 输入框」与「卡片容器 · 设置页的分组卡片」由 ✅ 玻璃 改为 ❌ **不透明**（依据与边界见 §11.2 注 ②）。**「浮层」行不变**——设置页的选择弹层仍走玻璃；导航层玻璃（`UI-02`）不变。② **设置页视觉重做**（`lib/ui/settings_page.dart` 重写 + 新建组件集 `lib/ui/settings_kit.dart`）：内容层大标题（`GlassLargeTitle`）随滚动两段式收起、顶栏出现「设置」；分组实心卡片；行形态 = 40×40 彩色圆角图标 + 标题（+ 副标题）+ 右侧「当前值 + 箭头」或 `Switch`；「搜索设置项」**只做占位**（不接过滤逻辑，点击给轻提示）。③ **新增「外观」组，`TYP-03` 首次有应用级入口**：此前 `SettingsStore.setThemeMode` 除测试外**零调用者**、`ReaderSettings.themeMode` 亦无消费点，主题三态在应用级**不可达**；本版经设置页写入即由 `app.dart` 重建 `MaterialApp` 整树换色（`HomeShell` / `SettingsPage` 补注入 `SettingsStore`）。④ **`GlassTopBar` 补 `largeTitleController`**（玻璃档透传库参数；「关」档的 Material `AppBar` 不认该控制器，故自实现同一条淡入曲线，否则大标题与顶栏标题同时可见）；`GlassLargeTitle` / `GlassLargeTitleController` 加入 `glass_kit.dart` 的 re-export，保持「页面不直接 import 玻璃库」的既有口径。⑤ **测试**：新增 `test/ui/settings_page_test.dart` **11 条**（设置页此前零覆盖），`ui` 组 117 → 128 全绿；`dart analyze` 0 error / 0 warning / 7 info（既有基线不变） |
+| **v2.11** | 2026-10-15 | **底部导航栏整组替换为一比一移植的 mi_like_ui 玻璃底栏 + tab 3 格化（无需求条目增减，P0 29 / P1 56 / P2 31 = 116 不变）**：来源 = 负责人指令 5 点（完整替换底栏 / 移除统计 tab / 「设置」改「我的」+ 参考项目 logo / 书架·笔记 logo 按参考风格重设计 / 明暗切换）+「一比一移植代码」。① **底栏整组替换**：`lib/ui/mi_like_ui/` **逐字节移植**自 `D:\WorkBuddy\FlutterTest\bottom_nav_demo`（`diff -r` 零差异；MReader 扩展一律放移植树之外），旧 `FrostedNavBar` / `NavBarStyle`（自磨砂复刻批）删除；MReader 侧只补两件参考项目不管的事——「关」档退化 Material `NavigationBar`（`UI-06` ②）与明暗映射（`GlassScope` 亮度 → `MiThemeMode`，`UI-01` ②），见 `glass_nav_host.dart`。明暗双配方（暗 scrim rgba(20,20,20,0.63) / 亮白玻璃）随应用主题三态切换。② **底栏 tab 4 → 3**：书架 / 笔记 / **我的**；「统计」移出底栏，入口收进「我的」页「统计」组的「阅读统计」行（`STAT-*` 条目与统计页本体全部不变）；「设置」更名「我的」（§12.1 页面清单第 7 行同步）；图标 =「我的」用参考项目笑脸贝雷帽、书架 / 笔记按参考风格重绘实心剪影。③ **`UI-02` 组件名同步**：底栏实现由 `GlassTabBar`（库）/ `FrostedNavBar`（自研）改为 mi_like_ui `MiGlassNavBar`，验收口径「导航层玻璃质感」不变；顺带消除 §12.1 第 7 行内容层「玻璃控件」与 v2.10 §11.2 改文的残留矛盾（改「不透明分组与控件」）。④ 切换动效 = 果冻飞行 + 末端沉降（负责人拍板「跟参考项目一致」）；底栏右侧绿色圆钮 = 参考项目预留空位圆钮，**仅还原视觉、暂不接功能** |
 
 ---
 
@@ -432,7 +433,7 @@
 | 编号 | 需求名 | 描述 | 验收要点 |
 |---|---|---|---|
 | **UI-01** | 玻璃态基础设施 | 接入 `liquid_glass_widgets`，启动预热着色器，全局主题与亮度解析正确接线；`MaterialApp` 下无黄色下划线文本。 | ① `main()` 中完成预热再 `runApp`；② 玻璃控件跟随应用 ThemeMode 而非仅系统亮度；③ 全应用搜不到黄色双下划线文本 |
-| **UI-02** | 导航层玻璃化 | `GlassAppBar` / `GlassTabBar` / `GlassToolbar` 应用于书架页、设置页、书库分组页等**导航层**。 | ① 上述页面顶栏与底栏为玻璃质感；② 滚动时顶栏下内容透出模糊而非纯色遮挡 |
+| **UI-02** | 导航层玻璃化 | `GlassAppBar` / `GlassToolbar` 应用于书架页、我的页、书库分组页等**导航层**；底部标签栏为 mi_like_ui 玻璃底栏（`MiGlassNavBar`，一比一移植 `bottom_nav_demo`，v2.11）。 | ① 上述页面顶栏与底栏为玻璃质感；② 滚动时顶栏下内容透出模糊而非纯色遮挡 |
 | **UI-03** | 浮层玻璃化 | 弹窗、底部弹窗、菜单统一使用 `GlassDialog` / `GlassSheet` / `GlassMenu`。 | ① 所有确认框与选择器为玻璃样式；② 打开时背景内容被模糊折射 |
 | **UI-04** | 内容层不透明（红线） | 书架列表行、目录列表行、搜索结果行、**统计排行列表行与统计图表**、**阅读页正文区**一律使用不透明控件，**不得**嵌套玻璃。 | ① 阅读页正文背景完全不透明；② 玻璃控件不出现在任何滚动列表行内；③ 无「玻璃包玻璃」的嵌套；④ 统计页的柱状图、热力图、排行列表均不在玻璃卡片内 |
 | **UI-05** | 质量档位策略 | 固定表面（顶栏/底栏）用 `premium`（由 `GlassScaffold` 自动提升）；可滚动区域内的玻璃用 `standard`；低端设备降 `minimal`。 | ① 顶栏为 premium；② 书架滚动区无 premium 玻璃；③ 提供一个「降低视觉特效」开关强制 minimal，开启后滚动流畅度提升 |
@@ -884,13 +885,13 @@ meta.json          版本号、导出时间、设备名、包内文件清单
 
 | # | 页面 | 壳层 | 内容层 |
 |---|---|---|---|
-| 1 | 书架（首页） | GlassAppBar + GlassTabBar | 不透明列表/网格 |
+| 1 | 书架（首页） | GlassAppBar + 玻璃浮动底栏（mi_like_ui） | 不透明列表/网格 |
 | 2 | 阅读页 | GlassAppBar（可隐）+ GlassSheet 控制条 | **不透明正文/图片** |
 | 3 | 目录（TOC） | GlassSheet | 不透明列表 |
 | 4 | 搜索（书内） | GlassSearchBar + GlassSheet | 不透明结果列表 |
 | 5 | AI 面板 | GlassSheet / GlassCard | 不透明文本区 + 玻璃操作按钮 |
 | 6 | 朗读控制条 | GlassSheet + GlassToolbar | 不透明状态区 |
-| 7 | 设置 | GlassAppBar | 不透明分组 + 玻璃控件 |
+| 7 | 我的（原「设置」） | GlassAppBar | 不透明分组与控件（v2.10 改；浮层仍玻璃） |
 | 8 | 同步与备份 | GlassAppBar | 不透明分组 + 玻璃控件 |
 | 9 | 生词本 / 书签 / 笔记 | GlassAppBar | 不透明列表 |
 | 10 | 阅读统计 | GlassAppBar | **不透明**卡片 / 图表 / 排行列表 |
