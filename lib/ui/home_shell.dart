@@ -1,4 +1,4 @@
-// 应用主壳层：四 tab（书架 / 统计 / 笔记 / 设置）+ 玻璃浮动底栏。
+// 应用主壳层：三 tab（书架 / 笔记 / 我的）+ mi_like_ui 玻璃浮动底栏 + 绿色圆钮。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 结构（2026-09-28 定；参考 anx-reader 的 `page/home_page.dart`）
@@ -6,17 +6,19 @@
 // 外层**不是** Scaffold，而是 `Stack`：子页与底栏叠放，底栏浮在最上层。
 // 子页各自持有 [GlassNavScaffold]（含自己的顶栏）——若外层再套一层 Scaffold，
 // 就会形成 `GlassScaffold` 嵌套 `GlassScaffold`，直接违反 `UI-04`
-// 「玻璃控件不可嵌套」。底栏因此以 `standalone: true` 使用 [GlassNavBar]
-// （脱离 `GlassScaffold` 祖先，高档需显式声明固定表面档位，见该参数文档）。
+// 「玻璃控件不可嵌套」。底栏（[GlassNavHost]）同样脱离 `GlassScaffold` 祖先
+// 浮在 Stack 最上层。
 //
-// 底栏形态 = **自磨砂伪玻璃悬浮胶囊**（左右外边距 28 / 浮起 27 / 圆角 = 高/2、
-// 62 高），不是贴底通栏——与参考图（HyperOS 主题商店）实测一致。
+// 底栏形态 = **mi_like_ui 玻璃悬浮胶囊**（2026-10-15 整组换参考项目
+// `D:\WorkBuddy\FlutterTest\bottom_nav_demo`，代码**一比一移植**入
+// `lib/ui/mi_like_ui/`，与上游逐字节一致；几何/材质/动效事实源 =
+// `MiGlassNavMetrics` / `MiGlassPalette`）。tab = 书架 / 笔记 / 我的，
+// 「设置」改名「我的」（图标用参考项目 `SmileyBeretIconPainter`），
+// **「统计」移出底栏**、入口收进「我的」页；右侧绿色圆钮（预留空位圆钮）
+// 按参考项目还原视觉（选中「书架」时弹出、切走收起），暂不接功能。
+// MReader 侧只做档位退化与明暗映射（见 `glass_nav_host.dart`）。
 //
-// 2026-10-12 换实现：`GlassNavBar`（库 `GlassTabBar`）→ [FrostedNavBar]（自研
-// `BackdropFilter`）。理由见 `frosted_nav_bar.dart` / `nav_bar_style.dart` 文件头：
-// 参考图那一档玻璃无折射 / 色散，用不上库的核心着色器，却要承担它的全部代价；
-// 自研换来几何 100% 可控（实测标签严格等分，而库默认 `spacing` 会破坏等分）、
-// 选中块宽度可按实测值定、测试开销归零。
+// 旧 [FrostedNavBar] / [NavBarStyle]（自磨砂复刻批）已随本批删除。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 底部避让
@@ -58,9 +60,11 @@ import '../sync/sync_trigger.dart';
 import '../sync/webdav_client.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
-import 'frosted_nav_bar.dart';
 import 'glass_kit.dart';
+import 'glass_nav_host.dart';
+import 'mi_like_ui/mi_like_ui.dart';
 import 'notes_page.dart';
+import 'reader_nav_icons.dart';
 import 'settings_page.dart';
 import 'shelf_page.dart';
 import 'stats_page.dart';
@@ -68,11 +72,12 @@ import 'vocab_page.dart';
 
 /// 浮动底栏为各页内容预留的底部空白。
 ///
-/// 胶囊高 62（[NavBarStyle.barHeight]）+ 底部外边距 27（`verticalPadding`）
-/// + 安全区与呼吸余量 ≈ 100。各页把它并入自己滚动容器的 `padding.bottom`。
+/// 胶囊高 55.4（`MiGlassNavMetrics.barHeight`）+ 底部外边距 24.2（参考项目
+/// 实测浮起）≈ 80，+ 安全区与呼吸余量取 **100**。各页把它并入自己滚动容器的
+/// `padding.bottom`。
 ///
-/// 2026-10-13 按参考图**原生截图**实测值调整：胶囊高 68→**62**、浮起 18→**27**，
-/// 合计 86 → 89，仍取 **100** 留足安全区与呼吸余量。
+/// 2026-10-15 随「底栏整组换参考项目」批更新口径（62/27 → 55.4/24.2），
+/// 余量取整不变：各页底部避让测试的期望值不受影响。
 const double kShellBottomInset = 100;
 
 /// 宽屏断点（超过则改用侧边导航轨）；与 anx-reader 取值一致。
@@ -224,29 +229,29 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     }
   }
 
-  /// 底栏标签（顺序即下标语义，**勿任意重排**）。
+  /// 底栏标签（顺序即下标语义，**勿任意重排**）：书架 / 笔记 / 我的。
   ///
-  /// ⚠️ 2026-10-13：`icon` 一律取**实心（filled）**版本，不再走
-  /// `outlined → filled` 的选中态切换——参考图 4 个 tab 的图标全部是实心风格，
-  /// 且选中态**只靠底衬区分**（实测两类图标/文字亮度一致）。`activeIcon` 因此
-  /// 留空（[NavTab.iconFor] 缺省回落到 `icon`）。
+  /// 2026-10-15「底栏整组换参考项目」批（负责人拍板）：
+  ///   · **移除「统计」tab**——统计页入口收进「我的」页（`onOpenStats`）；
+  ///   · **「设置」改名「我的」**，图标用参考项目 `SmileyBeretIconPainter`；
+  ///   · 「书架」「笔记」图标按参考风格新画（`reader_nav_icons.dart`）。
   ///
-  /// ⚠️ 2026-10-13（负责人拍板）：**移除「AI」tab**（原第 3 格）——导航栏不设
-  /// AI 入口。AI 能力本身不受影响：划词问答 / 章节摘要 / 全书问答 / 生词本仍从
-  /// 书架、阅读页、设置页各自的入口进入（`AI-01`~`AI-06` 接线未动）；被删的只是
-  /// `lib/ui/ai_page.dart` 那个**占位骨架页**（M4 之前无功能，且无其它入口）。
-  /// 与参考图/参考视频的 **4 格** 形态一致。
-  static const List<NavTab> _tabs = <NavTab>[
-    NavTab(icon: Icons.menu_book, label: '书架'),
-    NavTab(icon: Icons.insights, label: '统计'),
-    NavTab(icon: Icons.sticky_note_2, label: '笔记'),
-    NavTab(icon: Icons.settings, label: '设置'),
-  ];
+  /// 图标 painter 的墨色随明暗模式（[MiColors.foregroundFor]）⇒ 在 build 里
+  /// 组装，不是常量。
+  List<MiGlassNavItem> _navItems(MiThemeMode mode) {
+    final Color ink = MiColors.foregroundFor(mode);
+    return <MiGlassNavItem>[
+      MiGlassNavItem(label: '书架', painter: ShelfBooksIconPainter(ink)),
+      MiGlassNavItem(label: '笔记', painter: NotesIconPainter(ink)),
+      MiGlassNavItem(label: '我的', painter: SmileyBeretIconPainter(ink)),
+    ];
+  }
 
-  /// 四个 tab 的内容页。
+  /// 三个 tab 的内容页。
   ///
   /// 每页**自带** [GlassNavScaffold]（顶栏 + 不透明正文），本壳层只负责
-  /// 「选哪一页」与「底栏」。
+  /// 「选哪一页」与「底栏」。**统计页不在其中**（2026-10-15 移出底栏）——
+  /// 入口收进「我的」页（`SettingsPage.onOpenStats`），从那里推入。
   List<Widget> _buildPages() => <Widget>[
         ShelfPage(
           repository: widget.repository,
@@ -266,7 +271,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           readingPrefsStore: widget.readingPrefsStore,
           syncTrigger: widget.syncTrigger,
         ),
-        StatsPage(service: widget.statsService, repository: widget.repository),
         NotesPage(
           vocabStore: widget.vocabStore,
           // 生词本页依赖全在壳层（仓库 / 进度 / AI / 统计），由回调就地组装——
@@ -283,6 +287,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           syncStore: widget.syncStore,
           syncClient: widget.syncClient,
           syncTrigger: widget.syncTrigger,
+          onOpenStats: () => unawaited(_openStatsPage()),
         ),
       ];
 
@@ -311,6 +316,21 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     );
   }
 
+  /// push 统计页（2026-10-15 统计移出底栏后，「我的」页的唯一入口）。
+  ///
+  /// 依赖与原底栏 tab 时代同源（组合根注入的 [StatsService] / [LibraryRepository]），
+  /// 统计页自身带 [GlassNavScaffold] 顶栏与返回键（`canPop` 时显示）。
+  Future<void> _openStatsPage() {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => StatsPage(
+          service: widget.statsService,
+          repository: widget.repository,
+        ),
+      ),
+    );
+  }
+
   void _select(int index) {
     if (index == _index) return;
     setState(() => _index = index);
@@ -329,27 +349,41 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     );
   }
 
-  /// 窄屏（手机 / 窄窗）：内容 + 浮动胶囊底栏。
+  /// 窄屏（手机 / 窄窗）：内容 + 浮动胶囊底栏 + 绿色圆钮。
   ///
-  /// [IndexedStack] 让四页都保活（切回书架时滚动位置与筛选不丢），
+  /// [IndexedStack] 让三页都保活（切回书架时滚动位置与筛选不丢），
   /// 非当前页不绘制、不参与命中测试。
   ///
   /// ⚠️ **必须是 `Stack + Positioned` 而非 `Scaffold.bottomNavigationBar`**：
-  /// 自磨砂伪玻璃底栏的 [BackdropFilter] 需要采样**栏下方**的内容才能出磨砂
-  /// 效果；放进 `bottomNavigationBar` 时底栏在内容**之上**，采样不到正文，
-  /// 磨砂会退化成一块纯色（详见 `frosted_nav_bar.dart` 文件头）。
+  /// 玻璃底栏的 [BackdropFilter] 需要采样**栏下方**的内容才能出磨砂效果；
+  /// 放进 `bottomNavigationBar` 时底栏在内容**之上**，采样不到正文，
+  /// 磨砂会退化成一块纯色。
+  ///
+  /// 栏体浮起 24.2dp（参考项目实测「bar bottom sits 24.2 dp above screen
+  /// bottom」）；绿色圆钮 = 参考项目 [MiGlassNavFab] 的「预留空位圆钮」：
+  /// 选中「书架」时缩放弹出、栏体左移让位，切走镜像收起。**暂不接功能**
+  /// （2026-10-15 拍板「仅还原视觉」），故不传 `onTap`。
   Widget _buildBottomBarLayout(List<Widget> pages) {
+    final MiThemeMode mode = navThemeModeOf(context);
     return Stack(
       children: <Widget>[
         IndexedStack(index: _index, children: pages),
         Positioned(
           left: 0,
           right: 0,
-          bottom: 0,
-          child: FrostedNavBar(
-            tabs: _tabs,
+          bottom: 24.2,
+          child: GlassNavHost(
+            items: _navItems(mode),
             selectedIndex: _index,
             onTabSelected: _select,
+            themeMode: mode,
+            fab: MiGlassNavFab(
+              tabIndex: 0,
+              child: CustomPaint(
+                painter: GridDotsIconPainter(Colors.white),
+                size: const Size.square(18.2),
+              ),
+            ),
           ),
         ),
       ],
@@ -358,6 +392,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   /// 宽屏：侧边导航轨 + 内容。
   Widget _buildRailLayout(List<Widget> pages) {
+    final MiThemeMode mode = navThemeModeOf(context);
+    final List<MiGlassNavItem> items = _navItems(mode);
     return Scaffold(
       body: Row(
         children: <Widget>[
@@ -366,18 +402,16 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               selectedIndex: _index,
               onDestinationSelected: _select,
               labelType: NavigationRailLabelType.all,
-destinations: <NavigationRailDestination>[
-              for (final NavTab tab in _tabs)
-                NavigationRailDestination(
-                  icon: tab.icon == null
-                      ? const SizedBox.shrink()
-                      : Icon(tab.icon),
-                  selectedIcon: tab.activeIcon == null
-                      ? null
-                      : Icon(tab.activeIcon),
-                  label: Text(tab.label),
-                ),
-            ],
+              destinations: <NavigationRailDestination>[
+                for (final MiGlassNavItem item in items)
+                  NavigationRailDestination(
+                    icon: CustomPaint(
+                      painter: item.painter,
+                      size: const Size.square(24),
+                    ),
+                    label: Text(item.label),
+                  ),
+              ],
             ),
           ),
           const VerticalDivider(width: 1),

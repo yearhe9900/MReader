@@ -82,7 +82,18 @@ class _StatsPageState extends State<StatsPage> {
   Widget build(BuildContext context) {
     final StatsService service = widget.service;
     return GlassNavScaffold(
-      appBar: GlassTopBar(title: const Text('统计')),
+      appBar: GlassTopBar(
+        title: const Text('统计'),
+        // 2026-10-15 统计移出底栏后，本页只经「我的」页 push 打开 ⇒
+        // `canPop` 时显示返回键（底栏 tab 时代无处可回、不显示）。
+        leading: Navigator.of(context).canPop()
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: '返回',
+                onPressed: () => Navigator.of(context).maybePop(),
+              )
+            : null,
+      ),
       body: OpaqueContentSurface(
         child: !service.isLoaded
             ? const Center(child: CircularProgressIndicator())

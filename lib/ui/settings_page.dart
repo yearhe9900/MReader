@@ -66,6 +66,7 @@ class SettingsPage extends StatefulWidget {
     this.syncStore,
     this.syncClient,
     this.syncTrigger,
+    this.onOpenStats,
   });
 
   /// 性能偏好服务（玻璃质量档位 / 降低视觉特效开关的持久化）。
@@ -93,6 +94,11 @@ class SettingsPage extends StatefulWidget {
   ///
   /// `null` = 未接线 → 该入口不渲染（同步组其余入口不受影响）。
   final SyncTrigger? syncTrigger;
+
+  /// 统计页入口（2026-10-15 统计移出底栏，入口收进本页）。
+  ///
+  /// `null` = 未接线 → 入口行不渲染（同款降级口径）。
+  final VoidCallback? onOpenStats;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -163,7 +169,9 @@ class _SettingsPageState extends State<SettingsPage> {
       // 居中与否保持库默认（`centerTitle: true`）：两段式收起是 iOS 26 的
       // 大标题范式，库的 `_buildTitle` 也把标题强制 `TextAlign.center`。
       appBar: GlassTopBar(
-        title: const Text('设置'),
+        // 2026-10-15 底栏「设置」tab 改名「我的」后，本页标题同步改名——
+        // 标签与页面同名，避免「tab 叫我的、进去叫设置」的割裂。
+        title: const Text('我的'),
         largeTitleController: _titleController,
       ),
       body: OpaqueContentSurface(
@@ -171,7 +179,7 @@ class _SettingsPageState extends State<SettingsPage> {
           controller: _titleController.scrollController,
           slivers: <Widget>[
             GlassLargeTitle(
-              text: '设置',
+              text: '我的',
               controller: _titleController,
               // 显式给色：库缺省取 `CupertinoColors.label`（走 Cupertino 主题级联），
               // 这里直接跟 Material 主题的 `onSurface`，与卡片文字同一口径。
@@ -202,6 +210,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
+                    _buildStatsGroup(),
                     _buildAppearanceGroup(),
                     _buildAiGroup(),
                     GlassSettingsSection(perfPrefs: widget.perfPrefs),
@@ -214,6 +223,28 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
       ),
+    );
+  }
+
+  /// 「统计」组（2026-10-15 统计移出底栏后的唯一入口）：push 统计页。
+  ///
+  /// [SettingsPage.onOpenStats] 为 `null` = 未接线 → 本组整体隐藏（同款降级口径）。
+  Widget _buildStatsGroup() {
+    final VoidCallback? onOpenStats = widget.onOpenStats;
+    if (onOpenStats == null) {
+      return const SizedBox.shrink();
+    }
+    return SettingsGroupCard(
+      header: '统计',
+      children: <Widget>[
+        SettingsTile(
+          icon: Icons.insights,
+          accent: SettingsAccents.green,
+          title: '阅读统计',
+          subtitle: '阅读时长 / 读完本数 / 排行',
+          onTap: onOpenStats,
+        ),
+      ],
     );
   }
 

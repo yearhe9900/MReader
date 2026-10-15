@@ -22,8 +22,9 @@
 //    故不违反 `UI-06` ② 的「纯色退化」。本文件把这条口径**显式断言**下来，
 //    免得后人以为它是漏网之鱼。
 //
-// ⚠️ `find.text('设置')` 在本页恒为 **2 个**：内容层大标题 + 顶栏标题（两者文案相同，
-//    库文档要求如此）。需要精确定位时必须用 `find.descendant` 限定范围。
+// ⚠️ `find.text('我的')` 在本页恒为 **2 个**：内容层大标题 + 顶栏标题（两者文案相同，
+//    库文档要求如此；2026-10-15 底栏「设置」tab 改名「我的」后页面同名改）。需要
+//    精确定位时必须用 `find.descendant` 限定范围。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -71,10 +72,10 @@ Future<void> _settle(WidgetTester tester, {int rounds = 12}) async {
 GlassLargeTitleController _titleControllerOf(WidgetTester tester) =>
     tester.widget<GlassLargeTitle>(find.byType(GlassLargeTitle)).controller;
 
-/// 顶栏（[AppBar]）里那条「设置」标题。
+/// 顶栏（[AppBar]）里那条「我的」标题。
 Finder _barTitle() => find.descendant(
       of: find.byType(AppBar),
-      matching: find.text('设置'),
+      matching: find.text('我的'),
     );
 
 /// 顶栏标题当前的淡入不透明度。
@@ -175,13 +176,13 @@ void main() {
   });
 
   group('设置页 · 大标题两段式收起', () {
-    testWidgets('首帧：内容层与顶栏各有一条「设置」，顶栏标题不可见',
+    testWidgets('首帧：内容层与顶栏各有一条「我的」，顶栏标题不可见',
         (WidgetTester tester) async {
       await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
       await tester.pumpAndSettle();
 
-      // 两条「设置」= 大标题 + 顶栏标题（同文案是库的设计）。
-      expect(find.text('设置'), findsNWidgets(2));
+      // 两条「我的」= 大标题 + 顶栏标题（同文案是库的设计）。
+      expect(find.text('我的'), findsNWidgets(2));
       expect(find.byType(GlassLargeTitle), findsOneWidget);
 
       // 首帧进度为 0 → 顶栏标题必须不可见（只靠位置不靠透明度会「两条同时可见」）。
@@ -398,6 +399,38 @@ void main() {
       // 轻提示 2s 后自动消失；把时钟推过去，免得留下 pending Timer。
       await tester.pump(const Duration(seconds: 3));
       expect(find.text('设置搜索尚未实现'), findsNothing);
+    });
+  });
+
+  group('设置页 · 统计入口（2026-10-15 统计移出底栏）', () {
+    testWidgets('接线时渲染「阅读统计」行，点击触发回调',
+        (WidgetTester tester) async {
+      var opened = 0;
+      await tester.pumpWidget(host(
+        GlassQualityTier.off,
+        SettingsPage(
+          perfPrefs: perfPrefs,
+          settings: settings,
+          aiStore: aiStore,
+          aiClient: AiClient(),
+          onOpenStats: () => opened += 1,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('阅读统计'), findsOneWidget);
+      await tester.tap(_tile('阅读统计'));
+      await tester.pumpAndSettle();
+      expect(opened, 1);
+    });
+
+    testWidgets('未接线（null）时入口整体隐藏（同款降级口径）',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
+      await tester.pumpAndSettle();
+
+      expect(find.text('阅读统计'), findsNothing);
+      expect(find.text('统计'), findsNothing);
     });
   });
 }
