@@ -5,9 +5,10 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // 2026-10-16 参考项目批：参考项目把全部导航 logo 收在 `src/icons/nav_icons.dart`
 // 一个文件里，MReader 同款组织——本文件即 MReader 的 nav_icons.dart（原
-// `reader_nav_icons.dart` 更名）。与移植树 `mi_like_ui/src/icons/nav_icons.dart`
-// 是两份文件：后者是上游原件（保持与 `bottom_nav_demo` 逐字节一致，`diff -r`
-// 零差异，便于对账），本文件承载 MReader 自有的 logo，不进移植树。
+// `reader_nav_icons.dart` 更名）。与移植树 `mi_like_ui/src/icons/logo.dart`
+// 是两份文件：后者是上游原件（同日上游把 `nav_icons.dart` 更名 `logo.dart` 并
+// 追加加号 logo；保持与 `bottom_nav_demo` 逐字节一致，`diff -r` 零差异，
+// 便于对账），本文件承载 MReader 自有的 logo，不进移植树。
 //
 // 2026-10-15「底栏整组换参考项目」批（一比一移植 `bottom_nav_demo`）：
 //   · 「我的」= 参考项目 `SmileyBeretIconPainter` 原样用（在移植树里）；
@@ -23,7 +24,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// 与移植树 `nav_icons.dart` 的 `_fit` 同款：把 100 单位高的归一化坐标系
+/// 与移植树 `logo.dart` 的 `_fit` 同款：把 100 单位高的归一化坐标系
 /// 等比映射进 [size]，并让墨迹水平中心落在盒中心。
 void _fit(Canvas canvas, Size size, double inkCenterX) {
   final s = size.height / 100;

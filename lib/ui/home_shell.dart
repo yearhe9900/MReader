@@ -380,8 +380,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             themeMode: mode,
             fab: MiGlassNavFab(
               tabIndex: 0,
+              // 绿钮 glyph = 参考项目配套用法（`d6893f7`）：白色圆角加号
+              // （电话 App 截图 1220×378 实测）；此前点阵 glyph 是旧口径。
               child: CustomPaint(
-                painter: GridDotsIconPainter(Colors.white),
+                painter: PlusIconPainter(Colors.white),
                 size: const Size.square(18.2),
               ),
             ),
