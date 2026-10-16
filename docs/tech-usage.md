@@ -5805,4 +5805,65 @@ cast（`RenderConstrainedBox` is not `RenderRepaintBoundary`）⇒ 挂 `ValueKey
   跟随参考项目固定 dp。**仍待真机复验**；绿色圆钮功能待拍板。
 - 交付：`d0dc675`（代码与测试）。
 
+### 2.100 移植树同步上游：亮色真实玻璃渐变 + pill_tab_bar 入库；书架标签换胶囊（2026-10-16，`2854527`）
+
+> 来源：负责人指令 3 点——「书架标签按钮全部替换成参考项目的按钮」/「参考项目
+> 底部导航栏代码已更新」/「学习参考项目，将 logo 放在 nav_icons.dart 中」。
+> logo 落点拍板：**移植树外改名**（保持一比一 `diff -r` 零差异）。
+
+#### 一、上游更新清单与同步法
+
+同步 = 整体 `cp` 覆盖移植树文件，测试文件只改 import 包名适配
+（`package:mi_like_ui/` → `package:mreader/ui/mi_like_ui/`），其余逐字节一致。
+复核：`diff -rq` 上游 `lib/src` 与 `lib/mi_like_ui.dart` **零差异**。
+
+- **已提交侧**（§2.99 移植后上游新增）：`7bb503e`——const 构造断言不支持
+  `.length` / 参数字段求值，items 数量与 fab 适配校验从构造器移 `initState`；
+  `a4c6bdd`——`pill_tab_bar` 组件入库（`MiPillTabBar` / `MiPillTabMetrics` /
+  `MiPillTabPalette` + `MiTypography.pillLabel`，几何 87.6×39.9 / gap 11.9 /
+  edgeInset 11.9 均 1220×2656 完整截图实测）。
+- **未提交工作区侧**（「底栏代码已更新」的主体）：亮色配方「白玻璃」→
+  **「真实玻璃渐变」**——`MiGlassPalette` 新增 `scrimGradient` / `lensTintGradient`
+  （可空渐变字段，非空时 painter 走 `_layerPaint` 渐变绘制），亮色栏体半透明
+  上透下实（alpha 0.61→0.80）、透镜暖灰玻璃体（0.66→0.82），背后内容透上来；
+  亮色黄金图 `light_bar_home/mine` 重生成。
+- 测试同步：`pill_tab_bar_test.dart` 7 条移植（明暗黄金图 / 点按切换 / 横滑 /
+  越界断言 / const 构造回归锁）+ `fab_golden_test.dart` 断言用例随 `7bb503e`
+  从「构造器 expect throws」改「pumpWidget + takeException」。mi_like_ui 组
+  20 条全绿。
+
+#### 二、书架分组标签行 → `MiPillTabBar`（接线三件事）
+
+1. **语义映射**：组件是纯标签行（点谁选谁、无取消语义）；书架拍板「单选 +
+   再点**已选中**的回『全部』」由 `onTap` 映射承担
+   （`i == 0 || i == selectedIndex ? null : groups[i-1].id`）。「选中分组被删空
+   → 回落『全部』」沿用既有 `hasSelection` 判定 → `selectedIndex` 归零。
+2. **消双重内距（本批唯一新坑）**：组件自带 `edgeInset` 11.9（参考项目页边距
+   口径），而 MReader 顶栏标题槽给 8dp、左缘须与搜索胶囊对齐（既有形态）——
+   直接嵌入会右偏 11.9。解法 = `ClipRect + LayoutBuilder + OverflowBox
+   (alignment: topCenter, 宽 = 槽宽 + 2×11.9)`：组件盒放宽居中后其内置内嵌
+   正好抵消到槽边，胶囊左缘 = 搜索胶囊左缘；外层 `ClipRect` 保住「超出视口
+   裁切滚动」。**学通用**：参考组件自带「页边距」类内嵌接进自有布局时先算
+   双重内距，用拓盒抵消，别改移植体也别硬吃偏移。
+3. **明暗**：复用 `navThemeModeOf`（`GlassScope` 级联亮度 → `MiThemeMode`，
+   与底栏同源）；「关」档不退化——胶囊是纯色组件、无玻璃可关。
+
+测试：`shelf_page_test.dart` 三处改（`_chipLabels` 读 `MiPillTabBar.labels`；
+GlassChip 档位红线用例改为「接线 + 滚动区无玻璃控件（`findsNothing`）」；
+「全部」选中态断言改读 `selectedIndex`）+ 新增⑤左缘对齐断言。**变异判红**：
+`topCenter → topLeft`（不抵消）→ ⑤ 红在 `19.9 = 8 + 11.9`，红的断言即目标
+断言；OverflowBox 居中带 ~1e-14 浮点噪声，对齐断言用 `closeTo`。ui 组
+**213 全绿**（207 + pill 6，静态口径吻合）。
+
+#### 三、logo 组织与契约
+
+- `reader_nav_icons.dart` → **`lib/ui/nav_icons.dart`**：学习参考项目「logo 集中
+  在 nav_icons.dart」组织；移植树 `src/icons/nav_icons.dart` 是上游原件（4 个
+  tab 图标 painter）**不动**，MReader 自有 logo（书架书堆 / 笔记切角便签）在
+  新文件里、`_fit` 保留私有副本。
+- **PRD v2.12**：§11.2「控制组件」行扩到书架浮动头部的分组标签行——原玻璃
+  `GlassChip`（2026-10-12 批）改**不透明胶囊**（注 ③ 记录取向，与注 ② 理由
+  ①③一致）；`UI-02` 顶栏栏体玻璃不变、`UI-04` 不受影响（滚动区反而更干净）。
+- 交付：`2854527`（代码与测试）。
+
 
