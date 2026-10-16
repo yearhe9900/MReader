@@ -5826,7 +5826,14 @@ cast（`RenderConstrainedBox` is not `RenderRepaintBoundary`）⇒ 挂 `ValueKey
   **「真实玻璃渐变」**——`MiGlassPalette` 新增 `scrimGradient` / `lensTintGradient`
   （可空渐变字段，非空时 painter 走 `_layerPaint` 渐变绘制），亮色栏体半透明
   上透下实（alpha 0.61→0.80）、透镜暖灰玻璃体（0.66→0.82），背后内容透上来；
-  亮色黄金图 `light_bar_home/mine` 重生成。
+  亮色黄金图 `light_bar_home/mine` 重生成。（该工作区内容随后被上游提交为
+  `efd7bd2`。）
+- **收尾前的二次同步（`4f18da0`）**：上游在本批实施期间又提交 `d6893f7`
+  （`nav_icons.dart` git mv 更名 `src/icons/logo.dart` + 新增 `PlusIconPainter`
+  加号 logo，barrel 导出随行）——开工时快照里还没有，**终核 `diff -r` 才暴露**。
+  **教训：上游是活的，收尾前必须重核 diff，不能拿开工快照交差。** MReader 侧
+  随配套用法把绿圆钮 glyph 由点阵（`GridDotsIconPainter`）换**白色加号**
+  （`MiGlassNavFab(child: CustomPaint(painter: PlusIconPainter(...)))`）。
 - 测试同步：`pill_tab_bar_test.dart` 7 条移植（明暗黄金图 / 点按切换 / 横滑 /
   越界断言 / const 构造回归锁）+ `fab_golden_test.dart` 断言用例随 `7bb503e`
   从「构造器 expect throws」改「pumpWidget + takeException」。mi_like_ui 组
@@ -5858,12 +5865,13 @@ GlassChip 档位红线用例改为「接线 + 滚动区无玻璃控件（`findsN
 #### 三、logo 组织与契约
 
 - `reader_nav_icons.dart` → **`lib/ui/nav_icons.dart`**：学习参考项目「logo 集中
-  在 nav_icons.dart」组织；移植树 `src/icons/nav_icons.dart` 是上游原件（4 个
-  tab 图标 painter）**不动**，MReader 自有 logo（书架书堆 / 笔记切角便签）在
-  新文件里、`_fit` 保留私有副本。
+  在 nav_icons.dart」组织（落点经 AskUserQuestion 拍板在**移植树外**，保
+  `diff -r` 零差异）；MReader 自有 logo（书架书堆 / 笔记切角便签）在新文件里、
+  `_fit` 保留私有副本。移植树图标文件是上游原件、随上游更名
+  `src/icons/logo.dart`（同日 `d6893f7`），**不混入 MReader logo**。
 - **PRD v2.12**：§11.2「控制组件」行扩到书架浮动头部的分组标签行——原玻璃
   `GlassChip`（2026-10-12 批）改**不透明胶囊**（注 ③ 记录取向，与注 ② 理由
   ①③一致）；`UI-02` 顶栏栏体玻璃不变、`UI-04` 不受影响（滚动区反而更干净）。
-- 交付：`2854527`（代码与测试）。
+- 交付：`2854527`（主体）+ `4f18da0`（二次同步），docs `0104604` 起。
 
 
