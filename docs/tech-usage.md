@@ -5933,5 +5933,72 @@ GlassChip 档位红线用例改为「接线 + 滚动区无玻璃控件（`findsN
   换 `AdaptivePillTabBar`，「`Icons.add` findsOneWidget」改 **findsNothing**
   （旧入口移除的反向钉）。
 
+### 2.102 底栏/胶囊同步上游透明 token + 两遍绘制批（2026-10-16，`6cbf00f`）
 
+> 来源：负责人指令「参考 D:\Workspace\personal\mi_like_ui_demo 这个项目，更新
+> MReader 底部导航栏和胶囊按钮」。**上游仓库已迁移**：现 = `mi_like_ui_demo`
+> （GitHub `yearhe9900/mi_like_ui`）；旧路径 `D:\WorkBuddy\FlutterTest\
+> bottom_nav_demo` 目录还在但已无 `.git`（不是仓库），勿再拿它当上游核 diff
+> （notes-pitfalls §1.4 已同步改路径）。
 
+#### 一、开工快照处置（上一轮中断的续扫）
+
+- 工作区已带**上一轮未提交的同步半成品**：透明 token 收口组（`glass_nav_bar`
+  blurSigma 改源 `5` 行 / `glass_tokens` 转发 + 5688126 去白描边 / `pill_tab_tokens`
+  半透明 alpha）、`transparency_tokens.dart` 新增、barrel 导出、icons 更名
+  （上游 4836784，已暂存）；**但 `pill_tab_bar.dart` 仍停在单遍版**（上游
+  1f99eff 终态 = 两遍绘制），`glass_tokens` 注释差一处弯引号。`diff -rq` 把
+  差异精确定位到恰 2 文件（+ 仅参考项目有的 demo/main.dart）。
+- **批次三（`f46efae`）文档当时也滞留未提交** → 先独立回填 `1d53265`
+  （PRD v2.13 + CHANGELOG 两条 + §2.101），再做本批。
+
+#### 二、同步内容（上游 4836784 / 5688126 / 1f99eff 三 commit）
+
+- `pill_tab_bar.dart` **两遍绘制**：plates（ClipRRect+BackdropFilter 空框）
+  全量先画、fills（半透明 AnimatedContainer + 文案 + 手势）后画，Stack 双层
+  `Positioned.fill`；填充**不再外包 ClipRRect**（沿用 Decoration 自身圆角 AA，
+  两层 AA 叠乘会把边缘覆盖率压成 c²）。两遍 backdrop 只含背景 → 相邻胶囊的
+  填充互不进彼此模糊源（无串色）。
+- `transparency_tokens.dart` 入库（blurSigma=28 + fillAlpha 字节常量，
+  `Color.fromARGB` 整数配 alpha 规避 `fromRGBO` double 量化陷阱），
+  `MiGlassTokens.blurSigma` 同源转发保兼容；亮色 `lensStroke` 0.30 → 0
+  （白描边系早期拟合虚构，会在胶囊外沿成白亮环、吃掉胶囊↔栏体间距可读性）。
+- 移植树整树重拷后 `diff -r` 零差异复核 ✓（收尾前又跑一次——上游是活的，
+  §2.100 教训不二吃）。
+
+#### 三、`AdaptivePillTabBar` 两遍绘制镜像（移植树外）
+
+- 同结构镜像，唯一附加点：**宽度先算一遍**（`widths` 列表）——plates 与
+  fills 两遍必须逐胶囊同宽（同一栅格），`rowWidth` = Σwidths + (n−1)×gap。
+- shelf 的 `OverflowBox` 拓盒抵消不受影响（组件根仍是
+  `SingleChildScrollView`，仅其子由 Row 换 SizedBox+Stack）。
+
+#### 四、测试与变异判红（ui 组 220 → **221 全绿**，`-j 1`；analyze 基线 1 info）
+
+- 黄金图 `pill_light` / `light_bar_home` / `light_bar_mine` 直接拷上游重生成
+  版——MReader 本地跑全绿 = **两机渲染字节吻合**的交叉验证（`pill_dark` 本就
+  一致未动）。
+- 新增结构钉（`adaptive_pill_tab_bar_test.dart` 末组）：组件内「恰两层
+  Positioned」的 Stack，先磨砂层后填充层；磨砂层 ClipRRect/BackdropFilter 各
+  N、无 Text；填充层 AnimatedContainer N、**无 ClipRRect 无 BackdropFilter**。
+  找栈用 `firstWhere(两层 Positioned)`——改回单遍直排时列表空 → StateError
+  → 红（结构消失即行为消失，恒红不恒绿）。
+- **变异判红**（两处同时改回单遍）：红恰 3 条 = 新结构用例（StateError @
+  firstWhere）+ `pill_dark`/`pill_light` 两张黄金图；宽度/点按/滚动/const 用例
+  全绿 —— 红的就是目标断言。**意外收获：pill_dark 也判红**——上游 1f99eff 的
+  「pill_dark 字节级零变化」说的是它自己改动前后；两遍↔单遍的结构差在暗底
+  同样可测。
+- `.gitignore` 补 `test/**/failures/`（golden 失败产物，同上游 06ac58a 约定）。
+
+#### 五、过程坑（两条通用）
+
+1. ⚠️ **`git commit` 不带 pathspec 会把 index 里先前暂存的无关改动一并卷进**
+   ——本批首提交把上轮暂存的 icons 改名混进了 docs 提交。修法 = `git reset
+   --soft HEAD~1` 后 `git commit -- <路径>` 按路径提交。**提交前先看
+   `git status --short` 首列（staged 区）有没有别人的东西。**
+2. ⚠️ **`grep -E '\d'` 在 POSIX ERE 不成立**（`\d` 被当字面量 d）——变异判红
+   首跑用它滤 flutter test 输出得空，险些误判「测试没跑」。数字类正则用
+   `[0-9]`，或直接看原始输出。
+
+- 交付：`6cbf00f`（主体，13 文件 +235/−28）+ 滞留文档回填 `1d53265`，docs
+  本条随批。
