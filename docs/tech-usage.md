@@ -5874,4 +5874,64 @@ GlassChip 档位红线用例改为「接线 + 滚动区无玻璃控件（`findsN
   ①③一致）；`UI-02` 顶栏栏体玻璃不变、`UI-04` 不受影响（滚动区反而更干净）。
 - 交付：`2854527`（主体）+ `4f18da0`（二次同步），docs `0104604` 起。
 
+### 2.101 导入入口迁绿圆钮 + 胶囊宽度自适应（2026-10-16，`f46efae`）
+
+> 来源：负责人指令 3 点——「仍叫 nav_icons.dart」/「将书架添加图书的功能迁移
+> 到绿圆钮上，之前的按钮移除」/「胶囊设置最小宽度和最大宽度，最小宽度就是当前
+> 宽度，最大宽度为当前宽度 * 2，超过最大宽度省略号截断」。
+
+#### 一、绿圆钮接「导入书籍」（组件零改动）
+
+- **`MiGlassNavFab` 自带 `onTap`**（移植体本就有该参数，§2.99 拍板「暂不接
+  功能」只是没传）——接功能无需碰移植树，`diff -r` 零差异维持。
+- **跨组件接线**：FAB 在 `HomeShell`（`GlassNavHost.fab`），导入逻辑在
+  `ShelfPageState.pickAndImport`（原 `_pickAndImport` 公开化）→ `HomeShell`
+  持 `GlobalKey<ShelfPageState>` 直调。`_HomeShellState` → **`ShelfPageState`
+  公开命名**（Key 泛型要求公开 State 类型）。
+- **入口收敛**：书架浮动头部原 `IconButton(Icons.add)` 移除（导入中原槽位只剩
+  spinner）；**空态引导按钮保留**——`LIB-01` ②「空态文案与导入按钮可见」是验收
+  项，只删常驻入口不动引导。PRD `LIB-01` 条文「顶部为导入入口」同步改文
+  （v2.13 ①；推翻 v2.11 ④「绿钮暂不接功能」）。
+- 无障碍：FAB glyph 外包 `Semantics(label: '导入书籍', button: true)`。
+- `nav_icons.dart` **文件名拍板不动**（负责人明示「仍叫」）。
+
+#### 二、胶囊宽度规则 → `AdaptivePillTabBar`（移植树外变体）
+
+- 宽度契约（负责人拍板）：**min = 当前宽度 87.6**（`MiPillTabMetrics.itemWidth`
+  = 参考项目定宽）、**max = 当前宽度 × 2 = 175.2**，胶囊宽 =
+  `clamp(文字自然宽 + 2×16, min, max)`，超 max **省略号截断**（`maxLines: 1` +
+  `TextOverflow.ellipsis`）。
+- **为什么不改移植体**：`MiPillTabBar` 是上游定宽原件；宽度规则是 MReader 自有
+  行为 → 新建 `lib/ui/adaptive_pill_tab_bar.dart`（同 `glass_nav_host.dart`
+  口径），视觉 token 全复用 `MiPillTabMetrics/Palette/Typography`，接口对齐
+  可整组互换。shelf_page 的 `ClipRect+OverflowBox` 拓盒抵消双重内距技巧原样
+  沿用（§2.100 二.2）。
+- 文字宽用 `TextPainter` 实测（`pillLabel` 样式 + 真实 `textScaler`/方向），
+  取 `textInset = 16`：3 字内标签仍落 min（观感同定宽版），长标签逐字放宽到
+  max 钳位转省略号。
+
+#### 三、测试（ui 组 213 → **220 全绿**，`-j 1`；analyze 基线 1 info 不变）
+
+- `adaptive_pill_tab_bar_test.dart` 5 条：min 钳位（短标签恰 87.6）/ 自然段
+  （严格落开区间 + `胶囊宽 − 32` 钉 textInset=16，**不重实现 TextPainter 测宽**）
+  / max 钳位 + 省略号（恰 175.2、文字钳进 143.2、`maxLines 1` + `ellipsis`）/
+  点按下标 / const 构造回归锁。测试字体每字 = 字号 13.85（零字距），2/6/15 字
+  分别落 min 内 / 自然段 / max 外。
+- `home_shell_test.dart` 2 条（新文件）：假 `FilePicker` 记录 `pickFiles`
+  调用（断言 epub/txt 多选）+ 无障碍语义断言。**三坑**：
+  1. **假件必须 `extends FilePicker` 不能 `implements`**——`FilePicker.platform`
+     的 setter 走 `PlatformInterface.verifyToken` 校验私有 token，只有经
+     `FilePicker()` 构造链的子类带得上；`_instance` 还是 `late`（未初始化时
+     getter 抛错，恢复前先 try/catch）。
+  2. **必须钉窄视口**（393×800）：默认测试窗 800 宽 > `kShellRailBreakpoint`
+     (600) 走宽屏侧边导航轨，绿圆钮（底栏形态专属）根本不在树上——首跑 2 红
+     即此因。
+  3. 找 FAB 用 `byWidgetPredicate(Semantics.label == '导入书籍')`，不用
+     `bySemanticsLabel`（空态引导按钮语义同名会歧义）。
+- **变异判红**：`onTap: null` → 接线用例红（pickCalls 0 ≠ 1）、语义用例仍绿
+  ——红的断言即目标断言。`shelf_page_test.dart` 同步：`_chipLabels`/类型引用
+  换 `AdaptivePillTabBar`，「`Icons.add` findsOneWidget」改 **findsNothing**
+  （旧入口移除的反向钉）。
+
+
 
