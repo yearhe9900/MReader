@@ -57,6 +57,7 @@ import '../stats/stats_service.dart';
 import '../sync/sync_trigger.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
+import 'adaptive_pill_tab_bar.dart';
 import 'book_card.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
@@ -64,7 +65,7 @@ import 'glass_material.dart';
 import 'glass_nav_host.dart' show navThemeModeOf;
 import 'home_shell.dart' show kShellBottomInset;
 import 'library_search_page.dart';
-import 'mi_like_ui/mi_like_ui.dart' show MiPillTabBar, MiPillTabMetrics;
+import 'mi_like_ui/mi_like_ui.dart' show MiPillTabMetrics;
 import 'shelf_grid.dart';
 
 /// 书架首页。
@@ -146,10 +147,12 @@ class ShelfPage extends StatefulWidget {
   final SyncTrigger? syncTrigger;
 
   @override
-  State<ShelfPage> createState() => _ShelfPageState();
+  State<ShelfPage> createState() => ShelfPageState();
 }
 
-class _ShelfPageState extends State<ShelfPage> {
+/// [ShelfPage] 的状态类（公开：`HomeShell` 经 [GlobalKey] 把底栏绿圆钮的
+/// 「导入书籍」动作接到 [pickAndImport]，2026-10-16 功能迁移批）。
+class ShelfPageState extends State<ShelfPage> {
   List<BookRecord> _books = <BookRecord>[];
   bool _loading = true;
   bool _importing = false;
@@ -281,7 +284,11 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  Future<void> _pickAndImport() async {
+  /// 导入书籍入口（`FilePicker` 多选 → 逐个 `importFile`）。
+  ///
+  /// 2026-10-16 起由底栏**绿圆钮**触发（`HomeShell` 经 GlobalKey 调本方法，
+  /// 原顶部加号按钮已移除）；空态引导按钮仍调本方法（`LIB-01` ②）。
+  Future<void> pickAndImport() async {
     setState(() {
       _importErrors = <String>[];
     });
@@ -608,12 +615,16 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 浮动头部（两行，参考图形态）：搜索行（胶囊 + 导入/排序）+ 分组 chips 行。
+  /// 浮动头部（两行，参考图形态）：搜索行（胶囊 + 排序）+ 分组标签行。
   ///
-  /// 整体包一层透明 [Material]：右侧两个动作按钮（导入 / 排序）是 Material
+  /// 2026-10-16：导入按钮迁到底栏**绿圆钮**（`HomeShell` 经 GlobalKey 调
+  /// [pickAndImport]），搜索行原「+」按钮移除；导入进行中在原槽位显示
+  /// 进度圈（非按钮，只是状态指示）。
+  ///
+  /// 整体包一层透明 [Material]：右侧动作按钮（排序）是 Material
   /// [IconButton]（水波纹与文字样式要求最近处有 Material）；搜索胶囊是玻璃
-  /// 控件（[GlassButton]）、分组标签行是 [MiPillTabBar] 纯色胶囊，都不需要
-  /// Material。`MaterialType.transparency` 不绘制底色，不破坏玻璃观感。
+  /// 控件（[GlassButton]）、分组标签行是 [AdaptivePillTabBar] 纯色胶囊，都不
+  /// 需要 Material。`MaterialType.transparency` 不绘制底色，不破坏玻璃观感。
   Widget _buildHeader() {
     return Material(
       type: MaterialType.transparency,
@@ -625,7 +636,7 @@ class _ShelfPageState extends State<ShelfPage> {
             height: kShelfSearchRowHeight,
             child: Row(
               children: <Widget>[
-                // 搜索胶囊铺满剩余宽（「全宽」形态；右侧两按钮保留在搜索行）。
+                // 搜索胶囊铺满剩余宽（「全宽」形态；排序按钮保留在搜索行）。
                 Expanded(child: _BookSearchEntry(onTap: _openSearch)),
                 if (_importing)
                   const Padding(
@@ -635,12 +646,6 @@ class _ShelfPageState extends State<ShelfPage> {
                       height: 20,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                  )
-                else
-                  IconButton(
-                    icon: const Icon(Icons.add),
-                    tooltip: '导入书籍',
-                    onPressed: _pickAndImport,
                   ),
                 IconButton(
                   icon: const Icon(Icons.sort),
@@ -663,8 +668,9 @@ class _ShelfPageState extends State<ShelfPage> {
   /// 分组筛选栏（**单选**：全部 / 各分组）—— 浮动头部第二行（参考图 chips 行）。
   ///
   /// ══════════════════════════════════════════════════════════════════════════════
-  /// 2026-10-16 参考项目批：GlassChip 行 → [MiPillTabBar]（一比一移植体的
-  /// 胶囊分类标签组件，胶囊几何 / 明暗配色 / 200ms 切换全在其内，与上游零差异）
+  /// 2026-10-16 参考项目批：GlassChip 行 → 胶囊分类标签（初版 [MiPillTabBar]
+  /// 定宽；同日按拍板换 [AdaptivePillTabBar] 自适应宽：min 87.6 / max 175.2 /
+  /// 超出省略号——视觉 token 全复用移植体，宽度规则在移植树外）
   /// ══════════════════════════════════════════════════════════════════════════════
   /// · 标签 = 「全部」+ 各分组名，横向可滚（组件内置滚动容器）；
   /// · 「全部」恒在首位；分组顺序 = `ShelfLayoutStore` 的创建序（`groups` 列表序）；
@@ -699,7 +705,7 @@ class _ShelfPageState extends State<ShelfPage> {
             maxWidth: wide,
             minHeight: kShelfChipsRowHeight,
             maxHeight: kShelfChipsRowHeight,
-            child: MiPillTabBar(
+            child: AdaptivePillTabBar(
               labels: <String>[
                 '全部',
                 for (final BookGroup group in groups) group.name,
@@ -818,7 +824,7 @@ class _ShelfPageState extends State<ShelfPage> {
             ),
             const SizedBox(height: 24),
             FilledButton.icon(
-              onPressed: _pickAndImport,
+              onPressed: pickAndImport,
               icon: const Icon(Icons.folder_open),
               label: const Text('导入书籍'),
             ),

@@ -197,6 +197,10 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
+  /// 书架页句柄：底栏**绿圆钮**的「导入书籍」动作经它转到
+  /// [ShelfPageState.pickAndImport]（2026-10-16 功能迁移批）。
+  final GlobalKey<ShelfPageState> _shelfKey = GlobalKey<ShelfPageState>();
+
   /// 当前底栏下标。
   int _index = 0;
 
@@ -255,6 +259,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   /// 入口收进「我的」页（`SettingsPage.onOpenStats`），从那里推入。
   List<Widget> _buildPages() => <Widget>[
         ShelfPage(
+          key: _shelfKey,
           repository: widget.repository,
           coverStore: widget.coverStore,
           progressStore: widget.progressStore,
@@ -362,8 +367,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   ///
   /// 栏体浮起 24.2dp（参考项目实测「bar bottom sits 24.2 dp above screen
   /// bottom」）；绿色圆钮 = 参考项目 [MiGlassNavFab] 的「预留空位圆钮」：
-  /// 选中「书架」时缩放弹出、栏体左移让位，切走镜像收起。**暂不接功能**
-  /// （2026-10-15 拍板「仅还原视觉」），故不传 `onTap`。
+  /// 选中「书架」时缩放弹出、栏体左移让位，切走镜像收起。
+  /// **2026-10-16 功能迁移批**：绿钮接「导入书籍」（经 [_shelfKey] 转
+  /// [ShelfPageState.pickAndImport]），取代原书架头部加号按钮。
   Widget _buildBottomBarLayout(List<Widget> pages) {
     final MiThemeMode mode = navThemeModeOf(context);
     return Stack(
@@ -380,11 +386,18 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             themeMode: mode,
             fab: MiGlassNavFab(
               tabIndex: 0,
+              // 2026-10-16 功能迁移：绿钮 =「导入书籍」入口（原书架头部
+              // 加号按钮已移除）；空态引导按钮仍由 LIB-01 ② 保留。
+              onTap: () => _shelfKey.currentState?.pickAndImport(),
               // 绿钮 glyph = 参考项目配套用法（`d6893f7`）：白色圆角加号
               // （电话 App 截图 1220×378 实测）；此前点阵 glyph 是旧口径。
-              child: CustomPaint(
-                painter: PlusIconPainter(Colors.white),
-                size: const Size.square(18.2),
+              child: Semantics(
+                label: '导入书籍',
+                button: true,
+                child: CustomPaint(
+                  painter: PlusIconPainter(Colors.white),
+                  size: const Size.square(18.2),
+                ),
               ),
             ),
           ),

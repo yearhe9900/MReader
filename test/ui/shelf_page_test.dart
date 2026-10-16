@@ -21,6 +21,7 @@ import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_progress.dart';
 import 'package:mreader/settings/shelf_layout_store.dart';
 import 'package:mreader/settings/shelf_prefs_store.dart';
+import 'package:mreader/ui/adaptive_pill_tab_bar.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
@@ -108,10 +109,11 @@ List<String> _titles(WidgetTester tester) => tester
 
 /// 分组筛选栏的标签文案（顺序即渲染顺序，「全部」恒在首位）。
 ///
-/// 2026-10-16 参考项目批：控件换成 [MiPillTabBar]（一比一移植体胶囊标签行），
-/// 文案改读 `MiPillTabBar.labels`（组件渲染 `Text(labels[i])`）。
+/// 2026-10-16 参考项目批：控件换成胶囊标签行；同日功能迁移批再换
+/// [AdaptivePillTabBar]（宽度自适应变体），文案改读 `AdaptivePillTabBar.labels`
+/// （组件渲染 `Text(labels[i])`）。
 List<String> _chipLabels(WidgetTester tester) =>
-    tester.widget<MiPillTabBar>(find.byType(MiPillTabBar)).labels;
+    tester.widget<AdaptivePillTabBar>(find.byType(AdaptivePillTabBar)).labels;
 
 void main() {
   capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
@@ -161,8 +163,10 @@ void main() {
       expect(find.text('书架空空如也'), findsOneWidget);
       expect(find.text('导入 EPUB / TXT 文件开始阅读'), findsOneWidget);
       expect(find.text('导入书籍'), findsOneWidget);
-      // 顶部 AppBar 也有导入按钮（IconButton）
-      expect(find.byIcon(Icons.add), findsOneWidget);
+      // 2026-10-16 功能迁移批：原顶部 AppBar 加号按钮**已移除**，导入入口
+      // 迁到底栏绿圆钮（`HomeShell` 侧，本测试不挂壳层故不在树上）。
+      // 空态引导按钮（上方「导入书籍」文案）仍保留（`LIB-01` ②）。
+      expect(find.byIcon(Icons.add), findsNothing);
     });
 
     testWidgets('LIB-01 导入后：书卡显示在网格中', (WidgetTester tester) async {
@@ -321,7 +325,7 @@ void main() {
       expect(btn.alignment, Alignment.centerLeft);
     });
 
-    testWidgets('分组标签行：MiPillTabBar 接线（参考项目胶囊组件，滚动区无玻璃控件）',
+    testWidgets('分组标签行：AdaptivePillTabBar 接线（自适应宽胶囊，滚动区无玻璃控件）',
         (WidgetTester tester) async {
       tester.view.physicalSize = const Size(800, 1000);
       tester.view.devicePixelRatio = 1.0;
@@ -333,12 +337,12 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 「全部」默认选中；胶囊几何走组件默认（87.6×39.9 参考实测，定宽）。
-      final MiPillTabBar bar =
-          tester.widget<MiPillTabBar>(find.byType(MiPillTabBar));
+      // 「全部」默认选中；胶囊宽度自适应（min 87.6 / max 175.2，规则用例见
+      // `adaptive_pill_tab_bar_test.dart`）。
+      final AdaptivePillTabBar bar =
+          tester.widget<AdaptivePillTabBar>(find.byType(AdaptivePillTabBar));
       expect(bar.labels, <String>['全部']);
       expect(bar.selectedIndex, 0);
-      expect(bar.itemWidth, MiPillTabMetrics.itemWidth);
       // 明暗由 `GlassScope` 级联亮度解析（同底栏 `navThemeModeOf`）；测试
       // 环境默认亮色主题 → light 配方。
       expect(bar.themeMode, MiThemeMode.light);
@@ -383,7 +387,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byType(GlassTopBar),
-          matching: find.byType(MiPillTabBar),
+          matching: find.byType(AdaptivePillTabBar),
         ),
         findsOneWidget,
       );
@@ -761,7 +765,9 @@ void main() {
       expect(find.text('玄幻'), findsNothing);
       expect(_titles(tester), <String>['a']);
       expect(
-        tester.widget<MiPillTabBar>(find.byType(MiPillTabBar)).selectedIndex,
+        tester
+            .widget<AdaptivePillTabBar>(find.byType(AdaptivePillTabBar))
+            .selectedIndex,
         0,
       );
       // 渲染层回落，**不改写**用户偏好（分组可能因同步 / 撤销而回来）。
