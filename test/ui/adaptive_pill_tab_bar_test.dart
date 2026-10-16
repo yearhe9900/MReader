@@ -10,6 +10,9 @@
 // `胶囊宽 − 32` 钉 textInset=16 双侧（不重实现 TextPainter 测宽）。
 // 测试字体（Ahem 式）下每字宽 = 字号 13.85，故 2 字 ≈ 59.7、6 字 ≈ 115.1、
 // 20 字 ≈ 309（+32 内距后分别落在 min 内 / 自然段 / max 外）。
+//
+// 结构契约（2026-10-16 跟随上游两遍绘制批，§2.102）：末组用例钉
+// 「磨砂取景框层先画于填充层 + 填充不包 ClipRRect」——改回单遍绘制即红。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/ui/adaptive_pill_tab_bar.dart';
@@ -115,6 +118,63 @@ void main() {
     await tester.tap(find.text('科幻'));
     await tester.pump(const Duration(milliseconds: 300));
     expect(taps, <int>[2]);
+  });
+
+  testWidgets('两遍绘制：磨砂层先画于填充层、填充不包 ClipRRect（§2.102）',
+      (tester) async {
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(800, 200);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(_harness(const <String>['全部', '玄幻']));
+
+    // 两遍绘制的容器 = 组件内「恰两层 Positioned」的 Stack；
+    // 找不到（改回单遍直排 Row）→ firstWhere 抛错 → 用例红。
+    final Stack stack = tester
+        .widgetList<Stack>(
+          find.descendant(
+            of: find.byType(AdaptivePillTabBar),
+            matching: find.byType(Stack),
+          ),
+        )
+        .firstWhere(
+          (Stack s) =>
+              s.children.length == 2 &&
+              s.children.every((Widget c) => c is Positioned),
+        );
+    expect(stack.children, hasLength(2));
+    final Widget platesLayer = stack.children[0]; // 先画（paint 顺序 = children 序）
+    final Widget fillsLayer = stack.children[1];
+
+    // pass 1（下层）：每胶囊一个磨砂取景框；层内无文案/填充——
+    // 画布上一旦有填充先进模糊源，相邻胶囊就会串色。
+    expect(
+      find.descendant(of: find.byWidget(platesLayer), matching: find.byType(ClipRRect)),
+      findsNWidgets(2),
+    );
+    expect(
+      find.descendant(of: find.byWidget(platesLayer), matching: find.byType(BackdropFilter)),
+      findsNWidgets(2),
+    );
+    expect(
+      find.descendant(of: find.byWidget(platesLayer), matching: find.byType(Text)),
+      findsNothing,
+    );
+
+    // pass 2（上层）：填充/文案/手势各 2；不包 ClipRRect、不叠 BackdropFilter
+    // （单层边缘 AA；两层 AA 叠乘会把边缘覆盖率压成 c²）。
+    expect(
+      find.descendant(of: find.byWidget(fillsLayer), matching: find.byType(AnimatedContainer)),
+      findsNWidgets(2),
+    );
+    expect(
+      find.descendant(of: find.byWidget(fillsLayer), matching: find.byType(ClipRRect)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: find.byWidget(fillsLayer), matching: find.byType(BackdropFilter)),
+      findsNothing,
+    );
   });
 
   test('const construction stays available', () {

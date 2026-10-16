@@ -37,6 +37,8 @@ android/key.properties
 # 临时测试输出（负责人本机重定向产物，随跑随生成）
 /docs/test-output.txt
 .scratch_smoke.txt
+# golden 比对失败产物（随跑随生成；同上游 06ac58a 约定）
+test/**/failures/
 
 # 性能基线样本（由 tool/gen_perf_fixtures.dart 生成，不入库）
 /perf_fixtures/
