@@ -64,7 +64,7 @@ import 'glass_kit.dart';
 import 'glass_nav_host.dart';
 import 'mi_like_ui/mi_like_ui.dart';
 import 'notes_page.dart';
-import 'reader_nav_icons.dart';
+import 'nav_icons.dart';
 import 'settings_page.dart';
 import 'shelf_page.dart';
 import 'stats_page.dart';
@@ -234,7 +234,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   /// 2026-10-15「底栏整组换参考项目」批（负责人拍板）：
   ///   · **移除「统计」tab**——统计页入口收进「我的」页（`onOpenStats`）；
   ///   · **「设置」改名「我的」**，图标用参考项目 `SmileyBeretIconPainter`；
-  ///   · 「书架」「笔记」图标按参考风格新画（`reader_nav_icons.dart`）。
+  ///   · 「书架」「笔记」图标按参考风格新画（`nav_icons.dart`，2026-10-16 随
+  ///     参考项目组织更名集中）。
   ///
   /// 图标 painter 的墨色随明暗模式（[MiColors.foregroundFor]）⇒ 在 build 里
   /// 组装，不是常量。

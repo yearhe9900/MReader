@@ -61,9 +61,10 @@ import 'book_card.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
 import 'glass_material.dart';
-import 'glass_scope.dart';
+import 'glass_nav_host.dart' show navThemeModeOf;
 import 'home_shell.dart' show kShellBottomInset;
 import 'library_search_page.dart';
+import 'mi_like_ui/mi_like_ui.dart' show MiPillTabBar, MiPillTabMetrics;
 import 'shelf_grid.dart';
 
 /// 书架首页。
@@ -610,9 +611,9 @@ class _ShelfPageState extends State<ShelfPage> {
   /// 浮动头部（两行，参考图形态）：搜索行（胶囊 + 导入/排序）+ 分组 chips 行。
   ///
   /// 整体包一层透明 [Material]：右侧两个动作按钮（导入 / 排序）是 Material
-  /// [IconButton]（水波纹与文字样式要求最近处有 Material）；搜索胶囊与 chips 已是
-  /// 玻璃控件（[GlassButton] / [GlassChip]），不需要 Material。
-  /// `MaterialType.transparency` 不绘制底色，不破坏玻璃观感。
+  /// [IconButton]（水波纹与文字样式要求最近处有 Material）；搜索胶囊是玻璃
+  /// 控件（[GlassButton]）、分组标签行是 [MiPillTabBar] 纯色胶囊，都不需要
+  /// Material。`MaterialType.transparency` 不绘制底色，不破坏玻璃观感。
   Widget _buildHeader() {
     return Material(
       type: MaterialType.transparency,
@@ -661,87 +662,58 @@ class _ShelfPageState extends State<ShelfPage> {
 
   /// 分组筛选栏（**单选**：全部 / 各分组）—— 浮动头部第二行（参考图 chips 行）。
   ///
-  /// 横向可滚——分组数量由用户决定，窄屏必然放不下，直接给滚动容器。
-  /// 「全部」恒在首位；分组顺序 = `ShelfLayoutStore` 的创建序（`groups` 列表序）。
-  /// 只列**真有书**的分组：空分组已由 `prune` 清掉，故此处无需再过滤。
-  /// 行高由 [_buildHeader] 的 `SizedBox(kShelfChipsRowHeight)` 统一给定；
-  /// 左缘与搜索胶囊对齐（同在标题槽内、共用顶栏内边距），不再另加侧边距。
+  /// ══════════════════════════════════════════════════════════════════════════════
+  /// 2026-10-16 参考项目批：GlassChip 行 → [MiPillTabBar]（一比一移植体的
+  /// 胶囊分类标签组件，胶囊几何 / 明暗配色 / 200ms 切换全在其内，与上游零差异）
+  /// ══════════════════════════════════════════════════════════════════════════════
+  /// · 标签 = 「全部」+ 各分组名，横向可滚（组件内置滚动容器）；
+  /// · 「全部」恒在首位；分组顺序 = `ShelfLayoutStore` 的创建序（`groups` 列表序）；
+  ///   只列**真有书**的分组：空分组已由 `prune` 清掉，故此处无需再过滤；
+  /// · 交互语义保持书架既有拍板：**单选 + 再点已选中的回「全部」**（组件是纯
+  ///   标签行、无「再点取消」语义，由 [onTap] 映射承担）；
+  /// · 明暗：[MiThemeMode] 按 `GlassScope` 级联亮度解析（同底栏 [navThemeModeOf]）。
+  ///
+  /// 对齐：组件自带 [MiPillTabMetrics.edgeInset]（11.9，参考项目页边距口径），
+  /// 而本页头部由顶栏槽给 8dp 内边距、左缘须与搜索胶囊对齐（既有形态）——故把
+  /// 组件盒**放宽 2×11.9 并居中**（`OverflowBox` + `Alignment.topCenter`）：
+  /// 内置内嵌正好抵消到槽边，胶囊左缘 = 槽左缘 = 搜索胶囊左缘；外层 [ClipRect]
+  /// 保住「超出视口裁切滚动」的形态。行高仍由 [_buildHeader] 的
+  /// `SizedBox(kShelfChipsRowHeight)`（40）给定，胶囊高 39.9 落在行内。
   Widget _buildGroupFilterBar() {
     final String? selected = widget.shelfPrefs.prefs.groupId;
-    // 选中分组已消失（书被删空）→ 视作「全部」，chip 高亮随之回到「全部」。
+    // 选中分组已消失（书被删空）→ 视作「全部」，高亮随之回到「全部」。
+    final List<BookGroup> groups = widget.shelfLayout.layout.groups;
     final bool hasSelection = selected != null &&
         widget.shelfLayout.layout.groupById(selected) != null;
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: <Widget>[
-          _buildGroupChip(
-            label: '全部',
-            groupId: null,
-            selected: !hasSelection,
-          ),
-          for (final BookGroup group in widget.shelfLayout.layout.groups)
-            _buildGroupChip(
-              label: group.name,
-              groupId: group.id,
-              selected: hasSelection && selected == group.id,
+    final int selectedIndex = hasSelection
+        ? 1 + groups.indexWhere((BookGroup group) => group.id == selected)
+        : 0;
+    return ClipRect(
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final double wide =
+              constraints.maxWidth + 2 * MiPillTabMetrics.edgeInset;
+          return OverflowBox(
+            alignment: Alignment.topCenter,
+            minWidth: wide,
+            maxWidth: wide,
+            minHeight: kShelfChipsRowHeight,
+            maxHeight: kShelfChipsRowHeight,
+            child: MiPillTabBar(
+              labels: <String>[
+                '全部',
+                for (final BookGroup group in groups) group.name,
+              ],
+              selectedIndex: selectedIndex,
+              themeMode: navThemeModeOf(context),
+              onTap: (int i) => unawaited(
+                widget.shelfPrefs.setGroup(
+                  i == 0 || i == selectedIndex ? null : groups[i - 1].id,
+                ),
+              ),
             ),
-        ],
-      ),
-    );
-  }
-
-  /// 单个分组 chip（**单选**）：选中即筛选，再点**已选中**的回「全部」。
-  ///
-  /// ══════════════════════════════════════════════════════════════════════════════
-  /// 2026-10-12 参考图批：FilterChip → GlassChip（真玻璃胶囊）
-  /// ══════════════════════════════════════════════════════════════════════════════
-  /// 原实现是 [FilterChip] + `surfaceContainerHighest` α0.6 + `outlineVariant`
-  /// 描边——与搜索胶囊同款病灶：**不是玻璃控件**，无模糊 / 增白 / 边缘光。
-  /// 现改为 [GlassChip]（库的 pill 玻璃，内部组合 [GlassButton.custom]）：
-  ///   · `useOwnLayer: true` + `settings: GlassMaterial.settingsFor`——顶栏内无父
-  ///     玻璃层，自带层才吃得到显式材质（grouped 模式下 per-widget settings 被忽略）；
-  ///   · `quality: GlassScope.qualityOf`——**显式 standard**。chips 行是横向
-  ///     `SingleChildScrollView`，`UI-04` 红线禁 premium 进滚动区；且
-  ///     `GlassAppBar` 内部给整条面包了 `GlassIsolationScope(defaultQuality: premium)`
-  ///     （`glass_app_bar.dart:410`），不显式传就会被提成 premium；
-  ///   · 选中态 = 参考图的「实底亮胶囊」：亮模式白 α0.85 叠在玻璃上（近实底）、
-  ///     暗模式白 α0.22（只亮一档）；文字两态都用 `onSurface`（玻璃面亮 → 深字）；
-  ///   · 交互同搜索胶囊：`interactionScale: 1.0` 去放大 + `stretch: 0.15`。
-  /// 高度：padding 12/7 + labelLarge ≈ 34，落在 chips 行 40 内（行高常量不变）。
-  Widget _buildGroupChip({
-    required String label,
-    required String? groupId,
-    required bool selected,
-  }) {
-    final ThemeData theme = Theme.of(context);
-    final bool isDark =
-        GlassScope.brightnessOf(context) == Brightness.dark;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: GlassChip(
-        label: label,
-        selected: selected,
-        // 选中态亮底（参考图「选中 = 实底亮胶囊」）：玻璃 + 白罩 → 近实底亮白。
-        selectedColor:
-            isDark ? const Color(0x38FFFFFF) : const Color(0xD9FFFFFF),
-        onTap: () => unawaited(
-          widget.shelfPrefs.setGroup(selected ? null : groupId),
-        ),
-        // 文字色：玻璃面已增白，两态都用 onSurface（亮模式深字 / 暗模式浅字）。
-        // 库默认是白 90%（为暗玻璃设计的），亮模式下会看不见。
-        labelStyle: theme.textTheme.labelLarge?.copyWith(
-          color: theme.colorScheme.onSurface,
-          fontWeight: FontWeight.w500,
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        settings: GlassMaterial.settingsFor(context),
-        useOwnLayer: true,
-        // 显式滚动区档位（禁 premium，见方法注释）。
-        quality: GlassScope.qualityOf(context),
-        interactionScale: 1.0,
-        stretch: 0.15,
-        semanticLabel: label,
+          );
+        },
       ),
     );
   }

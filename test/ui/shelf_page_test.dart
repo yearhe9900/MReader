@@ -24,6 +24,7 @@ import 'package:mreader/settings/shelf_prefs_store.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 import 'package:mreader/ui/shelf_page.dart';
 
 import '../test_config.dart';
@@ -105,14 +106,12 @@ List<String> _titles(WidgetTester tester) => tester
     .map((BookCard card) => card.record.title)
     .toList();
 
-/// 分组筛选栏的 chip 文案（顺序即渲染顺序，「全部」恒在首位）。
+/// 分组筛选栏的标签文案（顺序即渲染顺序，「全部」恒在首位）。
 ///
-/// 2026-10-12 参考图批：控件由 `FilterChip` 换成 [GlassChip]（真玻璃 pill），
-/// 故这里也改读 `GlassChip.label`（字符串，不再是 `Text` widget）。
-List<String> _chipLabels(WidgetTester tester) => tester
-    .widgetList<GlassChip>(find.byType(GlassChip))
-    .map((GlassChip chip) => chip.label)
-    .toList();
+/// 2026-10-16 参考项目批：控件换成 [MiPillTabBar]（一比一移植体胶囊标签行），
+/// 文案改读 `MiPillTabBar.labels`（组件渲染 `Text(labels[i])`）。
+List<String> _chipLabels(WidgetTester tester) =>
+    tester.widget<MiPillTabBar>(find.byType(MiPillTabBar)).labels;
 
 void main() {
   capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
@@ -322,7 +321,7 @@ void main() {
       expect(btn.alignment, Alignment.centerLeft);
     });
 
-    testWidgets('分组 chips：GlassChip + 显式 standard 档位（UI-04 滚动区红线）',
+    testWidgets('分组标签行：MiPillTabBar 接线（参考项目胶囊组件，滚动区无玻璃控件）',
         (WidgetTester tester) async {
       tester.view.physicalSize = const Size(800, 1000);
       tester.view.devicePixelRatio = 1.0;
@@ -334,21 +333,18 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      final Finder chips = find.byType(GlassChip);
-      expect(chips, findsWidgets);
-      final GlassChip chip = tester.widget<GlassChip>(chips.first);
-      expect(chip.useOwnLayer, isTrue);
-      expect(chip.settings, isNotNull);
-      expect(chip.settings!.blur, 9);
-      expect(chip.interactionScale, 1.0);
-      expect(chip.stretch, closeTo(0.15, 0.001));
-      // 红线断言：**不得是 premium**。chips 行是横向 `SingleChildScrollView`，
-      // 而 `GlassAppBar` 内部给整条面包了 `defaultQuality: premium` 隔离作用域，
-      // 不显式钉 standard 就会被提成 premium（`UI-04`）。
-      expect(chip.quality, isNot(GlassQuality.premium));
-      // 「全部」默认选中 + 选中态亮底（参考图「选中 = 实底亮胶囊」）。
-      expect(chip.selected, isTrue);
-      expect(chip.selectedColor!.a, greaterThan(0.7));
+      // 「全部」默认选中；胶囊几何走组件默认（87.6×39.9 参考实测，定宽）。
+      final MiPillTabBar bar =
+          tester.widget<MiPillTabBar>(find.byType(MiPillTabBar));
+      expect(bar.labels, <String>['全部']);
+      expect(bar.selectedIndex, 0);
+      expect(bar.itemWidth, MiPillTabMetrics.itemWidth);
+      // 明暗由 `GlassScope` 级联亮度解析（同底栏 `navThemeModeOf`）；测试
+      // 环境默认亮色主题 → light 配方。
+      expect(bar.themeMode, MiThemeMode.light);
+      // `UI-04` 红线延续：横向滚动区里**不得有玻璃控件**（旧行为是 GlassChip
+      // 显式 standard 档位防 premium 提升；换纯色胶囊组件后由结构满足）。
+      expect(find.byType(GlassChip), findsNothing);
     });
 
     testWidgets('浮动头部 + 内容 edge-to-edge：两行头部恒在顶栏内、首行不被盖住',
@@ -387,9 +383,9 @@ void main() {
       expect(
         find.descendant(
           of: find.byType(GlassTopBar),
-          matching: find.byType(GlassChip),
+          matching: find.byType(MiPillTabBar),
         ),
-        findsWidgets,
+        findsOneWidget,
       );
 
       // ③ 头部总高 96 = 搜索行 44 + 间距 12 + chips 行 40（`kShelfHeaderHeight`；
@@ -405,6 +401,22 @@ void main() {
         tester.getTopLeft(find.byType(BookCard).first).dy,
         108,
         reason: '首行必须落在浮动头部之下（拍板验收条目），否则被磨砂头部盖住',
+      );
+
+      // ⑤ 胶囊行左缘与搜索胶囊对齐：组件内置 11.9 内嵌被拓盒抵消
+      // （`_buildGroupFilterBar` 注释）；去掉 OverflowBox 拓宽 → 立即红。
+      // OverflowBox 居中带来 ~1e-14 浮点噪声，用 closeTo 收。
+      final Finder firstPill = find.ancestor(
+        of: find.text('全部'),
+        matching: find.byType(AnimatedContainer),
+      );
+      expect(
+        tester.getTopLeft(firstPill).dx,
+        closeTo(
+          tester.getTopLeft(find.byKey(const Key('shelf-search-entry'))).dx,
+          0.001,
+        ),
+        reason: '胶囊左缘必须与搜索胶囊左缘对齐（浮动头部既有形态）',
       );
     });
 
@@ -745,13 +757,13 @@ void main() {
       await tester.runAsync(() => shelfLayout.deleteGroup(groupId));
       await _settle(tester);
 
-      // chip 消失、书回到「全部」，且「全部」chip 呈选中态。
+      // chip 消失、书回到「全部」，且「全部」呈选中态（标签行选中下标归零）。
       expect(find.text('玄幻'), findsNothing);
       expect(_titles(tester), <String>['a']);
-      final GlassChip allChip = tester.widget<GlassChip>(
-        find.ancestor(of: find.text('全部'), matching: find.byType(GlassChip)),
+      expect(
+        tester.widget<MiPillTabBar>(find.byType(MiPillTabBar)).selectedIndex,
+        0,
       );
-      expect(allChip.selected, isTrue);
       // 渲染层回落，**不改写**用户偏好（分组可能因同步 / 撤销而回来）。
       expect(shelfPrefs.prefs.groupId, groupId);
     });

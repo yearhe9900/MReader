@@ -16,7 +16,7 @@ import 'package:mreader/ui/glass_nav_host.dart';
 import 'package:mreader/ui/glass_runtime.dart';
 import 'package:mreader/ui/glass_scope.dart';
 import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
-import 'package:mreader/ui/reader_nav_icons.dart';
+import 'package:mreader/ui/nav_icons.dart';
 
 import '../test_config.dart';
 

@@ -1,23 +1,29 @@
 // MReader 底栏标签图标（书架 / 笔记），按 mi_like_ui 图标集的同款口径手绘。
 //
 // ══════════════════════════════════════════════════════════════════════════════
-// 与 `mi_like_ui/src/icons/nav_icons.dart` 的关系
+// 文件组织学习参考项目：logo 集中在 nav_icons.dart
 // ══════════════════════════════════════════════════════════════════════════════
+// 2026-10-16 参考项目批：参考项目把全部导航 logo 收在 `src/icons/nav_icons.dart`
+// 一个文件里，MReader 同款组织——本文件即 MReader 的 nav_icons.dart（原
+// `reader_nav_icons.dart` 更名）。与移植树 `mi_like_ui/src/icons/nav_icons.dart`
+// 是两份文件：后者是上游原件（保持与 `bottom_nav_demo` 逐字节一致，`diff -r`
+// 零差异，便于对账），本文件承载 MReader 自有的 logo，不进移植树。
+//
 // 2026-10-15「底栏整组换参考项目」批（一比一移植 `bottom_nav_demo`）：
-//   · 「我的」= 参考项目 `SmileyBeretIconPainter` 原样用；
+//   · 「我的」= 参考项目 `SmileyBeretIconPainter` 原样用（在移植树里）；
 //   · 「书架」「笔记」参考项目没有对应图形，按其**同款风格**新画：
 //     ① 归一化坐标系 100 单位高、横向按墨迹宽高比自然延伸（`_fit` 口径一致）；
 //     ② 实心（filled）剪影、圆角、少量挖空细节（`PathOperation.difference`）；
 //     ③ `*IconPainter` 命名、`shouldRepaint` 只看 `color`。
 //
-// ⚠️ 为什么不把这两个 painter 塞进移植树 `mi_like_ui/`：该树保持与上游
-// **逐字节一致**（`diff -r` 零差异），便于以后跟参考项目对账；MReader 自有的
-// 扩展一律放移植树之外。`_fit` 因此是本文件的私有副本（5 行，同口径）。
+// ⚠️ 这两个 painter 不塞进移植树 `mi_like_ui/`：该树保持与上游
+// **逐字节一致**（`diff -r` 零差异）。`_fit` 因此是本文件的私有副本
+// （5 行，同口径）。
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// 与 `nav_icons.dart` 的 `_fit` 同款：把 100 单位高的归一化坐标系
+/// 与移植树 `nav_icons.dart` 的 `_fit` 同款：把 100 单位高的归一化坐标系
 /// 等比映射进 [size]，并让墨迹水平中心落在盒中心。
 void _fit(Canvas canvas, Size size, double inkCenterX) {
   final s = size.height / 100;
