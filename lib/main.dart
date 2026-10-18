@@ -66,9 +66,10 @@ Future<void> main() async {
   // 配合 `app.dart` 里的 `AnnotatedRegion<SystemUiOverlayStyle>`（透明状态栏 +
   // 图标随明暗翻转）才是一条连续的界面。
   //
-  // 代价是浮层要自己让开安全区：侧栏顶 = `padding.top + railMargin`、底栏底
-  // = `24.2 + padding.bottom`（见 `home_shell.dart`）；各页滚动容器的底部
-  // 空白 `kShellBottomInset` 已含安全区与呼吸余量。
+  // 代价是浮层要自己让开安全区：侧栏顶 = `padding.top + railMargin`；底栏浮
+  // 起口径本身即距**物理屏底** 24.2（edge-to-edge 下 `Positioned.bottom` 直接
+  // 量到屏底，不叠 `padding.bottom`，见 `home_shell.dart`）；各页滚动容器的
+  // 底部空白 `kShellBottomInset` 已含安全区与呼吸余量。
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
   // `FMT-01` / `META-10` ③：PDF 渲染内核经**注入缝**接入（`Q4 ①` 拍板 pdfrx 2.6.5）。

@@ -216,18 +216,21 @@ void main() {
           ),
         );
 
-    testWidgets('手机模式：底栏浮起量随手势条 inset 等量增大（= 24.2 + safeBottom）',
+    testWidgets('手机模式：底栏浮起 = 距物理屏底 24.2（不叠手势条 inset）',
         (tester) async {
       // 窄视口（393 < 600）走底栏形态。
       tester.view.physicalSize = const Size(393, 800);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      // 2026-10-18 反馈「手机模式底栏高度变了」的根因契约：edge-to-edge 后
-      // 底栏浮起 = 参考实测 24.2（kShellNavBarBottomLift）+ 手势条 inset。
-      // **差分判别**：注入 bottom inset = 34 后，胶囊底边须相对 inset=0 时
-      // 等量下移 34。单点断言在 inset 默认 0 的测试窗里对「丢掉 + safeBottom」
-      // 无判别力（变异恒绿，§2.97 静默退化）；差值必须精确跟上 inset 才绿。
+      // 2026-10-18/19 两轮真机反馈「手机模式底栏高度变了 / 还是没调整过来」
+      // 的根因契约：浮起口径 = `MiGlassNavMetrics` 实测「bar bottom sits
+      // 24.2 dp above **screen bottom**」——edge-to-edge 下 `Positioned.bottom`
+      // 量到物理屏底，**不再叠 safeBottom**（第一轮误叠手势条 inset，胶囊被
+      // 整抬 ~34dp）。
+      // **差分判别**：注入 bottom inset = 34 后，胶囊底边仍须距屏底 24.2——
+      // 「叠回 + safeBottom」的变异会让胶囊上移 34 判红（§2.97：钉住新行为
+      // 必须有能判别它的用例）。
       tester.view.padding = const FakeViewPadding(bottom: 34);
       await tester.pumpWidget(buildShell());
       await settle(tester, rounds: 30);
@@ -236,12 +239,12 @@ void main() {
       expect(inset, 34, reason: '测试窗 bottom inset 须已注入为 34');
 
       final Rect bar = tester.getRect(find.byType(MiGlassNavBar).first);
-      // 屏高 800 − inset 34 − 浮起 24.2 = 胶囊底边。
+      // 屏高 800 − 浮起 24.2 = 胶囊底边（**不减 inset**）。
       expect(
         bar.bottom,
-        moreOrLessEquals(800 - inset - kShellNavBarBottomLift, epsilon: 0.01),
-        reason: '底栏胶囊底边距屏底须为 kShellNavBarBottomLift + safeBottom'
-            '（少算 inset 时胶囊会偏高 34）',
+        moreOrLessEquals(800 - kShellNavBarBottomLift, epsilon: 0.01),
+        reason: '底栏胶囊底边距物理屏底须恒为 kShellNavBarBottomLift（24.2），'
+            '与手势条 inset 无关；叠 inset 时胶囊会偏高 34',
       );
       // 胶囊高度须等于上游实测 token，不得被宿层压缩/拉伸。
       expect(

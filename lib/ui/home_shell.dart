@@ -89,17 +89,19 @@ const double kShellBottomInset = 100;
 /// 宽屏断点（超过则改用侧边导航轨）；与 anx-reader 取值一致。
 const double kShellRailBreakpoint = 600;
 
-/// 底栏胶囊距屏底的浮起高度（`MiGlassNavMetrics` 注释「bar bottom sits
-/// 24.2 dp above screen bottom」的参考实测值）。
+/// 底栏胶囊距**物理屏底**的浮起高度（`MiGlassNavMetrics` 注释「bar bottom
+/// sits 24.2 dp above **screen bottom**」的参考实测值）。
 ///
-/// 从 [MiGlassNavMetrics.barHeight] 同族的实测读数取，**不再在摆放处硬编码
-/// 24.2**——上游 `demo_app.dart` 把它与 barHeight 等 token 并列在一处，这里
-/// 同样收口成常量，避免散落字面量（改实测口径只改这一行）。
+/// 从 [MiGlassNavMetrics.barHeight] 同族的实测读数取，**不在摆放处硬编码
+/// 24.2**——上游把它与 barHeight 等 token 并列在一处，这里同样收口成常量，
+/// 避免散落字面量（改实测口径只改这一行）。
 ///
-/// ⚠️ 手机模式下底栏**浮起量的完整口径**是 `kShellNavBarBottomLift +
-/// safeBottom`：`safeBottom` 是 edge-to-edge 后让开的手势条 inset（真机非 0）。
-/// 两者缺一，底栏相对屏底的位置就与上游不一致（2026-10-18 反馈「手机模式
-/// 底栏高度变了」即此：只取其一都会偏 ~20dp）。
+/// ⚠️ 口径 = 距屏底，**不叠手势条 inset**：edge-to-edge 下 `Positioned.bottom`
+/// 本来就量到物理屏底，再叠 `safeBottom` 会把胶囊整整抬高一个手势条（~34dp）。
+/// 2026-10-18/19 两轮真机反馈「手机模式底部导航栏高度变了 / 还是没调整过来」
+/// 即此——第一轮误把上游 demo 自己的 edge-to-edge 补偿（`framed ? safeBottom`）
+/// 当成实测口径叠了上去。事实源以 `MiGlassNavMetrics` 注释与上游黄金图
+/// （`bottom: 24.2`、测试窗 inset=0）为准。
 const double kShellNavBarBottomLift = 24.2;
 
 /// 主壳层（底部导航）。
@@ -400,9 +402,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   Widget _buildLayout(List<Widget> pages, bool sideNav) {
     final MiThemeMode mode = navThemeModeOf(context);
     final List<MiGlassNavItem> items = _navItems(mode);
-    // edge-to-edge（T12）后内容铺到状态栏 / 手势条下面，浮层类元素要让开安全区。
+    // edge-to-edge（T12）后内容铺到状态栏 / 手势条下面，浮层类元素要让开
+    // 顶部安全区（侧栏顶）。底栏**不需要** bottom inset——浮起口径本身就是
+    // 距物理屏底 24.2（见 [kShellNavBarBottomLift]）。
     final double safeTop = MediaQuery.paddingOf(context).top;
-    final double safeBottom = MediaQuery.paddingOf(context).bottom;
     // 页底色：与各页（书架 [shelfGradientBackground] 的 base）同源取
     // `scaffoldBackgroundColor`，铺满**整个窗口**（含侧栏那一列）。
     //
@@ -458,12 +461,14 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             // 放进 `bottomNavigationBar` 时底栏在内容**之上**，采样不到正文，
             // 磨砂会退化成一块纯色。
             //
-            // 栏体浮起 24.2dp（参考项目实测「bar bottom sits 24.2 dp above screen
-            // bottom」）；edge-to-edge 下再让开手势条（上游同款）。
+            // 栏体浮起 24.2dp = 参考实测「bar bottom sits 24.2 dp above screen
+            // bottom」——edge-to-edge 下 `bottom` 直接量到物理屏底，**不再叠
+            // 手势条 inset**（叠了会整抬 ~34dp，2026-10-18/19 两轮真机反馈
+            // 「高度变了」的根因，见 [kShellNavBarBottomLift] 注）。
             Positioned(
               left: 0,
               right: 0,
-              bottom: kShellNavBarBottomLift + safeBottom,
+              bottom: kShellNavBarBottomLift,
               child: GlassNavHost(
                 items: items,
                 selectedIndex: _index,
