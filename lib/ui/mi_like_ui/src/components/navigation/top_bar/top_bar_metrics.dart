@@ -1,3 +1,5 @@
+import '../../../theme/gradient_blur_tokens.dart';
+
 /// [MiTopBar] 的几何 / 折叠动效参数：1:1 逐帧实测自参考录屏。
 ///
 /// Source frame: 1220x2656 px screen recording (HyperOS 设置「显示与亮度」
@@ -48,7 +50,12 @@
 /// 第二样本交叉验证：参考截图「设置」首页（同为 1220×2656）大标题墨心
 /// 133.50dp（模型 132.9，差 0.6dp）、墨盒 186×90px、墨左 29.64dp。
 ///
-/// 文字样式见 `theme/typography.dart`，配色 / 遮罩见
+/// **第三个样本**（亮色「我的」页录屏，同名 1220×2656 分辨率、同一采样密度）
+/// 给出材质侧的实测：磨砂 σ = 5.37dp、模糊遮罩 1.0→0（0…119dp）、叠色
+/// α 0.650→0（0…122.4dp）。该页顶栏**不内嵌任何组件**，故只用于材质标定，
+/// 折叠几何仍取前两个样本。细节见 `theme/top_bar_tokens.dart`。
+///
+/// 文字样式见 `theme/typography.dart`，材质 / 配色见
 /// `theme/top_bar_tokens.dart`，返回箭头见 `icons/nav_icons.dart`。
 class MiTopBarMetrics {
   MiTopBarMetrics._();
@@ -123,13 +130,26 @@ class MiTopBarMetrics {
   static double componentHeight(double largeTitleFontSize) =>
       largeTitleInkCenterY + largeTitleFontSize;
 
-  // ── 顶栏遮罩 ──────────────────────────────────────────────────────────
-  /// 遮罩纵向高度：全不透明段下沿 [scrimSolidBottom] ≈ 63.6dp，此后按
-  /// 1.5 次幂渐隐至 0（拟合 `m(y) = ((y−63.6)/65.3)^1.5`）。
+  // ── 顶栏遮罩 / 磨砂 ───────────────────────────────────────────────────
+  /// 材质盒高（磨砂层与叠色层共用）：128.9dp。
+  ///
+  /// 取自深色参考页（叠色全不透明段下沿 63.6dp，此后按 1.5 次幂渐隐至 0）。
+  /// 浅色参考页的两个材质层都比它早收尾 —— 叠色 α 到 122.4dp 归零、磨砂
+  /// 遮罩到 119.0dp 归零（各自实测，故浅色渐变的最后一个 stop 落在
+  /// 122.4/128.9 = 0.94957，其后再补一个 0 值 stop 到盒底）。
   static const double scrimHeight = 128.9;
 
-  /// 遮罩全不透明段下沿。
+  /// 深色参考页叠色全不透明段下沿（浅色页无实心段，顶部 α 仅 0.650）。
   static const double scrimSolidBottom = 63.6;
+
+  /// 低于该 σ 的模糊段**不绘制**：高斯半径 < 1dp 落在亚像素，渲染结果与
+  /// 「不模糊」在任意 dpr 下都不可分辨（实测 σ 曲线尾部 0.76 / 0.27 即属此列）。
+  ///
+  /// 权威定义在 [MiGradientBlurProfile.minVisibleSigma]（模糊属内容区、已抽成
+  /// `MiGradientBlur`），这里转发保持旧引用可用。省帧判据之一（另一条见
+  /// [MiTopBarPalette.scrimOpaqueBottom]）；两条都只剔除**视觉上不存在**的段，
+  /// 不改动任何可见像素。
+  static const double minVisibleBlurSigma = MiGradientBlurProfile.minVisibleSigma;
 
   // ── 内容 ──────────────────────────────────────────────────────────────
   /// 内容首行（**卡片**类）在静止态的顶缘：录屏页首行卡片填充顶缘
@@ -141,6 +161,51 @@ class MiTopBarMetrics {
   /// 523px = 168.5dp（同页卡片组顶缘 224.85dp，组间距 12.24dp）。
   /// 搜索栏比卡片类首行高 14.5dp，两个值都来自整机实测，故分档给出。
   static const double searchBarTopInset = 168.5;
+
+  // ── 头部插槽区（内容形态） ─────────────────────────────────────────────
+  //
+  // 顶栏除了「大标题 + 材质」，还可以**内嵌头部组件**（搜索栏 / 胶囊标签行 /
+  // 任意自定义头部）—— 分类页就是这种形态：搜索栏 + 胶囊行吸顶悬浮，网格
+  // 从胶囊后方滚过。这一区的几何全部实测自分类页完整截图（1220×2656，
+  // s = 393/1220 = 0.32213）。
+
+  /// 插槽区相对**屏幕顶端**的起始位置 = 状态栏让位（实测 56dp）。
+  ///
+  /// 与 [statusBarHeight]（53.8，由大标题墨心反推的行垂心让位）是两回事：
+  /// 那个服务于大标题几何，这个服务于「搜索栏顶缘 y = 56」的实测值。
+  /// 真机 / 平板安全区更高时取更大者，见 [headerTopInsetFor]。
+  static const double headerTopInset = 56.0;
+
+  /// 插槽区起始位置：安全区高于 [headerTopInset] 时取安全区。
+  ///
+  /// 让刘海屏不压住头部内容；桌面窗口（padding = 0）仍是 56。
+  static double headerTopInsetFor(double safeAreaTop) =>
+      safeAreaTop > headerTopInset ? safeAreaTop : headerTopInset;
+
+  /// 搜索栏底 → 胶囊标签行顶（实测 49px ≈ 15.8dp，取 16）。
+  static const double searchBarGap = 16.0;
+
+  /// 胶囊标签行底 → 滚动内容首行（分类页实测间距 12dp）。
+  static const double headerContentGap = 12.0;
+
+  /// 插槽左右页边距（实测 37px = 11.9dp，与页面内容边距同档）。
+  ///
+  /// 只作用于 [MiTopBar.searchBar] / [MiTopBar.header]：胶囊标签行要能
+  /// 横向出血滚动到屏幕边缘（它在内部自带同值的 `edgeInset`），套内外边距
+  /// 会把第 4 个胶囊多裁一截。
+  static const double headerInset = 11.9;
+
+  /// 搜索栏插槽默认高度 = `MiSearchBarMetrics.barHeight`（44.1）。
+  ///
+  /// 两个常量同值是有意的重复：metrics 类保持纯数据、不 import 组件层
+  ///（`MiTopBar` 自身为了产出内置搜索栏会 import `inputs/search_bar`，但
+  /// 几何表不需要跟着耦合）。跨层一致由测试 `top_bar_test.dart` 钉住
+  ///（改一处漏另一处会红）。
+  static const double searchBarSlotHeight = 44.1;
+
+  /// 胶囊标签行插槽默认高度 = `MiPillTabMetrics.pillHeight`（39.9）；同上，
+  /// 跨层同值由测试钉住。
+  static const double tabBarSlotHeight = 39.9;
 
   // ── 折叠动效（逐帧实测查找表） ─────────────────────────────────────────
   /// 大标题不透明度：`(滚动位移 dp, 墨迹峰值比)`。
