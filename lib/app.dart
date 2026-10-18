@@ -6,6 +6,7 @@
 // 注意：本批**不做玻璃视觉**（由 M1-T08 负责），lib/theme/ 目录本批不建；
 // 这里只保证主题三态接线正确、且 `MaterialApp` 下不出现黄色双下划线文本。
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'settings/settings_store.dart';
 import 'theme/app_theme.dart';
@@ -64,10 +65,35 @@ class _MReaderAppState extends State<MReaderApp> {
       // `GlassScopeProvider`（M2b-T07 档位生效接线）包在 Material 之下、
       // 路由树之上：全路由（含弹层 Overlay）共享生效档位，切档整树跟档。
       builder: (BuildContext context, Widget? child) {
-        return Material(
-          type: MaterialType.transparency,
-          child: GlassScopeProvider(
-            child: child ?? const SizedBox.shrink(),
+        // `UI-08` edge-to-edge（2026-10-19 上游平板模式批）：状态栏 / 手势条
+        // 透明化，让状态栏背后是**页面自己的底色 / 顶栏磨砂**，系统不再加那层
+        // 灰压色（`main.dart` 的 `setEnabledSystemUIMode(edgeToEdge)` 已把内容
+        // 铺到状态栏下面，这里配套把两条栏的底色与图标亮度交还给应用）。
+        //
+        // 挂在 `builder`（全路由之上）：导航 / 弹层 / 覆盖层都吃同一份样式，
+        // 不随路由变化抖动。亮度取 `GlassScope.brightnessOf`——与玻璃控件、
+        // 导航栏标签墨色**同一出处**（`UI-01` ②：跟应用主题三态，含 system 档
+        // 解析 platformBrightness），避免「一处主题两处口径」。
+        // 图标翻转口径与上游 `demo_app.dart` 的 `AnnotatedRegion` 逐字一致。
+        final bool light =
+            GlassScope.brightnessOf(context) != Brightness.dark;
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness:
+                light ? Brightness.dark : Brightness.light,
+            statusBarBrightness: light ? Brightness.light : Brightness.dark,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarDividerColor: Colors.transparent,
+            systemNavigationBarIconBrightness:
+                light ? Brightness.dark : Brightness.light,
+            systemNavigationBarContrastEnforced: false,
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: GlassScopeProvider(
+              child: child ?? const SizedBox.shrink(),
+            ),
           ),
         );
       },

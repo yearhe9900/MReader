@@ -28,12 +28,18 @@
 // 这与 anx-reader 给 `GridView` 写 `padding: (20, 12, 20, 80)` 是同一件事。
 //
 // ══════════════════════════════════════════════════════════════════════════════
-// 宽屏自适应
+// 宽屏自适应（2026-10-19 上游平板模式批）
 // ══════════════════════════════════════════════════════════════════════════════
-// `maxWidth > 600` 改用侧边导航轨（与 anx-reader 同一断点）。**玻璃库不含
-// 侧栏组件**（`lib/widgets/surfaces/` 下只有 appBar / tabBar / toolbar /
-// navigationShell 等），故此处用 Material [NavigationRail]——宽屏多为桌面，
-// 与 anx-reader 的选择一致，不额外造玻璃侧栏。
+// `maxWidth > 600`（`kShellRailBreakpoint`，与上游 `MiBreakpoints.navRail`
+// 严格大于口径逐像素同源）改用**玻璃侧边导航栏** [MiGlassSideNavBar]（上游
+// `demo_app.dart` 同款双形态：手机/窄窗 = 浮动胶囊底栏、平板/桌面 = 侧栏）。
+// 导航条目只有一份（[_navItems]）：底栏与侧栏吃同一份 items，换形态不换语义。
+// 布局照上游 demo：页面列让出 [MiGlassSideNavMetrics.gutterWidth]，侧栏贴左上、
+// 距左缘 railMargin、**让开状态栏**（`safeTop + railMargin`——edge-to-edge 后
+// 侧栏顶就在状态栏那一带，见 T12）。绿圆钮（导入书籍）两种形态共用同一份声明
+// （[_buildFab]）：窄窗挂底栏右侧（栏体左移让位）、宽屏挂侧栏栏尾下方。
+// 档位退化（`UI-06` ②「关」档 → Material [NavigationRail]）与明暗映射在
+// `glass_nav_host.dart` 的 [GlassSideNavHost]。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
 import 'dart:async';
@@ -342,100 +348,109 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     setState(() => _index = index);
   }
 
+  /// 导入书籍绿圆钮（**两种导航形态共用同一份声明**，上游口径）：
+  /// 窄窗挂底栏右侧（栏体左移让位）、宽屏挂侧栏栏尾下方；显隐契约、弹出曲线
+  /// 与直径/间距 token 两种形态逐帧同源（选中「书架」= `tabIndex 0` 时弹出）。
+  ///
+  /// 2026-10-16 功能迁移批：绿钮接「导入书籍」（经 [_shelfKey] 转
+  /// [ShelfPageState.pickAndImport]），取代原书架头部加号按钮。
+  MiGlassNavFab _buildFab() => MiGlassNavFab(
+        tabIndex: 0,
+        onTap: () => _shelfKey.currentState?.pickAndImport(),
+        // 绿钮 glyph = 参考项目配套用法（`d6893f7`）：白色圆角加号
+        // （电话 App 截图 1220×378 实测）；此前点阵 glyph 是旧口径。
+        child: Semantics(
+          label: '导入书籍',
+          button: true,
+          child: CustomPaint(
+            painter: PlusIconPainter(Colors.white),
+            size: const Size.square(18.2),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = _buildPages();
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        if (constraints.maxWidth > kShellRailBreakpoint) {
-          return _buildRailLayout(pages);
-        }
-        return _buildBottomBarLayout(pages);
+        // 与上游 `MiBreakpoints.usesSideNav` 同口径：**严格大于** 600 才切侧栏。
+        final bool sideNav = constraints.maxWidth > kShellRailBreakpoint;
+        return _buildLayout(pages, sideNav);
       },
     );
   }
 
-  /// 窄屏（手机 / 窄窗）：内容 + 浮动胶囊底栏 + 绿色圆钮。
-  ///
-  /// [IndexedStack] 让三页都保活（切回书架时滚动位置与筛选不丢），
-  /// 非当前页不绘制、不参与命中测试。
-  ///
-  /// ⚠️ **必须是 `Stack + Positioned` 而非 `Scaffold.bottomNavigationBar`**：
-  /// 玻璃底栏的 [BackdropFilter] 需要采样**栏下方**的内容才能出磨砂效果；
-  /// 放进 `bottomNavigationBar` 时底栏在内容**之上**，采样不到正文，
-  /// 磨砂会退化成一块纯色。
-  ///
-  /// 栏体浮起 24.2dp（参考项目实测「bar bottom sits 24.2 dp above screen
-  /// bottom」）；绿色圆钮 = 参考项目 [MiGlassNavFab] 的「预留空位圆钮」：
-  /// 选中「书架」时缩放弹出、栏体左移让位，切走镜像收起。
-  /// **2026-10-16 功能迁移批**：绿钮接「导入书籍」（经 [_shelfKey] 转
-  /// [ShelfPageState.pickAndImport]），取代原书架头部加号按钮。
-  Widget _buildBottomBarLayout(List<Widget> pages) {
+  /// 统一布局（上游 `demo_app.dart` 同构）：底栏 ⇄ 侧栏切换时**页面恒为
+  /// Stack 第一个子级、位置只改 `left`**——Element 不重建，切形态时各页
+  /// 滚动位置与页内状态保留。
+  Widget _buildLayout(List<Widget> pages, bool sideNav) {
     final MiThemeMode mode = navThemeModeOf(context);
+    final List<MiGlassNavItem> items = _navItems(mode);
+    // edge-to-edge（T12）后内容铺到状态栏 / 手势条下面，浮层类元素要让开安全区。
+    final double safeTop = MediaQuery.paddingOf(context).top;
+    final double safeBottom = MediaQuery.paddingOf(context).bottom;
     return Stack(
       children: <Widget>[
-        IndexedStack(index: _index, children: pages),
         Positioned(
-          left: 0,
+          left: sideNav ? MiGlassSideNavMetrics.gutterWidth : 0,
+          top: 0,
           right: 0,
-          bottom: 24.2,
-          child: GlassNavHost(
-            items: _navItems(mode),
-            selectedIndex: _index,
-            onTabSelected: _select,
-            themeMode: mode,
-            fab: MiGlassNavFab(
-              tabIndex: 0,
-              // 2026-10-16 功能迁移：绿钮 =「导入书籍」入口（原书架头部
-              // 加号按钮已移除）；空态引导按钮仍由 LIB-01 ② 保留。
-              onTap: () => _shelfKey.currentState?.pickAndImport(),
-              // 绿钮 glyph = 参考项目配套用法（`d6893f7`）：白色圆角加号
-              // （电话 App 截图 1220×378 实测）；此前点阵 glyph 是旧口径。
-              child: Semantics(
-                label: '导入书籍',
-                button: true,
-                child: CustomPaint(
-                  painter: PlusIconPainter(Colors.white),
-                  size: const Size.square(18.2),
+          bottom: 0,
+          // [IndexedStack] 让三页都保活（切回书架时滚动位置与筛选不丢），
+          // 非当前页不绘制、不参与命中测试。
+          child: IndexedStack(index: _index, children: pages),
+        ),
+        if (sideNav)
+          // 侧栏贴顶对齐、距画面左缘与安全区各一档留白（与底部栏距屏底一档
+          // 留白同一口径）；栏体自身收缩到内容高。一定要让开状态栏：铺满窗口
+          // 后侧栏顶就在状态栏那一带。
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: MiGlassSideNavMetrics.gutterWidth,
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: MiGlassSideNavMetrics.railMargin,
+                top: safeTop + MiGlassSideNavMetrics.railMargin,
+              ),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: GlassSideNavHost(
+                  items: items,
+                  selectedIndex: _index,
+                  onTabSelected: _select,
+                  themeMode: mode,
+                  // 绿色圆钮挂在栏尾下方（选中「书架」时弹出）。
+                  fab: _buildFab(),
                 ),
               ),
             ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// 宽屏：侧边导航轨 + 内容。
-  Widget _buildRailLayout(List<Widget> pages) {
-    final MiThemeMode mode = navThemeModeOf(context);
-    final List<MiGlassNavItem> items = _navItems(mode);
-    return Scaffold(
-      body: Row(
-        children: <Widget>[
-          SafeArea(
-            child: NavigationRail(
+          )
+        else
+          // 窄屏（手机 / 窄窗）：内容 + 浮动胶囊底栏 + 绿色圆钮。
+          //
+          // ⚠️ **必须是 `Stack + Positioned` 而非 `Scaffold.bottomNavigationBar`**：
+          // 玻璃底栏的 [BackdropFilter] 需要采样**栏下方**的内容才能出磨砂效果；
+          // 放进 `bottomNavigationBar` 时底栏在内容**之上**，采样不到正文，
+          // 磨砂会退化成一块纯色。
+          //
+          // 栏体浮起 24.2dp（参考项目实测「bar bottom sits 24.2 dp above screen
+          // bottom」）；edge-to-edge 下再让开手势条（上游同款）。
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 24.2 + safeBottom,
+            child: GlassNavHost(
+              items: items,
               selectedIndex: _index,
-              onDestinationSelected: _select,
-              labelType: NavigationRailLabelType.all,
-              destinations: <NavigationRailDestination>[
-                for (final MiGlassNavItem item in items)
-                  NavigationRailDestination(
-                    icon: CustomPaint(
-                      painter: item.painter,
-                      size: const Size.square(24),
-                    ),
-                    label: Text(item.label),
-                  ),
-              ],
+              onTabSelected: _select,
+              themeMode: mode,
+              fab: _buildFab(),
             ),
           ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            child: IndexedStack(index: _index, children: pages),
-          ),
-        ],
-      ),
+      ],
     );
   }
 }

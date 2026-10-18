@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'ai/ai_client.dart';
@@ -55,6 +56,20 @@ import 'ui/home_shell.dart';
 Future<void> main() async {
   // path_provider 等插件在访问前需要先初始化绑定。
   WidgetsFlutterBinding.ensureInitialized();
+
+  // `UI-08` edge-to-edge（2026-10-19 上游平板模式批）：内容铺到状态栏 /
+  // 手势条下面。
+  //
+  // 不铺的话，应用窗口从状态栏下方开始，状态栏那一条就是**系统自己画的
+  // 底色 + 压色**——平板实机看起来就是一条灰带，与页面底色对不上（上游
+  // 2026-10-18 同款实拍）。铺开之后状态栏背后是页面自己的底色 / 顶栏磨砂，
+  // 配合 `app.dart` 里的 `AnnotatedRegion<SystemUiOverlayStyle>`（透明状态栏 +
+  // 图标随明暗翻转）才是一条连续的界面。
+  //
+  // 代价是浮层要自己让开安全区：侧栏顶 = `padding.top + railMargin`、底栏底
+  // = `24.2 + padding.bottom`（见 `home_shell.dart`）；各页滚动容器的底部
+  // 空白 `kShellBottomInset` 已含安全区与呼吸余量。
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
   // `FMT-01` / `META-10` ③：PDF 渲染内核经**注入缝**接入（`Q4 ①` 拍板 pdfrx 2.6.5）。
   // 全仓唯一 import pdfrx 的文件是右边这个适配器；格式层（`PdfSource`）只认

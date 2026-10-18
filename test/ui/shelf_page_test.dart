@@ -270,7 +270,7 @@ void main() {
       expect(isGlassWidget(find.byType(BookCard).evaluate().single.widget), isFalse);
     });
 
-    testWidgets('顶栏搜索胶囊：靠左铺满（全宽）+ 真玻璃材质（GlassButton.custom）',
+    testWidgets('顶栏搜索胶囊：靠左铺满（全宽）+ 上游 MiSearchBar 材质',
         (WidgetTester tester) async {
       // 800 宽视口才分得清「靠左铺满」与「居中收缩」。须同时钉
       // `devicePixelRatio = 1`（默认 3 会把逻辑宽算成 266，动作按钮一挤
@@ -305,24 +305,20 @@ void main() {
       // 右侧仍留出两个动作按钮的位置（导入 / 排序）。
       expect(tester.getTopRight(box).dx, lessThan(800 - 48));
 
-      // 材质契约（2026-10-12 参考图批）：胶囊已从「半透明色块 `Container` +
-      // 描边」换成**真玻璃** [GlassButton.custom]——磨砂模糊 + 增白纱罩 +
-      // Fresnel 边缘光。断言按材质事实源逐项钉：改材质只许改
-      // `glass_material.dart`（`UI-07` 口径：业务页面不写字面量），这里跟
-      // `glass_material_test.dart` 一样用**字面量**，避免同义反复。
-      final GlassButton btn = tester.widget<GlassButton>(box);
-      expect(btn.height, 36);
-      expect(btn.useOwnLayer, isTrue,
-          reason: '顶栏内无父玻璃层；grouped 模式下 per-widget settings 被忽略');
-      expect(btn.settings, isNotNull);
-      expect(btn.settings!.blur, 9);
-      expect(btn.settings!.glassColor.a, closeTo(0.18, 0.001));
-      expect(btn.settings!.whitenStrength, closeTo(0.16, 0.001));
-      // 交互：去放大（项目口径）+ 轻微果冻。
-      expect(btn.interactionScale, 1.0);
-      expect(btn.stretch, closeTo(0.15, 0.001));
-      // 内容左对齐（默认 center 会把图标 + 文字收到胶囊中间）。
-      expect(btn.alignment, Alignment.centerLeft);
+      // 材质契约（2026-10-19 上游搜索栏批）：胶囊从自绘 [GlassButton.custom]
+      // 换成上游 [MiSearchBar]——组件自带 stadium 高 44.1、backdrop 磨砂
+      // （frosted 默认 true）+ 半透明填充。断言按组件事实源逐项钉：改材质
+      // 只许改移植树（`mi_like_ui`，与上游 `diff -r` 零差异），业务页不写字面量。
+      final MiSearchBar bar = tester.widget<MiSearchBar>(box);
+      // 占位文案（同 key 定位下钉 hint，避免「空栏」也过几何断言）。
+      expect(bar.hint, '搜索书名、作者');
+      // 点按接线：打开搜索页（onTap 非空 = 参与手势）。
+      expect(bar.onTap, isNotNull);
+      // 自绘 backdrop 磨砂保留（顶栏内无父磨砂层，故不传 frosted: false）。
+      expect(bar.frosted, isTrue);
+      // 明暗由 `GlassScope` 级联亮度解析（同底栏 `navThemeModeOf`）；
+      // 测试环境默认亮色主题 → light 配方。
+      expect(bar.themeMode, MiThemeMode.light);
     });
 
     testWidgets('分组标签行：AdaptivePillTabBar 接线（自适应宽胶囊，滚动区无玻璃控件）',
@@ -392,18 +388,18 @@ void main() {
         findsOneWidget,
       );
 
-      // ③ 头部总高 96 = 搜索行 44 + 间距 12 + chips 行 40（`kShelfHeaderHeight`；
-      // 这里按**字面量**锁——引用常量等于同义反复）。
+      // ③ 头部总高 96.1 = 搜索行 44.1（MiSearchBar 栏高）+ 间距 12 + chips 行 40
+      // （`kShelfHeaderHeight`；这里按**字面量**锁——引用常量等于同义反复）。
       expect(
         tester.widget<GlassTopBar>(find.byType(GlassTopBar)).toolbarHeight,
-        96,
+        96.1,
       );
 
-      // ④ 首行不被盖住：第一张书卡顶边 = 状态栏 0 + 头部 96 + 网格上间距 12 = 108。
-      // 去掉网格 `padding.top` 的头部留白 → 变 0，立即红。
+      // ④ 首行不被盖住：第一张书卡顶边 = 状态栏 0 + 头部 96.1 + 网格上间距 12
+      // = 108.1。去掉网格 `padding.top` 的头部留白 → 变 0，立即红。
       expect(
         tester.getTopLeft(find.byType(BookCard).first).dy,
-        108,
+        108.1,
         reason: '首行必须落在浮动头部之下（拍板验收条目），否则被磨砂头部盖住',
       );
 

@@ -133,22 +133,23 @@ void main() {
     });
 
     test('浮动头部几何（2026-09-29 参考图批：搜索行 + chips 行）', () {
-      // 行高分解 44 / 12 / 40 → 头部 96。三值照参考图（HyperOS 主题商店）
+      // 行高分解 44.1 / 12 / 40 → 头部 96.1（搜索行高 = MiSearchBar 栏高
+      // 44.1，2026-10-19 上游搜索栏批）。三值照参考图（HyperOS 主题商店）
       // **估的初始值**（截图为缩放图，不作精确依据），真机复核后可整体调；
-      // 改这里 = 破坏契约，须同步 `shelf_page_test` 里 96 / 108 两处字面量。
-      expect(kShelfSearchRowHeight, 44);
+      // 改这里 = 破坏契约，须同步 `shelf_page_test` 里 96.1 / 108.1 两处字面量。
+      expect(kShelfSearchRowHeight, 44.1);
       expect(kShelfHeaderRowGap, 12);
       expect(kShelfChipsRowHeight, 40);
-      expect(kShelfHeaderHeight, 96);
+      expect(kShelfHeaderHeight, 96.1);
 
-      // 合成的网格内边距：top = 状态栏 + 头部 + 12。例：状态栏 48 → 156。
+      // 合成的网格内边距：top = 状态栏 + 头部 + 12。例：状态栏 48 → 156.1。
       expect(
         shelfGridPadding(48),
-        const EdgeInsets.fromLTRB(20, 156, 20, kShellBottomInset),
+        const EdgeInsets.fromLTRB(20, 156.1, 20, kShellBottomInset),
       );
-      // 状态栏 0（widget 测试窗口）→ 首行顶边 = 0 + 96 + 12 = 108，
-      // 与 `shelf_page_test` 的 `getTopLeft(BookCard).dy == 108` 同一口径。
-      expect(shelfGridPadding(0).top, 108);
+      // 状态栏 0（widget 测试窗口）→ 首行顶边 = 0 + 96.1 + 12 = 108.1，
+      // 与 `shelf_page_test` 的 `getTopLeft(BookCard).dy == 108.1` 同一口径。
+      expect(shelfGridPadding(0).top, 108.1);
       // 其余三边不受头部影响（左右 20 / 底部 kShellBottomInset）。
       expect(shelfGridPadding(0).left, 20);
       expect(shelfGridPadding(0).right, 20);

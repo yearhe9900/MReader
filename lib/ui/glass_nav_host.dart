@@ -79,3 +79,71 @@ MiThemeMode navThemeModeOf(BuildContext context) =>
     GlassScope.brightnessOf(context) == Brightness.dark
         ? MiThemeMode.dark
         : MiThemeMode.light;
+
+/// mi_like_ui 玻璃**侧边**导航栏的 MReader 宿主（档位退化 + 明暗映射）。
+///
+/// 2026-10-19 上游平板模式批：`maxWidth > kShellRailBreakpoint` 时取代底栏
+/// [GlassNavHost]（上游 `demo_app.dart` 同款「侧栏 ⇄ 底栏」双形态）。
+/// 与 [GlassNavHost] 逐条同构：
+///   ① **「关」档退化**（`UI-06` ②）：换 Material [NavigationRail] 纯色形态，
+///      功能完整可用（原宽屏实现即 Material rail，行为不变）；
+///   ② **明暗映射**（`UI-01` ②）：[MiThemeMode] 由 `GlassScope` 级联亮度驱动。
+///
+/// 摆放位置（贴顶 + 距左缘 / 安全区留白）由宿主（`home_shell.dart`）给出——
+/// 与底栏「栏体位置在壳层」的同构做法；本类只负责栏体本身。
+class GlassSideNavHost extends StatelessWidget {
+  /// 创建侧栏宿主。
+  const GlassSideNavHost({
+    required this.items,
+    required this.selectedIndex,
+    required this.onTabSelected,
+    required this.themeMode,
+    this.fab,
+    super.key,
+  });
+
+  /// 标签配置（顺序即下标语义；**与底栏同一份 items**，换形态不换语义）。
+  final List<MiGlassNavItem> items;
+
+  /// 当前选中下标。
+  final int selectedIndex;
+
+  /// 选中回调。
+  final ValueChanged<int> onTabSelected;
+
+  /// 明暗模式（调用方按 `GlassScope` 亮度解析，与标签墨色同源）。
+  final MiThemeMode themeMode;
+
+  /// 预留空位圆钮（`null` = 不启用；侧栏形态挂在**栏尾下方**）。
+  final MiGlassNavFab? fab;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!GlassScope.configOf(context).glassEnabled) {
+      // 「关」档（`UI-06` ②）：Material 纯色侧轨（原宽屏实现），功能完整可用。
+      // 圆钮不接入（Material rail 无此形态）——与底栏关档丢弃 fab 同口径。
+      return NavigationRail(
+        selectedIndex: selectedIndex,
+        onDestinationSelected: onTabSelected,
+        labelType: NavigationRailLabelType.all,
+        destinations: <NavigationRailDestination>[
+          for (final MiGlassNavItem item in items)
+            NavigationRailDestination(
+              icon: CustomPaint(
+                painter: item.painter,
+                size: const Size.square(24),
+              ),
+              label: Text(item.label),
+            ),
+        ],
+      );
+    }
+    return MiGlassSideNavBar(
+      items: items,
+      selectedIndex: selectedIndex,
+      onTap: onTabSelected,
+      themeMode: themeMode,
+      fab: fab,
+    );
+  }
+}

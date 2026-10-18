@@ -61,11 +61,10 @@ import 'adaptive_pill_tab_bar.dart';
 import 'book_card.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
-import 'glass_material.dart';
 import 'glass_nav_host.dart' show navThemeModeOf;
 import 'home_shell.dart' show kShellBottomInset;
 import 'library_search_page.dart';
-import 'mi_like_ui/mi_like_ui.dart' show MiPillTabMetrics;
+import 'mi_like_ui/mi_like_ui.dart' show MiGradientBlur, MiPillTabMetrics, MiSearchBar;
 import 'shelf_grid.dart';
 
 /// 书架首页。
@@ -847,18 +846,33 @@ class ShelfPageState extends State<ShelfPage> {
   /// 经 [shelfGridPadding] 合成后 = `状态栏 + 浮动头部高 + 12`——**首行不被
   /// 浮动头部盖住**的唯一保证（内容 edge-to-edge 后正文从 y=0 起）。
   Widget _buildBookGrid(double topInset) {
-    return ShelfGrid(
-      books: _visibleBooks,
-      coverStore: widget.coverStore,
-      openingBookId: _openingBookId,
-      padding: shelfGridPadding(topInset),
-      // 点书卡 = **直接进阅读页**（2026-09-29 拍板：原「点卡 → 详情页」改道；
-      // 与 anx-reader 一致——其 `book_item.dart:51-53` 的 `onTap` 即
-      // `pushToReadingPage`）。详情页入口改走长按操作单「书籍详情」。
-      onOpenBook: (BookRecord record) => unawaited(_openBook(record)),
-      // 不 `unawaited`：这个 Future 的完成时机**就是**长按抬起反馈的复位时机
-      // （见 `_showBookActions` 的返回值语义）。
-      onBookActions: _showBookActions,
+    return Stack(
+      children: <Widget>[
+        ShelfGrid(
+          books: _visibleBooks,
+          coverStore: widget.coverStore,
+          openingBookId: _openingBookId,
+          padding: shelfGridPadding(topInset),
+          // 点书卡 = **直接进阅读页**（2026-09-29 拍板：原「点卡 → 详情页」改道；
+          // 与 anx-reader 一致——其 `book_item.dart:51-53` 的 `onTap` 即
+          // `pushToReadingPage`）。详情页入口改走长按操作单「书籍详情」。
+          onOpenBook: (BookRecord record) => unawaited(_openBook(record)),
+          // 不 `unawaited`：这个 Future 的完成时机**就是**长按抬起反馈的复位时机
+          // （见 `_showBookActions` 的返回值语义）。
+          onBookActions: _showBookActions,
+        ),
+        // 内容区顶部渐进模糊（`UI-02` ②，2026-10-19 上游批）：书卡从头部下
+        // 穿过、滚出顶部时被这层磨砂渐进糊住（与 GlassTopBar 磨砂连成一条），
+        // 到下方逐渐清晰、120dp 处归零（无硬边）。叠在列表**之后**（同 Stack）
+        // 才采样得到滚动内容；`IgnorePointer` 不吃手势，不影响点卡 / 长按。
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 120,
+          child: MiGradientBlur(height: 120),
+        ),
+      ],
     );
   }
 
@@ -903,20 +917,19 @@ class ShelfPageState extends State<ShelfPage> {
 /// 搜索框就只剩半宽且浮在中间——「看起来是个居中的小胶囊」，不是搜索框该有的样子。
 ///
 /// ══════════════════════════════════════════════════════════════════════════════
-/// 2026-10-12 参考图批：半透明色块 → 真玻璃胶囊
+/// 2026-10-19 上游搜索栏批：自绘玻璃胶囊 → 上游 [MiSearchBar]
 /// ══════════════════════════════════════════════════════════════════════════════
-/// 原实现是 `surfaceContainerHighest` α0.6 纯色填充 + outline 描边的普通
-/// [Container]——**没有模糊层**（观感全靠顶栏 edge-blur 偶然衬出）、没有增白、
-/// 没有边缘光，纯色页面背景下就是一枚灰 pill（负责人「玻璃态效果没想象中
-/// 那么好」的三处病灶之一）。现改为 [GlassButton.custom]：
-///   · `useOwnLayer: true`——顶栏内没有父玻璃层，自带层才吃得到显式 settings；
-///   · `settings: GlassMaterial.settingsFor`——控件级材质（强磨砂 + 增白纱罩
-///     + 边缘光，参考图 = HyperOS 主题商店搜索胶囊）；
-///   · `interactionScale: 1.0`——去「放大」（2026-09-29 项目口径），
-///     `stretch: 0.15` 留一丝果冻感，光晕保留（同 [GlassNavBar] 的 glowOnly 精神）；
-///   · stadium 形状（圆角 18 = 半高，36 高胶囊）。
+/// 原实现是 [GlassButton.custom] 手拼「放大镜图标 + 占位文字」的自绘玻璃
+/// 胶囊（36 高）。现改为上游 [MiSearchBar]——1:1 实测自小米主题商店分类页
+/// 的搜索栏：stadium 高 44.1、图标 17.8 + 图文间距 12 起于左缘 15.4、占位
+/// 文字 CJK 16.5dp、栏体自带 backdrop 磨砂（`frosted` 默认 true，顶栏无父
+/// 玻璃层故保留自绘磨砂）。材质配方走组件自身的 `search_bar_tokens`，不再
+/// 由业务页引 `GlassMaterial.settingsFor`（同 `UI-07`「材质单一出处」精神）。
 /// 几何契约不变：靠左贴顶栏内边距、铺满可用宽（`test/ui/shelf_page_test.dart`
 /// 的 `shelf-search-entry` 断言只换样式判据，几何判据原样）。
+///
+/// 明暗经 [navThemeModeOf] 显式传入（与底栏 / 胶囊标签同一 `GlassScope` 出处，
+/// `UI-01` ② 跟应用主题三态），而非留给组件回落环境 `Theme.of`。
 class _BookSearchEntry extends StatelessWidget {
   const _BookSearchEntry({required this.onTap});
 
@@ -925,50 +938,13 @@ class _BookSearchEntry extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return GlassButton.custom(
+    return MiSearchBar(
       // 供契约测试定位（`test/ui/shelf_page_test.dart` 断言「靠左铺满 +
-      // 真玻璃参数」）。
+      // MiSearchBar 材质」）。
       key: const Key('shelf-search-entry'),
+      hint: '搜索书名、作者',
       onTap: onTap,
-      // 36 高胶囊（与参考图搜索胶囊同档）；圆角 18 = 半高 → stadium。
-      // 比半高更大的圆角也只会被裁到半高，直接写 18 免歧义。
-      height: 36,
-      shape: const LiquidRoundedRectangle(borderRadius: 18),
-      // 控件级材质 + 自带层（顶栏无父玻璃层；settings 在 grouped 模式下会被
-      // 忽略，故必须 useOwnLayer）。
-      settings: GlassMaterial.settingsFor(context),
-      useOwnLayer: true,
-      // 交互：去放大（项目口径）+ 轻微果冻 + 保留手指高光。
-      interactionScale: 1.0,
-      stretch: 0.15,
-      // 无障碍标签（可见占位文本在 child 里，两者同文）。
-      label: '搜索书名、作者',
-      // 内容左对齐（默认 center 会把图标+文字收到胶囊中间）。
-      alignment: Alignment.centerLeft,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: Row(
-          children: <Widget>[
-            Icon(
-              Icons.search,
-              size: 18,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '搜索书名、作者',
-                overflow: TextOverflow.ellipsis,
-                // 仍是**占位符**口径（比正文弱一档）。
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+      themeMode: navThemeModeOf(context),
     );
   }
 }
