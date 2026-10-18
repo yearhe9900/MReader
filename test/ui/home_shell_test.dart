@@ -24,6 +24,8 @@ import 'package:mreader/settings/shelf_layout_store.dart';
 import 'package:mreader/settings/shelf_prefs_store.dart';
 import 'package:mreader/stats/stats_service.dart';
 import 'package:mreader/ui/home_shell.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart'
+    show MiGlassNavMetrics, MiGlassNavBar;
 
 import '../reader/reader_harness.dart';
 import '../test_config.dart';
@@ -166,6 +168,127 @@ void main() {
 
       // 旧入口（顶部加号按钮）已移除，导入只剩绿圆钮 + 空态引导两个入口。
       expect(find.byIcon(Icons.add), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 60)),
+      );
+      await settle(tester, rounds: 10);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // 2026-10-18 反馈批：底栏浮起口径 + 亮色侧栏列铺页底色（截图对照上游）
+  // ────────────────────────────────────────────────────────────────────────────
+  group('底栏浮起与页底色（对齐上游 demo_app.dart）', () {
+    late Directory tempDir;
+    late TestAppPaths paths;
+    late LibraryRepository repo;
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('mreader_shell_geom_');
+      paths = TestAppPaths(tempDir);
+      repo = fakeRepository(paths);
+    });
+
+    tearDown(() async {
+      await repo.pendingWarmUps;
+      if (tempDir.existsSync()) {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    Widget buildShell() => MaterialApp(
+          home: HomeShell(
+            repository: repo,
+            coverStore: FileCoverStore(paths),
+            progressStore: ProgressStore(paths),
+            perfPrefs: PerfPrefsStore(tempDir),
+            shelfPrefs: ShelfPrefsStore(tempDir),
+            shelfLayout: ShelfLayoutStore(tempDir),
+            settings: SettingsStore(tempDir),
+            statsService: StatsService(paths),
+            aiStore: ProviderStore(
+              tempDir,
+              AiKeyVault(FileSecureStore(directory: tempDir)),
+            ),
+            aiClient: AiClient(),
+          ),
+        );
+
+    testWidgets('手机模式：底栏浮起量随手势条 inset 等量增大（= 24.2 + safeBottom）',
+        (tester) async {
+      // 窄视口（393 < 600）走底栏形态。
+      tester.view.physicalSize = const Size(393, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      // 2026-10-18 反馈「手机模式底栏高度变了」的根因契约：edge-to-edge 后
+      // 底栏浮起 = 参考实测 24.2（kShellNavBarBottomLift）+ 手势条 inset。
+      // **差分判别**：注入 bottom inset = 34 后，胶囊底边须相对 inset=0 时
+      // 等量下移 34。单点断言在 inset 默认 0 的测试窗里对「丢掉 + safeBottom」
+      // 无判别力（变异恒绿，§2.97 静默退化）；差值必须精确跟上 inset 才绿。
+      tester.view.padding = const FakeViewPadding(bottom: 34);
+      await tester.pumpWidget(buildShell());
+      await settle(tester, rounds: 30);
+
+      final double inset = tester.view.padding.bottom;
+      expect(inset, 34, reason: '测试窗 bottom inset 须已注入为 34');
+
+      final Rect bar = tester.getRect(find.byType(MiGlassNavBar).first);
+      // 屏高 800 − inset 34 − 浮起 24.2 = 胶囊底边。
+      expect(
+        bar.bottom,
+        moreOrLessEquals(800 - inset - kShellNavBarBottomLift, epsilon: 0.01),
+        reason: '底栏胶囊底边距屏底须为 kShellNavBarBottomLift + safeBottom'
+            '（少算 inset 时胶囊会偏高 34）',
+      );
+      // 胶囊高度须等于上游实测 token，不得被宿层压缩/拉伸。
+      expect(
+        bar.height,
+        moreOrLessEquals(MiGlassNavMetrics.barHeight, epsilon: 0.01),
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 60)),
+      );
+      await settle(tester, rounds: 10);
+    });
+
+    testWidgets('宽屏模式：整块布局铺页底色（侧栏列与内容列同底，无色差竖缝）',
+        (tester) async {
+      // 宽视口（800 > 600）走侧栏形态——此时内容只占右侧列，侧栏列必须同样
+      // 铺页底色，否则露出窗口底色，浅色下与页面之间出现一道色差（截图差异根因）。
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(buildShell());
+      await settle(tester, rounds: 30);
+
+      final Color pageBg =
+          Theme.of(tester.element(find.byType(HomeShell)))
+              .scaffoldBackgroundColor;
+      // 侧栏那一列（x < gutterWidth）背后的最底层容器必须已是页底色——由壳层
+      // ColoredBox 铺满整窗提供。取 ancestor 链上首个同色 ColoredBox。
+      final Iterable<ColoredBox> colored = tester.widgetList<ColoredBox>(
+        find.ancestor(
+          of: find.byType(IndexedStack),
+          matching: find.byType(ColoredBox),
+        ),
+      );
+      expect(colored, isNotEmpty, reason: '壳层须有 ColoredBox 铺页底色');
+      final ColoredBox gutterBg =
+          colored.firstWhere((ColoredBox w) => w.color == pageBg);
+      final Rect gutterRect = tester.getRect(find.byWidget(gutterBg));
+      // 该底色盒必须横跨整窗（含侧栏列与内容列），否则侧栏列仍会露底。
+      expect(gutterRect.left, lessThanOrEqualTo(0));
+      expect(
+        gutterRect.width,
+        greaterThanOrEqualTo(800),
+        reason: '页底色须铺满整窗宽度（含侧栏那一列），不得只铺内容列',
+      );
 
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(

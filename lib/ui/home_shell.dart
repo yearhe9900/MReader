@@ -89,6 +89,19 @@ const double kShellBottomInset = 100;
 /// 宽屏断点（超过则改用侧边导航轨）；与 anx-reader 取值一致。
 const double kShellRailBreakpoint = 600;
 
+/// 底栏胶囊距屏底的浮起高度（`MiGlassNavMetrics` 注释「bar bottom sits
+/// 24.2 dp above screen bottom」的参考实测值）。
+///
+/// 从 [MiGlassNavMetrics.barHeight] 同族的实测读数取，**不再在摆放处硬编码
+/// 24.2**——上游 `demo_app.dart` 把它与 barHeight 等 token 并列在一处，这里
+/// 同样收口成常量，避免散落字面量（改实测口径只改这一行）。
+///
+/// ⚠️ 手机模式下底栏**浮起量的完整口径**是 `kShellNavBarBottomLift +
+/// safeBottom`：`safeBottom` 是 edge-to-edge 后让开的手势条 inset（真机非 0）。
+/// 两者缺一，底栏相对屏底的位置就与上游不一致（2026-10-18 反馈「手机模式
+/// 底栏高度变了」即此：只取其一都会偏 ~20dp）。
+const double kShellNavBarBottomLift = 24.2;
+
 /// 主壳层（底部导航）。
 ///
 /// 依赖全部由组合根（`main.dart`）注入，本层不构造存储 / 仓库。
@@ -264,44 +277,44 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   /// 「选哪一页」与「底栏」。**统计页不在其中**（2026-10-15 移出底栏）——
   /// 入口收进「我的」页（`SettingsPage.onOpenStats`），从那里推入。
   List<Widget> _buildPages() => <Widget>[
-        ShelfPage(
-          key: _shelfKey,
-          repository: widget.repository,
-          coverStore: widget.coverStore,
-          progressStore: widget.progressStore,
-          shelfPrefs: widget.shelfPrefs,
-          shelfLayout: widget.shelfLayout,
-          statsService: widget.statsService,
-          aiStore: widget.aiStore,
-          aiClient: widget.aiClient,
-          vocabStore: widget.vocabStore,
-          summaryCache: widget.summaryCache,
-          ragStore: widget.ragStore,
-          ttsSettings: widget.ttsSettings,
-          onlineTts: widget.onlineTts,
-          bookmarkStore: widget.bookmarkStore,
-          readingPrefsStore: widget.readingPrefsStore,
-          syncTrigger: widget.syncTrigger,
-        ),
-        NotesPage(
-          vocabStore: widget.vocabStore,
-          // 生词本页依赖全在壳层（仓库 / 进度 / AI / 统计），由回调就地组装——
-          // 笔记页只留「计数 + 入口」两个字段，不背开书管道的依赖。
-          onOpenVocab: widget.vocabStore == null
-              ? null
-              : () => unawaited(_openVocabPage()),
-        ),
-        SettingsPage(
-          perfPrefs: widget.perfPrefs,
-          settings: widget.settings,
-          aiStore: widget.aiStore,
-          aiClient: widget.aiClient,
-          syncStore: widget.syncStore,
-          syncClient: widget.syncClient,
-          syncTrigger: widget.syncTrigger,
-          onOpenStats: () => unawaited(_openStatsPage()),
-        ),
-      ];
+    ShelfPage(
+      key: _shelfKey,
+      repository: widget.repository,
+      coverStore: widget.coverStore,
+      progressStore: widget.progressStore,
+      shelfPrefs: widget.shelfPrefs,
+      shelfLayout: widget.shelfLayout,
+      statsService: widget.statsService,
+      aiStore: widget.aiStore,
+      aiClient: widget.aiClient,
+      vocabStore: widget.vocabStore,
+      summaryCache: widget.summaryCache,
+      ragStore: widget.ragStore,
+      ttsSettings: widget.ttsSettings,
+      onlineTts: widget.onlineTts,
+      bookmarkStore: widget.bookmarkStore,
+      readingPrefsStore: widget.readingPrefsStore,
+      syncTrigger: widget.syncTrigger,
+    ),
+    NotesPage(
+      vocabStore: widget.vocabStore,
+      // 生词本页依赖全在壳层（仓库 / 进度 / AI / 统计），由回调就地组装——
+      // 笔记页只留「计数 + 入口」两个字段，不背开书管道的依赖。
+      onOpenVocab: widget.vocabStore == null
+          ? null
+          : () => unawaited(_openVocabPage()),
+    ),
+    SettingsPage(
+      perfPrefs: widget.perfPrefs,
+      settings: widget.settings,
+      aiStore: widget.aiStore,
+      aiClient: widget.aiClient,
+      syncStore: widget.syncStore,
+      syncClient: widget.syncClient,
+      syncTrigger: widget.syncTrigger,
+      onOpenStats: () => unawaited(_openStatsPage()),
+    ),
+  ];
 
   /// push 生词本页（词条点击跳回原文的开书依赖在此组装）。
   Future<void> _openVocabPage() {
@@ -355,19 +368,19 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   /// 2026-10-16 功能迁移批：绿钮接「导入书籍」（经 [_shelfKey] 转
   /// [ShelfPageState.pickAndImport]），取代原书架头部加号按钮。
   MiGlassNavFab _buildFab() => MiGlassNavFab(
-        tabIndex: 0,
-        onTap: () => _shelfKey.currentState?.pickAndImport(),
-        // 绿钮 glyph = 参考项目配套用法（`d6893f7`）：白色圆角加号
-        // （电话 App 截图 1220×378 实测）；此前点阵 glyph 是旧口径。
-        child: Semantics(
-          label: '导入书籍',
-          button: true,
-          child: CustomPaint(
-            painter: PlusIconPainter(Colors.white),
-            size: const Size.square(18.2),
-          ),
-        ),
-      );
+    tabIndex: 0,
+    onTap: () => _shelfKey.currentState?.pickAndImport(),
+    // 绿钮 glyph = 参考项目配套用法（`d6893f7`）：白色圆角加号
+    // （电话 App 截图 1220×378 实测）；此前点阵 glyph 是旧口径。
+    child: Semantics(
+      label: '导入书籍',
+      button: true,
+      child: CustomPaint(
+        painter: PlusIconPainter(Colors.white),
+        size: const Size.square(18.2),
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -390,67 +403,77 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     // edge-to-edge（T12）后内容铺到状态栏 / 手势条下面，浮层类元素要让开安全区。
     final double safeTop = MediaQuery.paddingOf(context).top;
     final double safeBottom = MediaQuery.paddingOf(context).bottom;
-    return Stack(
-      children: <Widget>[
-        Positioned(
-          left: sideNav ? MiGlassSideNavMetrics.gutterWidth : 0,
-          top: 0,
-          right: 0,
-          bottom: 0,
-          // [IndexedStack] 让三页都保活（切回书架时滚动位置与筛选不丢），
-          // 非当前页不绘制、不参与命中测试。
-          child: IndexedStack(index: _index, children: pages),
-        ),
-        if (sideNav)
-          // 侧栏贴顶对齐、距画面左缘与安全区各一档留白（与底部栏距屏底一档
-          // 留白同一口径）；栏体自身收缩到内容高。一定要让开状态栏：铺满窗口
-          // 后侧栏顶就在状态栏那一带。
+    // 页底色：与各页（书架 [shelfGradientBackground] 的 base）同源取
+    // `scaffoldBackgroundColor`，铺满**整个窗口**（含侧栏那一列）。
+    //
+    // 上游 `demo_app.dart` 同款做法：内容只占右侧列，侧栏列若不铺页底色，
+    // 露出的就是窗口底色——浅色下与页面之间出现一道色差（2026-10-18 亮色
+    // 反馈「亮色模式需要这样」：截图里侧栏列与内容列是同一片浅底）。
+    final Color pageBg = Theme.of(context).scaffoldBackgroundColor;
+    return ColoredBox(
+      color: pageBg,
+      child: Stack(
+        children: <Widget>[
           Positioned(
-            left: 0,
+            left: sideNav ? MiGlassSideNavMetrics.gutterWidth : 0,
             top: 0,
+            right: 0,
             bottom: 0,
-            width: MiGlassSideNavMetrics.gutterWidth,
-            child: Padding(
-              padding: EdgeInsets.only(
-                left: MiGlassSideNavMetrics.railMargin,
-                top: safeTop + MiGlassSideNavMetrics.railMargin,
-              ),
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: GlassSideNavHost(
-                  items: items,
-                  selectedIndex: _index,
-                  onTabSelected: _select,
-                  themeMode: mode,
-                  // 绿色圆钮挂在栏尾下方（选中「书架」时弹出）。
-                  fab: _buildFab(),
+            // [IndexedStack] 让三页都保活（切回书架时滚动位置与筛选不丢），
+            // 非当前页不绘制、不参与命中测试。
+            child: IndexedStack(index: _index, children: pages),
+          ),
+          if (sideNav)
+            // 侧栏贴顶对齐、距画面左缘与安全区各一档留白（与底部栏距屏底一档
+            // 留白同一口径）；栏体自身收缩到内容高。一定要让开状态栏：铺满窗口
+            // 后侧栏顶就在状态栏那一带。
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: MiGlassSideNavMetrics.gutterWidth,
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: MiGlassSideNavMetrics.railMargin,
+                  top: safeTop + MiGlassSideNavMetrics.railMargin,
+                ),
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  child: GlassSideNavHost(
+                    items: items,
+                    selectedIndex: _index,
+                    onTabSelected: _select,
+                    themeMode: mode,
+                    // 绿色圆钮挂在栏尾下方（选中「书架」时弹出）。
+                    fab: _buildFab(),
+                  ),
                 ),
               ),
+            )
+          else
+            // 窄屏（手机 / 窄窗）：内容 + 浮动胶囊底栏 + 绿色圆钮。
+            //
+            // ⚠️ **必须是 `Stack + Positioned` 而非 `Scaffold.bottomNavigationBar`**：
+            // 玻璃底栏的 [BackdropFilter] 需要采样**栏下方**的内容才能出磨砂效果；
+            // 放进 `bottomNavigationBar` 时底栏在内容**之上**，采样不到正文，
+            // 磨砂会退化成一块纯色。
+            //
+            // 栏体浮起 24.2dp（参考项目实测「bar bottom sits 24.2 dp above screen
+            // bottom」）；edge-to-edge 下再让开手势条（上游同款）。
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: kShellNavBarBottomLift + safeBottom,
+              child: GlassNavHost(
+                items: items,
+                selectedIndex: _index,
+                onTabSelected: _select,
+                themeMode: mode,
+                fab: _buildFab(),
+              ),
             ),
-          )
-        else
-          // 窄屏（手机 / 窄窗）：内容 + 浮动胶囊底栏 + 绿色圆钮。
-          //
-          // ⚠️ **必须是 `Stack + Positioned` 而非 `Scaffold.bottomNavigationBar`**：
-          // 玻璃底栏的 [BackdropFilter] 需要采样**栏下方**的内容才能出磨砂效果；
-          // 放进 `bottomNavigationBar` 时底栏在内容**之上**，采样不到正文，
-          // 磨砂会退化成一块纯色。
-          //
-          // 栏体浮起 24.2dp（参考项目实测「bar bottom sits 24.2 dp above screen
-          // bottom」）；edge-to-edge 下再让开手势条（上游同款）。
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 24.2 + safeBottom,
-            child: GlassNavHost(
-              items: items,
-              selectedIndex: _index,
-              onTabSelected: _select,
-              themeMode: mode,
-              fab: _buildFab(),
-            ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }
