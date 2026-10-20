@@ -25,6 +25,7 @@ enum FormatErrorCode {
   txtNoContent,
   cbrUnsupported,
   mobiUnsupported,
+  mobiHuffCdicUnsupported,
   noImagePages,
 }
 
@@ -65,5 +66,7 @@ const Map<FormatErrorCode, String> kFormatErrorMessages =
   FormatErrorCode.txtNoContent: '这个 TXT 里没有找到可阅读的文本。',
   FormatErrorCode.cbrUnsupported: '这是一本 CBR（RAR 压缩包），暂不支持打开，请转换为 CBZ 后导入。',
   FormatErrorCode.mobiUnsupported: '暂不支持 MOBI/AZW3 格式，请转换为 EPUB 或 TXT 后导入。',
+  FormatErrorCode.mobiHuffCdicUnsupported: '这本 MOBI/AZW3 使用了 HUFF/CDIC 压缩，'
+      '当前版本暂不支持打开（未压缩与 PalmDOC 压缩的 MOBI/AZW3 可正常打开）。',
   FormatErrorCode.noImagePages: '压缩包里没有找到任何图片页。',
 };

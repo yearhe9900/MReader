@@ -16,6 +16,7 @@ import 'cbr_source.dart';
 import 'chapter_text_cache.dart';
 import 'dart_epub_source.dart';
 import 'dart_txt_source.dart';
+import 'mobi_source.dart';
 import 'pdf_source.dart';
 import 'sniffer.dart';
 import 'structure_cache.dart';
@@ -160,7 +161,7 @@ class BookRegistry {
       case FormatKind.pdf:
         return PdfSource(fileName: fileName, bytes: bytes);
       case FormatKind.mobi:
-        throw const MReaderFormatException(FormatErrorCode.mobiUnsupported);
+        return MobiSource(fileName: fileName, bytes: bytes);
       case FormatKind.unsupported:
         throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
     }

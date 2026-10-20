@@ -89,12 +89,10 @@ class ImportService {
     if (kind == FormatKind.unsupported) {
       throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
     }
-    // MOBI 系已被魔数识别但解析器未接入（`M2b-T05`）：导入即拒绝，口径区分
-    // 「这是 MOBI，还没支持」与「不认识的格式」（`FMT-06` ①）。
-    if (kind == FormatKind.mobi) {
-      throw const MReaderFormatException(FormatErrorCode.mobiUnsupported);
-    }
-    // 落盘扩展名 = 格式名（`unsupported`/`mobi` 已在上方拦截，这两臂不可达）。
+    // MOBI/AZW3 已接入解析器（`MobiSource`，2026-10-20）：魔数识别后正常走
+    // openBook；压缩口径不支持的（HUFF/CDIC）在解析器内抛
+    // `mobiHuffCdicUnsupported`，不再在导入前一律拒绝。
+    // 落盘扩展名 = 格式名。
     final String format = switch (kind) {
       FormatKind.epub => 'epub',
       FormatKind.txt => 'txt',

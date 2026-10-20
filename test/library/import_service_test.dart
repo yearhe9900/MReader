@@ -122,10 +122,13 @@ void main() {
       );
     });
 
-    test('MOBI 系导入即拒绝：mobiUnsupported（FMT-06 ①；M2b-T05 接入解析器前）',
+    test('MOBI 系已接入解析器：截断的 BOOKMOBI 抛格式异常（不再一律 mobiUnsupported）',
         () async {
       // PalmDB `BOOKMOBI` 最小复刻（同 test/format/sniffer_test.dart 夹具）：
       // 偏移 0..32 可打印 name（AZW3 实测 `epubor.c`）+ NUL，偏移 60..68 = BOOKMOBI。
+      // 2026-10-20 起 MOBI 走 [MobiSource]（`FormatKind.mobi` 已接线），不再在
+      // 导入前一律拒绝；**判据换成「仍抛格式异常」**——80 字节截断体由解析器判
+      // `emptyFile`/`corruptFile`，而不是入口处的 `mobiUnsupported`。
       final Uint8List mobiBytes = Uint8List(80);
       const List<int> name = <int>[
         0x65, 0x70, 0x75, 0x62, 0x6F, 0x72, 0x2E, 0x63, // "epubor.c"
@@ -136,15 +139,14 @@ void main() {
       ];
       mobiBytes.setRange(60, 68, tag);
 
-      // 改名 .txt——魔数压过后缀识别为 MOBI 系；导入即拒绝，口径区分
-      // 「这是 MOBI，还没支持」（mobiUnsupported）与「不认识的格式」。
-      expect(
-        () => service.import(bytes: mobiBytes, fileName: '牧神记.txt'),
+      // 改名 .txt —— 魔数压过后缀，仍识别为 MOBI 系；解析器按结构不可信拒绝。
+      await expectLater(
+        service.import(bytes: mobiBytes, fileName: '牧神记.txt'),
         throwsA(
           isA<MReaderFormatException>().having(
             (MReaderFormatException e) => e.code,
             'code',
-            FormatErrorCode.mobiUnsupported,
+            isNot(FormatErrorCode.mobiUnsupported),
           ),
         ),
       );
