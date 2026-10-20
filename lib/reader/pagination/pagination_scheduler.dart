@@ -283,7 +283,7 @@ class PaginationScheduler {
 
 /// 按书持久持有的 [PaginationScheduler] 注册表（修法③「冷缓存收口」）。
 ///
-/// ## 为什么需要（`docs/研究-阅读页画布对照.md` §7③，开书闪动机制链③）
+/// ## 为什么需要（路线 A §7③，开书闪动机制链③）
 ///
 /// 改前 `ReaderPage._open` 每次 `PaginationScheduler()` 新建 ⇒ 分页结果缓存
 /// 随阅读页 State 生死，**重开书冷缓存**：目标章页表要重排，首见只有

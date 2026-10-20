@@ -2,7 +2,7 @@
 //
 // 为什么单独成文件：`ReaderPage` 的「增量加载 + 淘汰上界」是 `PERF-02` 的核心逻辑，
 // 但它必须在**纯 Dart 单测**里能被直接断言——`testWidgets` 的 FakeAsync 区一旦
-// `await` 真异步 IO 就会挂死（`68578e4` / `docs/tech-usage.md`）。故把「缓存 + 规划」
+// `await` 真异步 IO 就会挂死（见 `68578e4`）。故把「缓存 + 规划」
 // 抽成本文件两个不依赖 Flutter 的类，由 `ReaderPage` 驱动、由 `test/perf/*` 直接测。
 //
 // ⚠️ 本文件**不 import Flutter、不 import `dart:io`**（可进 isolate）。

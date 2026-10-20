@@ -17,7 +17,7 @@
 //   · 中档钉 `standard`（取消 premium 提升）；高档不覆盖（`null`，交库自动提升）。
 //
 // 玻璃档的 GlassDialog / GlassSheet 弹层**不在此渲染**——flutter test 软件光栅下
-// 每帧数百 ms 真实异步开销（tech-usage §2.26）；关档退化弹层是纯 Material，可测。
+// 每帧数百 ms 真实异步开销（§2.26）；关档退化弹层是纯 Material，可测。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';

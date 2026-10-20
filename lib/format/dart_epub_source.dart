@@ -9,7 +9,7 @@
 //    （[_parsedOnce]）：经 `IsolateRunner` 在后台 isolate 跑 `parseEpubStructureTask`
 //    （纯数据）→ 结构经信封传回 → 由持有原始 `bytes` 的**本 isolate** 调
 //    `bindEpubResult` 绑定（见 `lib/epub/epub_parser.dart` 顶部说明与
-//    `docs/schedule.md` 的 M2a-T06 勘误）。
+//    M2a-T06 勘误）。
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;

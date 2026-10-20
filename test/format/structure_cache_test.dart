@@ -234,7 +234,7 @@ void main() {
 
     test('T06 结构缓存不再落 entryNames（解析 isolate 的传输品，绑定侧自建）', () {
       // 编码端签名里已无该字段；这里锁住「信封里不含条目名表」的口径：
-      // 470 章真实书的 cache 曾因这张表胀到 1/3 体积（`tech-usage.md` §2.107）。
+      // 470 章真实书的 cache 曾因这张表胀到 1/3 体积（§2.107）。
       final Uint8List blob = encodeStructureEnvelope(_key, _fullStructure());
       final String asText = utf8.decode(blob, allowMalformed: true);
       expect(asText.contains('oebps/cover.png'), isFalse);

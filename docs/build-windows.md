@@ -87,7 +87,7 @@ Android 主力机（Impeller 默认启用）**观感不一致**。
 > 不再是「没有 Impeller ANGLE」。**实际观感差异待在 Windows 上重新实测**。
 
 **不要在 Windows 上反复调玻璃视觉**——视觉调优集中在 Android 真机一次性完成
-（PRD `Q1`/`Q3`；`schedule.md` §4.2 的 N-5 已写明该约束）。
+（PRD `Q1`/`Q3`）。
 
 ---
 
@@ -97,7 +97,7 @@ Android 主力机（Impeller 默认启用）**观感不一致**。
 flutter pub get                       # 拉依赖（本机 pub 缓存：D:\pub_cache）
 flutter analyze                       # 静态检查（不需要 Developer Mode）
 flutter test                          # 全量测试（把 tmp_book/ 放好可跑真样本冒烟）
-bash tool/test.sh parse               # 分组局部测试（见 docs/tech-usage.md）
+bash tool/test.sh parse               # 分组局部测试（分组口径见 tool/test.sh 头注释）
 flutter build windows --debug         # 桌面调试构建（需要 Developer Mode + VS2022）
 flutter build apk --debug             # Android 调试包
 flutter run -d windows                # 桌面直跑
@@ -118,11 +118,11 @@ flutter run -d <android-device-id>    # Android 真机直跑
 | `Unable to find suitable Visual Studio toolchain` | 装 VS2022「使用 C++ 的桌面开发」工作负载 |
 | pub 解析慢 / 失败 | 确认 `PUB_CACHE=D:\pub_cache`；必要时 `flutter pub cache repair` |
 | PDF 打不开、提示加密 | 预期行为：加密 PDF 明确拒绝（`Q4 ④`），非缺陷 |
-| 中文乱码（重定向到文件） | Git Bash 用 `... 2>&1 \| (printf '\xEF\xBB\xBF'; cat) > out.txt`；PowerShell 见 `docs/tech-usage.md` 同条 |
+| 中文乱码（重定向到文件） | Git Bash 用 `... 2>&1 \| (printf '\xEF\xBB\xBF'; cat) > out.txt`；PowerShell 用 `\| Out-File -Encoding utf8`（`>` 写 UTF-16LE 会中文乱码） |
 
 ---
 
 ## 6. 验收对应关系
 
 - Windows 构建属于 §17「跨里程碑持续项」的五平台发布验收（`M4-T08`）范围；
-- 本文件在 `M2b-T09` 建档，作为**五平台冒烟备料**的 Windows 分册（总清单见 `docs/acceptance-M2b.md`）。
+- 本文件在 `M2b-T09` 建档，作为**五平台冒烟备料**的 Windows 分册。

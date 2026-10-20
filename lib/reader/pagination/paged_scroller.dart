@@ -436,7 +436,7 @@ class PagedScrollerState extends State<PagedScroller> {
   /// 视口顶落在标题区 → 页 0 页首；空章列表 / 空页表 → null。
   /// 字符换算走**行表口径**（视口顶所在行的行首，[_charStartAtY]），
   /// 与 [offsetFor] 严格对偶成不动点——「采样→落位→采样」不跨行、不复利，
-  /// 重开书不漂移（`docs/tech-usage.md` §2.84）。
+  /// 重开书不漂移（§2.84）。
   ScrollSample? sampleNow() {
     if (widget.chapters.isEmpty) return null;
     final double y = offset;
@@ -483,7 +483,7 @@ class PagedScrollerState extends State<PagedScroller> {
   /// **某一行的中间**：该行只露出下半截（上半被卷轴裁掉），用户看到的就是
   /// 「字没显示全 / 文字丢失上一半」。开书恢复、跳章、跳书签、跳目录**每次都
   /// 走这条路径**，所以是稳定复现、不是偶发——真机连续两张截图的首行都被切
-  /// 掉约 45%（见 `docs/tech-usage.md` §2.70）。
+  /// 掉约 45%（见 §2.70）。
   ///
   /// 按行顶对齐后：目标字符所在行的**整行**都在视口内（该行贴视口顶），页内
   /// 其余内容紧随其后，语义上就是「从这一行开始读」。卷轴坐标若因此小于
@@ -548,7 +548,7 @@ class PagedScrollerState extends State<PagedScroller> {
   /// 段间距空白时，语义上「从下一行开始读」，重开书只前移 ≤ 一段间距）。
   /// y 落在页内容之外（页尾 / 跨页空白）→ [PageSlice.end] = 下一页页首行首。
   ///
-  /// 不动点（`docs/tech-usage.md` §2.84）：对任意字符 c，
+  /// 不动点（§2.84）：对任意字符 c，
   /// `_charStartAtY(_lineTopInPage(c))` = c 所在行行首 ⇒ 「采样→落位→采样」
   /// 不跨行、幂等；程序化落位（行顶）后重采恒为原值，误差不复利。
   static int _charStartAtY(

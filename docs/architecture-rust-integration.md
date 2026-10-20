@@ -239,7 +239,7 @@ class BookRegistry {
 
 ### A.1.1 文件落位（M1-T02 实施后）
 
-上面的代码块按**契约**合并展示；实际实施按 `docs/schedule.md` §2.1 的 M1-T02 行拆成**多文件**：
+上面的代码块按**契约**合并展示；实际实施按 M1-T02 拆成**多文件**：
 
 | 文件 | 内容 | 依赖纪律 |
 |---|---|---|
@@ -1422,7 +1422,7 @@ flowchart LR
 
 > **为什么是 §N 而不是 team-lead 建议的 §M**：`§M` 已被「关键时序图与流程图」占用（§M.1~M.3 已被 §0 / §L / 代码注释多处引用）。为**不打乱既有编号**，本节另立 **§N**，紧接 §M 之后。这不是「另立文档」——仍是本文档的一节，只是换了字母。若确要把元数据链路提前到 §L 之前，**只移动、不重编号**。
 
-> **本节定位**：`docs/schedule.md` 的 **M1-T03 行**原文写着依赖「M1-T05（**接口**）」并注明「`LIB-06` 的连带清理依赖 `META-06` 的封面登记接口，**需先与 M1-T05 约定接口再开工**」。因此本节把 M1-T05 的**接口先冻死**——冻结后按此实现；后续任何改动都是**破坏性变更，须走评审**。
+> **本节定位**：**M1-T03** 的排期依赖写着「M1-T05（**接口**）」并注明「`LIB-06` 的连带清理依赖 `META-06` 的封面登记接口，**需先与 M1-T05 约定接口再开工**」。因此本节把 M1-T05 的**接口先冻死**——冻结后按此实现；后续任何改动都是**破坏性变更，须走评审**。
 
 > **回答的 7 个判断**（team-lead 指定）：① BookMeta 唯一归属 ② 来源标记闭合枚举 ③ 简介字段 ④ 纯 Dart/Flutter 边界 ⑤ 封面引用类型（无魔法字符串）⑥ 缩略图与解码限幅 ⑦ M1-T03 接口契约。
 
@@ -1787,7 +1787,7 @@ await coverStore.purgeOrphans(
 - **§A.1 `BookMeta`**：✅ 已就地纠正来源标记注释并加指向 §N 的说明（见 §A.1）。
 - **§B.3 L3（元数据等价）**：✅ 已回写——`*Origin` 按 **`MetaOrigin` 枚举值相等**；封面比对改为 **`PendingCover.bytes` 字节相等 + `format` 相等**，`coverBytes` 字样已清零（`load()` 阶段封面在解析期未落盘，正是 `PendingCover`）；顺带把新增的 `intro` 纳入 L3 字符串比对。
 - **§C.1（跨边界类型表）**：✅ 已回写——`OpenedBook.meta` 的封面以 `PendingCover`（**原始字节 + 真实格式**）过边界；Rust 侧只产字节 + 格式、**绝不落盘**，落盘仍归 Dart `CoverStore` —— `NF-D8`（Rust 只读）自动满足。
-- **`docs/class-diagram.mermaid`**：已同步（`BookMeta` 形状 + `CoverRef` 一族）。
+- **类图**：原 `docs/class-diagram.mermaid` 已随 v2.16 文档清理移除；`BookMeta` 形状与 `CoverRef` 一族以 `lib/meta/` 源码为准。
 
 ---
 
@@ -1802,7 +1802,7 @@ await coverStore.purgeOrphans(
 | `c8d06ca` | **模型 + 兼容桥**：`lib/model/book_meta.dart`（`BookMeta` / `MetaOrigin` / `CoverRef` / `CoverFormat` / `BookMetaAuto`）；`lib/format/book_source.dart` 改「import + re-export」，`lib/meta/book_meta.dart` 一行 re-export（§N.1） |
 | `f168d1d` | **纯 Dart 提取**：`lib/meta/{meta_source,epub_meta,txt_meta}.dart` + `lib/epub/epub_parser.dart` 的 `OpfView`（含 `description`，§N.4） |
 | `e0d9a4c` | **封面落盘 + 合成封面**：`lib/meta/{cover_store,synth_cover}.dart`（§N.6 / §N.7） |
-| `8e11ae0` | **M1-T05 技术记录**：`docs/tech-usage.md` §2.9 + `CHANGELOG.md` |
+| `8e11ae0` | **M1-T05 技术记录**：`CHANGELOG.md`（详细实证已随 v2.16 文档清理移除） |
 | `ac655f3` | **§N 回写批（生成本节）**：§N.8 计数修正（**5 → 6 方法**）、§N.6 缩略图恒 `.thumb.png`、§N.7 `AtomicFile` 兄弟文件规则、§N.4 `OpfView.description`、§B.3 / §C.1 对齐、本节 §N.9 |
 
 **逐条对齐结果**：§N.8 冻结总表 **7 行全部落地**。其中第 ④ 行（纯 Dart / Flutter 边界）已经**只读核查**证实：

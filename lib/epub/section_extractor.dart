@@ -62,7 +62,7 @@ const Set<String> _skipTags = <String>{
 /// 章内 `#id` 跳转 = `paragraphs.indexWhere((p) => p.contains('\x00ID:$id\x00'))`；
 /// 链接 = 按 `\x00` 切分后奇数段以 `A:` 开头者即 href（闭合标记为 `A`）。
 ExtractedSection extractSection(Uint8List bytes, {String baseDir = ''}) {
-  // ── 首帧「一次性门」定位探针（2026-10-06，见 docs/tech-usage.md §2.69 附四/五）──
+  // ── 首帧「一次性门」定位探针（2026-10-06，见 §2.69 附四/五）──
   // 真机 release 档 `reader.firstBatch` 291~442ms，而按内容量归一后
   // 「后台补齐章0.01ms/段、首帧章 2.3~3.5ms/段」⇒ 慢在「第一次」而非数据量。
   // 本探针把 `extractSection` 内部切成三段，用于判定这批成本**落在哪一段**：

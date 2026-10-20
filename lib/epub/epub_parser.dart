@@ -13,7 +13,7 @@
 //    正确接线（`DartEpubSource._parsedOnce` 已采用）：后台 isolate 跑
 //    [parseEpubStructureTask]（即 [parseEpubStructure] 纯数据）→ 结构经 [EpubParseOutcome]
 //    信封传回 → 再由持有原始 `bytes` 的 isolate 调 [bindEpubResult] 绑定闭包
-//    （见 `docs/schedule.md` M2a-T06 勘误）。
+//    （见 M2a-T06 勘误）。
 //
 // `PERF-02` ①（内存收敛）：结构解析阶段**只建「条目名 → ArchiveFile」索引、绝不预解压**；
 //    章节正文由绑定期产出的 `loadBytes` **按需、非驻留**解压（见 `zip_paths.dart` 的

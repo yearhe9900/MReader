@@ -48,7 +48,7 @@ void main() {
         (WidgetTester tester) async {
       // 组合根等价于书架 `ShelfPage._openBook`：建追踪 → 构造 ReaderPage。
       // 这里直接驱动 `OpenTrace` + `ReaderPage`，不复制书架的读字节/嗅探段
-      // （那两段由 `open.readBytes`/`open.sniff` 覆盖，见 tech-usage §2.69）。
+      // （那两段由 `open.readBytes`/`open.sniff` 覆盖，见 §2.69）。
       PerfLog.records.clear();
 
       late final void Function() beginAndPush;

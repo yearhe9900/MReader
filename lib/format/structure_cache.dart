@@ -4,12 +4,12 @@
 // 磁盘实现在 `lib/storage/structure_cache_store.dart`（走 `AtomicFile` + `DATA-01` 的
 // 原子写与损坏隔离），测试可用内存 fake 注入。
 //
-// 里程碑口径（`docs/里程碑-分页引擎.md` T06）：`parseEpubStructure` 结果按
+// 里程碑口径（M-PAGE T06）：`parseEpubStructure` 结果按
 // `bookId + 文件 mtime/size` 落盘；判据命中时**跳过 isolate 派发**、直接
 // `bindEpubResult` 绑定（闭包仍不跨 isolate，`PERF-01` 契约不变）——文件未变
 // 重开**零解析**。章节正文磁盘缓存**不在本期**（§6 ⑤⑵ 后置）。
 //
-// ## 为什么是紧凑二进制而不是 JSON（2026-10-20 改，`tech-usage.md` §2.107）
+// ## 为什么是紧凑二进制而不是 JSON（2026-10-20 改，§2.107）
 //
 // 缓存存在的意义是「让开书变快」，但旧实现把结构编码成 **JSON 文本**：
 // 真机 1152 章真实样本的缓存文件 100KB+，`jsonDecode` 要在主 isolate 上重建

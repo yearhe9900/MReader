@@ -140,7 +140,7 @@ BENCH[after]  big_bodies.epub    chapters=100 iters=3 minMs=4758 medianMs=4833 r
 
 ## 6. 已知边界（本次未覆盖 / 后续）
 
-- `PERF-02` 的**磁盘缓存**（`docs/进度表.md` 风险 2）仍待 M2；本任务只做「内存收敛」。
+- `PERF-02` 的**磁盘缓存**（原挂账风险 2）仍待 M2；本任务只做「内存收敛」。
 - `PERF-01` 的 **isolate 真正接线**已于 **M2a-T06** 交付（后台 `parseEpubStructureTask` + 主 isolate
   `bindEpubResult`，实测见 §7.1）；本 M1-T07 批次当时只交了 `parseEpubStructure`（纯数据）+
   `IsolateRunner`（当时为 `compute()` 薄封装）两块底座。

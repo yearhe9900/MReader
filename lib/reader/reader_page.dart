@@ -612,7 +612,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 开书门闸挂起中：就绪信号已具备（正文可上屏）但放行条件还没齐
   /// ——转场继续按住，补报点（[_checkOpenGate]）复查后放行。
   ///
-  /// 路线 A 纪律②「排到目标页才上屏」（`docs/研究-阅读页画布对照.md` §7①②）：
+  /// 路线 A 纪律②「排到目标页才上屏」（路线 A §7①②）：
   /// ① 估算落位只是过渡帧，`_pendingLand` 二次精确落位完成前不放行——否则
   /// 「估算位置 → 精确位置」的大跳发生在纸张滑入中，就是「开书闪动」主链；
   /// ② 放行时刻视口必须是**真身**（[_viewportReal]）——残留「载入中…」占位带
@@ -871,7 +871,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             );
         // backlog① 方案 B：恢复目标非书首时，校正全程遮罩（从头开书首帧即到位，不遮）。
         _restoreMask = index != 0 || pos > 0;
-        // 章块 key **不预分配**（`tech-usage.md` §2.107）：旧实现在这里
+        // 章块 key **不预分配**（§2.107）：旧实现在这里
         // `for (i < chapters.length) _chapterKeys[i] = GlobalKey()`，1152 章的书
         // 一次开书就要造 1152 个 GlobalKey，而首帧真正进树的只有窗口那几章——
         // 其余全是白烧的分配。改为 `_chapterKeyAt(index)` 按需懒建（同一 index
@@ -902,7 +902,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         _ready = true;
         _pagedMode = paged;
         if (paged) {
-          // 修法③「冷缓存收口」（`docs/研究-阅读页画布对照.md` §7③）：
+          // 修法③「冷缓存收口」（路线 A §7③）：
           // 调度器按书**进程级驻留**（[sharedPaginationSchedulers]），重开书
           // 命中定稿页表、一次精确落位——不再随 State 新建冷缓存（开书闪动
           // 机制链③）。`unfreeze()`：上一 State 若在翻页动画中被 dispose，
@@ -975,7 +975,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// `testWidgets` 跑在 `FakeAsync` 里，定时器会在页面 dispose 后留下未清挂起物。
   ///
   /// [requireLanded]：分页模式的「就绪」= **目标语义坐标精确落位收敛** 且
-  /// **视口真身**（路线 A 纪律②，`docs/研究-阅读页画布对照.md` §7①②）。
+  /// **视口真身**（路线 A 纪律②，路线 A §7①②）。
   /// 估算落位只是过渡帧——`_pendingLand` 二次精确落位完成前不放行，挂
   /// [_openGatePending] 等补报点（[_checkOpenGate]）复查；3s 兜底
   /// （`kReaderOpenHoldTimeout`）仍是「漏报就绪不卡死」的最后防线。
@@ -1016,7 +1016,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.scheduleFrame();
   }
 
-  /// 「视口真身」判据（路线 A 纪律②，`docs/研究-阅读页画布对照.md` §7②）：
+  /// 「视口真身」判据（路线 A 纪律②，路线 A §7②）：
   /// 可见区间 `[pixels, pixels + 视口高)` 内没有「载入中…」占位带。
   ///
   /// 占位带 = [PagedChapterView.pages] 为空的窗口视图（未分页章只占
@@ -1609,7 +1609,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 后台补齐循环：每批 [kLoadBatchSize] 章，逐批合入（经 [_applyLayoutChange]
   /// 做语义重锚）；直到「当前窗口内全部驻留」为止。滚动后由 [_ensureAutoFill] 再触发。
   ///
-  /// ## R1：批次间让出帧 + 空闲门（2026-10-06，CPU Profiler 定案，见tech-usage §2.69 附九）
+  /// ## R1：批次间让出帧 + 空闲门（2026-10-06，CPU Profiler 定案，见§2.69 附九）
   ///
   /// Profiler 实测：补齐阶段的 `RegExp` 占 **34.9%**、HTML 词法 15%、日志 7%
   /// ⇒ 后 820ms 里 **478ms（56%）是纯 CPU 空转**，且按 50ms 分桶**均匀分布**

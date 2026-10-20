@@ -1,8 +1,8 @@
 // `PERF-02`（懒加载内存收敛）/ `PERF-03`（逐段渲染）的**纯 Dart** 验收。
 //
 // ⚠️ 一律用 `test()` 而非 `testWidgets`：本项目已两次实证 `testWidgets` 测试体内
-// `await` 真异步 IO 会挂死（FakeAsync 不排空微任务队列），详见 `68578e4` /
-// `docs/tech-usage.md`。故「有界缓存 + 增量加载」逻辑抽到 `lib/reader/chapter_cache.dart`
+// `await` 真异步 IO 会挂死（FakeAsync 不排空微任务队列），详见 `68578e4`。
+// 故「有界缓存 + 增量加载」逻辑抽到 `lib/reader/chapter_cache.dart`
 // （纯 Dart），在此直接对**真实 source** 驱动并断言。
 import 'dart:io';
 import 'dart:typed_data';
