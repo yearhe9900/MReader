@@ -141,6 +141,47 @@ void main() {
     expect(tester.takeException(), isA<AssertionError>());
   });
 
+  /// 压在内容上时未选胶囊换成玻璃膜（平底页那档 6% onSurface 会读不出形状）；
+  /// 选中档两态同款，不参与这层膜。
+  testWidgets('overContent swaps only the unselected fill for the veil',
+      (tester) async {
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 80);
+    addTearDown(tester.view.reset);
+
+    Color fillOf(String label) => (tester
+            .widget<AnimatedContainer>(find.ancestor(
+                of: find.text(label), matching: find.byType(AnimatedContainer)))
+            .decoration! as BoxDecoration)
+        .color!;
+
+    for (final mode in MiThemeMode.values) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topCenter,
+              child: MiPillTabBar(
+                labels: four,
+                selectedIndex: 0,
+                onTap: _noop,
+                themeMode: mode,
+                overContent: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final palette = MiPillTabPalette.of(mode);
+      expect(fillOf(four[0]), palette.selectedFill, reason: '选中档两态同款');
+      expect(fillOf(four[1]),
+          MiTransparencyTokens.veiledFill(palette.unselectedFill, mode));
+      expect(fillOf(four[1]), isNot(palette.unselectedFill));
+    }
+  });
+
   test('const construction stays available', () {
     // 构造断言若含 .length / 参数字段求值会封死 const 构造（回归锁）
     const bar = MiPillTabBar(labels: ['a', 'b'], selectedIndex: 1, onTap: _noop);

@@ -116,8 +116,16 @@ const double kShelfHeaderHeight =
 /// 顶部留白保证**首行不被浮动头部盖住**（拍板验收条目）；行仍会随滚动
 /// 从头部下穿过、透出磨砂模糊（`UI-02` ②）。`topInset` 传
 /// `MediaQuery.paddingOf(context).top`。
-EdgeInsets shelfGridPadding(double topInset) => kShelfGridPadding.copyWith(
-      top: topInset + kShelfHeaderHeight + kShelfGridPadding.top,
+///
+/// [headerHeight] 默认 [kShelfHeaderHeight]（搜索栏 + 胶囊行两行）；**搜索态**
+/// 下胶囊行收起、头部只剩搜索行，传 [kShelfSearchRowHeight]——否则结果网格
+/// 顶部会多留一整块空白（2026-10-20 就地搜索态）。
+EdgeInsets shelfGridPadding(
+  double topInset, {
+  double headerHeight = kShelfHeaderHeight,
+}) =>
+    kShelfGridPadding.copyWith(
+      top: topInset + headerHeight + kShelfGridPadding.top,
     );
 
 // ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@ class AdaptivePillTabBar extends StatelessWidget {
     required this.selectedIndex,
     required this.onTap,
     this.themeMode = MiThemeMode.dark,
+    this.overContent = false,
   });
 
   /// 胶囊最小宽度 = 参考项目定宽（`MiPillTabMetrics.itemWidth`，87.6）。
@@ -58,6 +59,15 @@ class AdaptivePillTabBar extends StatelessWidget {
   /// 明暗模式，驱动配色配方。
   final MiThemeMode themeMode;
 
+  /// 未选胶囊是否铺**玻璃膜**（默认 false，语义同 `MiPillTabBar.overContent`）。
+  ///
+  /// 书架头部是浮动层、书卡从下方穿过（压在内容上）：只留平底页那档
+  /// onSurface@6% 时，胶囊在杂乱封面上读不出形状。开启后在填充**之下**再垫
+  /// 一层页面色膜并预合成单色（[MiTransparencyTokens.veiledFill]）——
+  /// 膜取页底色 ⇒ 垫在同色页底上恒等于没垫，**静止态观感不变**，所以不需要
+  /// 跟着滚动位置翻转的开关。选中胶囊两态同款，不参与这层膜。
+  final bool overContent;
+
   @override
   Widget build(BuildContext context) {
     // labels 非空与 selectedIndex 范围校验在 build：const 构造断言不支持
@@ -68,6 +78,11 @@ class AdaptivePillTabBar extends StatelessWidget {
       'selectedIndex 必须落在 labels 范围内',
     );
     final MiPillTabPalette palette = MiPillTabPalette.of(themeMode);
+    // 未选填充两态：平底 = 低调 6% onSurface；压内容 = 该档再垫一层玻璃膜
+    // （预合成为单色，平底观感不变）。选中档两态同款。
+    final Color unselectedFill = overContent
+        ? MiTransparencyTokens.veiledFill(palette.unselectedFill, themeMode)
+        : palette.unselectedFill;
     final TextScaler scaler = MediaQuery.textScalerOf(context);
     final TextDirection direction = Directionality.of(context);
     final ImageFilter blur = ImageFilter.blur(
@@ -117,7 +132,7 @@ class AdaptivePillTabBar extends StatelessWidget {
             width: widths[i],
             height: MiPillTabMetrics.pillHeight,
             decoration: BoxDecoration(
-              color: selected ? palette.selectedFill : palette.unselectedFill,
+              color: selected ? palette.selectedFill : unselectedFill,
               borderRadius: BorderRadius.circular(MiDimens.radiusPill),
             ),
             alignment: Alignment.center,

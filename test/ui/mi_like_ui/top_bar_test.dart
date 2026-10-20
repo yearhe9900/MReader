@@ -551,7 +551,9 @@ void main() {
     test('token：栏顶 σ = 5.37dp；阶梯按实测 σ(y) 单调递减、无缝铺满 0…119dp', () {
       expect(MiTopBarPalette.blurSigma, 5.37);
 
-      const bands = MiTopBarPalette.blurBands;
+      // 上游「透明参数统一收口」批后 `blurBands` 为 final（σ 逐档引用
+      // `MiTransparencyTokens.blurSigmaRamp`，不再是编译期常量）。
+      final bands = MiTopBarPalette.blurBands;
       expect(bands, isNotEmpty);
       // 首段从 0 起、末段到 119dp 收（下缘完全锐利）
       expect(bands.first.top, 0);
@@ -864,7 +866,9 @@ void main() {
         reason: '头部区形态的叠色铺满整条顶栏（否则搜索栏 / 胶囊四周会断层）',
       );
 
-      // ③ 只开磨砂：有模糊、无压色；曲线拉到整条栏 156dp（形状不变）
+      // ③ 只开磨砂：有模糊、无压色；**一整段恒定 σ** 铺满整条栏 156dp
+      //（上游 2026-10-20 判据：头部区搜索栏行 / 间隙 / 胶囊行后方糊得一样重，
+      // 胶囊底缘往下立刻锐利 → 不是渐进曲线）
       await tester.pumpWidget(harness(
         title: null,
         showBack: false,
@@ -872,16 +876,16 @@ void main() {
         searchBar: const SizedBox.expand(),
         tabBar: const SizedBox.expand(),
       ));
-      expect(
-        blurLayers(),
-        findsNWidgets(
-          MiTopBar.visibleBlurBands(
-            MiTopBarPalette.dark,
-            extent: 156.0,
-            underSurface: false,
-          ).length,
-        ),
+      final headerBands = MiTopBar.uniformBlurBands(
+        MiTopBarPalette.dark,
+        extent: 156.0,
+        underSurface: false,
       );
+      expect(headerBands, hasLength(1), reason: '头部区是一段恒定 σ，不是阶梯');
+      expect(blurLayers(), findsNWidgets(headerBands.length));
+      final headerRect = tester.getRect(blurLayers());
+      expect(headerRect.top, 0);
+      expect(headerRect.height, closeTo(156.0, 0.01));
       expect(_scrimDark, findsNothing);
       expect(
         tester.getSize(find.byType(MiTopBar)).height,
@@ -900,10 +904,10 @@ void main() {
         tabBar: const SizedBox.expand(),
       ));
 
-      // 磨砂两处形态（纯标题 128.9 / 头部区 156）用**同一条**实测 σ(y) 曲线，
-      // 但范围拉伸到各自材质盒底 —— 曲线是内容区自己的（无顶栏的「每日精选」
-      // 页顶部照样糊、到 ~120dp 自然收尾；分类页则糊到胶囊行下方），
-      // 形状固定、范围跟栏高走。
+      // 磨砂曲线**只服务「无头部区」形态**（纯标题 / 纯材质）：那档是内容区
+      // 自己的顶部渐进模糊（无顶栏的「每日精选」页顶部照样糊、到 ~120dp
+      // 自然收尾），形状固定、范围按材质盒拉伸。头部区形态是另一套实测规律，
+      // 见下面的 [MiTopBar.uniformBlurBands]。
       //
       // 关掉叠色时上半段裸露，必须**从 0 开始糊**（实机踩过：跳过它栏顶一片清晰）
       final bare = MiTopBar.visibleBlurBands(
@@ -930,14 +934,30 @@ void main() {
       expect(covered.length, lessThan(bare.length));
       expect(covered.last.bottom, closeTo(109.0 * k, 0.01));
 
-      // 头部区形态：同一条曲线拉到 156 才归零，且 0 起糊（那页没有压色）
-      final tall = MiTopBar.visibleBlurBands(
+      // 头部区形态**不走这条曲线**：一整段恒定 σ 铺满 0…156，到栏底硬切
+      //（首页亮/暗截图实测：搜索栏行、栏与胶囊之间的间隙、胶囊行后方糊得一样
+      // 重；胶囊底缘往下内容立刻锐利 —— 照曲线拉到 156dp 时胶囊处只剩 σ≈2.5）
+      final tall = MiTopBar.uniformBlurBands(
         MiTopBarPalette.dark,
         extent: 156.0,
         underSurface: false,
       );
-      expect(tall.first.top, 0);
-      expect(tall.last.bottom, closeTo(109.0 * 156.0 / 119.0, 0.01));
+      expect(tall, hasLength(1), reason: '恒定 σ 只要一段，不是 8 段阶梯');
+      expect(tall.single.top, 0);
+      expect(tall.single.bottom, closeTo(156.0, 0.01));
+      expect(tall.single.sigma, MiTopBarPalette.blurSigma);
+
+      // 深色叠色在头部区形态同样铺满整条栏：α=1 的实心段按盒高比例拉长，
+      // 之下那段模糊 100% 不可见 → 跳过（零视觉差异的省帧）
+      final tallCovered = MiTopBar.uniformBlurBands(
+        MiTopBarPalette.dark,
+        extent: 156.0,
+      );
+      expect(
+        tallCovered.single.top,
+        closeTo(MiTopBarPalette.dark.scrimOpaqueBottom * 156.0 / 128.9, 0.01),
+      );
+      expect(tallCovered.single.bottom, closeTo(156.0, 0.01));
 
       // 纯标题形态的叠色仍到实测材质盒 128.9
       await tester.pumpWidget(harness(offset: 40));
@@ -1214,8 +1234,9 @@ void main() {
       expect(
         barBlurs(),
         findsNWidgets(
-          // 头部区形态：材质盒 = 整条栏 156，叠色在（默认 showSurface: true）
-          MiTopBar.visibleBlurBands(MiTopBarPalette.dark, extent: 156.0).length,
+          // 头部区形态：材质盒 = 整条栏 156，叠色在（默认 showSurface: true）；
+          // 恒定 σ 一整段（上游 2026-10-20 判据，不是 8 段渐进阶梯）
+          MiTopBar.uniformBlurBands(MiTopBarPalette.dark, extent: 156.0).length,
         ),
         reason: '全栏只有顶栏那几条 σ(y) 段，没有零件私货',
       );

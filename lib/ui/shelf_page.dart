@@ -28,6 +28,7 @@
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -63,8 +64,15 @@ import 'book_detail_page.dart';
 import 'glass_kit.dart';
 import 'glass_nav_host.dart' show navThemeModeOf;
 import 'home_shell.dart' show kShellBottomInset;
-import 'library_search_page.dart';
-import 'mi_like_ui/mi_like_ui.dart' show MiGradientBlur, MiPillTabMetrics, MiSearchBar;
+import 'mi_like_ui/mi_like_ui.dart'
+    show
+        MiPillTabMetrics,
+        MiSearchBar,
+        MiSearchCancelButton,
+        MiSearchCancelMetrics,
+        MiThemeMode,
+        MiTopBarMetrics,
+        MiTopBarPalette;
 import 'shelf_grid.dart';
 
 /// 书架首页。
@@ -169,6 +177,27 @@ class ShelfPageState extends State<ShelfPage> {
   /// 防「双击卡片 → 叠两个详情页」。pop 后由 [_openDetail] 的 `finally` 释放。
   bool _detailPushing = false;
 
+  // ── 就地搜索态（2026-10-20 上游搜索栏批）────────────────────────────────
+  //
+  // 原实现是 push 独立搜索页（`LibrarySearchPage`）：查询与书架状态解耦、
+  // 不必在当前子树处理键盘遮挡。改成上游形态的**就地搜索态**后，这两点由
+  // 「胶囊行收起 + 结果替换网格」承担——本页只过滤元数据（纯内存、零 IO），
+  // 边输入边出结果，比跳页少一次路由与一次列表重建。
+
+  /// 是否处于搜索态（点搜索栏进入，点取消钮退出）。
+  bool _searching = false;
+
+  /// 当前查询串（已 trim、已转小写）。
+  String _query = '';
+
+  /// 搜索输入控制器 / 焦点：由页面持有，退出搜索态时能主动 `unfocus` 收键盘。
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+
+  /// 搜索态转场时长（上游录屏逐帧实测 480ms：起手静止 48ms + 位移 430ms）。
+  static const Duration _searchTransition =
+      Duration(milliseconds: MiTopBarMetrics.searchTransitionMs);
+
   @override
   void initState() {
     super.initState();
@@ -183,6 +212,8 @@ class ShelfPageState extends State<ShelfPage> {
   void dispose() {
     widget.shelfPrefs.removeListener(_onStoreChanged);
     widget.shelfLayout.removeListener(_onStoreChanged);
+    _searchController.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -542,21 +573,55 @@ class ShelfPageState extends State<ShelfPage> {
 
   /// 顶栏假搜索框 → 书库搜索页；选中结果**直接进阅读页**。
   ///
-  /// 搜索做成**独立页面**（而非就地输入）：查询与书架状态解耦，
-  /// 也不必在当前子树里处理键盘遮挡。与 anx-reader 的做法一致。
+  /// 搜索态：点搜索栏**就地展开**（不再 push 独立搜索页）。
   ///
-  /// 结果处理与书架点卡保持同一语义（2026-09-29 拍板）：anx 的搜索页复用同一个
-  /// `BookItem`（`search_page.dart:204`），点结果即 `pushToReadingPage`，
-  /// 故本项目也直接 [_openBook]，避免「同一手势两种结果」的割裂。
-  Future<void> _openSearch() async {
-    final BookRecord? picked = await Navigator.of(context).push<BookRecord>(
-      MaterialPageRoute<BookRecord>(
-        builder: (_) => LibrarySearchPage(books: _books),
-      ),
-    );
-    if (picked != null && mounted) {
-      await _openBook(picked);
-    }
+  /// ══════════════════════════════════════════════════════════════════════════════
+  /// 2026-10-20 上游搜索栏批：独立搜索页 → 就地搜索态
+  /// ══════════════════════════════════════════════════════════════════════════════
+  /// 原实现 `Navigator.push(LibrarySearchPage)`：查询与书架状态解耦，但点一下
+  /// 搜索栏就要整页跳转，与参考 App（搜索栏原地变输入框 + 右侧取消钮 + 胶囊行
+  /// 淡出、内容让位）差一整层交互。现改为：
+  ///
+  ///  * 搜索栏换真输入框（`MiSearchBar(editable: true)`：放大镜与占位文字不动、
+  ///    光标 + hint 同现），聚焦即弹键盘；
+  ///  * 右侧让出 [MiSearchCancelButton]（⌀44.1 = 栏高），转场中段淡入；
+  ///  * 胶囊分类行淡出并收高（搜索态不参与排版，头部只剩搜索行）；
+  ///  * 结果**直接替换下方网格**（书卡形态不变，点卡即走 [_openBook] 同一管道）。
+  ///
+  /// 元数据过滤是纯内存操作（书名 / 作者 / 原始文件名），可以边输入边出结果。
+  void _enterSearch() {
+    if (_searching) return;
+    setState(() => _searching = true);
+  }
+
+  /// 退出搜索态：先收键盘再清查询（顺序反了会在列表重建后弹一次键盘）。
+  void _exitSearch() {
+    if (!_searching) return;
+    _searchFocus.unfocus();
+    _searchController.clear();
+    setState(() {
+      _searching = false;
+      _query = '';
+    });
+  }
+
+  /// 输入变化：查询串统一 trim + 小写后比较（中文不受影响，英文大小写不敏感）。
+  void _onQueryChanged(String raw) {
+    final String next = raw.trim().toLowerCase();
+    if (next == _query) return;
+    setState(() => _query = next);
+  }
+
+  /// 命中的书（书名 / 作者 / 原始文件名任一包含查询串）。
+  List<BookRecord> get _searchResults {
+    if (_query.isEmpty) return const <BookRecord>[];
+    final String q = _query;
+    return _books
+        .where((BookRecord b) =>
+            b.title.toLowerCase().contains(q) ||
+            b.author.toLowerCase().contains(q) ||
+            b.fileName.toLowerCase().contains(q))
+        .toList();
   }
 
   // 拖拽 / 文件夹相关的方法（`_mergeIntoFolder` / `_dropIntoFolder` /
@@ -589,26 +654,83 @@ class ShelfPageState extends State<ShelfPage> {
         // 居中收缩会破坏「全宽搜索胶囊 + 铺满 chips 行」形态。传 `false` 走
         // `:579-611`：可用宽 = 整宽减去两侧内边距（本页无 leading/actions 槽）。
         centerTitle: false,
+        // 高度**恒取两行**：搜索态由头部自己把胶囊行收成 0 高（[AnimatedSize]），
+        // 顶栏高度若跟着突变，转场第一帧整条栏会跳一下。
         toolbarHeight: kShelfHeaderHeight,
       ),
       body: OpaqueContentSurface(
         child: DecoratedBox(
           decoration: shelfGradientBackground(theme),
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : _books.isEmpty
-                  ? _buildEmptyState(theme)
-                  : Column(
-                      children: <Widget>[
-                        Expanded(
-                          // 有书、但当前分组里一本都没有（如刚把书都移出了该分组）。
-                          child: _visibleBooks.isEmpty
-                              ? _buildNoMatchState(theme)
-                              : _buildBookGrid(topInset),
+          child: _searching
+              ? _buildSearchBody(theme, topInset)
+              : _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _books.isEmpty
+                      ? _buildEmptyState(theme)
+                      : Column(
+                          children: <Widget>[
+                            Expanded(
+                              // 有书、但当前分组里一本都没有（如刚把书都移出了该分组）。
+                              child: _visibleBooks.isEmpty
+                                  ? _buildNoMatchState(theme)
+                                  : _buildBookGrid(topInset),
+                            ),
+                            if (_importErrors.isNotEmpty)
+                              _buildErrorList(theme),
+                          ],
                         ),
-                        if (_importErrors.isNotEmpty) _buildErrorList(theme),
-                      ],
-                    ),
+        ),
+      ),
+    );
+  }
+
+  /// 搜索态正文：未输入 → 引导；无命中 → 提示；有结果 → **同一套书卡网格**。
+  ///
+  /// 复用 [_buildBookGrid] 而不是另写结果列表：点结果与点书架书卡必须是同一个
+  /// 手势结果（2026-09-29 拍板「同一手势一种结果」），复用能天然保证这点。
+  Widget _buildSearchBody(ThemeData theme, double topInset) {
+    if (_query.isEmpty) {
+      return _buildSearchHint(theme);
+    }
+    final List<BookRecord> results = _searchResults;
+    if (results.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text(
+            '没有匹配「$_query」的书籍',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      );
+    }
+    return _buildBookGrid(topInset, books: results);
+  }
+
+  /// 搜索态未输入时的引导（原独立搜索页的同款文案与图标）。
+  Widget _buildSearchHint(ThemeData theme) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(
+              Icons.search,
+              size: 56,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '输入关键字开始搜索',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -625,6 +747,7 @@ class ShelfPageState extends State<ShelfPage> {
   /// 控件（[GlassButton]）、分组标签行是 [AdaptivePillTabBar] 纯色胶囊，都不
   /// 需要 Material。`MaterialType.transparency` 不绘制底色，不破坏玻璃观感。
   Widget _buildHeader() {
+    final MiThemeMode mode = navThemeModeOf(context);
     return Material(
       type: MaterialType.transparency,
       child: Column(
@@ -635,8 +758,17 @@ class ShelfPageState extends State<ShelfPage> {
             height: kShelfSearchRowHeight,
             child: Row(
               children: <Widget>[
-                // 搜索胶囊铺满剩余宽（「全宽」形态；排序按钮保留在搜索行）。
-                Expanded(child: _BookSearchEntry(onTap: _openSearch)),
+                // 搜索胶囊铺满剩余宽（「全宽」形态）；搜索态下由右侧取消钮让位。
+                Expanded(
+                  child: _BookSearchEntry(
+                    onTap: _enterSearch,
+                    searching: _searching,
+                    controller: _searchController,
+                    focusNode: _searchFocus,
+                    onChanged: _onQueryChanged,
+                    mode: mode,
+                  ),
+                ),
                 if (_importing)
                   const Padding(
                     padding: EdgeInsets.all(12),
@@ -646,18 +778,58 @@ class ShelfPageState extends State<ShelfPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   ),
-                IconButton(
-                  icon: const Icon(Icons.sort),
-                  tooltip: '排序方式',
-                  onPressed: _showSortMenu,
-                ),
+                // 2026-10-20 上游搜索栏批：搜索行右侧的**排序按钮移除**（顶部只留
+                // 搜索栏 + 胶囊行）。排序逻辑与菜单 [_showSortMenu] 原样保留，
+                // 入口暂缺——挂账待定，确定落点后直接接回，不必重写。
+                if (_searching)
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      left: MiSearchCancelMetrics.barGap,
+                    ),
+                    // 取消钮在转场中段淡入（Interval 直接取上游录屏实测段：
+                    // 0.35…0.62，既不跟最后一帧一起冒出来，也不是一开始就有）
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween<double>(begin: 0, end: 1),
+                      duration: _searchTransition,
+                      curve: const Interval(
+                        MiTopBarMetrics.searchCancelFadeBegin,
+                        MiTopBarMetrics.searchCancelFadeEnd,
+                        curve: Curves.easeOut,
+                      ),
+                      builder: (BuildContext context, double t, Widget? child) =>
+                          Opacity(opacity: t, child: child),
+                      child: MiSearchCancelButton(
+                        onTap: _exitSearch,
+                        themeMode: mode,
+                        // 头部已有自己的磨砂层（见 [_buildHeaderBlur]），零件
+                        // 不再自绘 backdrop；膜照开（书卡从头部下方穿过）
+                        frosted: false,
+                        overContent: true,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
-          SizedBox(height: kShelfHeaderRowGap),
-          SizedBox(
-            height: kShelfChipsRowHeight,
-            child: _buildGroupFilterBar(),
+          // 胶囊分类行：搜索态淡出并收高（不参与排版，头部只剩搜索行）。
+          // 用 AnimatedSize 而不是改 toolbarHeight——顶栏高度突变会让整条栏跳。
+          AnimatedOpacity(
+            opacity: _searching ? 0 : 1,
+            duration: _searchTransition,
+            child: AnimatedSize(
+              duration: _searchTransition,
+              curve: MiTopBarMetrics.searchMotion,
+              alignment: Alignment.topCenter,
+              child: _searching
+                  ? const SizedBox(width: double.infinity, height: 0)
+                  : Padding(
+                      padding: const EdgeInsets.only(top: kShelfHeaderRowGap),
+                      child: SizedBox(
+                        height: kShelfChipsRowHeight,
+                        child: _buildGroupFilterBar(),
+                      ),
+                    ),
+            ),
           ),
         ],
       ),
@@ -711,6 +883,9 @@ class ShelfPageState extends State<ShelfPage> {
               ],
               selectedIndex: selectedIndex,
               themeMode: navThemeModeOf(context),
+              // 书卡从头部下方穿过（压在内容上）：未选胶囊要垫那层玻璃膜，
+              // 否则在杂乱封面上只剩文字可辨、读不出胶囊形状（上游 2026-10-20）
+              overContent: true,
               onTap: (int i) => unawaited(
                 widget.shelfPrefs.setGroup(
                   i == 0 || i == selectedIndex ? null : groups[i - 1].id,
@@ -724,6 +899,13 @@ class ShelfPageState extends State<ShelfPage> {
   }
 
   /// 排序菜单（右上角弹出；当前字段右侧显示方向箭头，再点同项即翻转方向）。
+  ///
+  /// **当前无 UI 入口**（2026-10-20 上游搜索栏批：搜索行右侧的排序按钮移除，
+  /// 顶部只留「搜索栏 + 胶囊行」）。排序**功能与偏好照旧完整保留**——排序字段 /
+  /// 方向仍在 `ShelfPrefsStore` 里生效，`_visibleBooks` 照旧读它；只是入口
+  /// 暂缺、挂账待定落点（候选：胶囊行末尾的排序胶囊 / 设置页书架分组）。
+  /// 定案后直接给某个按钮接上 `onPressed: _showSortMenu` 即可，无需重写。
+  // ignore: unused_element
   Future<void> _showSortMenu() async {
     final ThemeData theme = Theme.of(context);
     final ShelfPrefs prefs = widget.shelfPrefs.prefs;
@@ -845,14 +1027,20 @@ class ShelfPageState extends State<ShelfPage> {
   /// [topInset] = 状态栏高（`MediaQuery.padding.top`）；网格 `padding.top`
   /// 经 [shelfGridPadding] 合成后 = `状态栏 + 浮动头部高 + 12`——**首行不被
   /// 浮动头部盖住**的唯一保证（内容 edge-to-edge 后正文从 y=0 起）。
-  Widget _buildBookGrid(double topInset) {
+  ///
+  /// [books] 默认 [_visibleBooks]；搜索态传命中结果（同一套书卡网格，保证
+  /// 「点结果」与「点书架书卡」是同一手势结果）。
+  Widget _buildBookGrid(double topInset, {List<BookRecord>? books}) {
+    // 搜索态胶囊行收起 → 头部只剩搜索行，顶部留白与磨砂跟随缩短。
+    final double headerHeight =
+        _searching ? kShelfSearchRowHeight : kShelfHeaderHeight;
     return Stack(
       children: <Widget>[
         ShelfGrid(
-          books: _visibleBooks,
+          books: books ?? _visibleBooks,
           coverStore: widget.coverStore,
           openingBookId: _openingBookId,
-          padding: shelfGridPadding(topInset),
+          padding: shelfGridPadding(topInset, headerHeight: headerHeight),
           // 点书卡 = **直接进阅读页**（2026-09-29 拍板：原「点卡 → 详情页」改道；
           // 与 anx-reader 一致——其 `book_item.dart:51-53` 的 `onTap` 即
           // `pushToReadingPage`）。详情页入口改走长按操作单「书籍详情」。
@@ -861,18 +1049,43 @@ class ShelfPageState extends State<ShelfPage> {
           // （见 `_showBookActions` 的返回值语义）。
           onBookActions: _showBookActions,
         ),
-        // 内容区顶部渐进模糊（`UI-02` ②，2026-10-19 上游批）：书卡从头部下
-        // 穿过、滚出顶部时被这层磨砂渐进糊住（与 GlassTopBar 磨砂连成一条），
-        // 到下方逐渐清晰、120dp 处归零（无硬边）。叠在列表**之后**（同 Stack）
-        // 才采样得到滚动内容；`IgnorePointer` 不吃手势，不影响点卡 / 长按。
+        // 头部区磨砂（`UI-02` ②）。叠在列表**之后**（同 Stack）才采样得到滚动
+        // 内容；`IgnorePointer` 不吃手势，不影响点卡 / 长按。
         Positioned(
           top: 0,
           left: 0,
           right: 0,
-          height: 120,
-          child: MiGradientBlur(height: 120),
+          height: topInset + headerHeight,
+          child: _buildHeaderBlur(),
         ),
       ],
+    );
+  }
+
+  /// 头部区磨砂：**一整段恒定 σ 铺满头部、到栏底硬切**。
+  ///
+  /// ══════════════════════════════════════════════════════════════════════════════
+  /// 2026-10-20 上游「首页悬浮头部」批：渐进曲线 → 恒定 σ
+  /// ══════════════════════════════════════════════════════════════════════════════
+  /// 原实现是 [MiGradientBlur]（σ 沿 y 递减、120dp 处归零）。上游拿完整截图
+  /// 逐点实测后推翻了这条曲线：搜索栏行、栏与胶囊之间的间隙、胶囊行后方的
+  /// 内容**糊得一样重**，胶囊底缘往下立刻锐利 —— 照曲线拉伸到头部底缘时，
+  /// 胶囊行所在位置只剩 σ≈2.5，与截图明显不符。
+  ///
+  /// 于是头部区形态改走 `MiTopBar.uniformBlurBands` 那条规律的一整段恒定
+  /// σ（本页是自拼头部、不是 `MiTopBar` 的头部插槽，故这里自己铺同一段）：
+  /// 高度 = 状态栏 + 头部高（[shelfGridPadding] 的同一口径），到栏底硬切。
+  ///
+  /// 只用一段也把全宽高斯从 8 段压到 1 段（滚动时每帧都走这里）。
+  Widget _buildHeaderBlur() {
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: MiTopBarPalette.blurSigma,
+          sigmaY: MiTopBarPalette.blurSigma,
+        ),
+        child: const SizedBox.expand(),
+      ),
     );
   }
 
@@ -906,14 +1119,10 @@ class ShelfPageState extends State<ShelfPage> {
   }
 }
 
-/// 顶栏里的「假搜索框」——外观是搜索框，点击进搜索页（照搬 anx-reader）。
-///
-/// 为什么不做成可就地输入：搜索是**独立页面**（[LibrarySearchPage]），
-/// 顶栏只做入口。就地输入会把查询状态绑进书架子树，还要在当前布局里
-/// 处理键盘遮挡与结果覆盖层，收益不抵复杂度。
+/// 顶栏里的搜索栏——常规态是「假搜索框」（点击进搜索态），搜索态变真输入框。
 ///
 /// **靠左铺满而非居中收缩**：调用方须传 `centerTitle: false`（见 `build`）。
-/// 居中档下库会把可用宽压成 `width - 2 * max(两侧)`，右侧两个动作按钮一占，
+/// 居中档下库会把可用宽压成 `width - 2 * max(两侧)`，搜索态还要让位给取消钮，
 /// 搜索框就只剩半宽且浮在中间——「看起来是个居中的小胶囊」，不是搜索框该有的样子。
 ///
 /// ══════════════════════════════════════════════════════════════════════════════
@@ -922,19 +1131,49 @@ class ShelfPageState extends State<ShelfPage> {
 /// 原实现是 [GlassButton.custom] 手拼「放大镜图标 + 占位文字」的自绘玻璃
 /// 胶囊（36 高）。现改为上游 [MiSearchBar]——1:1 实测自小米主题商店分类页
 /// 的搜索栏：stadium 高 44.1、图标 17.8 + 图文间距 12 起于左缘 15.4、占位
-/// 文字 CJK 16.5dp、栏体自带 backdrop 磨砂（`frosted` 默认 true，顶栏无父
-/// 玻璃层故保留自绘磨砂）。材质配方走组件自身的 `search_bar_tokens`，不再
-/// 由业务页引 `GlassMaterial.settingsFor`（同 `UI-07`「材质单一出处」精神）。
+/// 文字 CJK 16.5dp。材质配方走组件自身的 `search_bar_tokens`，不再由业务页引
+/// `GlassMaterial.settingsFor`（同 `UI-07`「材质单一出处」精神）。
 /// 几何契约不变：靠左贴顶栏内边距、铺满可用宽（`test/ui/shelf_page_test.dart`
 /// 的 `shelf-search-entry` 断言只换样式判据，几何判据原样）。
+///
+/// ══════════════════════════════════════════════════════════════════════════════
+/// 2026-10-20 上游搜索栏批：接**搜索态**与**玻璃膜**
+/// ══════════════════════════════════════════════════════════════════════════════
+///  * [searching] = true 时同一个组件换成真输入框（`editable`）：几何 / 配色
+///    不变，光标 + hint 同现，聚焦即弹键盘。进入靠 `autofocus`，退出由父级
+///    `unfocus` + 换回非编辑态两个动作一起收键盘；
+///  * [overContent] 恒开：书卡从头部下方穿过（压在高频封面上），只留平底页
+///    那档半透明填充时整条栏会糊成一片、边缘读不出来。
 ///
 /// 明暗经 [navThemeModeOf] 显式传入（与底栏 / 胶囊标签同一 `GlassScope` 出处，
 /// `UI-01` ② 跟应用主题三态），而非留给组件回落环境 `Theme.of`。
 class _BookSearchEntry extends StatelessWidget {
-  const _BookSearchEntry({required this.onTap});
+  const _BookSearchEntry({
+    required this.onTap,
+    required this.searching,
+    required this.controller,
+    required this.focusNode,
+    required this.onChanged,
+    required this.mode,
+  });
 
-  /// 点击回调（打开搜索页）。
+  /// 常规态点击回调（进入搜索态）。
   final VoidCallback onTap;
+
+  /// 是否处于搜索态（真输入框）。
+  final bool searching;
+
+  /// 搜索态输入控制器。
+  final TextEditingController controller;
+
+  /// 搜索态焦点节点（退出时由页面 `unfocus`）。
+  final FocusNode focusNode;
+
+  /// 输入变化回调。
+  final ValueChanged<String> onChanged;
+
+  /// 明暗配方（父级已解析，避免两次查 `GlassScope`）。
+  final MiThemeMode mode;
 
   @override
   Widget build(BuildContext context) {
@@ -943,8 +1182,18 @@ class _BookSearchEntry extends StatelessWidget {
       // MiSearchBar 材质」）。
       key: const Key('shelf-search-entry'),
       hint: '搜索书名、作者',
-      onTap: onTap,
-      themeMode: navThemeModeOf(context),
+      onTap: searching ? null : onTap,
+      themeMode: mode,
+      // 头部已有自己的磨砂层（`_buildHeaderBlur`），零件不再自绘 backdrop：
+      // 整条栏只糊一次，否则栏内比周围更糊、且多一份每帧全 QUAD 高斯。
+      frosted: false,
+      // 压在书卡上：垫玻璃膜（膜取页底色 ⇒ 静止态观感不变）
+      overContent: true,
+      editable: searching,
+      controller: searching ? controller : null,
+      focusNode: searching ? focusNode : null,
+      autofocus: searching,
+      onChanged: searching ? onChanged : null,
     );
   }
 }

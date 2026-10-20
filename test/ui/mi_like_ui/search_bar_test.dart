@@ -20,7 +20,12 @@ Color _compose(Color bg, Color fill) {
 }
 
 /// 可交互脚手架；[mode] 为空时走「跟随环境 Theme」路径。
-Widget _harness({MiThemeMode? mode, VoidCallback? onTap, ThemeData? theme}) {
+Widget _harness({
+  MiThemeMode? mode,
+  VoidCallback? onTap,
+  ThemeData? theme,
+  bool overContent = false,
+}) {
   return MaterialApp(
     theme: theme,
     home: Scaffold(
@@ -33,6 +38,7 @@ Widget _harness({MiThemeMode? mode, VoidCallback? onTap, ThemeData? theme}) {
           hint: '搜索主题 / 壁纸 / 图标',
           themeMode: mode,
           onTap: onTap,
+          overContent: overContent,
         ),
       ),
     ),
@@ -170,6 +176,50 @@ void main() {
     // `Theme.of` 仍是旧亮度（`ThemeData.lerp` 在 t<0.5 取前者），必须等动画走完
     await tester.pump(const Duration(milliseconds: 300));
     expect(fillIn(), MiSearchBarPalette.dark.fill);
+  });
+
+  /// 压在内容上时改用玻璃膜：平底页那档 onSurface@13/36 在照片上几乎读不出
+  /// 栏形（模糊只改局部对比、不改局部均值，落差只能来自填充本身）。
+  testWidgets('overContent paints the glass veil instead of the flat fill',
+      (tester) async {
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 300);
+    addTearDown(tester.view.reset);
+
+    for (final mode in MiThemeMode.values) {
+      await tester.pumpWidget(_harness(mode: mode, overContent: true));
+      final box = tester.widget<ColoredBox>(
+        find
+            .descendant(
+                of: find.byType(MiSearchBar), matching: find.byType(ColoredBox))
+            .first,
+      );
+      expect(
+        box.color,
+        MiTransparencyTokens.veiledFill(MiSearchBarPalette.of(mode).fill, mode),
+      );
+      expect(box.color, isNot(MiSearchBarPalette.of(mode).fill));
+    }
+  });
+
+  /// 膜取页底色 ⇒ 垫在同色页底上恒等于没垫：平底页观感必须不变。
+  ///
+  /// 这是「分类页也能开 overContent」的前提（静止态背后是页底、滚动态才有
+  /// 内容压上来），也是本批不做「跟着滚动位置翻转」状态开关的依据。
+  test('veil over the page background leaves the flat fill unchanged', () {
+    for (final mode in MiThemeMode.values) {
+      final Color bg = mode == MiThemeMode.dark
+          ? MiColors.pageBackgroundDark
+          : MiColors.pageBackgroundLight;
+      final Color flat = MiSearchBarPalette.of(mode).fill;
+      final Color plain = _compose(bg, flat);
+      final Color veiled =
+          _compose(bg, MiTransparencyTokens.veiledFill(flat, mode));
+      // 只允许浮点舍入（实测差 0.3 级），任何肉眼可见的偏移都是 bug
+      expect((plain.r * 255).round(), closeTo((veiled.r * 255).round(), 1));
+      expect((plain.g * 255).round(), closeTo((veiled.g * 255).round(), 1));
+      expect((plain.b * 255).round(), closeTo((veiled.b * 255).round(), 1));
+    }
   });
 
   test('const construction stays available', () {

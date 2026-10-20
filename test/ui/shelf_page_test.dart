@@ -296,26 +296,33 @@ void main() {
 
       // 几何契约：靠左贴顶栏内边距（`GlassAppBar` 默认 horizontal padding = 8），
       // 并**铺满可用宽**——2026-09-29 参考图批撤掉原先的 `maxWidth: 400`
-      // 桌面上限（拍板「全宽搜索胶囊」）：800 - 16(两侧内边距) - 96(两按钮)
-      // ≈ 688，故断言 > 600；若退回 400 上限或居中档立刻红。
+      // 桌面上限（拍板「全宽搜索胶囊」）。2026-10-20 上游搜索栏批又移除了
+      // 搜索行右侧的排序按钮，可用宽进一步变宽（800 - 16 内边距 ≈ 784），
+      // 故断言 > 600 仍成立；若退回 400 上限或居中档立刻红。
       final Finder box = find.byKey(const Key('shelf-search-entry'));
       expect(box, findsOneWidget);
       expect(tester.getTopLeft(box).dx, lessThanOrEqualTo(16));
       expect(tester.getSize(box).width, greaterThan(600));
-      // 右侧仍留出两个动作按钮的位置（导入 / 排序）。
-      expect(tester.getTopRight(box).dx, lessThan(800 - 48));
+      // 常规态右侧已无动作按钮（排序入口移除），胶囊右缘可贴到内边距上。
+      expect(tester.getTopRight(box).dx, lessThanOrEqualTo(800 - 8));
 
       // 材质契约（2026-10-19 上游搜索栏批）：胶囊从自绘 [GlassButton.custom]
-      // 换成上游 [MiSearchBar]——组件自带 stadium 高 44.1、backdrop 磨砂
-      // （frosted 默认 true）+ 半透明填充。断言按组件事实源逐项钉：改材质
-      // 只许改移植树（`mi_like_ui`，与上游 `diff -r` 零差异），业务页不写字面量。
+      // 换成上游 [MiSearchBar]——组件自带 stadium 高 44.1、半透明填充。
+      // 断言按组件事实源逐项钉：改材质只许改移植树（`mi_like_ui`，与上游
+      // `diff -r` 零差异），业务页不写字面量。
       final MiSearchBar bar = tester.widget<MiSearchBar>(box);
       // 占位文案（同 key 定位下钉 hint，避免「空栏」也过几何断言）。
       expect(bar.hint, '搜索书名、作者');
-      // 点按接线：打开搜索页（onTap 非空 = 参与手势）。
+      // 点按接线：进入就地搜索态（onTap 非空 = 参与手势）。
       expect(bar.onTap, isNotNull);
-      // 自绘 backdrop 磨砂保留（顶栏内无父磨砂层，故不传 frosted: false）。
-      expect(bar.frosted, isTrue);
+      // 常规态不是输入框（不占焦点、不弹键盘）。
+      expect(bar.editable, isFalse);
+      // 2026-10-20 上游搜索栏批：磨砂移交头部（[_buildHeaderBlur] 铺一整段
+      // 恒定 σ），零件不再自绘 backdrop——整条栏只糊一次。
+      expect(bar.frosted, isFalse);
+      // 压在书卡上：垫玻璃膜（平底/静止态观感不变，只在内容滚到头部后方
+      // 时显出形状）。
+      expect(bar.overContent, isTrue);
       // 明暗由 `GlassScope` 级联亮度解析（同底栏 `navThemeModeOf`）；
       // 测试环境默认亮色主题 → light 配方。
       expect(bar.themeMode, MiThemeMode.light);
@@ -813,19 +820,110 @@ void main() {
       expect(_chipLabels(tester), <String>['全部', '玄幻']);
     });
 
-    testWidgets('L3 排序菜单含「手动排序」一项', (WidgetTester tester) async {
-      await tester.runAsync(
-        () => repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt'),
-      );
+    testWidgets('排序入口已移除（挂账），排序偏好仍驱动书架顺序',
+        (WidgetTester tester) async {
+      await tester.runAsync(() async {
+        await repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt');
+        await repo.importFile(bytes: _txtBytes('C'), fileName: 'c.txt');
+      });
 
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      await tester.tap(find.byIcon(Icons.sort));
+      // 2026-10-20 上游搜索栏批：搜索行右侧的排序按钮**移除**——顶部只留
+      // 「搜索栏 + 胶囊行」。反向钉住：谁把按钮加回搜索行就判红。
+      expect(find.byIcon(Icons.sort), findsNothing);
+
+      // 移除的只是**入口**，排序能力仍完整：偏好一改，书架顺序随之变。
+      // 两步都显式给方向，不依赖 store 的默认升降序（否则用例会跟着默认值漂）。
+      await tester.runAsync(() async {
+        await shelfPrefs.setSortField(ShelfSortField.title);
+        await shelfPrefs.setSortAscending(true);
+      });
+      await _settle(tester);
+      expect(_titles(tester).first, 'a', reason: '标题升序');
+
+      await tester.runAsync(() => shelfPrefs.setSortAscending(false));
+      await _settle(tester);
+      expect(_titles(tester).first, 'c', reason: '标题降序');
+    });
+
+    testWidgets('搜索态：点搜索栏就地展开（真输入框 + 取消钮、胶囊行收起）',
+        (WidgetTester tester) async {
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('甲'), fileName: 'alpha.txt'),
+      );
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      // 常规态：胶囊行在、没有取消钮
+      expect(find.byType(AdaptivePillTabBar), findsOneWidget);
+      expect(find.byType(MiSearchCancelButton), findsNothing);
+      expect(
+        tester.widget<MiSearchBar>(find.byKey(const Key('shelf-search-entry')))
+            .editable,
+        isFalse,
+      );
+
+      await tester.tap(find.byKey(const Key('shelf-search-entry')));
+      await tester.pumpAndSettle(); // 480ms 转场（AnimatedSize / 取消钮淡入）
+
+      // ① 搜索栏变真输入框：`editable` 打开、点击回调交出（不再是「假搜索框」）
+      final MiSearchBar bar =
+          tester.widget<MiSearchBar>(find.byKey(const Key('shelf-search-entry')));
+      expect(bar.editable, isTrue);
+      expect(bar.onTap, isNull);
+      expect(bar.overContent, isTrue, reason: '搜索态也压在书卡上');
+      // ② 取消钮出现；③ 胶囊分类行收起（不参与排版）
+      expect(find.byType(MiSearchCancelButton), findsOneWidget);
+      expect(find.byType(AdaptivePillTabBar), findsNothing);
+      // ④ 未输入时给引导，网格让位
+      expect(find.text('输入关键字开始搜索'), findsOneWidget);
+      expect(find.byType(BookCard), findsNothing);
+    });
+
+    testWidgets('搜索态：输入即过滤（元数据命中），结果仍是书卡网格；取消恢复全量',
+        (WidgetTester tester) async {
+      await tester.runAsync(() async {
+        await repo.importFile(bytes: _txtBytes('甲'), fileName: 'alpha.txt');
+        await repo.importFile(bytes: _txtBytes('乙'), fileName: 'beta.txt');
+      });
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+      expect(find.byType(BookCard), findsNWidgets(2));
+
+      await tester.tap(find.byKey(const Key('shelf-search-entry')));
       await tester.pumpAndSettle();
 
-      expect(find.text('手动排序'), findsOneWidget);
-      expect(find.text('导入时间'), findsOneWidget);
+      // 输入即过滤：书名 / 作者 / 原始文件名任一命中
+      await tester.enterText(
+        find.descendant(
+          of: find.byKey(const Key('shelf-search-entry')),
+          matching: find.byType(TextField),
+        ),
+        'alpha',
+      );
+      await tester.pumpAndSettle();
+      expect(_titles(tester), <String>['alpha'], reason: '只留命中的那本');
+
+      // 无命中 → 提示文案（不出网格）
+      await tester.enterText(
+        find.descendant(
+          of: find.byKey(const Key('shelf-search-entry')),
+          matching: find.byType(TextField),
+        ),
+        '不存在的书名',
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(BookCard), findsNothing);
+      expect(find.textContaining('没有匹配'), findsOneWidget);
+
+      // 取消：退搜索态、清空查询、恢复全量网格
+      await tester.tap(find.byType(MiSearchCancelButton));
+      await tester.pumpAndSettle();
+      expect(find.byType(MiSearchCancelButton), findsNothing);
+      expect(find.byType(AdaptivePillTabBar), findsOneWidget);
+      expect(find.byType(BookCard), findsNWidgets(2));
     });
 
     testWidgets('没有任何分组时，chips 只有「全部」', (WidgetTester tester) async {
