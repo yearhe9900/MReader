@@ -1,11 +1,37 @@
-// 设置页（PRD §12.1 页面 7；M2b-T07 只落「玻璃效果」分组，2026-09-29 重做视觉）。
+// 设置页（PRD §12.1 页面 7；2026-09-29 重做视觉，2026-10-19 顶栏切上游）。
 //
-// 本页是玻璃质量档位的**消费点**（`UI-05` / `UI-06`）：档位生效接线后，
-// 「关」档纯色退化已下沉到 [GlassNavScaffold] 等薄封装（`glass_kit.dart`），
-// 本页不再做档位特判——切档后经 `GlassRuntime` 全局生效、整树跟档。
+// ══════════════════════════════════════════════════════════════════════════════
+// 2026-10-20 「玻璃效果」分组移除（负责人口径）
+// ══════════════════════════════════════════════════════════════════════════════
+// 「效果质量」「降低视觉特效」两行整组移除（[GlassSettingsSection] 组件一并删除）。
+// **玻璃档位能力不删**：`PerfPrefsStore` 仍由 `main.dart` 加载并
+// `GlassRuntime.bind`，只是不再有 UI 修改入口 —— 档位恒为默认值（高 /
+// 降低特效关）；`UI-06` ② 的关档纯色退化路径（`GlassNavHost` /
+// `GlassSideNavHost`）继续保留，供后续重新加入口或设备自动降级复用。
+// 本页因此不再消费 `perfPrefs`：构造参数同步移除，不留无消费者的依赖。
 //
-// 视觉红线（`UI-04` + 本批口径）：内容层永远不透明（[OpaqueContentSurface]），
-// 玻璃只出现在导航层；玻璃库锁定 1.7.0 不动。
+// 视觉红线（`UI-04`）不变：内容层不透明，玻璃只出现在导航层。
+//
+// ══════════════════════════════════════════════════════════════════════════════
+// 2026-10-19 上游顶栏批：顶栏与内容区模糊切上游 [MiTopBar]
+// ══════════════════════════════════════════════════════════════════════════════
+// 本批把顶栏从旧玻璃库体系（[GlassNavScaffold] + [GlassTopBar] +
+// [GlassLargeTitle] + [OpaqueContentSurface]）整体切到上游移植体 [MiTopBar]，
+// 与上游「我的」页（`_MockPageShell`，大标题折叠形态）同款：
+//   · 页面 = `Stack[Positioned.fill(滚动内容), Positioned(top: 0, MiTopBar)]`；
+//   · [MiTopBar] 是受控组件：`ScrollController` 位移经 [ValueNotifier] 喂给
+//     `scrollOffset`，只重建顶栏一层（上游同款做法）；
+//   · **内容区顶部渐进模糊由顶栏材质自带**（`showBlur` 默认 true，内部复用
+//     独立组件 `MiGradientBlur`——上游设计：磨砂本体属于内容区，顶栏按材质
+//     盒高复用它），页面不再单独叠模糊层；
+//   · 「我的」是底栏顶层页 → `showBack` 保持默认 false（上游口径：顶层页无
+//     返回圆钮）；
+//   · 旧批的搜索占位随 GlassLargeTitle 一并移除——上游「我的」页顶栏无搜索
+//     头部（搜索形态属分类页），占位本就是「未实现」的死功能（拍板④）。
+//
+// 下方 2026-09-29 改版的拍板口径**仍然有效**（①卡片不透明③外观组④不给错误
+// 预期），仅②的大标题实现载体换为 [MiTopBar]（两段式收起实测同源：大标题
+// 1:1 随内容上移 + 独立淡出，紧凑标题随后淡入）。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 2026-09-29 改版（参考 HyperOS 深色设置页）
@@ -23,10 +49,6 @@
 //   ④ **搜索框只做占位**：不接任何过滤逻辑，点击给一条轻提示，避免「能搜但搜不到」
 //      的错误预期。
 //
-// `GlassLargeTitle` 与顶栏标题**共用同一个** [GlassLargeTitleController]：
-// 控制器自持 `ScrollController`（接给本页 `CustomScrollView`），两处都订阅它，
-// 不存在第二份进度真值。控制器由本页 `State` 创建与释放。
-//
 // 为什么玻璃库的 sliver 可以直接放进 `OpaqueContentSurface`：该容器的断言只校验
 // **直接子节点**（`glass_kit.dart:139-143`），本页的直接子节点是 `CustomScrollView`；
 // 而 [GlassLargeTitle] 只画文本与 `Transform.scale`（`glass_large_title.dart:398-458`，
@@ -37,29 +59,27 @@ import 'package:flutter/material.dart';
 
 import '../ai/ai_client.dart';
 import '../ai/provider_store.dart';
-import '../settings/perf_prefs_store.dart';
 import '../settings/settings_store.dart';
 import '../sync/sync_config_store.dart';
 import '../sync/sync_trigger.dart';
 import '../sync/webdav_client.dart';
 import '../theme/app_theme.dart';
 import 'ai_settings_page.dart';
-import 'glass_kit.dart';
-import 'glass_settings_section.dart';
 import 'home_shell.dart' show kShellBottomInset;
+import 'mi_like_ui/mi_like_ui.dart' show MiTopBar, MiTopBarMetrics;
 import 'settings_kit.dart';
 import 'sync_settings_page.dart';
 import 'sync_status_page.dart';
 
-/// 页面内容的左右留白（卡片与搜索占位对齐同一左边缘）。
-const double _kPageInset = 16;
+/// 页面内容的左右留白（上游「我的」页实测 20，2026-10-19 随顶栏批对齐；
+/// 原 16 是 2026-09-29 改版自定值，随搜索占位一并退场）。
+const double _kPageInset = 20;
 
 /// 设置页。
 class SettingsPage extends StatefulWidget {
   /// 创建设置页（依赖显式注入，非全局单例）。
   const SettingsPage({
     super.key,
-    required this.perfPrefs,
     required this.settings,
     required this.aiStore,
     required this.aiClient,
@@ -68,9 +88,6 @@ class SettingsPage extends StatefulWidget {
     this.syncTrigger,
     this.onOpenStats,
   });
-
-  /// 性能偏好服务（玻璃质量档位 / 降低视觉特效开关的持久化）。
-  final PerfPrefsStore perfPrefs;
 
   /// 设置服务（主题三态；`app.dart` 由它驱动 `MaterialApp.themeMode`）。
   final SettingsStore settings;
@@ -105,17 +122,16 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  /// 大标题 ⇄ 顶栏标题的收起联动控制器。
-  ///
-  /// 自持 `ScrollController`（见库 `glass_large_title.dart:53-173`），
-  /// **必须**由本 `State` 释放；顶栏（[GlassTopBar.largeTitleController]）与内容层
-  /// 大标题（[GlassLargeTitle]）共用同一实例。
-  final GlassLargeTitleController _titleController = GlassLargeTitleController();
+  /// 滚动位移 → 顶栏折叠的受控链（上游 `_MockPageShell` 同款）：
+  /// [ScrollController] 喂 [ValueNotifier]，[MiTopBar] 只跟着这一层重建，
+  /// 不整页 `setState`。
+  final ScrollController _scrollController = ScrollController();
+  final ValueNotifier<double> _scrollOffset = ValueNotifier<double>(0);
 
   @override
   void initState() {
     super.initState();
-    widget.perfPrefs.addListener(_onDepsChanged);
+    _scrollController.addListener(_syncScrollOffset);
     widget.settings.addListener(_onDepsChanged);
     // 同步配置可选（`SYNC-01`）：订阅配置增删，「已配置 / 未配置」值不陈旧。
     widget.syncStore?.addListener(_onDepsChanged);
@@ -123,14 +139,17 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   void dispose() {
-    widget.perfPrefs.removeListener(_onDepsChanged);
+    _scrollController.removeListener(_syncScrollOffset);
+    _scrollController.dispose();
+    _scrollOffset.dispose();
     widget.settings.removeListener(_onDepsChanged);
     widget.syncStore?.removeListener(_onDepsChanged);
-    _titleController.dispose();
     super.dispose();
   }
 
-  /// 两个依赖任一变化即重绘本页（项目既定状态管理约定）。
+  void _syncScrollOffset() => _scrollOffset.value = _scrollController.offset;
+
+  /// 依赖任一变即重绘本页（项目既定状态管理约定）。
   void _onDepsChanged() {
     if (mounted) {
       setState(() {});
@@ -161,67 +180,62 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    // 档位生效统一走薄封装（GlassNavScaffold 内部读 `GlassScope.configOf`）：
-    // 高 / 中 / 低档玻璃壳层；「关」档自动退化纯色（`UI-06` ②）。
-    return GlassNavScaffold(
-      // 大标题在内容层（本页自己画），顶栏标题由控制器驱动淡入——故顶栏标题
-      // 初帧不可见（`collapseProgress == 0` → `barProgress == 0`）。
-      // 居中与否保持库默认（`centerTitle: true`）：两段式收起是 iOS 26 的
-      // 大标题范式，库的 `_buildTitle` 也把标题强制 `TextAlign.center`。
-      appBar: GlassTopBar(
-        // 2026-10-15 底栏「设置」tab 改名「我的」后，本页标题同步改名——
-        // 标签与页面同名，避免「tab 叫我的、进去叫设置」的割裂。
-        title: const Text('我的'),
-        largeTitleController: _titleController,
-      ),
-      body: OpaqueContentSurface(
-        child: CustomScrollView(
-          controller: _titleController.scrollController,
-          slivers: <Widget>[
-            GlassLargeTitle(
-              text: '我的',
-              controller: _titleController,
-              // 显式给色：库缺省取 `CupertinoColors.label`（走 Cupertino 主题级联），
-              // 这里直接跟 Material 主题的 `onSurface`，与卡片文字同一口径。
-              color: Theme.of(context).colorScheme.onSurface,
-              padding: const EdgeInsetsDirectional.fromSTEB(
+    // 上游「我的」页同款（`_MockPageShell`）：滚动内容铺底 + 顶栏钉顶。
+    // 页底色与 home_shell 铺的整窗页底同源（`scaffoldBackgroundColor`），
+    // 页面独立成树（测试 / push 子页）时也不露窗口底色。
+    //
+    // 顶栏形态 = 大标题折叠（上游「我的」页实测形态）：磨砂 + 叠色 + 大/紧凑
+    // 标题两段式；内容区顶部渐进模糊由顶栏材质自带（`showBlur` 内部复用
+    // `MiGradientBlur`，上游设计——磨砂本体属于内容区、顶栏按材质盒高复用）。
+    return ColoredBox(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      child: Stack(
+        children: <Widget>[
+          Positioned.fill(
+            child: ListView(
+              controller: _scrollController,
+              // 顶部让位 = 上游实测 [MiTopBarMetrics.contentTopInset]（183，
+              // 大标题墨心之下）；底部自留浮动胶囊底栏的空白（`kShellBottomInset`）。
+              padding: const EdgeInsets.fromLTRB(
+                _kPageInset,
+                MiTopBarMetrics.contentTopInset,
                 _kPageInset,
                 0,
-                _kPageInset,
-                4,
               ),
-              searchBarPadding: const EdgeInsetsDirectional.fromSTEB(
-                _kPageInset,
-                4,
-                _kPageInset,
-                12,
-              ),
-              searchBar: const _SettingsSearchPlaceholder(),
-            ),
-            SliverToBoxAdapter(
-              child: Padding(
-                // 底部自留浮动胶囊底栏的空白（`home_shell.dart:18-20` / `kShellBottomInset`）。
-                padding: const EdgeInsetsDirectional.fromSTEB(
-                  _kPageInset,
-                  0,
-                  _kPageInset,
-                  kShellBottomInset,
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: kShellBottomInset),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      _buildStatsGroup(),
+                      _buildAppearanceGroup(),
+                      _buildAiGroup(),
+                      _buildSyncGroup(),
+                      // 后续分组（RUST-10 加速参数…）在此追加。
+                    ],
+                  ),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    _buildStatsGroup(),
-                    _buildAppearanceGroup(),
-                    _buildAiGroup(),
-                    GlassSettingsSection(perfPrefs: widget.perfPrefs),
-                    _buildSyncGroup(),
-                    // 后续分组（RUST-10 加速参数…）在此追加。
-                  ],
-                ),
+              ],
+            ),
+          ),
+          // 顶栏必须 Positioned 钉顶（上游 ⚠️：留作非定位子级时 Stack 按它
+          // 收缩，整页在 loose 约束里被垂直居中）。
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            child: ValueListenableBuilder<double>(
+              valueListenable: _scrollOffset,
+              builder: (BuildContext context, double offset, _) => MiTopBar(
+                // 2026-10-15 底栏「设置」tab 改名「我的」后，本页标题同步改名。
+                title: '我的',
+                scrollOffset: offset,
+                // 「我的」是底栏顶层页 → 无返回圆钮（默认 false，上游口径）。
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -337,49 +351,8 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 }
 
-/// 「搜索设置项」输入框的**占位**（本批不实现搜索）。
-///
-/// 拍板口径：「先做搜索框占位，不实际实现」——**不接任何过滤逻辑**，
-/// 点击只给一条轻提示，明确告知尚未实现，不给「能搜但搜不到」的错误预期。
-/// 形态照参考图：40 高、圆角 20、`surfaceContainerHighest` 填充 + `outlineVariant` 描边。
-class _SettingsSearchPlaceholder extends StatelessWidget {
-  const _SettingsSearchPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme colors = Theme.of(context).colorScheme;
-    return Material(
-      // 自带 Material：水波纹才画在本框之上——`OpaqueContentSurface` 的 Material
-      // 在滚动视图之外，波纹会被本框底色盖住（同 `settings_kit.dart` 卡片的口径）。
-      color: colors.surfaceContainerHighest,
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: colors.outlineVariant),
-      ),
-      child: InkWell(
-        onTap: () => GlassOverlays.showToast(
-          context: context,
-          message: '设置搜索尚未实现',
-        ),
-        child: SizedBox(
-          height: 40,
-          child: Row(
-            children: <Widget>[
-              const SizedBox(width: 12),
-              Icon(Icons.search, size: 20, color: colors.onSurfaceVariant),
-              const SizedBox(width: 8),
-              Text(
-                '搜索系统设置项',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: colors.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+// 「搜索设置项」占位（`_SettingsSearchPlaceholder`）已随 2026-10-19 上游顶栏
+// 批移除：它挂在旧 [GlassLargeTitle] 的 searchBar 插槽上，而上游「我的」页顶栏
+// （大标题折叠形态）没有搜索头部——搜索形态属分类页（吸顶头部），本批对齐
+// 上游形态后占位失去挂点；其本就是「未实现」的死功能（拍板④），点击只弹
+// 轻提示，移除不损失任何真实能力。

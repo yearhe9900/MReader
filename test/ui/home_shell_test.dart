@@ -18,7 +18,6 @@ import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/platform/secure_store_io.dart';
 import 'package:mreader/reader/progress_store.dart';
-import 'package:mreader/settings/perf_prefs_store.dart';
 import 'package:mreader/settings/settings_store.dart';
 import 'package:mreader/settings/shelf_layout_store.dart';
 import 'package:mreader/settings/shelf_prefs_store.dart';
@@ -112,7 +111,6 @@ void main() {
             repository: repo,
             coverStore: FileCoverStore(paths),
             progressStore: ProgressStore(paths),
-            perfPrefs: PerfPrefsStore(tempDir),
             shelfPrefs: ShelfPrefsStore(tempDir),
             shelfLayout: ShelfLayoutStore(tempDir),
             settings: SettingsStore(tempDir),
@@ -203,7 +201,6 @@ void main() {
             repository: repo,
             coverStore: FileCoverStore(paths),
             progressStore: ProgressStore(paths),
-            perfPrefs: PerfPrefsStore(tempDir),
             shelfPrefs: ShelfPrefsStore(tempDir),
             shelfLayout: ShelfLayoutStore(tempDir),
             settings: SettingsStore(tempDir),

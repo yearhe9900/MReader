@@ -314,15 +314,12 @@ void main() {
   });
 
   group('设置页入口接线（`SYNC-01` 配置入口）', () {
-    late PerfPrefsStore perfPrefs;
     late SettingsStore settings;
     late ProviderStore aiStore;
 
     setUp(() async {
-      perfPrefs = PerfPrefsStore(dir);
       settings = SettingsStore(dir);
       aiStore = ProviderStore(dir, AiKeyVault(FileSecureStore(directory: dir)));
-      await perfPrefs.load();
       await settings.load();
       await aiStore.load();
     });
@@ -334,7 +331,6 @@ void main() {
         host(
           GlassQualityTier.off,
           SettingsPage(
-            perfPrefs: perfPrefs,
             settings: settings,
             aiStore: aiStore,
             aiClient: AiClient(),
@@ -359,7 +355,6 @@ void main() {
         host(
           GlassQualityTier.off,
           SettingsPage(
-            perfPrefs: perfPrefs,
             settings: settings,
             aiStore: aiStore,
             aiClient: AiClient(),
@@ -380,7 +375,6 @@ void main() {
         host(
           GlassQualityTier.off,
           SettingsPage(
-            perfPrefs: perfPrefs,
             settings: settings,
             aiStore: aiStore,
             aiClient: AiClient(),

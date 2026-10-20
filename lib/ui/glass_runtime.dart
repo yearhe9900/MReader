@@ -100,10 +100,15 @@ GlassTierConfig glassTierConfigFor(GlassQualityTier tier) {
   }
 }
 
-/// 档位的人类可读名（设置页「效果质量」行的**当前值**与单选弹层候选项文案）。
+/// 档位的人类可读名（「高 / 中 / 低 / 关」）。
 ///
 /// 2026-09-29：原消费点是 `SegmentedButton` 的分段标签，该控件已随设置页改版
 /// 换成「行 + 弹层单选」；本函数的契约（返回「高 / 中 / 低 / 关」）不变。
+///
+/// **2026-10-20**：设置页的「效果质量 / 降低视觉特效」两行整组移除后，本函数
+/// 暂无生产消费者（仅 `glass_runtime_test` 钉契约）——保留是因为档位模型仍在
+/// （`GlassRuntime` 折算链 + 关档退化路径），后续重加入口或设备自动降级提示
+/// 都要用它出文案。
 String glassQualityTierLabel(GlassQualityTier tier) {
   switch (tier) {
     case GlassQualityTier.high:

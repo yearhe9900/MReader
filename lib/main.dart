@@ -277,7 +277,6 @@ Future<void> main() async {
           repository: repository,
           coverStore: coverStore,
           progressStore: progressStore,
-          perfPrefs: perfPrefs,
           shelfPrefs: shelfPrefs,
           shelfLayout: shelfLayout,
           settings: settings,

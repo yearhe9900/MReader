@@ -1,13 +1,22 @@
-// `test/ui/settings_page_test.dart`：设置页 2026-09-29 改版的验收映射。
+// `test/ui/settings_page_test.dart`：设置页验收映射（2026-09-29 改版 +
+// 2026-10-19 上游顶栏批 + 2026-10-20 移除玻璃效果组）。
 //
 // ══════════════════════════════════════════════════════════════════════════════
-// 本批拍板口径 → 断言
+// 拍板口径 → 断言
 // ══════════════════════════════════════════════════════════════════════════════
-//   · ①卡片不透明             → 「外观」「玻璃效果」两组用 [SettingsGroupCard]（Material 实心卡片）；
-//   · ②内容层大标题（两段式） → 大标题与顶栏标题**共用同一个** `GlassLargeTitleController`；
-//     首帧顶栏标题不可见，滚到底完全可见；前半段（progress < 0.5）恒不可见；
+//   · ①卡片不透明             → 「外观」组用 [SettingsGroupCard]（Material 实心卡片）；
+//   · ②顶栏 = 上游 [MiTopBar] → 受控折叠：`scrollOffset` 跟随滚动位移，大标题
+//     淡出 / 紧凑标题淡入两段式（期望值取 [MiTopBarMetrics] 纯函数同源计算）；
+//   · 内容区顶部渐进模糊       → 顶栏材质自带（`showBlur` 内部复用 [MiGradientBlur]）
+//     ——上游设计：磨砂本体属于内容区，页面不单独叠模糊层；
+//   · 顶部让位                 → 滚动容器 `padding.top == MiTopBarMetrics.contentTopInset`
+//     （上游「我的」页同款 183；丢了它大标题区会被内容顶穿）；
 //   · ③「外观」组             → 主题三态写入 `SettingsStore` 并原子落盘（`TYP-03`）；
-//   · ④搜索框只做占位         → 点击只给轻提示，不出现任何输入框 / 结果列表。
+//   · ④「玻璃效果」组**已移除** → 效果质量 / 降低视觉特效两行不再出现（2026-10-20
+//     负责人口径；档位能力仍在 `GlassRuntime`，只是没有 UI 入口）。
+//
+// 2026-09-29 拍板④的搜索占位已随顶栏批移除（上游「我的」页顶栏无搜索头部），
+// 其「只给轻提示、不进搜索态」的用例随之退场。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 两条测试口径（沿用既有测试的既定做法）
@@ -15,21 +24,18 @@
 // 1. **宿主钉「关」档**（`glass_off_fallback_test.dart` 的 `host(tier, …)` 同款）：
 //    玻璃档的 `GlassDialog` / `GlassSheet` 在 `flutter test` 软件光栅下每帧数百 ms 真实
 //    异步开销（tech-usage §2.26），故**需要弹层交互的用例一律在关档跑**——关档退化走
-//    Material 底部弹窗，既便宜又恰好覆盖 `UI-06` ② 的退化路径。玻璃档只做「在场 +
-//    控制器同一实例」的静态断言，不弹层。
-// 2. **大标题在关档同样在场**：`GlassLargeTitle` 只画 `Text` + `Transform.scale`
-//    （`glass_large_title.dart:398-458`，**零玻璃质感**），是布局 / 动画组件而非质感组件，
-//    故不违反 `UI-06` ② 的「纯色退化」。本文件把这条口径**显式断言**下来，
-//    免得后人以为它是漏网之鱼。
+//    Material 底部弹窗，既便宜又恰好覆盖 `UI-06` ② 的退化路径。
+// 2. **顶栏是 mi_like_ui 移植体、不感知档位**（与书架页 `MiSearchBar` /
+//    `MiGradientBlur` 同口径）：磨砂由顶栏材质自带，关 / 高档都在场，
+//    不做档位特判。
 //
-// ⚠️ `find.text('我的')` 在本页恒为 **2 个**：内容层大标题 + 顶栏标题（两者文案相同，
-//    库文档要求如此；2026-10-15 底栏「设置」tab 改名「我的」后页面同名改）。需要
-//    精确定位时必须用 `find.descendant` 限定范围。
+// ⚠️ `find.text('我的')` 在本页恒为 **2 个**：[MiTopBar] 的大标题与紧凑标题
+//    同文案（组件设计如此，各包一层 [Opacity] 由滚动位移驱动此消彼长）。
+//    需要精确定位时必须用 `find.descendant` 限定范围。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:mreader/ai/ai_client.dart';
 import 'package:mreader/ai/provider_store.dart';
 import 'package:mreader/ai/secure_key_store.dart';
@@ -39,6 +45,8 @@ import 'package:mreader/settings/settings_store.dart';
 import 'package:mreader/ui/glass_kit.dart';
 import 'package:mreader/ui/glass_runtime.dart';
 import 'package:mreader/ui/glass_scope.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart'
+    show MiGradientBlur, MiTopBar, MiTopBarMetrics;
 import 'package:mreader/ui/settings_kit.dart';
 import 'package:mreader/ui/settings_page.dart';
 
@@ -68,29 +76,34 @@ Future<void> _settle(WidgetTester tester, {int rounds = 12}) async {
   }
 }
 
-/// 内容层大标题的控制器（库要求它与顶栏标题共用同一实例）。
-GlassLargeTitleController _titleControllerOf(WidgetTester tester) =>
-    tester.widget<GlassLargeTitle>(find.byType(GlassLargeTitle)).controller;
+/// 顶栏本体（上游 [MiTopBar] 受控组件）。
+Finder _topBar() => find.byType(MiTopBar);
 
-/// 顶栏（[AppBar]）里那条「我的」标题。
-Finder _barTitle() => find.descendant(
-      of: find.byType(AppBar),
-      matching: find.text('我的'),
-    );
-
-/// 顶栏标题当前的淡入不透明度。
+/// [MiTopBar] 内两条标题（大 / 紧凑）各自的 [Opacity] 包装，顺序 = 大、紧凑。
 ///
-/// 取**最近的** [Opacity] 祖先：我们的 `_fadeInBarTitle` 是包在标题外的那一层，
-/// 且其 `child` 就是标题本身——故最近的 `Opacity` 必定是它
-/// （`find.ancestor` 按「由近及远」返回，见 flutter_test `_AncestorWidgetFinder`）。
-double _barTitleOpacity(WidgetTester tester) {
-  final Finder barTitle = _barTitle();
-  expect(barTitle, findsOneWidget);
-  final Iterable<Opacity> opacities = tester.widgetList<Opacity>(
-    find.ancestor(of: barTitle, matching: find.byType(Opacity)),
+/// 组件设计：`title` 非 null 时两条 `Text` 同时在场、文案相同，各包一层
+/// [Opacity]（`largeTitleOpacity` / `compactTitleOpacity` 驱动，此消彼长）。
+/// 顶栏内部除这两层外没有任何 [Opacity]（磨砂走 `BackdropFilter`），
+/// 故直接取顶栏内全部 [Opacity] 即得到这两层。
+List<Opacity> _titleOpacities(WidgetTester tester) {
+  final List<Opacity> opacities = tester.widgetList<Opacity>(
+    find.descendant(of: _topBar(), matching: find.byType(Opacity)),
+  ).toList();
+  expect(
+    opacities.length,
+    2,
+    reason: 'MiTopBar 两条标题必须各有一层 Opacity（两段式收起的驱动层）',
   );
-  expect(opacities, isNotEmpty, reason: '顶栏标题必须由淡入包装（关档路径需自补）');
-  return opacities.first.opacity;
+  return opacities;
+}
+
+/// 本页滚动容器（[ListView]）的 [ScrollController]。
+ScrollController _scrollOf(WidgetTester tester) {
+  final ListView list = tester.widget<ListView>(find.byType(ListView));
+  final ScrollController? controller = list.controller;
+  expect(controller, isNotNull, reason: '设置页必须把控制器接到顶栏受控链上');
+  expect(controller!.hasClients, isTrue);
+  return controller;
 }
 
 /// 某一行的 [SettingsTile]（按行标题文本定位）。
@@ -105,20 +118,17 @@ void main() {
   tearDown(GlassRuntime.resetForTest);
 
   late Directory tempDir;
-  late PerfPrefsStore perfPrefs;
   late SettingsStore settings;
   late ProviderStore aiStore;
 
   setUp(() async {
     // `setUp` 在 FakeAsync 之外，可照常 await（含真异步 IO）。
     tempDir = await Directory.systemTemp.createTemp('mreader_settings_');
-    perfPrefs = PerfPrefsStore(tempDir);
     settings = SettingsStore(tempDir);
     aiStore = ProviderStore(
       tempDir,
       AiKeyVault(FileSecureStore(directory: tempDir)),
     );
-    await perfPrefs.load();
     await settings.load();
     await aiStore.load();
   });
@@ -130,68 +140,55 @@ void main() {
   });
 
   Widget buildPage() => SettingsPage(
-        perfPrefs: perfPrefs,
         settings: settings,
         aiStore: aiStore,
         aiClient: AiClient(),
       );
 
-  group('设置页 · 壳层与档位退化', () {
-    testWidgets('关档：壳层 / 顶栏走 Material，大标题仍在场（UI-06 ②）',
+  group('设置页 · 顶栏 = 上游 MiTopBar', () {
+    testWidgets('无旧玻璃壳层；顶栏钉顶、内容按 contentTopInset 让位（关 / 高档同款）',
         (WidgetTester tester) async {
-      await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
-      await tester.pumpAndSettle();
+      for (final GlassQualityTier tier in <GlassQualityTier>[
+        GlassQualityTier.off,
+        GlassQualityTier.high,
+      ]) {
+        await tester.pumpWidget(host(tier, buildPage()));
+        await tester.pumpAndSettle();
 
-      // 壳层与顶栏退化（同 `glass_off_fallback_test.dart` 的关档断言）。
-      expect(find.byType(Scaffold), findsOneWidget);
-      expect(find.byType(AppBar), findsOneWidget);
-      expect(find.byType(GlassScaffold), findsNothing);
-      expect(find.byType(GlassAppBar), findsNothing);
+        // ① 旧玻璃壳层体系整组退场（Scaffold / AppBar / 大标题 sliver / 不透明容器）。
+        expect(find.byType(Scaffold), findsNothing, reason: '$tier');
+        expect(find.byType(AppBar), findsNothing, reason: '$tier');
+        expect(find.byType(GlassNavScaffold), findsNothing, reason: '$tier');
+        expect(find.byType(GlassTopBar), findsNothing, reason: '$tier');
+        expect(find.byType(GlassLargeTitle), findsNothing, reason: '$tier');
+        expect(find.byType(OpaqueContentSurface), findsNothing, reason: '$tier');
 
-      // 大标题**在场**：它是布局 / 动画组件（只画文本与 Transform.scale），
-      // 不是玻璃质感组件——关档的「纯色退化」不受影响（见文件头口径 2）。
-      expect(find.byType(GlassLargeTitle), findsOneWidget);
+        // ② 顶栏 = 上游移植体，且**不感知档位**（材质自带磨砂 + 压色）。
+        final MiTopBar bar = tester.widget<MiTopBar>(_topBar());
+        expect(bar.title, '我的');
+        expect(bar.showBlur, isTrue, reason: '磨砂由顶栏材质自带（$tier）');
+        expect(bar.showSurface, isTrue, reason: '大标题形态需要压色保证可读（$tier）');
+        expect(bar.showBack, isFalse, reason: '顶层页无返回圆钮（$tier）');
+        expect(
+          find.descendant(of: _topBar(), matching: find.byType(MiGradientBlur)),
+          findsOneWidget,
+          reason: '内容区顶部渐进模糊必须由顶栏材质产出（$tier）',
+        );
 
-      // 内容层不透明容器仍在（`UI-04` 红线的唯一出口）。
-      expect(find.byType(OpaqueContentSurface), findsOneWidget);
+        // ③ 顶栏钉在屏顶（非定位子级会让 Stack 按它收缩、整页垂直居中）。
+        expect(tester.getTopLeft(_topBar()).dy, 0.0, reason: '$tier');
+
+        // ④ 滚动内容让位 = 上游实测 contentTopInset。
+        final ListView list = tester.widget<ListView>(find.byType(ListView));
+        expect(
+          (list.padding as EdgeInsets).top,
+          MiTopBarMetrics.contentTopInset,
+          reason: '$tier',
+        );
+      }
     });
 
-    testWidgets('高档：玻璃壳层在场，顶栏与大标题共用同一控制器实例',
-        (WidgetTester tester) async {
-      await tester.pumpWidget(host(GlassQualityTier.high, buildPage()));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(GlassScaffold), findsOneWidget);
-      expect(find.byType(GlassAppBar), findsOneWidget);
-
-      // 硬要求（库 `glass_large_title.dart:53-173`）：大标题与顶栏标题必须订阅
-      // **同一个**控制器，否则两段式收起各走各的、标题会重叠或闪跳。
-      final GlassLargeTitle largeTitle =
-          tester.widget<GlassLargeTitle>(find.byType(GlassLargeTitle));
-      final GlassAppBar bar =
-          tester.widget<GlassAppBar>(find.byType(GlassAppBar));
-      expect(bar.largeTitleController, isNotNull);
-      expect(bar.largeTitleController, same(largeTitle.controller));
-    });
-  });
-
-  group('设置页 · 大标题两段式收起', () {
-    testWidgets('首帧：内容层与顶栏各有一条「我的」，顶栏标题不可见',
-        (WidgetTester tester) async {
-      await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
-      await tester.pumpAndSettle();
-
-      // 两条「我的」= 大标题 + 顶栏标题（同文案是库的设计）。
-      expect(find.text('我的'), findsNWidgets(2));
-      expect(find.byType(GlassLargeTitle), findsOneWidget);
-
-      // 首帧进度为 0 → 顶栏标题必须不可见（只靠位置不靠透明度会「两条同时可见」）。
-      final GlassLargeTitleController controller = _titleControllerOf(tester);
-      expect(controller.collapseProgress, 0.0);
-      expect(_barTitleOpacity(tester), 0.0);
-    });
-
-    testWidgets('滚动：前半段顶栏标题仍不可见，滚到底完全可见',
+    testWidgets('大标题两段式：受控 scrollOffset 驱动大标题淡出、紧凑标题随后淡入',
         (WidgetTester tester) async {
       // 视口调小才有滚动余量（内容天然不足一屏）。
       // **必须同时钉 `devicePixelRatio = 1`**：默认 3 会把逻辑高度算成 1/3，
@@ -203,25 +200,39 @@ void main() {
       await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
       await tester.pumpAndSettle();
 
-      final GlassLargeTitleController controller = _titleControllerOf(tester);
-      final ScrollController scroll = controller.scrollController;
-      expect(scroll.hasClients, isTrue);
-      // 内容高约 500、正文视口约 316 → 确有滚动余量（否则下面的断言全是假绿）。
-      expect(scroll.position.maxScrollExtent, greaterThan(50));
+      // 首帧：大标题全显、紧凑标题全隐（两段式不重叠）。
+      List<Opacity> opacities = _titleOpacities(tester);
+      expect(opacities[0].opacity, 1.0);
+      expect(opacities[1].opacity, 0.0);
+      expect(tester.widget<MiTopBar>(_topBar()).scrollOffset, 0.0);
 
-      // 前半段：进度已 > 0（确实在收起）但未过 0.5 → 顶栏标题**恒不可见**。
+      final ScrollController scroll = _scrollOf(tester);
+      // 真有滚动余量（否则下面的断言全是假绿）。
+      expect(
+        scroll.position.maxScrollExtent,
+        greaterThan(MiTopBarMetrics.collapsedOffset),
+      );
+
+      // 中间态（10dp）：大标题衰减中、紧凑标题**还没起步**。
       scroll.jumpTo(10);
       await tester.pump();
-      expect(controller.collapseProgress, greaterThan(0.0));
-      expect(controller.collapseProgress, lessThan(0.5));
-      expect(_barTitleOpacity(tester), 0.0);
+      expect(
+        tester.widget<MiTopBar>(_topBar()).scrollOffset,
+        10.0,
+        reason: '受控链：ScrollController 位移必须喂到顶栏 scrollOffset',
+      );
+      opacities = _titleOpacities(tester);
+      expect(opacities[0].opacity, MiTopBarMetrics.largeTitleOpacity(10));
+      expect(opacities[0].opacity, greaterThan(0.0));
+      expect(opacities[0].opacity, lessThan(1.0));
+      expect(opacities[1].opacity, 0.0, reason: '大标题归零前紧凑标题不得淡入');
 
-      // 一路滚到底（拖拽量远大于总滚动余量 → 偏移被钳到 maxScrollExtent，
-      // 必然越过完整收起距离，与标定出的标题高度无关）。
-      await tester.drag(find.byType(CustomScrollView), const Offset(0, -400));
-      await tester.pumpAndSettle();
-      expect(controller.collapseProgress, 1.0);
-      expect(_barTitleOpacity(tester), 1.0);
+      // 折叠完成位移之后：大标题归零、紧凑标题全显。
+      scroll.jumpTo(MiTopBarMetrics.collapsedOffset + 5);
+      await tester.pump();
+      opacities = _titleOpacities(tester);
+      expect(opacities[0].opacity, 0.0);
+      expect(opacities[1].opacity, 1.0);
     });
   });
 
@@ -276,129 +287,19 @@ void main() {
     });
   });
 
-  group('设置页 · 「玻璃效果」组', () {
-    testWidgets('两行在场：效果质量显示当前档位，脚注为生效档位说明',
+  group('设置页 · 「玻璃效果」组已移除（2026-10-20 负责人口径）', () {
+    testWidgets('效果质量 / 降低视觉特效两行不再出现，页面无开关残留',
         (WidgetTester tester) async {
       await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
       await tester.pumpAndSettle();
 
-      expect(find.text('玻璃效果'), findsOneWidget);
-      expect(find.text('效果质量'), findsOneWidget);
-      expect(find.text('降低视觉特效'), findsOneWidget);
+      // 分组标题与两行全不在场（改动前这三条都会红）。
+      expect(find.text('玻璃效果'), findsNothing);
+      expect(find.text('效果质量'), findsNothing);
+      expect(find.text('降低视觉特效'), findsNothing);
 
-      // 默认高档：行右侧显示档位名，脚注是**生效档位**的说明（高 = 用户档位）。
-      expect(tester.widget<SettingsTile>(_tile('效果质量')).value, '高');
-      expect(
-        find.textContaining('顶栏 / 底栏 premium（自动提升）'),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('弹层选「中」→ 写入偏好并回显', (WidgetTester tester) async {
-      await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
-      await tester.pumpAndSettle();
-
-      await tester.tap(_tile('效果质量'));
-      await tester.pumpAndSettle();
-      // 四个候选项（高 / 中 / 低 / 关），描述取档位配置摘要。
-      expect(find.text('中'), findsOneWidget);
-      expect(find.textContaining('省掉 premium 着色器开销'), findsOneWidget);
-
-      await tester.tap(find.text('中'));
-      await tester.pumpAndSettle();
-      await _settle(tester);
-
-      expect(perfPrefs.prefs.glassTier, GlassQualityTier.medium);
-      expect(tester.widget<SettingsTile>(_tile('效果质量')).value, '中');
-
-      final String raw = await tester.runAsync(
-            () => File('${tempDir.path}${Platform.pathSeparator}perf_prefs.json')
-                .readAsString(),
-          ) ??
-          '';
-      expect(raw, contains('"glassTier":"medium"'));
-    });
-
-    testWidgets('降低视觉特效：点整行即切换，脚注追加钳制说明（UI-05 ③）',
-        (WidgetTester tester) async {
-      await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
-      await tester.pumpAndSettle();
-
-      // 默认关：脚注只有生效档位说明。
-      expect(perfPrefs.prefs.reduceVisualEffects, isFalse);
-      expect(find.textContaining('已按「降低视觉特效」钳制'), findsNothing);
-
-      // 整行可点（触控面积大于开关本体），开关同步反映状态。
-      await tester.tap(_tile('降低视觉特效'));
-      await tester.pumpAndSettle();
-      await _settle(tester);
-
-      expect(perfPrefs.prefs.reduceVisualEffects, isTrue);
-      expect(
-        tester
-            .widget<Switch>(find.descendant(
-              of: _tile('降低视觉特效'),
-              matching: find.byType(Switch),
-            ))
-            .value,
-        isTrue,
-      );
-      // 生效档位被钳到低档：脚注说明 + 保留「所选档位」。
-      expect(find.textContaining('全部 minimal'), findsWidgets);
-      expect(
-        find.textContaining('已按「降低视觉特效」钳制，所选档位：高'),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('关档下「降低视觉特效」行置灰且不可点', (WidgetTester tester) async {
-      // 用户档位先落成「关」（`runAsync` 让真异步写入得以完成）。
-      await tester.runAsync(
-        () => perfPrefs.setGlassTier(GlassQualityTier.off),
-      );
-
-      await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
-      await tester.pumpAndSettle();
-
-      final Finder row = _tile('降低视觉特效');
-      expect(tester.widget<SettingsTile>(row).enabled, isFalse);
-      // 开关与整行同时禁用（两个入口一致，不留半禁用状态）。
-      expect(
-        tester
-            .widget<Switch>(find.descendant(
-              of: row,
-              matching: find.byType(Switch),
-            ))
-            .onChanged,
-        isNull,
-      );
-
-      await tester.tap(row, warnIfMissed: false);
-      await tester.pumpAndSettle();
-      expect(perfPrefs.prefs.reduceVisualEffects, isFalse);
-    });
-  });
-
-  group('设置页 · 搜索框占位', () {
-    testWidgets('点击只给轻提示，不进入任何搜索态（本批不实现搜索）',
-        (WidgetTester tester) async {
-      await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
-      await tester.pumpAndSettle();
-
-      expect(find.text('搜索系统设置项'), findsOneWidget);
-      // 只是占位：不得有任何真实输入框。
-      expect(find.byType(TextField), findsNothing);
-
-      await tester.tap(find.text('搜索系统设置项'));
-      await tester.pumpAndSettle();
-
-      // 明确的「未实现」提示（不是静默无反应，也不是假结果列表）。
-      expect(find.text('设置搜索尚未实现'), findsOneWidget);
-      expect(find.byType(TextField), findsNothing);
-
-      // 轻提示 2s 后自动消失；把时钟推过去，免得留下 pending Timer。
-      await tester.pump(const Duration(seconds: 3));
-      expect(find.text('设置搜索尚未实现'), findsNothing);
+      // 本页唯一的开关（降低视觉特效）已随组移除——不留孤立的 Switch。
+      expect(find.byType(Switch), findsNothing);
     });
   });
 
@@ -409,7 +310,6 @@ void main() {
       await tester.pumpWidget(host(
         GlassQualityTier.off,
         SettingsPage(
-          perfPrefs: perfPrefs,
           settings: settings,
           aiStore: aiStore,
           aiClient: AiClient(),

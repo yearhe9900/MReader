@@ -6057,3 +6057,126 @@ Container → Positioned）与 MReader `HomeShell`，inset=34，实测胶囊底�
    就会产出「修一次错一次」的反馈循环（本条两轮反馈的成因）。
 
 - 交付：`e22bb17`（3 文件 +36/−27），docs 本条随批。
+
+### 2.105 「我的」页顶栏切上游 `MiTopBar` + 移除「玻璃效果」分组（2026-10-20）
+
+> 负责人两条口径：①「我的页顶栏对齐参考项目」（上一批遗留的工作区改动，
+> 未提交、测试未跑完）；②「我的 **移除玻璃效果**」——经澄清**不是**视觉上
+> 去磨砂，而是把设置页「效果质量」「降低视觉特效」两行整组删掉。
+
+#### 一、顶栏换载体（旧玻璃壳层 → 上游移植体）
+
+| | 旧（2026-09-29 改版） | 新（本批） |
+|---|---|---|
+| 壳层 | `GlassNavScaffold`（关档退化 Material） | `ColoredBox(scaffoldBackgroundColor)` + `Stack` |
+| 顶栏 | `GlassTopBar`（+ 关档自绘 Material `AppBar` 淡入） | `MiTopBar`（`showBlur` / `showSurface` 默认 true） |
+| 大标题 | 内容层首个 sliver `GlassLargeTitle` | 顶栏内部两条标题（`Baseline` 钉墨心） |
+| 折叠驱动 | `GlassLargeTitleController`（自持 `ScrollController`） | `ScrollController` → `ValueNotifier<double>` → `scrollOffset`（受控） |
+| 内容层 | `OpaqueContentSurface` 包裹 `CustomScrollView` | 普通 `ListView`（页底由 `ColoredBox` 铺，红线不变） |
+| 页边距 | 16 | 20（上游「我的」页实测） |
+
+上游 `_MockPageShell` 同款结构：
+
+```dart
+ColoredBox(color: scaffoldBackgroundColor,
+  child: Stack(children: [
+    Positioned.fill(child: ListView(
+      controller: _scrollController,
+      padding: EdgeInsets.fromLTRB(20, MiTopBarMetrics.contentTopInset, 20, 0),
+      ...)),
+    Positioned(left: 0, right: 0, top: 0,
+      child: ValueListenableBuilder<double>(
+        valueListenable: _scrollOffset,
+        builder: (_, offset, __) => MiTopBar(title: '我的', scrollOffset: offset))),
+  ]))
+```
+
+三点实现约束：
+
+1. **顶栏必须 `Positioned` 钉顶**。留作 `Stack` 的非定位子级时 Stack 按它
+   收缩（393×152.8），一旦上级是 loose 约束（`Center` / `AnimatedSwitcher`
+   内部那个 `alignment: center` 的 Stack）整页被垂直居中（上游实测偏移
+   351.6dp）。
+2. **受控链只重建顶栏一层**：`_scrollOffset` 是 `ValueNotifier`，不上
+   `setState`（整页重建会把列表也带一遍）。
+3. 顶部让位由宿主显式给 `MiTopBarMetrics.contentTopInset`（183）。顶栏是
+   `Stack` 覆盖层、不参与排版，漏了这一条大标题区会被首条内容顶穿。
+
+旧「搜索设置项」占位随 `GlassLargeTitle` 的 `searchBar` 插槽一并删除：上游
+「我的」页顶栏没有搜索头部（搜索形态属分类页的吸顶头部），而占位本就是
+「能点但搜不到」的死功能（2026-09-29 拍板④）。
+
+#### 二、移除「玻璃效果」分组（本次核心）
+
+- 删 `lib/ui/glass_settings_section.dart`（`GlassSettingsSection` 组件整文件）
+  与设置页里的挂载点、import。
+- **依赖链收敛**：该组是 `SettingsPage.perfPrefs` 的唯一消费者（除自身监听），
+  故一并删除 `SettingsPage.perfPrefs` 参数 + 订阅/退订、
+  `HomeShell.perfPrefs`（唯一用途是透传给设置页）、`main.dart` 的
+  `HomeShell(perfPrefs: …)` 实参。`main()` 里的 `PerfPrefsStore` 实例**保留**：
+  仍要 `load()` 并 `GlassRuntime.bind(perfPrefs)`。
+- **能力不删**：`PerfPrefsStore` / `GlassRuntime` / `resolveUserTier` /
+  「关」档纯色退化路径（`GlassNavHost` / `GlassSideNavHost`）全部保留。理由
+  是 `UI-06` ②「关掉特效 UI 仍完整」还得靠「关」档档位验证，把折算链删掉
+  等于把这套退化能力的所有验证载体一起弃掉。
+- `glassQualityTierLabel` / `glassTierConfigSummary` 暂时**无生产消费者**
+  （只剩 `glass_runtime_test` 钉契约）。保留而非删除：档位模型仍在，后续
+  重加入口或做设备自动降级的提示文案都要用；删除会连带把档位语义文档丢掉。
+- **PRD 同步**：`UI-05` ③ 整条划删并注明口径来源；`UI-06` 描述 + 验收②③
+  加删改标（持久化能力保留、当前无 UI 写入方）；§11.3 表末行、§11.2 注②
+  「主题模式 / 效果质量」、`NF-A2` 同步；§12.1 页面清单第 7 行顶栏列改
+  `MiTopBar`；版本记录 v2.15。
+
+#### 三、测试
+
+`settings_page_test.dart` 原处**半成品**状态：头部 helper 已换 MiTopBar 体系，
+但「壳层与档位退化」「大标题两段式收起」「搜索框占位」三组仍钉旧的
+`GlassNavScaffold` / `GlassLargeTitle`，且引用了已删的 `_titleControllerOf` /
+`_barTitleOpacity`——**编译都过不去**。接手先跑 `dart analyze` 才看见（这批
+改动停在「代码改完、测试没跟」的中间态）。
+
+重写要点：
+
+- 顶栏形态：关 / 高档各跑一遍，断言旧壳层六件套全不在场、`MiTopBar` 的
+  `title` / `showBlur` / `showSurface` / `showBack`、顶栏内确有
+  `MiGradientBlur`、`getTopLeft(top).dy == 0`、`ListView.padding.top ==
+  MiTopBarMetrics.contentTopInset`。
+- 两段式：`scroll.jumpTo(10)` 后断言 `MiTopBar.scrollOffset == 10`（受控链
+  真的接上了，不是本地状态），两条标题 `Opacity` 与
+  `MiTopBarMetrics.largeTitleOpacity(10)` **同源计算**比对；再跳到
+  `collapsedOffset + 5` 断言 `[0, 1]`。两段不重叠（10dp 时紧凑仍为 0）单独钉。
+- 移除契约：`玻璃效果` / `效果质量` / `降低视觉特效` 三处文本 `findsNothing`
+  + 页面无孤立 `Switch`。
+- **变异判红两条**（都已执行）：
+  1. `MiTopBar(scrollOffset: offset)` → `scrollOffset: 0`（切断受控链）→
+     「两段式」用例在 `scrollOffset == 10` 那条断言上红；
+  2. 往「外观」组注回一条 `SettingsTile(title: '效果质量')` → 「分组已移除」
+     用例红。
+  两次变异都确认**红的断言就是目标断言**，还原后 7 条全绿。
+
+构造点连带清理：`test/sync/sync_settings_page_test.dart`（3 处）、
+`test/sync/sync_status_page_test.dart`（2 处）、`test/ui/home_shell_test.dart`
+（2 处）、`test/reader/stats_collector_test.dart`（1 处）。⚠️ sync 两个测试
+删掉 `perf_prefs_store` import 后会丢 `GlassQualityTier`（`host(tier, …)` 要用），
+该枚举就定义在这个文件里——**import 必须留**。
+
+#### 四、坑
+
+1. ⚠️ **「移除设置项」≠「移除能力」**。先把「有没有别的能力靠这条 UI 才能
+   验证」问一遍：`UI-06` ② 的关档退化就是靠档位开关才有人走到的路径。删 UI
+   留能力、删依赖留 store，是本批的取舍线。
+2. ⚠️ 交接半成品批次时**先 analyze 再改**：本批接手时测试文件是「helper 换了、
+   用例没换」，`flutter test` 直接编译失败，看不出任何行为差异。
+3. ⚠️ 删公共依赖后要顺着**调用点**清，而不是只删字段：`perfPrefs` 一条从
+   `main.dart` → `HomeShell` → `SettingsPage` 串了三层，只删中间一层会留下
+   「传了没人用」的死参数。
+
+- 交付：本批提交（settings_page / home_shell / main / perf_prefs_store /
+  glass_runtime 注释 + 删 glass_settings_section + 5 个测试文件 + PRD v2.15）。
+  ui 组 **306** 全绿（`-j 1`）、sync **165** 全绿、analyze 零新增（仅移植树
+  固有 4 条 info）。
+- ⚠️ **reader 组整组跑有既有抖动**：两次整组跑分别红 1 条 / 3 条，全部落在
+  `scroll_stop_stability_test`（停手零位移 / 程序化落位行顶）与
+  `reader_page_test`（开→关 8 次不累积偏离）——这三条都是时间敏感用例
+  （挂账 #8 / #13「慢滚停稳后偶发大跳」同源）。把这两个文件**单独**连跑 3 次
+  全绿（13 条 / 次），判定为整组运行时的资源竞争抖动，**与本批无关**。

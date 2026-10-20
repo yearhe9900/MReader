@@ -28,7 +28,6 @@ import 'package:mreader/reader/pagination/paged_scroller.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/platform/secure_store_io.dart';
-import 'package:mreader/settings/perf_prefs_store.dart';
 import 'package:mreader/settings/settings_store.dart';
 import 'package:mreader/settings/shelf_layout_store.dart';
 import 'package:mreader/settings/shelf_prefs_store.dart';
@@ -216,7 +215,6 @@ void main() {
             repository: repo,
             coverStore: FileCoverStore(paths),
             progressStore: progressStore,
-            perfPrefs: PerfPrefsStore(tempDir),
             shelfPrefs: ShelfPrefsStore(tempDir),
             shelfLayout: ShelfLayoutStore(tempDir),
             settings: SettingsStore(tempDir),

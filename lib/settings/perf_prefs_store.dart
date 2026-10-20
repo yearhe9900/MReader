@@ -8,7 +8,12 @@
 //   · 落盘一律经 [JsonStore] → [AtomicFile]，满足 `DATA-01` 原子写入（不引第三方持久化库）。
 //
 // 本文件是**纯 Dart**（零 Flutter / 玻璃库依赖）：档位 → 玻璃库 `GlassQuality`
-// 的映射收敛在消费点 `lib/ui/glass_settings_section.dart` 一处，便于纯单测。
+// 的映射在 `lib/ui/glass_runtime.dart`，便于纯单测。
+//
+// **2026-10-20 注**：设置页的「效果质量 / 降低视觉特效」两行已按负责人口径移除，
+// 本 store 因此**暂无 UI 修改入口**——偏好恒为默认值（[PerfPrefs.defaultGlassTier]
+// + 降低特效关），但实例仍在 `main()` 加载并 `GlassRuntime.bind`，档位折算链与
+// 关档退化路径（`UI-06` ②）保持可用。
 //
 // 档位与开关（口径说明）：
 //   · 质量档位 [GlassQualityTier]：高 / 中 / 低 / 关（`UI-05`）；
@@ -24,7 +29,7 @@ import '../storage/json_store.dart';
 /// 玻璃效果质量档位（`UI-05`）：高 / 中 / 低 / 关。
 ///
 /// 与玻璃库 `GlassQuality`（`standard` / `premium` / `minimal`）的映射
-/// 见消费点 `glassTierConfigFor`（`lib/ui/glass_settings_section.dart`）。
+/// 见 `glassTierConfigFor`（`lib/ui/glass_runtime.dart`）。
 enum GlassQualityTier {
   /// 高：固定表面（顶栏 / 底栏）由库自动提升 `premium`，滚动区 / 浮层 `standard`
   /// ——现行 P0 口径（PRD §11.3）。

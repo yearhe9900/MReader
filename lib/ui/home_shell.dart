@@ -56,7 +56,6 @@ import '../meta/cover_store.dart';
 import '../reader/bookmark_store.dart';
 import '../reader/progress_store.dart';
 import '../reader/reading_prefs_store.dart';
-import '../settings/perf_prefs_store.dart';
 import '../settings/settings_store.dart';
 import '../settings/shelf_layout_store.dart';
 import '../settings/shelf_prefs_store.dart';
@@ -114,7 +113,6 @@ class HomeShell extends StatefulWidget {
     required this.repository,
     required this.coverStore,
     required this.progressStore,
-    required this.perfPrefs,
     required this.shelfPrefs,
     required this.shelfLayout,
     required this.settings,
@@ -141,9 +139,6 @@ class HomeShell extends StatefulWidget {
 
   /// 阅读进度存储（书架页 → 阅读页）。
   final ProgressStore progressStore;
-
-  /// 性能偏好（设置页的玻璃档位）。
-  final PerfPrefsStore perfPrefs;
 
   /// 书架视图偏好（筛选 / 排序）。
   final ShelfPrefsStore shelfPrefs;
@@ -307,7 +302,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           : () => unawaited(_openVocabPage()),
     ),
     SettingsPage(
-      perfPrefs: widget.perfPrefs,
       settings: widget.settings,
       aiStore: widget.aiStore,
       aiClient: widget.aiClient,
