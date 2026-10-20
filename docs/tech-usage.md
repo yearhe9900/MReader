@@ -6391,3 +6391,94 @@ ColoredBox(color: scaffoldBackgroundColor,
 - 交付：`lib/format/structure_cache.dart`、`lib/storage/structure_cache_store.dart`、
   `lib/epub/epub_parser.dart`、`lib/reader/reader_page.dart`、`lib/ui/shelf_page.dart`、
   `lib/library/library_repository.dart` + 2 个测试文件 + CHANGELOG / 本文件。
+
+### 2.108 开书复用池：**导入即入池 + 关书回池**（2026-10-20）
+
+负责人第二轮把口径说准了：**「我需要的是导入一本新书后，能快速打开它，且之后能
+更快打开」**。§2.107 优化的是「每开一次要付多少」；本节解决的是「同一本书为什么
+要付第二次」。
+
+#### 一、账本：导入一本书，解析了几遍
+
+旧链路（`ImportService.import` + `LibraryRepository.importFile` + `warmUpBookCaches`）：
+
+| 时机 | 做了什么 | 产物去向 |
+|---|---|---|
+| 导入 · 解析 | **裸** `openBook`（不注入任何缓存）+ `load()` | `dispose()` **扔掉**——解析结果当场作废 |
+| 导入 · 预热 | `readBookBytes` 读整本 → 再 `openBook` → 逐章 `content(i)` | 只留章正文缓存（结构又解析了一遍） |
+| 用户点开 | `readBookBytes` 再读整本 → `openBook` → 结构缓存命中 → 章节表 | 这一次才开始用结构缓存 |
+
+也就是说：**同一份文件被完整解析了两遍、整本读盘两到三遍**，而第一遍的成果
+（结构 + 章节表 + 已读入的字节）全部丢掉。用户感受正是「导入完还得等、
+第二次开也没变快」——因为每次都在从零重来。
+
+#### 二、三处改动（把「解析一次」贯彻到底）
+
+1. **导入顺序反转**（`lib/library/import_service.dart`）：旧顺序「解析 → bookId →
+   复制」改成 **「bookId → 复制副本 → stat 出判据 → 带缓存解析」**。
+   这样解析用的就是**最终落盘的那份副本**，判据天然正确，结构缓存当场写盘
+   （`_parseOffloaded` 的 miss 分支写回）。
+   代价：解析失败时副本已落盘，必须显式 `_deleteQuietly(destPath)` 收掉，
+   否则留下一个无索引引用的孤儿文件。
+   返回类型 `BookRecord` → **`ImportOutcome{record, source, cacheKey}`**：
+   `source` 是**活着的**书源（非可空，刻意如此——丢引用等于泄漏一份整本字节）。
+2. **导入即入池**（`LibraryRepository.importFile`）：`_index.save` 之后把
+   `outcome.source` 交给 `BookSourcePool.put`。用户导入完立刻点开 ⇒ 章节表
+   都是现成的，**零读盘、零解析**。
+   `_scheduleWarmUp(record, bytes: bytes)` 顺带把导入时已读入的字节递过去，
+   省掉预热再读一次整本（15MB 级 IO）。
+3. **关书回池**（`ReaderPage.dispose`）：`widget.source.dispose()` →
+   `repository.recycleBookSource(record, source)`。第二次、第三次打开同样命中。
+
+#### 三、`BookSourcePool` 的三条纪律（`lib/format/book_source_pool.dart`）
+
+- **判据必须校验**：条目带 `StructureCacheKey`（`bookId + mtimeMs + size`）。
+  文件被替换 / 副本被重写 → 判据不符 → 条目**就地 dispose** 并当 miss
+  （绝不让旧字节冒充新文件，与磁盘缓存同一条纪律：`T06` / `DATA-01`）。
+- **取出即独占**：`take` 命中即把条目**移出池**，由调用方独占（同一本书不会
+  同时被两个阅读页持有），用完再 `put` 回来。池里永远不存在「正被别处用着」的源。
+- **内存有上界**：`maxEntries = 2`（刚导入那本 + 上次读那本）、
+  `maxBytes = 48MB`（单本）。超限淘汰最久未用者并立即 `dispose`。
+  驻留体积取**副本文件字节数** `StructureCacheKey.size`（书源持有的正是这份整本
+  字节，两者恒等），不必为此在 `BookSource` 契约里新开成员（见坑 1）。
+
+所有权随之明确成**双出口**（`lib/ui/shelf_page.dart::_openBook`）：局部 `pending`
+只有一个合法去向——**交给 `ReaderPage`** 或 **归还仓库**；`catch` 与 `finally`
+两个出口都做归还，中途 `return` 不会漏。
+
+#### 四、测试
+
+- 新增 `test/format/book_source_pool_test.dart` **8** 条：独占取走 / 判据不符销毁 /
+  `key == null` 销毁 / 超字节上限销毁 / 条目超限淘汰最久 / 同 bookId 重复 put /
+  `evict` + `clear` / 恰好等于上限仍可驻留。
+- 新增 `test/library/open_reuse_pool_test.dart` **5** 条（端到端）：
+  导入即入池 / 关书回池可连续命中三次 / 副本被替换判据不符走冷路径 /
+  删书清池 / 小书不影响导入结果。
+- `test/library/import_service_test.dart`：`import` 返回 `ImportOutcome` 后
+  加 `_import` helper（`addTearDown(outcome.source.dispose)`）——**测试自己必须
+  负责销毁**，否则每条用例泄漏一份整本书源。
+- 分组：`fast` **485** 全绿（472 + 13）/ `reader` **464** 全绿 /
+  `ui` **311** 全绿（`-j 1`）；`dart analyze lib/ test/` 仅剩移植树固有 4 条 info。
+
+#### 五、坑
+
+1. ⚠️ **`BookSource` 是 `implements` 契约，加带默认实现的成员等于逼所有 fake 跟着改**：
+   首版给 `BookSource` 加了 `int get residentBytes`（想按真实驻留内存做上限），
+   7 处测试 fake（`cbz` / `cbr` / `pdf` / `reader_harness` / `reader_page_test` 等）
+   全部 `Missing concrete implementation`——`implements` **不继承默认实现**。
+   退回用既有 `StructureCacheKey.size`（与 `bytes.length` 恒等），契约零改动。
+   ⇒ **改公共抽象前先问「有没有等价既有字段」，别为了顺手在契约上开口子。**
+2. ⚠️ **预热不能跟池抢所有权**：预热自己 `openBook` 新建一个源，不能复用池里那份
+   （会被两边同时 dispose）。它靠「结构缓存已写好 ⇒ 命中」只付 bind，不重跑
+   isolate 全量解析——这是「反转导入顺序」白拿的第二个收益。
+3. ⚠️ **导入失败必须清副本**：顺序反转后副本先落盘，`source.load()` 抛错时若不
+   `_deleteQuietly`，`library/` 下会慢慢堆出无索引引用的孤儿文件。
+4. **池是加速层不是缓存层**：`put` 遇到 `key == null` / 超上限**直接销毁**入参，
+   调用方不需要（也不应该）再自己 dispose——这条「恒不泄漏」是池的对外承诺，
+   写进注释才不会被后来者加一层重复 dispose。
+5. 本批**未**改：`readBookBytes` 仍在冷路径上整本读（候选：文件后备随机读）；
+   分页页表仍只存内存（候选：磁盘持久化）；`chapters()` 仍未进结构缓存。
+
+- 交付：`lib/format/book_source_pool.dart`（新增）、`lib/library/import_service.dart`、
+  `lib/library/library_repository.dart`、`lib/reader/reader_page.dart`、
+  `lib/ui/shelf_page.dart` + 2 个新增测试文件 + 1 个测试适配 + CHANGELOG / 本文件。
