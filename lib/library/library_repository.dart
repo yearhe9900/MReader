@@ -13,6 +13,7 @@ import 'dart:typed_data';
 
 import '../format/book_registry.dart';
 import '../format/book_source.dart';
+import '../format/book_source_pool.dart';
 import '../format/chapter_text_cache.dart';
 import '../format/structure_cache.dart';
 import '../format/txt_outline_cache.dart';
@@ -89,6 +90,30 @@ class LibraryRepository {
   /// 开书管道用的章正文缓存。
   ChapterTextCacheStore get chapterTextCache => _chapterTextCache;
 
+  /// **已解析书源复用池**（2026-10-20，§2.108）：导入即入池、关书回池，
+  /// 同一本书再开时零读盘零解析。
+  late final BookSourcePool _sourcePool = BookSourcePool();
+
+  /// 复用池（测试观察 / 清场用）。
+  BookSourcePool get sourcePool => _sourcePool;
+
+  /// 取池中「已解析好的书源」（命中即**独占取走**）。
+  ///
+  /// [key] 是开书当场 stat 出来的判据：与池内条目不符（文件被替换）→ 当 miss，
+  /// 并把旧条目就地销毁。返回 `null` = 走完整冷路径（读字节 + 建源）。
+  BookSource? takePooledSource(BookRecord record, StructureCacheKey? key) =>
+      _sourcePool.take(record.bookId, key);
+
+  /// 把一个书源交回池（阅读页关闭 / 预热收尾时调用）。
+  ///
+  /// 内部重新 stat 一次取判据：文件已删 / 不可读 → 直接销毁，不入池。
+  /// 不满足驻留条件（无字节数 / 超上限）时 [BookSourcePool.put] 内部会销毁它，
+  /// 故本方法**恒不泄漏**——调用方不需要再自己 dispose。
+  Future<void> recycleBookSource(BookRecord record, BookSource source) async {
+    final StructureCacheKey? key = await structureCacheKey(record);
+    _sourcePool.put(record.bookId, key, source);
+  }
+
   /// 加载全部在库书籍（`LIB-01` / `LIB-03`）。
   Future<List<BookRecord>> loadBooks() => _index.load();
 
@@ -109,18 +134,29 @@ class LibraryRepository {
       }
     }
 
-    // 新导入（解析 → 复制 → 封面物化 → BookRecord）
-    final BookRecord record = await _importService.import(
+    // 新导入（复制副本 → 带缓存解析 → 封面物化 → BookRecord）
+    final ImportOutcome outcome = await _importService.import(
       bytes: bytes,
       fileName: fileName,
+      structureCache: _structureCache,
+      txtOutlineCache: _txtOutlineCache,
+      chapterTextCache: _chapterTextCache,
     );
+    final BookRecord record = outcome.record;
 
     // 更新索引
     existing.add(record);
     await _index.save(existing);
+    // **导入即入池**（2026-10-20，§2.108）：导入管道刚解析好的书源直接驻留，
+    // 用户导入完立刻点开 = 零读盘、零解析（章节表都是现成的）。
+    // `put` 内部按字节上限判定，超限/不可驻留时它会自己 dispose，这里恒不泄漏。
+    _sourcePool.put(record.bookId, outcome.cacheKey, outcome.source);
     // 导入即按章预热缓存（2026-10-09 拍板）：后台跑、绝不拖慢导入本身；
     // 失败静默——缓存是加速层，慢一点不碍事，导入结果不受影响。
-    _scheduleWarmUp(record);
+    // 注：预热自己**新建**一个带缓存的书源（结构缓存已在上面写好 ⇒ 命中，
+    // 不再重跑 isolate 全量解析），因此它不会跟池里的那份抢所有权。
+    // 把导入时已读入的 `bytes` 直接递过去，省掉预热再读一次整本文件。
+    _scheduleWarmUp(record, bytes: bytes);
     return ImportResult(record: record, isNew: true);
   }
 
@@ -136,6 +172,10 @@ class LibraryRepository {
     _warmUpStopping.add(record.bookId);
     await _warmUps[record.bookId];
     _warmUpStopping.remove(record.bookId);
+
+    // ⓪b 丢弃复用池里的驻留源（§2.108）：书都要删了，没必要再占一份内存；
+    //    也杜绝「删完又从池里打开」这条不该存在的路径。
+    await _sourcePool.evict(record.bookId);
 
     // ① 删封面（LIB-06 / META-06；NoCover / SyntheticCover 为空操作）
     await _coverStore.delete(record.cover);
@@ -227,8 +267,12 @@ class LibraryRepository {
   /// 登记并启动一本书的导入预热（失败静默；收尾后自动出表）。
   ///
   /// 任务进 [_warmUps]：[deleteBook] ②a 与 [pendingWarmUps] 靠它等收尾。
-  void _scheduleWarmUp(BookRecord record) {
-    final Future<void> job = warmUpBookCaches(record).whenComplete(() {
+  ///
+  /// [bytes] 是导入时已在内存的那份原始字节：传进来就省掉预热自己再读一次
+  /// 整本文件（15MB 级 IO）；`null` 时回落自己读（既有行为，供其它调用方用）。
+  void _scheduleWarmUp(BookRecord record, {Uint8List? bytes}) {
+    final Future<void> job =
+        warmUpBookCaches(record, bytes: bytes).whenComplete(() {
       _warmUps.remove(record.bookId);
       _warmUpStopping.remove(record.bookId);
     });
@@ -240,14 +284,17 @@ class LibraryRepository {
   /// 逐章 `content(i)` = 现场计算一次 + 写回章正文缓存；TXT 顺带写回大纲缓存
   /// （`_prepare` 自带写回）。每章之间让出一次宏任务，预热不冻结 UI。
   /// 全程吞错：缓存是加速层，预热失败/中断对导入结果与开书零影响。
-  Future<void> warmUpBookCaches(BookRecord record) async {
+  ///
+  /// 注（§2.108）：导入路径此时**结构缓存已写好**（导入管道带着缓存解析过一次），
+  /// 故这里 `openBook` 走缓存命中——不再重跑 isolate 全量解析。
+  Future<void> warmUpBookCaches(BookRecord record, {Uint8List? bytes}) async {
     try {
-      final Uint8List? bytes = await readBookBytes(record);
-      if (bytes == null || bytes.isEmpty) return;
+      final Uint8List? raw = bytes ?? await readBookBytes(record);
+      if (raw == null || raw.isEmpty) return;
       final StructureCacheKey? key = await structureCacheKey(record);
       final BookSource source = await openBook(
         fileName: record.fileName,
-        bytes: bytes,
+        bytes: raw,
         structureCache: _structureCache,
         cacheKey: key,
         txtOutlineCache: _txtOutlineCache,

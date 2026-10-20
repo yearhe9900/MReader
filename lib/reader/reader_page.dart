@@ -715,7 +715,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     _imageCache.dispose();
     _controller?.dispose();
-    unawaited(widget.source.dispose());
+    // 书源不在这里直接销毁：交回仓库的**复用池**（§2.108）——同一本书再打开时
+    // 就是零读盘零解析。池内部按字节上限判定，超限/不可驻留者当场 dispose，
+    // 故这条路径恒不泄漏；`repository` 是必填参数（`shelf_page` / 详情页都传）。
+    unawaited(widget.repository.recycleBookSource(widget.record, widget.source));
     super.dispose();
   }
 

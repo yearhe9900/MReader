@@ -492,47 +492,67 @@ class ShelfPageState extends State<ShelfPage> {
       title: record.title,
     );
     setState(() => _openingBookId = record.bookId); // 该卡显示 loading 覆盖层
+    // 已就绪待交接的书源。**所有权只有两个合法去向**：交给 `ReaderPage`，
+    // 或者在本方法内归还仓库（`recycleBookSource` 会按字节上限决定驻留/销毁）。
+    // 早退、异常、`!mounted` 都必须走后者，否则整本字节泄漏。
+    BookSource? pending;
     try {
       final PerfWatch readWatch = PerfLog.watch('open.readBytes');
-      // 判据（一次 `stat`）与读字节**并发**：两者互不依赖，串行等于白等一次
-      // 文件系统往返。stat 会先回，这里只是把它的等待藏在读字节里面。
-      final Future<Uint8List?> bytesF =
-          widget.repository.readBookBytes(record);
-      final Future<StructureCacheKey?> cacheKeyF =
-          widget.repository.structureCacheKey(record);
-      final Uint8List? bytes = await bytesF;
-      readWatch.done(
-          'book=${record.title} sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
-      trace.step('readBytes', readWatch.elapsedMs,
-          'sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
-      if (bytes == null || bytes.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('文件已丢失：${record.fileName}')),
-          );
-        }
-        return;
-      }
+      // ## 先查**复用池**（§2.108）：命中就完全跳过「读字节 + 建源」
+      //
+      // 池里有两种来源：① 刚导入时解析好的那份（导入即入池）；② 上次读完关书
+      // 还回来的那份。两者都自带原始字节 + 已解析结构 + 章节表缓存 ⇒ 这一步的
+      // 成本只剩一次 `stat`（判据校验）。
+      //
+      // 判据与磁盘缓存同口径（`bookId + mtime + size`）：文件被替换过 → 池条目
+      // 自动作废并销毁，走下面的冷路径，绝不会让旧字节冒充新文件。
+      final PerfWatch statsWatch = PerfLog.watch('open.stat');
+      final StructureCacheKey? cacheKey =
+          await widget.repository.structureCacheKey(record);
+      statsWatch.done('hit=${cacheKey == null ? 0 : 1}');
 
-      final PerfWatch sniffWatch = PerfLog.watch('open.sniff');
-      // M-PAGE `T06`：结构缓存判据（副本 mtime/size + bookId）；文件缺失 → null
-      // → 缓存对不启用，开书行为与无缓存时一致。
-      final StructureCacheKey? cacheKey = await cacheKeyF;
-      final BookSource source = await openBook(
-        fileName: record.fileName,
-        bytes: bytes,
-        structureCache: widget.repository.structureCache,
-        cacheKey: cacheKey,
-        txtOutlineCache: widget.repository.txtOutlineCache,
-        chapterTextCache: widget.repository.chapterTextCache,
-      );
-      sniffWatch.done('impl=${source.implId}');
-      trace.step('sniff', sniffWatch.elapsedMs, 'impl=${source.implId}');
+      final BookSource? pooled =
+          widget.repository.takePooledSource(record, cacheKey);
+      if (pooled != null) {
+        pending = pooled;
+        trace.step('poolHit', statsWatch.elapsedMs,
+            'impl=${pooled.implId} sizeKB=${(cacheKey?.size ?? 0) ~/ 1024}');
+        PerfLog.step('open.pool', statsWatch.elapsedMs,
+            'hit=1 impl=${pooled.implId}');
+      } else {
+        final Uint8List? bytes = await widget.repository.readBookBytes(record);
+        readWatch.done(
+            'book=${record.title} sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
+        trace.step('readBytes', readWatch.elapsedMs,
+            'sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
+        if (bytes == null || bytes.isEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('文件已丢失：${record.fileName}')),
+            );
+          }
+          return;
+        }
+
+        final PerfWatch sniffWatch = PerfLog.watch('open.sniff');
+        pending = await openBook(
+          fileName: record.fileName,
+          bytes: bytes,
+          structureCache: widget.repository.structureCache,
+          cacheKey: cacheKey,
+          txtOutlineCache: widget.repository.txtOutlineCache,
+          chapterTextCache: widget.repository.chapterTextCache,
+        );
+        sniffWatch.done('impl=${pending.implId}');
+        trace.step('sniff', sniffWatch.elapsedMs, 'impl=${pending.implId}');
+        PerfLog.step('open.pool', 0, 'hit=0 impl=${pending.implId}');
+      }
       // 不在导航前 eager 解析：全量 load() 在主 isolate 同步执行会冻结 UI，
       // 导致首击「无响应」、用户补点第二次（PERF）。解析与 loading 交给
       // ReaderPage._open() 承担（其自带 spinner + 错误态，RD-05 仍满足）。
 
       if (!mounted) return;
+      final BookSource source = pending;
       // 开书转场（2026-10-09 重做）：用 [ReaderOpenRoute] 替掉裸 [MaterialPageRoute]——
       // 阅读页作为**一整张纸从右侧滑入**铺满，书架静止在后被压暗
       // （460ms / easeOutCubic / 70dp 圆角，参数来自负责人给的参考动效逐帧量化）。
@@ -566,11 +586,26 @@ class ShelfPageState extends State<ShelfPage> {
       // 入栈）就往下走，finally 立即释放守卫。关书刷新走 route.popped，不占守卫。
       unawaited(Navigator.of(context).push(route));
       trace.mark('pushed');
+      pending = null; // 所有权已交给阅读页（它关书时归还仓库）
       unawaited(route.popped.then((_) {
         // 阅读页关闭后刷新（lastReadAt / readProgress 已在 M1-T04 更新）。
         if (mounted) unawaited(_loadBooks());
       }));
+    } catch (_) {
+      // 建源 / 入栈失败：把手里的书源还回去（池会按上限决定驻留或销毁），
+      // 再原样抛出——错误提示沿用既有上层处理。
+      final BookSource? leftover = pending;
+      pending = null;
+      if (leftover != null) {
+        unawaited(widget.repository.recycleBookSource(record, leftover));
+      }
+      rethrow;
     } finally {
+      // 兜底：`!mounted` 早退等路径走这里（所有权没交出去 = 必须归还）。
+      final BookSource? leftover = pending;
+      if (leftover != null) {
+        unawaited(widget.repository.recycleBookSource(record, leftover));
+      }
       _opening = false;
       if (mounted) setState(() => _openingBookId = null);
     }

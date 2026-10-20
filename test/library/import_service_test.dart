@@ -36,6 +36,23 @@ class _TestAppPaths implements AppPaths {
 Uint8List _txtBytes([String content = '这是正文内容。\n第二行。']) =>
     Uint8List.fromList(content.codeUnits);
 
+/// 导入并**立刻销毁**书源（本文件只验记录字段）。
+///
+/// `ImportService.import` 现在返回 `ImportOutcome`（记录 + **活着的**书源 + 判据）：
+/// 生产路径由 `LibraryRepository` 把书源交给复用池驻留，这里不关心驻留行为，
+/// 故统一在 tearDown 销毁，避免测试之间泄漏整本字节。
+/// （池的行为由 `test/format/book_source_pool_test.dart` 单独覆盖。）
+Future<BookRecord> _import(
+  ImportService service, {
+  required Uint8List bytes,
+  required String fileName,
+}) async {
+  final ImportOutcome outcome =
+      await service.import(bytes: bytes, fileName: fileName);
+  addTearDown(outcome.source.dispose);
+  return outcome.record;
+}
+
 void main() {
   group('ImportService', () {
     late Directory tempDir;
@@ -71,7 +88,8 @@ void main() {
 
     test('TXT 导入：记录字段正确 + 副本文件存在', () async {
       final Uint8List bytes = _txtBytes('这是测试正文。');
-      final BookRecord record = await service.import(
+      final BookRecord record = await _import(
+        service,
         bytes: bytes,
         fileName: '测试书.txt',
       );
@@ -138,7 +156,8 @@ void main() {
         EpubEntry('p/2.png', kTinyPng),
         EpubEntry('p/1.png', kTinyPng),
       ]);
-      final BookRecord record = await service.import(
+      final BookRecord record = await _import(
+        service,
         bytes: bytes,
         fileName: '测试漫画.cbz',
       );
@@ -162,7 +181,8 @@ void main() {
       addTearDown(
         () => PdfEngineProvider.current = const UnavailablePdfEngine(),
       );
-      final BookRecord record = await service.import(
+      final BookRecord record = await _import(
+        service,
         bytes: minimalPdfBytes(),
         fileName: '小狗钱钱.pdf',
       );
