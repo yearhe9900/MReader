@@ -6180,3 +6180,133 @@ ColoredBox(color: scaffoldBackgroundColor,
   `reader_page_test`（开→关 8 次不累积偏离）——这三条都是时间敏感用例
   （挂账 #8 / #13「慢滚停稳后偶发大跳」同源）。把这两个文件**单独**连跑 3 次
   全绿（13 条 / 次），判定为整组运行时的资源竞争抖动，**与本批无关**。
+
+### 2.106 上游「首页悬浮头部」批：玻璃膜 + 恒定 σ 磨砂 + 就地搜索态（2026-10-20，`38ba101`）
+
+> 负责人指令：「上游分类 tab 代码更新，优化了搜索栏和胶囊按钮在顶部的透明
+> 效果，我需要你在 MReader 中实现」。澄清后范围定为：①顶部只留搜索栏 +
+> 胶囊行（排序按钮移除、功能保留）；②搜索栏点击后**全就地搜索态**；
+> ③移植树的透明参数收口一并同步。
+
+#### 一、上游这批到底改了什么（按 commit 拆）
+
+| commit | 内容 | 对 MReader 的影响 |
+|---|---|---|
+| `fb4adde` | ①头部区磨砂改**整段恒定 σ**、栏底硬切；②新增 `overContent` 玻璃膜 | 直接可见（书架顶部） |
+| `ab1fcef` | 膜改为**垫在填充之下**（`veiledFill` 预合成），分类页也开上 | 直接可见（膜的正确形态） |
+| `7385bc0` | 透明参数收口进 `MiTransparencyTokens` | 纯搬运、零行为变化 |
+| `c30d349`…`e3d5227` | 顶栏通用化 / 声明式入参 / 头部区共用磨砂 | MReader 上次同步已包含 |
+| `ff79d60` | demo 去掉自绘 Home 指示条、浮起量取 `max` | 不需要（MReader 底栏口径已在 §2.104 定案） |
+
+**判据 1（恒定 σ）的实测依据**：搜索栏行、栏与胶囊之间的间隙、胶囊行后方的
+树影**糊得一样重**；胶囊底缘（150…152dp）往下草地图案立刻锐利。照渐进曲线
+拉到 156dp 时胶囊行处只剩 σ≈2.5 —— 与截图明显不符，故曲线被推翻。
+
+**判据 2（玻璃膜）的实测依据**：模糊只改局部对比、不改局部均值。同一 y 横向
+相邻取样：亮色未选胶囊内侧 ≈200 vs 间隙 ≈167（**+33**）、暗色 ≈70 vs ≈170
+（**−100**）。只留 onSurface@6% 的低调填充时，我们的胶囊内侧 148 vs 间隙 164
+（**−16**，与参考反号）。落差只能来自填充本身。
+反解（按「膜 + 低调填充两层叠完」口径）：亮 153/255、暗 167/255。
+
+#### 二、移植树同步（14 个文件，`diff -r` 零差异）
+
+第一轮 `diff -r -q` 报 9 个文件，补齐后又不完整 —— 真正的差异面是 14 个：
+
+- 透明 token：`transparency_tokens.dart`（收口 + veil）、`top_bar_tokens` /
+  `search_bar_tokens` / `glass_tokens` / `button_tokens` /
+  `gradient_blur_tokens`（只保留引用）；
+- 零件：`search_bar.dart`、`pill_tab_bar.dart`（各加 `overContent`）、
+  `top_bar.dart`（`overContent` + `uniformBlurBands` / `_uniformBands`）；
+- 搜索态：`search_cancel_button.dart` / `search_cancel_metrics.dart`（新文件）、
+  `search_bar_metrics.dart`（`caretHeight`）、`top_bar_metrics.dart`
+  （`searchTransitionMs` = 480 / `searchMotion` = 前 10% 静止 + easeOutQuint /
+  取消钮淡入 0.35…0.62）、`colors.dart`（`accent` / `pageBackgroundFor`）、
+  `mi_like_ui.dart`（导出）。
+
+⚠️ **教训**：同步上游不能按「本轮 commit 的 message 关键词」挑文件。`git show
+--stat` 只给出该 commit 改过的文件，但**上一批同步时漏掉的文件不会出现在
+本轮任何 commit 里**——只有完整 `diff -r` 才能暴露（本批的
+`search_cancel_button.dart` 就是历史遗留缺口）。
+
+#### 三、token 收口的连锁：`bands` 从 const 变 final
+
+`MiGradientBlurProfile.bands` 改为「段位/段高两张几何表 + `blurSigmaRamp` 生成」
+后不再是编译期常量，`MiTopBarPalette.blurBands` 随之为 `final`。
+唯一受影响的引用是 `test/ui/mi_like_ui/top_bar_test.dart:554` 的
+`const bands = MiTopBarPalette.blurBands;` → 改 `final`。
+其余业务层零改动（analyze 零 error / warning）。
+
+#### 四、MReader 落地：三段改动
+
+1. **顶部磨砂**（`_buildHeaderBlur`）：书架的头部是**自拼**的（`GlassTopBar`
+   + 自己的两层容器），不是 `MiTopBar` 的头部插槽，所以拿不到
+   `uniformBlurBands` 那条现成路径 —— 在应用层照同一规律铺**一段**
+   `BackdropFilter(σ = MiTopBarPalette.blurSigma 5.37)`，高度 =
+   `topInset + headerHeight`，`ClipRect` 到栏底硬切。替换掉原来的
+   `MiGradientBlur(height: 120)`：
+   - 原 120 **比头部还矮**（状态栏 + 96.1 ≈ 130~150），胶囊行下半部其实
+     没被糊住；
+   - 8 段全宽高斯顺带压成 1 段（滚动时每帧都走这里）。
+2. **玻璃膜**：`MiSearchBar` / `AdaptivePillTabBar` 都传 `overContent: true`。
+   `AdaptivePillTabBar` 是**移植树外的自研变体**（宽度自适应），必须自己跟
+   这条参数——它的填充表达式与 `MiPillTabBar` 是同一份，改法逐字对齐
+   （未选 = `veiledFill(unselectedFill)`、选中档不变）。
+3. **就地搜索态**：`_searching` / `_query` / `_searchController` /
+   `_searchFocus` 全在 `ShelfPageState` 内；`MiSearchBar(editable: true)` +
+   `MiSearchCancelButton` + 胶囊行 `AnimatedOpacity` + `AnimatedSize`；
+   结果复用 `_buildBookGrid(books: …)`。
+   独立搜索页 `lib/ui/library_search_page.dart` **删除**（无测试引用）。
+
+搜索态的三个细节：
+
+- **`onTap` 必须传 `null`**：`MiSearchBar` 在 `editable` 态仍然会把 onTap
+  接到外层 GestureDetector 上，不清空的话输入态点一下又触发一次
+  `_enterSearch`（幂等，但手势与光标争抢焦点）；
+- **`toolbarHeight` 保持两行**：搜索态由头部内部 `AnimatedSize` 把胶囊行
+  收成 0 高。若把 `toolbarHeight` 跟着改，`GlassTopBar` 高度突变会让整条栏
+  在转场第一帧跳一下；
+- **顶部留白分档**：`shelfGridPadding(topInset, headerHeight: …)` 新增可选
+  参数（默认 `kShelfHeaderHeight` 不变，契约测试原样），搜索态传
+  `kShelfSearchRowHeight` —— 否则结果网格顶部会多留一整块空白。
+- 退出顺序：先 `unfocus()` 再 `clear()` 再 `setState`。反了会在列表重建后
+  再弹一次键盘。
+
+#### 五、排序按钮移除（功能保留、入口挂账）
+
+`_buildHeader` 的搜索行右侧 `IconButton(Icons.sort)` 删除；`_showSortMenu`
+与 `ShelfPrefsStore` 的排序字段/方向**原样保留**（`_visibleBooks` 照旧读它），
+方法上标 `// ignore: unused_element` 并写明候选落点。契约测试从「点按钮弹
+菜单」改为**反向钉住 + 能力钉住**：`find.byIcon(Icons.sort)` 必须
+`findsNothing`（谁加回来就红），同时断言改 `sortField + sortAscending` 后
+书架顺序确实跟着变（入口缺失 ≠ 功能移除）。
+
+#### 六、坑
+
+1. ⚠️ **测试在讲旧规矩时不会自己变红**（§2.97 的又一例）：两条顶栏用例拿
+   `visibleBlurBands(...).length` 当期望段数 —— 恒定 σ 落地后它们**恰好
+   红**（8 段变 1 段），但如果上游只改行为不改段数（比如只调 σ），这些用例
+   会继续绿着讲旧故事。改行为必须回头问「钉住它的用例现在还判别吗」。
+2. ⚠️ **移植树外的变体要逐个跟**：`AdaptivePillTabBar` 不在 `mi_like_ui/`，
+   `diff -r` 零差异**不覆盖它**。上游给组件加参数时，凡是「复制过组件内部
+   填充/几何表达式」的自研变体都得手工对齐（§2.101 的宽度自适应、本批的
+   `overContent` 都一样）。
+3. ⚠️ **`const` 断言是 token 收口的隐藏代价**：`bands` 从 const 变 final 后，
+   所有 `const x = ...bands` 全编译失败。收口前先 grep `const .*\.bands`。
+4. 膜的语义是「垫在填充**之下**并预合成」，不是「有内容时只铺膜」：后者在
+   「静止态背后是页底、滚动态才有内容」的页面（书架就是）根本没法开——开了
+   静止态胶囊与页底同色而消失。
+5. ⚠️ **`diff -r` 零差异还依赖行尾**：仓库默认 `text=auto eol=crlf`（检出写
+   CRLF），而上游是 LF —— `git checkout` 过 `lib/ui/mi_like_ui/**` 之后，
+   整棵树会变成「全文件差异」，真实改动反而看不出来。本批给该子树加
+   `.gitattributes` 例外（`text eol=lf`）。历史批次是靠「一直用 `cp` 覆盖、
+   从未 checkout 该子树」侥幸维持的。
+
+- 交付：本批提交（移植树 14 文件 + shelf_page / shelf_geometry /
+  adaptive_pill_tab_bar / 删 library_search_page + 4 个测试文件 +
+  CHANGELOG / 本文件）。
+- 测试：ui 组 **311** 全绿（`-j 1`，原 307 + 新增 4）；
+  `test/ui/mi_like_ui` 单组 **112** 全绿；analyze 零 error / warning
+  （仅移植树固有 4 条 info）。
+- **待真机复验**：顶部恒定 σ 的观感（尤其与 `GlassNavScaffold` 自带
+  `ProgressiveBlur` 叠加后是否过糊）、膜在书卡封面上是否读得出胶囊形状、
+  搜索态转场与键盘弹出。
