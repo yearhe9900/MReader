@@ -126,7 +126,6 @@ EpubStructure _fullStructure() => const EpubStructure(
       coverCandidates: <CoverCandidate>[
         CoverCandidate(href: 'OEBPS/cover.png', source: 'meta'),
       ],
-      entryNames: <String, String>{'oebps/cover.png': 'OEBPS/cover.png'},
       flatTitles: <String, String>{'OEBPS/text/ch1.xhtml': '章节标题'},
     );
 
@@ -138,13 +137,14 @@ const StructureCacheKey _key = StructureCacheKey(
 
 void main() {
   group('信封序列化（纯层）', () {
-    test('T06 往返：encode → json 往返 → decode 还原全部字段', () {
+    test('T06 往返：encode → decode 还原全部字段', () {
       final EpubStructure src = _fullStructure();
-      final Object? round = jsonDecode(
-        jsonEncode(encodeStructureEnvelope(_key, src)),
-      );
-      final EpubStructure? back = decodeStructureEnvelope(round, key: _key);
+      final Uint8List blob = encodeStructureEnvelope(_key, src);
+      final StructureDecodeResult result =
+          decodeStructureEnvelopeDetailed(blob, key: _key);
 
+      expect(result.status, StructureDecodeStatus.hit);
+      final EpubStructure? back = result.structure;
       expect(back, isNotNull);
       final EpubStructure s = back!;
       expect(s.title, '缓存测试书');
@@ -167,52 +167,77 @@ void main() {
       expect(s.coverCandidates.length, 1);
       expect(s.coverCandidates[0].href, 'OEBPS/cover.png');
       expect(s.coverCandidates[0].source, 'meta');
-      expect(s.entryNames, <String, String>{'oebps/cover.png': 'OEBPS/cover.png'});
       expect(s.flatTitles, <String, String>{'OEBPS/text/ch1.xhtml': '章节标题'});
     });
 
-    test('T06 判据：bookId / mtime / size 任一不符即 miss', () {
-      final Object envelope =
-          encodeStructureEnvelope(_key, _fullStructure());
+    test('T06 判据：bookId / mtime / size 任一不符即 miss（且不算损坏）', () {
+      final Uint8List blob = encodeStructureEnvelope(_key, _fullStructure());
 
-      expect(
-        decodeStructureEnvelope(envelope,
-            key: const StructureCacheKey(
-                bookId: 'fedcba9876543210', mtimeMs: 1759300000000, size: 4096)),
-        isNull,
-      );
-      expect(
-        decodeStructureEnvelope(envelope,
-            key: const StructureCacheKey(
-                bookId: '0123456789abcdef', mtimeMs: 1759300000001, size: 4096)),
-        isNull,
-      );
-      expect(
-        decodeStructureEnvelope(envelope,
-            key: const StructureCacheKey(
-                bookId: '0123456789abcdef', mtimeMs: 1759300000000, size: 4097)),
-        isNull,
-      );
+      for (final StructureCacheKey other in <StructureCacheKey>[
+        const StructureCacheKey(
+            bookId: 'fedcba9876543210', mtimeMs: 1759300000000, size: 4096),
+        const StructureCacheKey(
+            bookId: '0123456789abcdef', mtimeMs: 1759300000001, size: 4096),
+        const StructureCacheKey(
+            bookId: '0123456789abcdef', mtimeMs: 1759300000000, size: 4097),
+      ]) {
+        final StructureDecodeResult r =
+            decodeStructureEnvelopeDetailed(blob, key: other);
+        expect(r.structure, isNull);
+        expect(r.status, StructureDecodeStatus.keyMismatch,
+            reason: '判据不符是正常失效，不该被当成损坏隔离');
+      }
     });
 
     test('T06 schema 版本不符 → miss（旧文件按 miss 处理，不迁移）', () {
-      final Map<String, Object?> envelope =
-          encodeStructureEnvelope(_key, _fullStructure());
-      envelope['schema'] = kStructureCacheSchema + 1;
-      expect(decodeStructureEnvelope(envelope, key: _key), isNull);
+      final Uint8List blob = encodeStructureEnvelope(_key, _fullStructure());
+      final Uint8List bumped = Uint8List.fromList(blob);
+      bumped[4] = kStructureCacheSchema + 1; // magic(4) 之后紧跟 schema
+      final StructureDecodeResult r =
+          decodeStructureEnvelopeDetailed(bumped, key: _key);
+      expect(r.structure, isNull);
+      expect(r.status, StructureDecodeStatus.keyMismatch);
     });
 
-    test('T06 形状损坏 → miss 不抛', () {
-      expect(decodeStructureEnvelope('not a map', key: _key), isNull);
-      expect(decodeStructureEnvelope(42, key: _key), isNull);
-      expect(decodeStructureEnvelope(<String, Object?>{}, key: _key), isNull);
+    test('T06 字节流损坏 → 判 corrupted 且不抛', () {
+      final Uint8List blob = encodeStructureEnvelope(_key, _fullStructure());
 
-      // structure 在、但 toc 项缺字段。
-      final Map<String, Object?> envelope =
-          encodeStructureEnvelope(_key, _fullStructure());
-      ((envelope['structure'] as Map<String, Object?>)['toc'] as List)
-          .add(<String, Object?>{'href': 'x'});
-      expect(decodeStructureEnvelope(envelope, key: _key), isNull);
+      // ① 完全不是本格式（魔数不符）。
+      expect(
+        decodeStructureEnvelopeDetailed(
+                Uint8List.fromList(<int>[1, 2, 3, 4, 5, 6, 7, 8]),
+                key: _key)
+            .status,
+        StructureDecodeStatus.corrupted,
+      );
+      // ② 空 / 过短。
+      expect(decodeStructureEnvelopeDetailed(null, key: _key).status,
+          StructureDecodeStatus.corrupted);
+      expect(decodeStructureEnvelopeDetailed(Uint8List(0), key: _key).status,
+          StructureDecodeStatus.corrupted);
+      // ③ 截断在字符串中间（模拟半截文件）。
+      expect(
+        decodeStructureEnvelopeDetailed(
+                Uint8List.sublistView(blob, 0, blob.length ~/ 2),
+                key: _key)
+            .status,
+        StructureDecodeStatus.corrupted,
+      );
+      // ④ 尾部多出脏字节（结构读完了但没到底）。
+      expect(
+        decodeStructureEnvelopeDetailed(
+                Uint8List.fromList(<int>[...blob, 0x7F]), key: _key)
+            .status,
+        StructureDecodeStatus.corrupted,
+      );
+    });
+
+    test('T06 结构缓存不再落 entryNames（解析 isolate 的传输品，绑定侧自建）', () {
+      // 编码端签名里已无该字段；这里锁住「信封里不含条目名表」的口径：
+      // 470 章真实书的 cache 曾因这张表胀到 1/3 体积（`tech-usage.md` §2.107）。
+      final Uint8List blob = encodeStructureEnvelope(_key, _fullStructure());
+      final String asText = utf8.decode(blob, allowMalformed: true);
+      expect(asText.contains('oebps/cover.png'), isFalse);
     });
   });
 
@@ -416,13 +441,13 @@ void main() {
       // 主文件与轮转备份一并清理。
       expect(
         File('${tmp.path}${Platform.pathSeparator}structure'
-                '${Platform.pathSeparator}0123456789abcdef.json')
+                '${Platform.pathSeparator}0123456789abcdef.bin')
             .existsSync(),
         isFalse,
       );
       expect(
         File('${tmp.path}${Platform.pathSeparator}structure'
-                '${Platform.pathSeparator}0123456789abcdef.json.bak')
+                '${Platform.pathSeparator}0123456789abcdef.bin.bak')
             .existsSync(),
         isFalse,
       );
@@ -431,9 +456,10 @@ void main() {
     test('T06 损坏文件 → 隔离为 .corrupt 并按 miss 返回，不抛', () async {
       final Directory dir = await paths.subDir('structure');
       final File file = File(
-        '${dir.path}${Platform.pathSeparator}0123456789abcdef.json',
+        '${dir.path}${Platform.pathSeparator}0123456789abcdef.bin',
       );
-      file.writeAsStringSync('{ 坏掉的 json');
+      // 魔数正确、schema 正确，但正文是垃圾 → 判 corrupted（真损坏）。
+      file.writeAsBytesSync(<int>[0x4D, 0x52, 0x53, 0x43, kStructureCacheSchema, 0xFF]);
 
       final FileStructureCacheStore store = FileStructureCacheStore(paths);
       expect(await store.read(_key), isNull); // 损坏 → miss（无 .bak 可回退）

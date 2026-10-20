@@ -116,7 +116,6 @@ class EpubStructure {
     required this.sections,
     required this.toc,
     required this.coverCandidates,
-    required this.entryNames,
     this.flatTitles = const <String, String>{},
   });
 
@@ -149,9 +148,6 @@ class EpubStructure {
 
   /// 封面候选（`META-02` 四来源，**已按优先级排序**，命中即停）。
   final List<CoverCandidate> coverCandidates;
-
-  /// 包内条目名索引：`小写真实名 -> 真实名`（供取得结构的 isolate 重新定位条目）。
-  final Map<String, String> entryNames;
 
   /// 平坦目录预取标题表（`PERF-01` 残余项）：`章 href -> 章标题`，**仅 toc 为空时填充**。
   ///
@@ -590,7 +586,6 @@ _ParsedEpub _parse(
     sections: sectionRefs,
     toc: toc,
     coverCandidates: coverCandidates,
-    entryNames: lowerIndex,
     flatTitles: flatTitles,
   );
 

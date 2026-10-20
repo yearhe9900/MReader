@@ -67,7 +67,6 @@ class _FlatTitlesRunner extends IsolateRunner {
         sections: s.sections,
         toc: s.toc,
         coverCandidates: s.coverCandidates,
-        entryNames: s.entryNames,
         flatTitles: replacement,
       );
       return EpubParseOutcome.ok(tampered) as R;

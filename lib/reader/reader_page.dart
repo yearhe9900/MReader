@@ -792,14 +792,19 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           widget.bookmarkStore?.load(widget.record.bookId) ??
               Future<List<Bookmark>>.value(const <Bookmark>[]);
 
-      final PerfWatch loadWatch = PerfLog.watch('reader.load');
-      final BookMeta meta = await widget.source.load();
-      loadWatch.done('impl=${widget.source.implId}');
+      // ## 元数据（含封面解码）**不在首帧关键路径上**（2026-10-20，§2.107）
+      //
+      // 改前这里是 `await widget.source.load()` 再 `await chapters()`：而 `load()`
+      // 内部的 `buildEpubMeta` 会把封面候选**解压出来嗅探图片格式**（最大一块
+      // 是 1~3MB 的 JPEG inflate）——首帧一个字都用不到它：`_meta` 唯一的消费者
+      // 是 `_title` 的兜底（`record.title` 非空时根本不看）。真机开书 335~509ms
+      // 的分解里，这一段属于纯属白等。
+      // 现在：首帧只等章节表；`load()` 推迟到首帧上屏后、且**只有书名缺记录时**才跑。
       final PerfWatch chaptersWatch = PerfLog.watch('reader.chapters');
       final List<Chapter> chapters = await widget.source.chapters();
       chaptersWatch.done('count=${chapters.length}');
       // `reader.stores` 现在量的是**关键路径上的净等待**（store 起跑早于
-      // `reader.load`，源解析期间它们已完成 ⇒ 取值趋 0 即「已不在关键路径上」）。
+      // `reader.chapters`，源解析期间它们已完成 ⇒ 取值趋 0 即「已不在关键路径上」）。
       final ReadingProgress? progress = await progressF;
       final ReadingPrefs? prefs = await prefsF;
       storesWatch.done('concurrent');
@@ -845,7 +850,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         }
         // `_bookmarks` 不在这里赋值：它是异步后到的（见上面 `bookmarksF`），
         // 首帧按空表渲染、到手后单独 setState 补进（不再阻塞开书）。
-        _meta = meta;
+        // `_meta` 同理：见 [_loadMetaAfterReady]（首帧后、且只有书名缺记录时才取）。
         _chapters = chapters;
         _currentIndex = index;
         _chapterPos = pos;
@@ -863,9 +868,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             );
         // backlog① 方案 B：恢复目标非书首时，校正全程遮罩（从头开书首帧即到位，不遮）。
         _restoreMask = index != 0 || pos > 0;
-        for (int i = 0; i < chapters.length; i++) {
-          _chapterKeys[i] = GlobalKey();
-        }
+        // 章块 key **不预分配**（`tech-usage.md` §2.107）：旧实现在这里
+        // `for (i < chapters.length) _chapterKeys[i] = GlobalKey()`，1152 章的书
+        // 一次开书就要造 1152 个 GlobalKey，而首帧真正进树的只有窗口那几章——
+        // 其余全是白烧的分配。改为 `_chapterKeyAt(index)` 按需懒建（同一 index
+        // 复用同一 key，`putIfAbsent` 保证稳定）。
       });
       if (chapters.isEmpty) return;
       _noteReading(); // 定位完成：补记一次带真实坐标的活跃（起表在 initState）
@@ -917,6 +924,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 精确落位收敛才放行（估算落位的视口大跳不许发生在滑入中）。
       // 无门闸（深链 / 测试直进）时是 no-op。
       _signalOpenReady(requireLanded: paged);
+      // 元数据后到（不阻塞首帧；见 [_loadMetaAfterReady]）。
+      _loadMetaAfterReady();
       if (!paged) _scheduleEstimateRefresh(); // 估高只服务 ListView
       // **不在此处启动后台补齐**（`PERF-02` 时序修正 2026-09-28）：补齐会逐批
       // 「占位→真实」合入、改动总高，而此刻控制器还没建、首次恢复校正也还没跑
@@ -930,6 +939,30 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 用户盯着书架以为卡死了（转场被「按住」时没有任何其他退出路径）。
       _signalOpenReady();
     }
+  }
+
+  /// 首帧后补取元数据（**只在该取时才取**）。
+  ///
+  /// `_meta` 唯一的消费者是 [_title] 的兜底：`record.title` 非空时永远不看它。
+  /// 而 `source.load()` 内部（`buildEpubMeta`）会把封面候选**解压出来嗅探图片
+  /// 格式**（常见 1~3MB JPEG inflate）——首帧一个字都用不到。故把它整体移出
+  /// 开书关键路径：书名有记录时一次都不跑，缺记录时才在首帧之后补，到手后
+  /// `setState` 补进（此时正文早已上屏，用户无感）。
+  ///
+  /// 失败静默：`_title` 会回落到「阅读」，不影响任何阅读行为。
+  void _loadMetaAfterReady() {
+    if (widget.record.title.isNotEmpty) return;
+    unawaited(() async {
+      try {
+        final PerfWatch watch = PerfLog.watch('reader.load');
+        final BookMeta meta = await widget.source.load();
+        watch.done('deferred impl=${widget.source.implId}');
+        if (!mounted || _disposed) return;
+        setState(() => _meta = meta);
+      } catch (_) {
+        // 元数据取不到不影响阅读。
+      }
+    }());
   }
 
   /// 报「阅读页就绪」，放行开书转场的纸张滑入。
@@ -1448,12 +1481,25 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   /// 章块的 `RenderBox`（未布局 / 不在缓存内时为 `null`）。
+  ///
+  /// 取 key 时用 [_chapterKeyAt]（懒建）：未进入过树的章没有 key，返回 `null`
+  /// 与「已挂但未布局」同义——两条路径的消费方本来就按「拿不到 box = 未知高」处理。
   RenderBox? _chapterBoxAt(int index) {
     final BuildContext? ctx = _chapterKeys[index]?.currentContext;
     if (ctx == null) return null;
     final RenderObject? object = ctx.findRenderObject();
     return object is RenderBox && object.hasSize ? object : null;
   }
+
+  /// 第 [index] 章的稳定 `GlobalKey`（首次使用时创建）。
+  ///
+  /// 替代旧实现「开书时一次性给全书每章预分配 GlobalKey」——那对 1000+ 章的书
+  /// 是纯浪费（只有窗口内几章会真正进树）。`putIfAbsent` 保证同一 index 拿到的
+  /// 永远是同一个实例，故 Element 复用语义与预分配版**完全一致**。
+  GlobalKey _chapterKeyAt(int index) => _chapterKeys.putIfAbsent(
+        index,
+        () => GlobalKey(debugLabel: 'reader-chapter-$index'),
+      );
 
   /// 视口（正文滚动区）的 `RenderBox`。
   RenderBox? _viewportBox() {
@@ -5277,7 +5323,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (content == null) {
       // 未加载：占位块，高度取「已加载章渲染高度中位数」，避免总高反复跳变。
       return Container(
-        key: _chapterKeys[index],
+        key: _chapterKeyAt(index),
         height: _estimatedChapterHeight,
         alignment: Alignment.center,
         child: Text(
@@ -5295,7 +5341,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final List<String>? imagePages = content.imagePages;
     if (imagePages != null) {
       return Padding(
-        key: _chapterKeys[index],
+        key: _chapterKeyAt(index),
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -5320,7 +5366,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final double marginH = _settings.pageMargin.horizontal;
 
     return Padding(
-      key: _chapterKeys[index],
+      key: _chapterKeyAt(index),
       padding: EdgeInsets.fromLTRB(marginH, 16, marginH, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

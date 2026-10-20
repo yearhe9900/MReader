@@ -494,7 +494,13 @@ class ShelfPageState extends State<ShelfPage> {
     setState(() => _openingBookId = record.bookId); // 该卡显示 loading 覆盖层
     try {
       final PerfWatch readWatch = PerfLog.watch('open.readBytes');
-      final Uint8List? bytes = await widget.repository.readBookBytes(record);
+      // 判据（一次 `stat`）与读字节**并发**：两者互不依赖，串行等于白等一次
+      // 文件系统往返。stat 会先回，这里只是把它的等待藏在读字节里面。
+      final Future<Uint8List?> bytesF =
+          widget.repository.readBookBytes(record);
+      final Future<StructureCacheKey?> cacheKeyF =
+          widget.repository.structureCacheKey(record);
+      final Uint8List? bytes = await bytesF;
       readWatch.done(
           'book=${record.title} sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
       trace.step('readBytes', readWatch.elapsedMs,
@@ -511,8 +517,7 @@ class ShelfPageState extends State<ShelfPage> {
       final PerfWatch sniffWatch = PerfLog.watch('open.sniff');
       // M-PAGE `T06`：结构缓存判据（副本 mtime/size + bookId）；文件缺失 → null
       // → 缓存对不启用，开书行为与无缓存时一致。
-      final StructureCacheKey? cacheKey =
-          await widget.repository.structureCacheKey(record);
+      final StructureCacheKey? cacheKey = await cacheKeyF;
       final BookSource source = await openBook(
         fileName: record.fileName,
         bytes: bytes,

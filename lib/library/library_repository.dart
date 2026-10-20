@@ -180,12 +180,14 @@ class LibraryRepository {
   ///
   /// 文件不存在时返回 `null`（LIB-03：文件缺失场景）。
   Future<Uint8List?> readBookBytes(BookRecord record) async {
-    final Directory libDir = await _paths.subDir('library');
-    final File file = File(
-      '${libDir.path}${Platform.pathSeparator}${record.filePath}',
-    );
-    if (!await file.exists()) return null;
-    return file.readAsBytes();
+    final File file = await bookFile(record);
+    // 省掉一次 `exists()` 往返（开书关键路径）：直接读、按异常判定缺失。
+    // 真机上多一次 stat 就是多一次 IO 系统调用（大书开书窗口里没必要）。
+    try {
+      return await file.readAsBytes();
+    } on FileSystemException {
+      return null; // 文件缺失 / 不可读 → 与「不存在」同口径（`LIB-03`）
+    }
   }
 
   /// 书籍副本文件句柄（**不要求存在**——`SYNC-05` 下载补齐时按同一路径落盘）。
@@ -205,17 +207,21 @@ class LibraryRepository {
   /// 副本文件缺失 → `null`（调用方按「不启用缓存」处理）。
   /// 只 `stat` 不读内容——判据不含字节（`PERF-02`）。
   Future<StructureCacheKey?> structureCacheKey(BookRecord record) async {
-    final Directory libDir = await _paths.subDir('library');
-    final File file = File(
-      '${libDir.path}${Platform.pathSeparator}${record.filePath}',
-    );
-    if (!await file.exists()) return null;
-    final FileStat stat = await file.stat();
-    return StructureCacheKey(
-      bookId: record.bookId,
-      mtimeMs: stat.modified.millisecondsSinceEpoch,
-      size: stat.size,
-    );
+    final File file = await bookFile(record);
+    // 一次 `stat` 拿全（mtime + size）：旧实现 `exists()` + `stat()` 是两次
+    // 系统调用，而本方法在**开书关键路径**上与读字节串行（见 `shelf_page`）。
+    // 文件不存在时 `stat()` 不抛，而是返回 `type == notFound` 的 FileStat。
+    try {
+      final FileStat stat = await file.stat();
+      if (stat.type == FileSystemEntityType.notFound) return null;
+      return StructureCacheKey(
+        bookId: record.bookId,
+        mtimeMs: stat.modified.millisecondsSinceEpoch,
+        size: stat.size,
+      );
+    } on FileSystemException {
+      return null; // 不可读 → 按「不启用缓存」处理
+    }
   }
 
   /// 登记并启动一本书的导入预热（失败静默；收尾后自动出表）。
@@ -267,12 +273,14 @@ class LibraryRepository {
   /// 文件不存在时返回 `null`（`LIB-03`：文件缺失场景）。
   /// 只 `stat` 不读内容——大书展示大小不把整本书读进内存（`PERF-02`）。
   Future<int?> bookFileSize(BookRecord record) async {
-    final Directory libDir = await _paths.subDir('library');
-    final File file = File(
-      '${libDir.path}${Platform.pathSeparator}${record.filePath}',
-    );
-    if (!await file.exists()) return null;
-    return file.length();
+    final File file = await bookFile(record);
+    try {
+      final FileStat stat = await file.stat();
+      if (stat.type == FileSystemEntityType.notFound) return null;
+      return stat.size;
+    } on FileSystemException {
+      return null;
+    }
   }
 
   /// 更新一本书的「最近阅读时间 + 已读百分比」（`RD-04` 的 `BookRecord` 侧）。
