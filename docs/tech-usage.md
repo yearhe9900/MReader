@@ -6310,3 +6310,84 @@ ColoredBox(color: scaffoldBackgroundColor,
 - **待真机复验**：顶部恒定 σ 的观感（尤其与 `GlassNavScaffold` 自带
   `ProgressiveBlur` 叠加后是否过糊）、膜在书卡封面上是否读得出胶囊形状、
   搜索态转场与键盘弹出。
+
+### 2.107 开书关键路径第三轮：**结构缓存换二进制 + 元数据/封面移出首帧**（2026-10-20）
+
+负责人诉求：「提高打开图书的效率，感觉还是慢，从算法/缓存角度都行」。
+本轮先做**不动架构、收益确定**的四项，并把「缓存自己成了成本」这条揪出来。
+
+#### 一、账本：开书链路上到底谁在花时间
+
+按 `shelf_page._openBook` → `ReaderPage._open` 的顺序，**首帧真正依赖**的只有：
+章节表 + 目标章正文 + 排版参数 + 进度。逐段核对后发现三处「白等」：
+
+| 段 | 旧实现 | 是否首帧需要 |
+|---|---|---|
+| `readBookBytes` → `structureCacheKey` | **串行两次 IO**（读字节，再 `exists()` + `stat()` 判据） | 都要，但互不依赖 |
+| `source.load()`（`buildEpubMeta`） | 解压封面候选 + 嗅探图片格式（常见 1~3MB JPEG inflate） | **不需要**：`_meta` 唯一消费者是 `_title` 的兜底，`record.title` 非空时永远不看 |
+| 结构缓存读取 | 100KB+ **JSON 文本**：`jsonEncode`/`jsonDecode` 重建上千个 Map/List/String | 需要，但格式选错了 |
+| `_chapterKeys` 预分配 | `for (i < chapters.length) GlobalKey()` | **不需要**：只有窗口内几章进树 |
+
+**量化（桌面哨兵，`tmp_book/王晋康作品选(27册).epub` 15MB / 471 sections / 526 toc）**：
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| 结构缓存体积 | 94~102KB | **37KB**（39.6%） |
+| `jsonEncode` / `jsonDecode` | 6ms / 7ms | `blob encode` 1ms / `decode` **2ms** |
+| 分项体积（旧 JSON） | sections 29KB / toc 38KB / **entryNames 33KB** / covers 0 | — |
+
+真机按 3~5× 放大：单这一项 **≈ −20~25ms**。
+
+#### 二、四项改动
+
+1. **结构缓存改紧凑二进制**（`lib/format/structure_cache.dart`、
+   `lib/storage/structure_cache_store.dart`）：`[magic MRSC][schema][varint 长度前缀字段流]`，
+   解码只做「顺序读 + 直接建对象」，不再有中间树。落盘从 `JsonStore`（JSON 文本）
+   换成 `AtomicFile`（`DATA-01` 原子写照旧）。
+2. **删 `EpubStructure.entryNames`**：它是解析 isolate → 绑定之间的**一次性传输品**，
+   而绑定侧 `bindEpubResult` 本来就会重扫 zip 中央目录重建同一张 `lowerIndex` ——
+   落盘、读回、`Map.from` 全都是纯冗余（旧 JSON 里占 1/3 体积）。删掉后解析 isolate
+   的返回体也小一圈。
+3. **元数据（含封面解码）移出首帧**（`reader_page._loadMetaAfterReady`）：首帧只
+   `await chapters()`；`load()` 改为首帧上屏后、且**只有 `record.title` 为空时**才跑。
+4. **`_chapterKeys` 懒建**（`_chapterKeyAt`，`putIfAbsent` 保稳定）+ **判据 IO 与读字节并发**
+   （`shelf_page`）+ **去掉 `exists()` 那次多余 stat**（`library_repository` 三处）。
+5. schema 从 **1 → 2**：旧 JSON 缓存按 miss 处理（重解析一次），写入时顺手回收
+   旧 `<bookId>.json` 的四份后缀；损坏隔离仍按 `DATA-01` ② 只对**真损坏**
+   （magic/schema 对但字节流读不下去）执行，判据失效**不**隔离（否则每次换文件
+   都在磁盘上堆一个 `.corrupt`）。
+
+#### 三、为什么「损坏」与「判据失效」必须分开
+
+`decodeStructureEnvelopeDetailed` 现在返回 `StructureDecodeStatus`
+（`hit` / `keyMismatch` / `corrupted`），且**先解析完整个字节流、再比判据**。
+两个理由：
+- 判据失效是**正常**的（副本被替换、schema 升级），隔离成 `.corrupt` 只会堆垃圾；
+- 只有「结构读完了但没到底 / 越界 / 非法 UTF-8」才是真损坏，按 `DATA-01` ② 留证。
+
+#### 四、测试
+
+- `test/format/structure_cache_test.dart`：往返（全字段）、判据三键、schema 不符、
+  字节流损坏四式（非本格式 / 空 / 中间截断 / 尾部脏字节）、磁盘往返 + delete、
+  损坏隔离；**新增一条**「信封里不再出现条目名表」（锁住 `entryNames` 不回流）。
+- 分组：`fast` **472** 全绿（基线 471 + 新增 1）/ `reader` **464** 全绿 /
+  `ui` **311** 全绿（`-j 1`）；`dart analyze lib/ test/` 仅剩移植树固有 4 条 info。
+
+#### 五、坑
+
+1. ⚠️ **varint 宽度要按未来算**：首版写 5 组（35 bit），装不下 epoch 毫秒
+   （1759300000000 ≈ 2^40.7）——**每一份合法缓存都被判成损坏**，三条用例立刻红。
+   定成 8 组（56 bit）才对。
+2. ⚠️ **旧用例是钉住旧格式的**（§2.97 再验）：四条「信封」用例原本断言 JSON 树
+   形状（`envelope['schema']`、`(envelope['structure'])['toc']`），换格式后它们
+   **不是因为行为错而红，而是因为载体没了**。改它们时同步改了断言口径
+   （状态枚举 / 字节流损坏四式），并补一条「entryNames 不回流」的新用例。
+3. ⚠️ **`_meta` 的后到 setState 只允许发生在「书名缺记录」这一条窄路上**：它是
+   整页 rebuild，若对每本书都跑，等于给首帧后的稳定态平白加一次重建。故在
+   `_loadMetaAfterReady` 入口直接 `if (widget.record.title.isNotEmpty) return;`。
+4. 本批**未**改：`readBookBytes` 仍然把整本读进内存（大书 15MB ≈ 一次 30~80ms
+   的真机 IO），这是下一批的候选（文件后备随机读 / 书源复用池）。
+
+- 交付：`lib/format/structure_cache.dart`、`lib/storage/structure_cache_store.dart`、
+  `lib/epub/epub_parser.dart`、`lib/reader/reader_page.dart`、`lib/ui/shelf_page.dart`、
+  `lib/library/library_repository.dart` + 2 个测试文件 + CHANGELOG / 本文件。
