@@ -1,10 +1,12 @@
-// 增量分页器契约测试（T02）：先 5 页上屏、预算让出、**部分页表前缀 ==
+// 增量分页器契约测试（T02）：目标覆盖即上屏、预算让出、**部分页表前缀 ==
 // 最终前缀**。期望值一律硬编码字面量。夹具同 `pagination_measure_test.dart`
 // （等宽、字宽 18、行高 29.0、页 6 行 174.0、段首 2 缩进）：100 字段落 =
 // 102 可见 → 11 行 → 恒切 2 页——页 2k = `[100k, 100k+58)` h=**174.0**、
 // 页 2k+1 = `[100k+58, 100k+100)` h=**145.0**（跨段回拉到段末
 // paragraphEnd，50 字窗口内，页高不含段距）。
 // 全部用 `budget: Duration.zero` 驱动（step 零预算恰测 1 段），帧序列确定。
+// 首屏线口径（统一方案 Phase 1 §6.3）：`initialReady` = 目标页覆盖（1 段 2 页
+// 即就绪）；「5 页线」降为后台目标 `backgroundGoalReached`。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/reader/pagination/incremental_paginator.dart';
@@ -108,19 +110,22 @@ void main() {
     });
   });
 
-  group('首屏就绪（先 5 页上屏）', () {
-    test('initialReady 边界：第 3 段后 6 页才就绪（4 页不够）', () {
+  group('首屏就绪（目标页覆盖即上屏）', () {
+    test('initialReady 边界：1 段 2 页即就绪；5 页线只是后台目标', () {
       final IncrementalPaginator job = jobOf(8);
-      expect(job.initialReady, isFalse);
+      expect(job.initialReady, isFalse); // 初始空页 [0,0) 不覆盖目标 0
       job.step(Duration.zero);
       expect(job.pages.length, 2);
-      expect(job.initialReady, isFalse);
+      // 判别点（统一方案 Phase 1 §6.3）：2 页即就绪——「先 5 页」口径下此处
+      // 必须 false（4 页 < 5），本断言在旧实现上判红。
+      expect(job.initialReady, isTrue);
+      expect(job.backgroundGoalReached, isFalse); // 2 页 < 5
       job.step(Duration.zero);
-      expect(job.pages.length, 4);
-      expect(job.initialReady, isFalse); // 4 页 < 5
+      expect(job.backgroundGoalReached, isFalse); // 4 页 < 5
       job.step(Duration.zero);
       expect(job.pages.length, 6);
-      expect(job.initialReady, isTrue); // 6 ≥ 5 且目标 0 已覆盖
+      expect(job.backgroundGoalReached, isTrue); // 6 ≥ 5
+      expect(job.initialReady, isTrue);
     });
 
     test('目标页优先：target 450 时 initialReady 等到第 5 段（页尾 500 > 450）', () {
@@ -132,7 +137,8 @@ void main() {
       job.step(Duration.zero);
       expect(job.pages.length, 6);
       expect(job.targetCovered, isFalse); // 页尾 300 ≤ 450
-      expect(job.initialReady, isFalse); // 页数够但目标未覆盖
+      // 页数已超旧 5 页线仍不就绪——钉「就绪只看目标覆盖，不看页数」。
+      expect(job.initialReady, isFalse);
       job.step(Duration.zero);
       expect(job.targetCovered, isFalse); // 页尾 400
       job.step(Duration.zero);
@@ -147,13 +153,23 @@ void main() {
       expect(job.isComplete, isFalse);
     });
 
-    test('prime 推进到首屏就绪即停：≥5 页、目标覆盖、大章不被测完', () {
+    test('prime 已达标直通：目标覆盖后零预算也 true、不重复测量', () {
+      final IncrementalPaginator job = jobOf(300);
+      job.step(Duration.zero); // 恰测 1 段（确定性零预算）→ 2 页覆盖目标 0
+      expect(job.pages.length, 2);
+      expect(job.measuredParagraphs, 1);
+
+      expect(job.prime(Duration.zero), isTrue); // 已可落位：零预算直通
+      expect(job.measuredParagraphs, 1); // 直通不触发测量
+      expect(job.isComplete, isFalse);
+    });
+
+    test('prime 大预算：达标即停、大章不被测完', () {
       final IncrementalPaginator job = jobOf(300);
       expect(job.prime(const Duration(seconds: 5)), isTrue);
       expect(job.initialReady, isTrue);
-      expect(job.pages.length, greaterThanOrEqualTo(5));
       expect(job.targetCovered, isTrue);
-      // 达标即停：4ms 小片不可能测完 300 段（单切片最多推进几十段）。
+      // 达标即停：首个4ms 切片后目标已覆盖，不会推进完整章。
       expect(job.isComplete, isFalse);
       expect(job.measuredParagraphs, lessThan(300));
     });
@@ -252,10 +268,10 @@ void main() {
   });
 
   group('调度常量（里程碑 §1 口径）', () {
-    test('空闲帧预算 4~8ms 取中、首屏 5 页、突发预算 16ms', () {
+    test('空闲帧预算 4~8ms 取中、后台目标 5 页、突发预算 16ms', () {
       expect(kIdleFrameBudget.inMilliseconds, 6); // 里程碑「4~8ms」取中
       expect(kFirstPaintBudget.inMilliseconds, 16);
-      expect(kInitialPageCount, 5);
+      expect(kBackgroundPageGoal, 5); // 原「先 5 页」线，现为后台目标
       expect(kPrimeSlice.inMilliseconds, 4);
     });
   });

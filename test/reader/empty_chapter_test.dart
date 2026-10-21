@@ -20,6 +20,14 @@
 // 夹具：`FakeBookSource(paragraphCounts: [60, 0, 60])`——第 2 章 0 段，与
 // 《枭臣》孤行「正文」切出的空段章同构（`content` 非 null、段落表空）。
 // 视口 800×600（页高 572 = 600 − 28 指示条让位），与 `placeholder_band_test` 同款。
+//
+// ## 2026-10-21 窗口构成去脆弱化（配合 `initialReady` 放宽）
+//
+// 「1 页即上屏」后首屏卷更矮，拖动 -6000 的落点随首切片实测段数在
+// 「章 1 深处 / 章 2 深处」两态间摆动，停稳 ±1 收敛出 [h1,h2,h3] /
+// [h2,h3] 两种合法窗口——数据断言按 href 取章、不钉窗口长度；「章名
+// 照显」是渲染口径，用 `PagedLayout` 章顶 `jumpTo` 定点后查树，不依赖
+// 拖动落点把标题恰好带进可见带。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -79,22 +87,50 @@ void main() {
 
       final PagedScroller sc = scroller(tester);
       final List<PagedChapterView> views = sc.chapters;
-      expect(views.length, 3, reason: '窗口应已尾追加到第 3 章');
-      expect(views[0].pages, isNotEmpty, reason: '第 1 章照常分页');
-      expect(views[2].pages, isNotEmpty, reason: '第 3 章照常分页');
+      // 窗口构成**不钉死**（2026-10-21）：`initialReady` 放宽到「1 页即上屏」
+      // 后首屏卷更矮，拖动 -6000 的落点在「章 1 深处（cur=0）」与「章 2 深处
+      // （cur=2）」两种终态间随首切片实测段数摆动，停稳 ±1 收敛分别得
+      // [h1,h2,h3] / [h2,h3]——两种都合法。故按 href 取章钉事实；
+      // 「尾追加到第 3 章」= 末章 h3 必在窗。
+      expect(views.last.href, 'h3', reason: '窗口应已尾追加到第 3 章');
+      PagedChapterView byHref(String href) =>
+          views.firstWhere((PagedChapterView v) => v.href == href);
+
+      expect(byHref('h3').pages, isNotEmpty, reason: '第 3 章照常分页');
+      // 第 1 章照常分页（±1 收敛后可能出窗——在窗才验）。
+      if (views.any((PagedChapterView v) => v.href == 'h1')) {
+        expect(byHref('h1').pages, isNotEmpty, reason: '第 1 章照常分页');
+      }
 
       // 空段章（第 2 章）：走完分页管线拿到**一页空页**（内核「每章至少一页」）。
       // 改前 `pages` 恒空（`_registerWindowUnpaginated` 跳过空段章 ⇒ 永无页表）
       // ⇒ 永驻占位分支。
-      expect(views[1].paragraphs, isEmpty, reason: '空段章段落表为空');
-      expect(views[1].lines, isEmpty, reason: '空页没有行');
-      expect(views[1].pages, hasLength(1),
+      final PagedChapterView emptyView = byHref('h2');
+      expect(emptyView.paragraphs, isEmpty, reason: '空段章段落表为空');
+      expect(emptyView.lines, isEmpty, reason: '空页没有行');
+      expect(emptyView.pages, hasLength(1),
           reason: '空章契约：每章至少一页——空段章是一页空页的定稿章，'
               '不再是「正文还没来」');
-      expect(views[1].heading, isA<Column>(),
+      expect(emptyView.heading, isA<Column>(),
           reason: '真身标题块（占位分支的 heading 是 Center「载入中」）');
 
       // 用户可见口径：章间不再卡「载入中…」占位带，章名照显（只显章名）。
+      // 「照显」是**渲染**口径 ⇒ 先把空段章标题滚进可见带（PagedScroller 只挂
+      // 可见带内标题；拖尾落点在章 2 深处时 h2 标题离带很远——位置性断言
+      // 必须自己定位，不依赖拖动落点的等衡）。章顶用 SUT 同一
+      // `PagedLayout.build` 算，避免手抄布局公式漂移。
+      final PagedLayout layout = PagedLayout.build(
+        views,
+        paragraphSpacing: sc.config.paragraphSpacing,
+      );
+      final int h2Pos =
+          views.indexWhere((PagedChapterView v) => v.href == 'h2');
+      final PagedScrollerState st = tester.state<PagedScrollerState>(
+          find.byType(PagedScroller, skipOffstage: false));
+      st.scrollController.jumpTo(layout.chapterTops[h2Pos]
+          .clamp(0.0, st.scrollController.position.maxScrollExtent));
+      await settle(tester, rounds: 5);
+
       expect(
         find.descendant(
           of: find.byType(PagedScroller, skipOffstage: false),
@@ -104,8 +140,16 @@ void main() {
         reason: '空段章是「这一章没有正文」不是「正文还没来」——'
             '改前每次开书都在章间卡一条『第 2 章 · 载入中…』',
       );
-      expect(find.text('第二章', skipOffstage: false), findsOneWidget,
-          reason: '负责人拍板「可以只显示章节名」');
+      // 查找器圈进正文卷：底部读数行（`reader-progress-chapter`）也会显示
+      // 「第二章」，不圈范围会数出 2 个。
+      expect(
+        find.descendant(
+          of: find.byType(PagedScroller, skipOffstage: false),
+          matching: find.text('第二章', skipOffstage: false),
+        ),
+        findsOneWidget,
+        reason: '负责人拍板「可以只显示章节名」',
+      );
 
       await closeBook(tester);
     });

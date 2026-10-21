@@ -110,7 +110,9 @@ void main() {
       s.stepIdle(budget: Duration.zero); // a 测 1 段
       final IncrementalPaginator before = s.active!;
 
-      expect(openA(s, nextHref: 'n'), isFalse); // 同章重开仍走未就绪路径
+      // 1 段 2 页已覆盖目标 0 ⇒ 可落位（initialReady 放宽后返 true；
+      // 「先 5 页」口径下此处是 false）。本用例的判据是**进度与实例保留**。
+      expect(openA(s, nextHref: 'n'), isTrue);
       expect(identical(s.active, before), isTrue);
       expect(s.active!.measuredParagraphs, 1); // 进度不回退
       expect(s.prefetchPending, 1); // 旧队列保留且去重（仍 1 个）
@@ -196,7 +198,9 @@ void main() {
       expect(s.stepIdle(budget: Duration.zero), isTrue); // n 测 1 段
       expect(s.prefetchJobs.single.measuredParagraphs, 1);
 
-      expect(openA(s, href: 'n', count: 2), isFalse); // 提拔 n
+      // 提拔 n：1 段 2 页已覆盖目标 0 ⇒ 可落位返 true（initialReady 放宽；
+      // 「先 5 页」口径下此处是 false）。本用例判据是**进度保留 + 队列作废**。
+      expect(openA(s, href: 'n', count: 2), isTrue);
       expect(s.activeHref, 'n');
       expect(s.active!.measuredParagraphs, 1); // 预分页进度保住
       expect(s.prefetchPending, 0); // 旧队列作废

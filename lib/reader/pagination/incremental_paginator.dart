@@ -1,10 +1,15 @@
-// 增量分页器（T02）：**先 5 页上屏、空闲帧补完、每帧预算让出**。
+// 增量分页器（T02）：**目标页覆盖即上屏、空闲帧补完、每帧预算让出**。
 //
 // `dart:ui` 排版只能在 root isolate、无后台线程 → 靠时间预算切片让出主线程：
 // · [step]：至少测 1 段（绝不空转），预算尽即返回；调用方在空闲帧循环。
 // · [prime]：开书/跳章首屏突发，按 [kPrimeSlice] 小片推进到 [initialReady]
 //   （达标即停，不会一次测完整章）；预算尽未达标 → 返回 false，调用方挂
 //   占位页转空闲帧补（保证④「占位上屏 + 一次落位」前半段）。
+//
+// 首屏线口径（统一方案 Phase 1 §6.3，2026-10-21 放宽）：`initialReady` =
+// **目标页覆盖**（1 页即上屏）。改前是「目标覆盖 **且** ≥ [kBackgroundPageGoal]
+// 页」（T02「先 5 页上屏」，legado_flutter 同款）；5 页线降为**后台目标**
+// （[backgroundGoalReached]，空闲帧 [step] 续排天然越过），不再挡首屏。
 //
 // 页表前缀稳定性（上屏契约）：贪心切页前缀决定——除**末页**（随行耗尽增长）
 // 外，已产出页边界不随后续测量改变；`covers` 只信末页覆盖范围。
@@ -22,8 +27,12 @@ const Duration kIdleFrameBudget = Duration(milliseconds: 6);
 /// 开书/跳章首次上屏的突发预算（≈ 1 帧；超时未达标转占位 + 空闲帧补）。
 const Duration kFirstPaintBudget = Duration(milliseconds: 16);
 
-/// 首屏最少页数（「先 **5 页**上屏」，legado_flutter 同款）。
-const int kInitialPageCount = 5;
+/// 首屏突发的后台目标页数（原「先 5 页上屏」的 5 页线，legado_flutter 同款）。
+///
+/// 2026-10-21 起**不再挡首屏**（统一方案 Phase 1 §6.3）：`initialReady` 只看
+/// 目标页覆盖；本值降为**后台目标**——[prime] 达标后不再等它，空闲帧 [step]
+/// 续排时天然越过。保留常量是为了 [backgroundGoalReached] 的判据与测试口径。
+const int kBackgroundPageGoal = 5;
 
 /// [prime] 的推进小片（达标即停的粒度上界；实测单段远小于此）。
 const Duration kPrimeSlice = Duration(milliseconds: 4);
@@ -97,10 +106,16 @@ class IncrementalPaginator {
       _complete ||
       (_pages.isNotEmpty && targetCharOffset < _pages.last.end);
 
-  /// 首屏是否就绪：目标页已覆盖 **且** 至少 [kInitialPageCount] 页
-  /// （全章不足 5 页时以完成为准）。开书「先 5 页上屏」的判定。
-  bool get initialReady =>
-      _complete || (_pages.length >= kInitialPageCount && targetCovered);
+  /// 首屏是否就绪：**目标页已覆盖即真**（1 页即上屏，统一方案 Phase 1 §6.3）。
+  ///
+  /// 5 页线（[kBackgroundPageGoal]）已降为后台目标（[backgroundGoalReached]），
+  /// 不再挡首屏——「先 5 页」时代的判据是「目标覆盖 **且** ≥ 5 页」。
+  bool get initialReady => targetCovered;
+
+  /// 后台目标是否达成（≥ [kBackgroundPageGoal] 页）：只作续排观测口径，
+  /// 不参与 [initialReady] / [prime] 的达标判定。
+  bool get backgroundGoalReached =>
+      _complete || _pages.length >= kBackgroundPageGoal;
 
   /// 一个预算切片的排版：至少测 1 段，预算尽即让出。
   ///
@@ -132,9 +147,10 @@ class IncrementalPaginator {
   /// 首屏突发：在 [budget] 内按 [kPrimeSlice] 小片推进到 [initialReady]。
   ///
   /// 返回 `initialReady`；`false` 表示预算已尽仍未达标（调用方挂占位页、
-  /// 转空闲帧继续 [step]）。空章构造即完成，恒 `true`。
+  /// 转空闲帧继续 [step]）。已达标（含空章构造即完成）**零预算也直通**——
+  /// 「目标页已可落位」是状态判定，不该被预算短路。
   bool prime(Duration budget) {
-    if (_complete) return true;
+    if (initialReady) return true;
     if (budget <= Duration.zero) return false;
     final Stopwatch clock = Stopwatch()..start();
     while (!initialReady) {
