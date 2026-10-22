@@ -27,6 +27,7 @@ import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
 import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 import 'package:mreader/ui/shelf_page.dart';
+import 'package:mreader/ui/shelf_search_page.dart';
 
 import '../test_config.dart';
 
@@ -848,7 +849,7 @@ void main() {
       expect(_titles(tester).first, 'c', reason: '标题降序');
     });
 
-    testWidgets('搜索态：点搜索栏就地展开（真输入框 + 取消钮、胶囊行收起）',
+    testWidgets('点搜索栏 → 卡片式推入搜索页（头部三件套几何 + 返回圆钮出栈）',
         (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _txtBytes('甲'), fileName: 'alpha.txt'),
@@ -856,33 +857,41 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 常规态：胶囊行在、没有取消钮
       expect(find.byType(AdaptivePillTabBar), findsOneWidget);
-      expect(find.byType(MiSearchCancelButton), findsNothing);
-      expect(
-        tester.widget<MiSearchBar>(find.byKey(const Key('shelf-search-entry')))
-            .editable,
-        isFalse,
-      );
+      expect(find.byType(BookCard), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('shelf-search-entry')));
-      await tester.pumpAndSettle(); // 480ms 转场（AnimatedSize / 取消钮淡入）
+      // 搜索页输入框的光标闪烁是不停的定时器：不用 pumpAndSettle，
+      // 按转场时长（`MiCardPageRouteMetrics.durationMs` = 400ms）固定推进。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 420));
 
-      // ① 搜索栏变真输入框：`editable` 打开、点击回调交出（不再是「假搜索框」）
-      final MiSearchBar bar =
-          tester.widget<MiSearchBar>(find.byKey(const Key('shelf-search-entry')));
-      expect(bar.editable, isTrue);
-      expect(bar.onTap, isNull);
-      expect(bar.overContent, isTrue, reason: '搜索态也压在书卡上');
-      // ② 取消钮出现；③ 胶囊分类行收起（不参与排版）
-      expect(find.byType(MiSearchCancelButton), findsOneWidget);
+      // ① 推入独立搜索页：整屏、无 App 级导航（书架被不透明路由盖住 → offstage）
+      expect(find.byType(ShelfSearchPage), findsOneWidget);
       expect(find.byType(AdaptivePillTabBar), findsNothing);
-      // ④ 未输入时给引导，网格让位
       expect(find.text('输入关键字开始搜索'), findsOneWidget);
       expect(find.byType(BookCard), findsNothing);
+
+      // ② 头部几何（上游度量）：圆钮 ⌀44.1；输入框与圆钮同中心；圆钮→输入框 11
+      final Rect back = tester
+          .getRect(find.byKey(const ValueKey<String>('shelf-search-back')));
+      final Rect field = tester
+          .getRect(find.byKey(const ValueKey<String>('shelf-search-field')));
+      expect(back.width, moreOrLessEquals(MiSearchBarMetrics.barHeight));
+      expect(back.height, moreOrLessEquals(MiSearchBarMetrics.barHeight));
+      expect(field.center.dy, moreOrLessEquals(back.center.dy, epsilon: 0.5));
+      expect(field.left - back.right, moreOrLessEquals(11.0, epsilon: 0.2));
+
+      // ③ 返回圆钮出栈，书架回来（头部仍是静态搜索胶囊）
+      await tester.tap(find.byKey(const ValueKey<String>('shelf-search-back')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 420));
+      expect(find.byType(ShelfSearchPage), findsNothing);
+      expect(find.byType(MiSearchBar), findsOneWidget);
+      expect(find.byType(AdaptivePillTabBar), findsOneWidget);
     });
 
-    testWidgets('搜索态：输入即过滤（元数据命中），结果仍是书卡网格；取消恢复全量',
+    testWidgets('搜索页输入即过滤（元数据命中）；无命中给提示；返回不残留',
         (WidgetTester tester) async {
       await tester.runAsync(() async {
         await repo.importFile(bytes: _txtBytes('甲'), fileName: 'alpha.txt');
@@ -893,36 +902,30 @@ void main() {
       expect(find.byType(BookCard), findsNWidgets(2));
 
       await tester.tap(find.byKey(const Key('shelf-search-entry')));
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 420));
+
+      Finder field() => find.descendant(
+            of: find.byKey(const ValueKey<String>('shelf-search-field')),
+            matching: find.byType(TextField),
+          );
 
       // 输入即过滤：书名 / 作者 / 原始文件名任一命中
-      await tester.enterText(
-        find.descendant(
-          of: find.byKey(const Key('shelf-search-entry')),
-          matching: find.byType(TextField),
-        ),
-        'alpha',
-      );
-      await tester.pumpAndSettle();
+      await tester.enterText(field(), 'alpha');
+      await tester.pump();
       expect(_titles(tester), <String>['alpha'], reason: '只留命中的那本');
 
       // 无命中 → 提示文案（不出网格）
-      await tester.enterText(
-        find.descendant(
-          of: find.byKey(const Key('shelf-search-entry')),
-          matching: find.byType(TextField),
-        ),
-        '不存在的书名',
-      );
-      await tester.pumpAndSettle();
+      await tester.enterText(field(), '不存在的书名');
+      await tester.pump();
       expect(find.byType(BookCard), findsNothing);
       expect(find.textContaining('没有匹配'), findsOneWidget);
 
-      // 取消：退搜索态、清空查询、恢复全量网格
-      await tester.tap(find.byType(MiSearchCancelButton));
-      await tester.pumpAndSettle();
-      expect(find.byType(MiSearchCancelButton), findsNothing);
-      expect(find.byType(AdaptivePillTabBar), findsOneWidget);
+      // 返回：搜索页出栈，书架全量网格照旧
+      await tester.tap(find.byKey(const ValueKey<String>('shelf-search-back')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 420));
+      expect(find.byType(ShelfSearchPage), findsNothing);
       expect(find.byType(BookCard), findsNWidgets(2));
     });
 
