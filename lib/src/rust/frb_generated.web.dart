@@ -6,7 +6,9 @@
 // Static analysis wrongly picks the IO variant, thus ignore this
 // ignore_for_file: argument_type_not_assignable
 
+import 'api/error.dart';
 import 'api/guard.dart';
+import 'api/kernel.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -27,7 +29,73 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  bool dco_decode_bool(dynamic raw);
+
+  @protected
+  RkResource dco_decode_box_autoadd_rk_resource(dynamic raw);
+
+  @protected
+  HighPerfError dco_decode_high_perf_error(dynamic raw);
+
+  @protected
+  HighPerfErrorKind dco_decode_high_perf_error_kind(dynamic raw);
+
+  @protected
+  int dco_decode_i_32(dynamic raw);
+
+  @protected
+  List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  List<RkBlock> dco_decode_list_rk_block(dynamic raw);
+
+  @protected
+  List<RkChapter> dco_decode_list_rk_chapter(dynamic raw);
+
+  @protected
+  List<RkTocNode> dco_decode_list_rk_toc_node(dynamic raw);
+
+  @protected
+  List<RkWeight> dco_decode_list_rk_weight(dynamic raw);
+
+  @protected
+  String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  RkResource? dco_decode_opt_box_autoadd_rk_resource(dynamic raw);
+
+  @protected
+  RkBlock dco_decode_rk_block(dynamic raw);
+
+  @protected
+  RkChapter dco_decode_rk_chapter(dynamic raw);
+
+  @protected
+  RkChapterText dco_decode_rk_chapter_text(dynamic raw);
+
+  @protected
+  RkMeta dco_decode_rk_meta(dynamic raw);
+
+  @protected
+  RkResource dco_decode_rk_resource(dynamic raw);
+
+  @protected
+  RkTocNode dco_decode_rk_toc_node(dynamic raw);
+
+  @protected
+  RkWeight dco_decode_rk_weight(dynamic raw);
+
+  @protected
+  int dco_decode_u_32(dynamic raw);
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw);
 
   @protected
   int dco_decode_u_8(dynamic raw);
@@ -39,7 +107,77 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
+  RkResource sse_decode_box_autoadd_rk_resource(SseDeserializer deserializer);
+
+  @protected
+  HighPerfError sse_decode_high_perf_error(SseDeserializer deserializer);
+
+  @protected
+  HighPerfErrorKind sse_decode_high_perf_error_kind(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  List<RkBlock> sse_decode_list_rk_block(SseDeserializer deserializer);
+
+  @protected
+  List<RkChapter> sse_decode_list_rk_chapter(SseDeserializer deserializer);
+
+  @protected
+  List<RkTocNode> sse_decode_list_rk_toc_node(SseDeserializer deserializer);
+
+  @protected
+  List<RkWeight> sse_decode_list_rk_weight(SseDeserializer deserializer);
+
+  @protected
+  String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  RkResource? sse_decode_opt_box_autoadd_rk_resource(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RkBlock sse_decode_rk_block(SseDeserializer deserializer);
+
+  @protected
+  RkChapter sse_decode_rk_chapter(SseDeserializer deserializer);
+
+  @protected
+  RkChapterText sse_decode_rk_chapter_text(SseDeserializer deserializer);
+
+  @protected
+  RkMeta sse_decode_rk_meta(SseDeserializer deserializer);
+
+  @protected
+  RkResource sse_decode_rk_resource(SseDeserializer deserializer);
+
+  @protected
+  RkTocNode sse_decode_rk_toc_node(SseDeserializer deserializer);
+
+  @protected
+  RkWeight sse_decode_rk_weight(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_8(SseDeserializer deserializer);
@@ -48,13 +186,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_decode_unit(SseDeserializer deserializer);
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer);
-
-  @protected
-  bool sse_decode_bool(SseDeserializer deserializer);
-
-  @protected
   void sse_encode_String(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_rk_resource(
+    RkResource self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_high_perf_error(HighPerfError self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_high_perf_error_kind(
+    HighPerfErrorKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_8_strict(
@@ -63,16 +222,64 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_rk_block(List<RkBlock> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_rk_chapter(
+    List<RkChapter> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_rk_toc_node(
+    List<RkTocNode> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_rk_weight(List<RkWeight> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_rk_resource(
+    RkResource? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_rk_block(RkBlock self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_chapter(RkChapter self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_chapter_text(RkChapterText self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_meta(RkMeta self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_resource(RkResource self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_toc_node(RkTocNode self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_weight(RkWeight self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
   void sse_encode_u_8(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_bool(bool self, SseSerializer serializer);
 }
 
 // Section: wire_class

@@ -41,9 +41,11 @@ thiserror = "2"
 # `M35-T03` ③：KF8 最小验证对象（PRD `Q25`；测试 rust/tests/kf8_gate.rs）。
 # 结论未出前不进任何业务链路——只被该 gate 测试引用。
 mobi = "0.8"
-# 移植的 Rust 阅读内核（图书解析核心）：会话编排（句柄表）+ 统一数据模型。
+# 移植的 Rust 阅读内核（图书解析核心）：会话编排（句柄表）+ 统一数据模型 +
+# 格式适配契约（ContentSource）。
 rrk-kernel.workspace = true
 rrk-model.workspace = true
+rrk-format.workspace = true
 
 # `RUST-04` / 架构 §D.2：panic 必须显式 unwind——`catch_unwind` 在 abort 下失效，
 # panic 会直接终止进程。两处显式写死，让「改成 abort」变成一次显眼的 diff

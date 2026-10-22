@@ -15,7 +15,8 @@ pub enum HighPerfErrorKind {
     Internal,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{message_zh}")]
 pub struct HighPerfError {
     pub kind: HighPerfErrorKind,
     /// 单一、中文、可读；**不得包含 Rust 类型名 / 栈 / 英文 panic 原文**。
