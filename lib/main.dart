@@ -16,6 +16,7 @@ import 'ai/secure_key_store.dart';
 import 'ai/summary_cache.dart';
 import 'ai/vocab_store.dart';
 import 'app.dart';
+import 'highperf/ffi/high_perf_ffi_engine.dart';
 import 'highperf/high_perf_registry.dart';
 import 'library/book_index.dart';
 import 'library/library_repository.dart';
@@ -81,11 +82,12 @@ Future<void> main() async {
   // `RUST-01 ③`：加速能力**探测只做一次**（启动时），结论缓存进注册表；
   // 打开书时不再探测、无 IO 成本。探测失败**不抛、不阻塞**——整体回落纯 Dart。
   //
-  // T01（M35-T01）阶段这里**不传 engine**：`lib/highperf/ffi/**`（T04）尚未落地，
-  // 如实取纯 Dart 回落实例，而不是给一个空引擎让它探出「版本不匹配」这种假原因。
-  // T04/T05 接入时，本行改为传入 FFI 引擎工厂（唯一 import FRB 的文件仍在
-  // `lib/highperf/ffi/high_perf_ffi_engine.dart`，本文件只做组合，不碰 FRB 细节）。
-  final HighPerfRegistry highPerf = HighPerfRegistry.fromEnvironment();
+  // 2026-10-22 解析内核移植落地：传入 FFI 引擎（探测「库可加载 + 符号在 +
+  // ABI 匹配」），解析内核经 `BookRegistry` 按能力择一挂载；探测失败 / 强制
+  // 纯 Dart 时整条链自动回落纯 Dart 实现（`RUST-01` 口径），不阻塞启动。
+  final HighPerfRegistry highPerf = HighPerfRegistry.fromEnvironment(
+    engine: HighPerfFfiEngine(),
+  );
 
   // `UI-01` ① + 平台能力经抽象注入（PRD §15.1）：
   // 玻璃着色器预热、数据目录解析/设置加载、加速层探测**三者并行**——互不依赖，

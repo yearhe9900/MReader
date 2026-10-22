@@ -12,8 +12,9 @@
 //
 // 纯 Dart：**不 import Flutter、不 import `dart:io`**。
 // 因此本目录的类型可被纯层（`lib/format/**`）与 isolate 任务安全引用。
-// 唯一例外是 `lib/highperf/ffi/high_perf_ffi_engine.dart`（T04 落地，全仓唯一
-// `import 'package:flutter_rust_bridge/...'` / `frb_generated.dart` 之处）。
+// 触碰 FRB 的只有两处（2026-10-22 解析内核移植后）：探测面
+// `lib/highperf/ffi/high_perf_ffi_engine.dart`（加载 + ABI 探针）与解析调用面
+// `lib/format/rust_kernel_source.dart`（内核书源适配）。
 import 'high_perf_error.dart';
 
 /// Dart 侧期望的 Rust 加速层 ABI 版本（§A.3 情形 3 的**唯一可靠哨兵**）。

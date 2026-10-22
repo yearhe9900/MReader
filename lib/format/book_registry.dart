@@ -18,6 +18,7 @@ import 'dart_epub_source.dart';
 import 'dart_txt_source.dart';
 import 'mobi_source.dart';
 import 'pdf_source.dart';
+import 'rust_kernel_source.dart';
 import 'sniffer.dart';
 import 'structure_cache.dart';
 import 'txt_outline_cache.dart';
@@ -57,24 +58,17 @@ class BookRegistry {
   HighPerfRegistry get highPerf =>
       _injectedHighPerf ?? HighPerfRegistryProvider.current;
 
-  /// 该格式对应的**加速层候选能力**；`null` = 该格式没有 Rust 候选（PRD §15.6.2 的六项
-  /// 候选里没有它）。
+  /// 该格式对应的**加速层能力**；`null` = 该格式不走 Rust（无内核适配）。
   ///
-  /// 这张映射表是 [open] 在 T04 择实现的**唯一依据**，也是体检 / 日志回答
+  /// 这张映射表是 [open] 择实现的**唯一依据**，也是体检 / 日志回答
   /// 「开这本 EPUB 时加速层到底生效了没」的入口：
   /// `highPerf.has(registry.capabilityFor(FormatKind.epub)!)`。
   ///
-  /// 逐条理由：
-  ///   · `epub` → 候选 2a（**只覆盖 zip 解压层**；XHTML→段落是 2b，首版不纳入，
-  ///     因此这里没有对应枚举值——见 `HighPerfCapability` 的注释）；
-  ///   · `txt`  → 候选 3（**首版只做编码探测**，解码留 Dart）；
-  ///   · `mobi` → 候选 1；
-  ///   · `cbz` / `cbr` / `pdf` → **无候选**：PRD §15.6.2 的六项里没有它们。
-  ///     CBZ 与 EPUB 同为 zip，但它的解压结果直接是**图片页**，本工程的实测口径
-  ///     （`docs/perf-baseline/README.md`）显示其瓶颈在图片解码与渲染，不在解压；
-  ///     PDF 的瓶颈在原生渲染引擎（`pdfrx`），CBZ 的界面上没有「解压耗时」阈值。
-  ///     **不得**因为「顺手也能 Zip 化」而把它们挂到 2a 上——那属于
-  ///     `RUST-06` 的「未超阈值的候选能力不得实施 Rust」。
+  /// 语义（2026-10-22 解析内核移植后）：`epub` / `txt` / `mobi` 三档 = **整条
+  /// 解析链走 Rust 内核**（打开 / 分章 / 正文抽取 / 资源，`rust/vendor/` 的
+  /// `rrk-*`）；探测失败或单本解析失败一律回落纯 Dart 实现（`RUST-01` 口径）。
+  ///   · `cbz` / `cbr` / `pdf` → **无候选**：内核未接（CBR 内核明确不支持；
+  ///     PDF 渲染走 `pdfrx` 原生引擎、CBZ 瓶颈在图片解码），保持纯 Dart。
   ///   · `unsupported` → 无候选（打不开的东西没有加速一说）。
   HighPerfCapability? capabilityFor(FormatKind kind) => switch (kind) {
         FormatKind.epub => HighPerfCapability.epubDecompress,
@@ -115,18 +109,13 @@ class BookRegistry {
   /// 其余格式忽略）：搜索后台重建路径传 `false` 跳过无目录书的全书标题预取，
   /// 见 `DartEpubSource.prefetchFlatTitles`。
   ///
-  /// ## 加速层择实现的位置（**当前状态如实写明，别当成已接完**）
+  /// ## 加速层择实现（2026-10-22 解析内核移植落地）
   ///
-  /// 架构 §A.1 的目标形态是：`epub` / `txt` 两路按
-  /// `highPerf.has(HighPerfCapability.<能力>)` 在「bytes 型 Dart 源」与
-  /// 「路径型 Rust 源」之间**择一**（§A.1 的 `RUST-03` 衔接说明：两条路的能力都已在
-  /// 现有签名参数里，**无需改签名**）。
-  ///
-  /// **M35-T01 阶段该分支尚未落地**，原因是 Rust 源（`RustEpubSource` /
-  /// `RustTxtSource`）属 **M35-T04**，且 T03 的 FRB 最小通路 gate 未过时整条 Rust 线
-  /// 回退纯 Dart。T01 **不预置一个恒不被选中的 Rust 分支**——那会让「有没有第二实现」
-  /// 变成读代码看不出来的东西（本工程已两次吃到「报告全绿 ≠ 真接线」的教训）。
-  /// 因此此处**如实保留纯 Dart 回落**，T04 落地时在此处插入 `has(...)` 择一。
+  /// `epub` / `txt` / `mobi` 三路按 `highPerf.has(capabilityFor(kind))` 在
+  /// 「Rust 解析内核源（[RustKernelSource]）」与「纯 Dart 源」之间择一：
+  /// 探测通过先开 Rust 源，**任何失败都回落 Dart 源**（单本坏字节不改探测结论，
+  /// 只记失败计数，连续失败才惰性降级该能力）。纯 Dart 回落永远存在
+  /// （`RUST-07`：无 Rust 工具链 / 动态库时全部功能照常）。
   Future<BookSource> open({
     required String fileName,
     required Uint8List bytes,
@@ -138,22 +127,32 @@ class BookRegistry {
   }) async {
     switch (sniffFormat(fileName: fileName, bytes: bytes)) {
       case FormatKind.epub:
-        return DartEpubSource(
-          fileName: fileName,
-          bytes: bytes,
-          structureCache: structureCache,
-          cacheKey: cacheKey,
-          chapterTextCache: chapterTextCache,
-          prefetchFlatTitles: prefetchFlatTitles,
-        );
+        return await _openRust(
+              kind: FormatKind.epub,
+              fileName: fileName,
+              bytes: bytes,
+            ) ??
+            DartEpubSource(
+              fileName: fileName,
+              bytes: bytes,
+              structureCache: structureCache,
+              cacheKey: cacheKey,
+              chapterTextCache: chapterTextCache,
+              prefetchFlatTitles: prefetchFlatTitles,
+            );
       case FormatKind.txt:
-        return DartTxtSource(
-          fileName: fileName,
-          bytes: bytes,
-          outlineCache: txtOutlineCache,
-          cacheKey: cacheKey,
-          chapterTextCache: chapterTextCache,
-        );
+        return await _openRust(
+              kind: FormatKind.txt,
+              fileName: fileName,
+              bytes: bytes,
+            ) ??
+            DartTxtSource(
+              fileName: fileName,
+              bytes: bytes,
+              outlineCache: txtOutlineCache,
+              cacheKey: cacheKey,
+              chapterTextCache: chapterTextCache,
+            );
       case FormatKind.cbz:
         return CbzSource(fileName: fileName, bytes: bytes);
       case FormatKind.cbr:
@@ -161,9 +160,35 @@ class BookRegistry {
       case FormatKind.pdf:
         return PdfSource(fileName: fileName, bytes: bytes);
       case FormatKind.mobi:
-        return MobiSource(fileName: fileName, bytes: bytes);
+        return await _openRust(
+              kind: FormatKind.mobi,
+              fileName: fileName,
+              bytes: bytes,
+            ) ??
+            MobiSource(fileName: fileName, bytes: bytes);
       case FormatKind.unsupported:
         throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
+    }
+  }
+
+  /// Rust 解析内核择一：探测结论为可用才尝试；打开失败**不抛**、回落 `null`
+  /// （调用方接纯 Dart 实现），并给注册表记一次失败（惰性降级判据）。
+  Future<BookSource?> _openRust({
+    required FormatKind kind,
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
+    final HighPerfCapability? cap = capabilityFor(kind);
+    if (cap == null || !highPerf.has(cap)) return null;
+    try {
+      final RustKernelSource source =
+          await RustKernelSource.open(fileName: fileName, bytes: bytes);
+      highPerf.noteSuccess(cap);
+      return source;
+    } catch (_) {
+      // 单本失败（坏字节 / 内核不认）不翻探测结论；连续失败才降级该能力。
+      highPerf.noteFailure(cap);
+      return null;
     }
   }
 }

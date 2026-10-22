@@ -327,3 +327,54 @@ pub fn kernel_weights(handle: u64) -> Result<Vec<RkWeight>, HighPerfError> {
         })
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use rrk_model::{ResourceKey, StyleFlags, TextRange};
+
+    use super::*;
+
+    fn text_range(start: u32, end: u32) -> Inline {
+        Inline::Text { range: TextRange::new(start, end), style: StyleFlags::default() }
+    }
+
+    #[test]
+    fn flatten_keeps_text_and_image_markers() {
+        // 共享正文缓冲：「前文」= 0..6，「引」= 6..9（UTF-8 字节偏移）。
+        let text = "前文引";
+        let blocks = vec![
+            Block::Paragraph {
+                inlines: vec![
+                    text_range(0, 6),
+                    Inline::Image { key: ResourceKey("OEBPS/a.png".into()) },
+                ],
+                indent: true,
+            },
+            Block::Image {
+                key: ResourceKey("OEBPS/b.png".into()),
+                alt: Some("图".into()),
+                size_hint: None,
+            },
+            Block::Divider,
+            Block::Quote {
+                blocks: vec![Block::Paragraph {
+                    inlines: vec![text_range(6, 9)],
+                    indent: false,
+                }],
+            },
+        ];
+        let mut out = Vec::new();
+        flatten_blocks(text, &blocks, &mut out);
+
+        // 分割线丢弃；引用块摊平为内层块；行内图片内嵌标记；块级图片自成一段。
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].kind, "p");
+        assert!(out[0].indent);
+        assert_eq!(out[0].text, "前文\x00IMG:OEBPS/a.png\x00");
+        assert_eq!(out[1].kind, "img");
+        assert_eq!(out[1].text, "\x00IMG:OEBPS/b.png\x00");
+        assert_eq!(out[1].key.as_deref(), Some("OEBPS/b.png"));
+        assert_eq!(out[2].kind, "p");
+        assert_eq!(out[2].text, "引");
+    }
+}
