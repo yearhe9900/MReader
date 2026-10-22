@@ -616,6 +616,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// ⇒ 中间一帧显示错章正文（闪动）。
   final Map<String, double> _stickyChapterHeights = <String, double>{};
 
+  /// 本书最近一次见到的**真实章高**（窗口内已分页章的章高中位数）。
+  ///
+  /// 未登记 [sticky] 的占位带（典型是**目录远跳**：目标章的前置章从没分过页）
+  /// 用它估高，而不是 96dp——否则目标章章顶先塌成 176、前置章真页表到货后再
+  /// 涨回 19000+，补偿跳超出旧布局滚动域 → 帧末补跳 → 中间那一帧显示上一章
+  /// （真机录屏 2026-10-22 16:15「切换章节也会闪」）。
+  double _lastRealChapterHeight = 0;
+
   /// 已应用视图的签名（`_computeSignature` 产物；链式补页后比对判重建）。
   String _viewsSignature = '';
 
@@ -1952,11 +1960,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         // [_jumpPaged] 只能推迟到帧末 ⇒ **中间那一帧显示错章正文**（探针实录
         // `paged.move why=views.late from=12502 to=30832`，d=18330）。
         //
-        // 沿用 [sticky]（上一次真实渲染的章高）后章顶不动，补偿只剩字体自身
-        // 的重排量（数十 px、同帧完成）。**只在正文已驻留时沿用**：内容没来的
-        // 章仍用 96dp 小占位带——否则会退回 2026-10-08 修掉的「章间一大段空白」。
-        final double sticky =
-            content == null ? 0.0 : (_stickyChapterHeights[chapters[i].href] ?? 0.0);
+        // 沿用 [sticky]（上一次真实渲染的章高；没登记过就用本书最近的真实
+        // 章高估，见 [_lastRealChapterHeight]）后章顶基本不动，补偿只剩
+        // 字体自身重排量（数十 px、同帧完成）。**只在正文已驻留且非空段时
+        // 沿用**：内容没来的章仍用 96dp 小占位带——否则会退回 2026-10-08
+        // 修掉的「章间一大段空白」（网络 / 解压慢的真机现场）；空段章真实
+        // 高只有标题（≈60），估成整章高会把窗口几何整体撑错。
+        final bool hasBody = content != null && content.paragraphList.isNotEmpty;
+        final double sticky = hasBody
+            ? (_stickyChapterHeights[chapters[i].href] ??
+                _lastRealChapterHeight)
+            : 0.0;
         final double band = _placeholderBandHeight(i, cfg);
         out.add(PagedChapterView(
           href: chapters[i].href,
@@ -2000,10 +2014,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final PagedLayout old =
         PagedLayout.build(views, paragraphSpacing: cfg.paragraphSpacing);
     final Map<String, double> next = <String, double>{};
+    final List<double> realHeights = <double>[];
     for (int i = 0; i < views.length; i++) {
       final String href = views[i].href;
       if (views[i].pages.isEmpty) {
-        // 已经是占位带：沿用上一轮记下的真章高（没有就不记，回落 96dp 小带）。
+        // 已经是占位带：沿用上一轮记下的真章高（没有就不记，回落估高/96dp）。
         final double? carried = _stickyChapterHeights[href];
         if (carried != null) next[href] = carried;
         continue;
@@ -2012,7 +2027,16 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       final double end =
           i + 1 < views.length ? old.chapterTops[i + 1] : old.totalHeight;
       final double height = end - top;
-      if (height > 0) next[href] = height;
+      if (height > 0) {
+        next[href] = height;
+        realHeights.add(height);
+      }
+    }
+    // 本书真实章高的中位数：给「未登记 sticky 的占位带」当估高（见
+    // [_lastRealChapterHeight]）。取中位数而不是均值——章长偶尔悬殊。
+    if (realHeights.isNotEmpty) {
+      realHeights.sort();
+      _lastRealChapterHeight = realHeights[realHeights.length ~/ 2];
     }
     _stickyChapterHeights
       ..clear()

@@ -1,8 +1,11 @@
-// 换参 reprime 的两条契约（2026-10-22 真机两连报）：
+// 换参 / 跳章的两条契约（2026-10-22 真机三连报）：
 //   A. 窗口不卡「载入中…」占位带（「快速缩小字体，视口里连着多条
 //      『第 N 章 · 载入中…』不消失，读数停「1/1」」）；
 //   B. 切字号不许闪动（「切换字体大小，会出现闪动」：先闪出一帧别处正文
-//      再跳回来，录屏逐帧实测 f55 正确 → f56 另一段 → f57 回来，读数没变）。
+//      再跳回来，录屏逐帧实测 f55 正确 → f56 另一段 → f57 回来，读数没变）；
+//   C. 切章节不许闪动（「切换章节，也会出现闪动」：目录远跳时目标章的前置章
+//      从没分过页，96dp 占位带把目标章顶压到 176，前置章真页表到货后章顶涨回
+//      19304，补偿超旧布局滚动域 ⇒ 帧末补跳 ⇒ 中间那帧显示上一章）。
 //
 // ## A 的根因
 //
@@ -264,6 +267,90 @@ void main() {
           matching: find.textContaining('载入中'),
         ),
         findsNothing,
+      );
+
+      await closeBook(tester);
+    });
+  });
+
+  group('切章不许闪动（前置章占位带不许先塌后涨）', () {
+    late Directory tempDir;
+    late TestAppPaths paths;
+    late ProgressStore progressStore;
+    late ReadingPrefsStore prefsStore;
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('mreader_chapflash_');
+      paths = TestAppPaths(tempDir);
+      progressStore = ProgressStore(paths);
+      prefsStore = ReadingPrefsStore(paths);
+    });
+
+    tearDown(() {
+      if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+    });
+
+    Widget buildApp() => MaterialApp(
+          home: ReaderPage(
+            source: FakeBookSource(
+              paragraphCounts: const <int>[
+                400, 400, 400, 400, 400, 400, 400, 400, 400, 400,
+              ],
+            ),
+            record: fakeRecord(),
+            progressStore: progressStore,
+            repository: fakeRepository(paths),
+            readingPrefsStore: prefsStore,
+          ),
+        );
+
+    testWidgets('目录跳到末章：章顶不许先塌成占位带再涨回去（那会闪一帧上一章）',
+        (WidgetTester tester) async {
+      // 真机现场（负责人录屏 2026-10-22 16:15）：目录里点一个**远章**。
+      // 远跳时目标章的前置章从没分过页 ⇒ 旧实现给它 96dp 占位带，目标章顶
+      // 塌到 176；等前置章真页表到货，章顶要涨回 19304——补偿目标超出**旧布局**
+      // 的 maxScrollExtent ⇒ `_jumpPaged` 推迟到帧末 ⇒ 中间那一帧视口顶落在
+      // 「已经变高的前置章」里 ⇒ **用户看到的是上一章**（探针实录
+      // `paged.move why=views.late from=176 to=19304 d=19128`）。
+      await tester.pumpWidget(buildApp());
+      await settle(tester, rounds: 80);
+
+      final PagedScrollerState st = tester.state<PagedScrollerState>(
+          find.byType(PagedScroller, skipOffstage: false));
+
+      PerfLog.records.clear();
+      await showChrome(tester);
+      await tester.tap(find.byKey(const Key('reader-toc')));
+      await tester.pumpAndSettle();
+      // 点第 6 章（目录只构建可见行，不能取 `.last`）：开书窗口只覆盖
+      // [h1..h4]，第 5 章（h5）从没分过页 ⇒ 目标章的前置章必是占位带。
+      final String targetTitle = FakeBookSource.titleAt(5); // 第六章 → h6
+      await tester.tap(find.text(targetTitle));
+      await settle(tester, rounds: 40);
+
+      final List<String> moves = PerfLog.records
+          .where((String r) => r.contains('paged.move'))
+          .toList(growable: false);
+      // 章顶「先塌后涨」的判据：涨回去的补偿超出旧布局滚动域 ⇒ 留痕 `.late`。
+      // `.late` 那一帧就是用户眼里的「闪一下上一章」。
+      expect(
+        moves.where((String m) => m.contains('.late')),
+        isEmpty,
+        reason: '切章落位必须同帧预跳——出现 late 说明章顶先塌成 96dp 占位带、'
+            '真页表到货后又涨回去，中间那帧显示的是上一章',
+      );
+
+      final ScrollSample? end = st.sampleNow();
+      expect(end, isNotNull);
+      expect(end!.href, 'h6', reason: '落在目录选中的章（$targetTitle）');
+      expect(end.charOffset, lessThanOrEqualTo(64), reason: '落在章首');
+      expect(
+        find.descendant(
+          of: find.byType(PagedScroller, skipOffstage: false),
+          matching: find.textContaining('载入中'),
+        ),
+        findsNothing,
+        reason: '切章后邻章也要排空，不许残留占位带',
       );
 
       await closeBook(tester);
