@@ -199,7 +199,13 @@ class _ShelfSearchPageState extends State<ShelfSearchPage> {
       openingBookId: widget.openingBookId,
       // 头部行底缘 → 结果列表：上游示例同一档（`MiDimens.spaceXl`）。
       padding: EdgeInsets.fromLTRB(inset, MiDimens.spaceXl, inset, 20),
-      onOpenBook: widget.onOpenBook,
+      onOpenBook: (BookRecord record) {
+        // 点结果先收键盘（2026-10-22 真机「搜索页进书剧烈闪动」）：输入法
+        // 收起动画与开书转场叠在一起会放大闪动；阅读页侧已置
+        // `resizeToAvoidBottomInset: false` 免疫键盘，这里再让键盘尽早收。
+        FocusScope.of(context).unfocus();
+        widget.onOpenBook(record);
+      },
       onBookActions: widget.onBookActions,
     );
   }

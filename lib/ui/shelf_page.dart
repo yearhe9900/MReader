@@ -197,8 +197,17 @@ class ShelfPageState extends State<ShelfPage> {
           themeMode: mode,
           openingBookId: _openingBookId,
           onOpenBook: (BookRecord record) {
-            // 先关搜索页再开书：阅读页压在书架之上，返回时不该回到搜索页。
-            Navigator.of(pageContext).pop();
+            // 关搜索页再开书：阅读页压在书架之上，返回时不该回到搜索页。
+            //
+            // ⚠️ 用 [Navigator.removeRoute] **瞬时移除**而非 `pop()`
+            // （2026-10-22 真机「搜索页进书剧烈闪动」）：`pop()` 的反向转场
+            // （搜索页滑出 + 书架视差恢复，400ms）会与紧随其后的
+            // [ReaderOpenRoute] 纸张滑入抢同一个下层——转场期下层在「滑出 /
+            // 视差 / 被 scrim 压暗」之间跳，叠加开书排版即闪动。瞬时移除让
+            // 背景直接回到**静止书架**，正是 [ReaderOpenTransition] 设计
+            // 假定的背景形态（「书架静止在后被压暗」）。
+            Navigator.of(pageContext)
+                .removeRoute(ModalRoute.of(pageContext)!);
             unawaited(_openBook(record));
           },
           onBookActions: _showBookActions,

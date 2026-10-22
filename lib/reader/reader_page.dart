@@ -4221,6 +4221,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 正文自己一像素都不动。
       extendBody: true,
       extendBodyBehindAppBar: true,
+      // `TYP-09` 同契约第三条（2026-10-22 真机「搜索页进书剧烈闪动」定案）：
+      // **键盘收起动画不得改正文排版区高度**。搜索页点书开读时输入法还在收起
+      // 途中，`resizeToAvoidBottomInset` 默认 true 会让 body 逐帧变高 ⇒
+      // `_syncPageConfig` 的 `pageHeight` 每帧都在变 ⇒ 整章反复重排 = 剧烈闪动。
+      // 正文区没有任何输入框（书内搜索走独立弹层），置 false 即与
+      // `extendBody*` 同款「正文一像素都不动」语义。
+      resizeToAvoidBottomInset: false,
       // `TYP-09` 验收①：默认全屏 ⇒ `_fullscreen` 初值 `true`，此处即 `null`；
       // 点正文唤出 chrome 后顶栏原样出现（验收①「唤出与收起」）。
       appBar: _fullscreen
