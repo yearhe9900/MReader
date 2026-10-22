@@ -190,6 +190,19 @@ const double _kProgressIndicatorReserve = 28;
 /// ≈ 2s 量级的让位，对「一次连续滚动」足够，对「滚动中途停手」也不过太久。
 const int kAutoFillPauseFrames = 20;
 
+/// 换参 reprime 的首屏突发预算（字号 / 行距 / 页边距 / 视口变更后的重分页）。
+///
+/// 比开书 / 跳章的 `kFirstPaintBudget`（16ms）宽 3 倍。理由：换参会把**页表
+/// 整体作废**（`_acceptConfig`），而突发覆盖不到目标就只能走「估算落位」——
+/// 估算落位必然先闪一帧别处正文再收敛（真机录屏 2026-10-22「切换字体大小会
+/// 闪一下」）。32 页级长章的深位置实测：16ms 只排到 ~40%（探针每次点字号都
+/// 打 `paged.estimate`），48ms 可覆盖到 ~70% 的常见落点。
+///
+/// 代价是**一次性的 3 帧停顿**（用户主动点字号，不在滚动 / 翻页手势里），
+/// 远小于「闪一屏错正文 + 再跳回」的观感代价；覆盖不到时仍回落估算
+/// （按已测前缀密度外推，见 `_primeOpenSync` 估算分支）+ 帧链收敛。
+const Duration kReprimeBurstBudget = Duration(milliseconds: 48);
+
 /// 连续滚动 + 正文增量加载的阅读页。
 class ReaderPage extends StatefulWidget {
   const ReaderPage({
@@ -595,6 +608,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 窗口章视图（与 [_window] 同序；只在应用时机整批换新，见 [_applyPagedViews]）。
   List<PagedChapterView> _pageViews = const <PagedChapterView>[];
+
+  /// 「上次真实渲染的章高」（href → 章块高），换参重排期间供占位带沿用。
+  ///
+  /// 见 [_refreshStickyHeights]：换参把页表整体作废后，已分页的邻章若立即
+  /// 塌回 96dp 占位带，当前章章顶会瞬移一整章高，补偿跳只能帧末补发
+  /// ⇒ 中间一帧显示错章正文（闪动）。
+  final Map<String, double> _stickyChapterHeights = <String, double>{};
 
   /// 已应用视图的签名（`_computeSignature` 产物；链式补页后比对判重建）。
   String _viewsSignature = '';
@@ -1894,8 +1914,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 构建窗口章视图：正文 + 分页结果都有 → 真视图；否则占位章
   /// （headingHeight = [_placeholderBandHeight]——**不再是整页高**）。
   List<PagedChapterView> _buildPageViews(
-      List<int> window, PaginationConfig cfg) {
-    final List<Chapter>? chapters = _chapters;
+      List<int> window, PaginationConfig cfg) {    final List<Chapter>? chapters = _chapters;
     final List<PagedChapterView> out = <PagedChapterView>[];
     if (chapters == null) return out;
     for (final int i in window) {
@@ -1923,12 +1942,28 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           heading: _headingWidget(i, cfg),
         ));
       } else {
+        // ## ⚠️ 换参重排期间：**已分页章不许塌成 96dp 占位带**
+        // （2026-10-22，真机「切换字体大小会闪一下」）
+        //
+        // 换参 `open` 把页表整体作废（`_acceptConfig`），窗口里已分页的邻章
+        // 立即退化成 [_placeholderBandHeight]（≈96dp）：当前章章顶随之从
+        // 「上一章一整章高」塌到 96dp，补偿跳要一次跳掉整整一章高；而补偿
+        // 目标常超出**旧布局**的 `maxScrollExtent`（新布局还没上屏），
+        // [_jumpPaged] 只能推迟到帧末 ⇒ **中间那一帧显示错章正文**（探针实录
+        // `paged.move why=views.late from=12502 to=30832`，d=18330）。
+        //
+        // 沿用 [sticky]（上一次真实渲染的章高）后章顶不动，补偿只剩字体自身
+        // 的重排量（数十 px、同帧完成）。**只在正文已驻留时沿用**：内容没来的
+        // 章仍用 96dp 小占位带——否则会退回 2026-10-08 修掉的「章间一大段空白」。
+        final double sticky =
+            content == null ? 0.0 : (_stickyChapterHeights[chapters[i].href] ?? 0.0);
+        final double band = _placeholderBandHeight(i, cfg);
         out.add(PagedChapterView(
           href: chapters[i].href,
           paragraphs: const <String>[],
           lines: const <MeasuredLine>[],
           pages: const <PageSlice>[],
-          headingHeight: _placeholderBandHeight(i, cfg),
+          headingHeight: sticky > band ? sticky : band,
           heading: Center(
             child: Text(
               '第 ${i + 1} 章 · 载入中…',
@@ -1939,6 +1974,49 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       }
     }
     return out;
+  }
+
+  /// 记下「当前正在渲染的章高」（href → 章块高），换参重排期间供占位带沿用。
+  ///
+  /// ## 为什么需要（2026-10-22，真机「切换字体大小会闪一下」）
+  ///
+  /// 换参 `open` 把页表整体作废（`_acceptConfig`），窗口里**已分页的邻章**
+  /// 立即退化成 [_placeholderBandHeight]（≈96dp）⇒ 当前章章顶瞬移一整章高，
+  /// 补偿跳要一次跳掉那么多；而补偿目标常超出**旧布局**的
+  /// `maxScrollExtent`（新布局尚未上屏）⇒ [_jumpPaged] 推迟到帧末补发
+  /// ⇒ 中间那一帧显示错章正文（探针实录
+  /// `paged.move why=views.late from=12502 to=30832`，d=18330）。
+  ///
+  /// 占位带沿用旧章高后章顶不动（Δ = 字体自身重排量），补偿同帧完成。
+  ///
+  /// 每次 prime 前从**当前正在渲染的** `_pageViews` 重算一次。**占位带必须
+  /// 继承上一轮的值**（连续换参时：上一轮已把邻章变成占位带，那一轮的真章高
+  /// 只能从 `_stickyChapterHeights` 里取，重新从视图读会读成空 ⇒ 章顶再塌一次，
+  /// 补偿跳又推迟一帧——快速连点字号时正是这么闪的）。窗口外的条目顺手剪掉。
+  void _refreshStickyHeights() {
+    final List<PagedChapterView> views = _pageViews;
+    final PaginationConfig? cfg = _pageConfig;
+    if (views.isEmpty || cfg == null) return;
+    final PagedLayout old =
+        PagedLayout.build(views, paragraphSpacing: cfg.paragraphSpacing);
+    final Map<String, double> next = <String, double>{};
+    for (int i = 0; i < views.length; i++) {
+      final String href = views[i].href;
+      if (views[i].pages.isEmpty) {
+        // 已经是占位带：沿用上一轮记下的真章高（没有就不记，回落 96dp 小带）。
+        final double? carried = _stickyChapterHeights[href];
+        if (carried != null) next[href] = carried;
+        continue;
+      }
+      final double top = old.chapterTops[i];
+      final double end =
+          i + 1 < views.length ? old.chapterTops[i + 1] : old.totalHeight;
+      final double height = end - top;
+      if (height > 0) next[href] = height;
+    }
+    _stickyChapterHeights
+      ..clear()
+      ..addAll(next);
   }
 
   /// 窗口签名（逐章「页数 + 完整标记」）：链式补页 / 占位→真 视图切换的判据。
@@ -2011,7 +2089,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         if (scheduler == null || _pageConfig == null) continue;
         if (_pendingLand == null) _syncPagedIdentity();
         if (!_primeOpenSync(
-            charOffset: _currentCharOffset(), keepScrollRemainder: true)) {
+            charOffset: _currentCharOffset(),
+            keepScrollRemainder: true,
+            burstBudget: kReprimeBurstBudget)) {
           _reprimeRequested = true; // 内容未就绪：保留待办
           return;
         }
@@ -2060,9 +2140,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// [keepScrollRemainder]：自然滚动停手 / reprime 重锚时必须置 `true`——
   /// 见 [_scrollRemainderOf]；程序化落位（开书恢复 / 跳章 / 跳书签 / 跳目录 /
   /// 搜索命中）保持默认 `false` = **行顶对齐**（`§2.70` 语义）。
+  ///
+  /// [burstBudget]：prime 突发预算（[PaginationScheduler.open] 的 `budget`）。
+  /// 默认 16ms = 开书 / 跳章；换参 reprime 传 [kReprimeBurstBudget]（48ms）
+  /// ——换参页表整体作废，突发覆盖不到目标必然闪一帧估算落位（见该常量头注）。
   bool _primeOpenSync({
     required int charOffset,
     bool keepScrollRemainder = false,
+    Duration burstBudget = kFirstPaintBudget,
   }) {
     if (!mounted || _disposed || !_pagedMode) return false;
     final PaginationScheduler? scheduler = _scheduler;
@@ -2087,6 +2172,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final PaginationConfig cfg = pendingCfg ?? currentCfg!;
     final bool cfgChanged = currentCfg != cfg;
     _pendingConfig = null;
+    // 换视图前记下**旧视图的章高**（换参后邻章占位带沿用，防章顶塌陷，
+    // 见 [_refreshStickyHeights]）。必须在覆盖 `_pageConfig` 之前取。
+    _refreshStickyHeights();
     _pageConfig = cfg; // 消费待换参数（视图与 config 同批换新）
 
     final String href = chapters[index].href;
@@ -2125,6 +2213,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       nextHref: nextOk ? chapters[index + 1].href : null,
       nextParagraphs: nextOk ? next.paragraphList : null,
       nextHeadingHeight: nextOk ? _headingHeightOf(index + 1, cfg) : 0,
+      budget: burstBudget,
     );
 
     List<PagedChapterView> views = _buildPageViews(_window, cfg);
@@ -2140,8 +2229,19 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
     final bool landed = landAt != null;
     if (landAt == null) {
-      // 页表未覆盖目标（占位/部分页）：按窗口位置 + 章内比例估算落位，
-      // 挂 pending 等空闲帧补完后二次精确落位（`RC1`：期间不写盘）。
+      // 页表未覆盖目标（占位/部分页）：估算落位，挂 pending 等空闲帧补完后
+      // 二次精确落位（`RC1`：期间不写盘）。
+      //
+      // ## ⚠️ 章内偏移必须按「已测前缀的像素/字符密度」外推
+      // （2026-10-22，真机录屏「切换字体大小会闪一下」）
+      //
+      // 改前 = `frac × cfg.pageHeight`，等于**把整章当成一页高**：34 页的章、
+      // 章内 66% 处被落成 0.66 页（探针实录 `paged.estimate index=0 char=2052
+      // off=380`，真值 12480）——视口先闪到章首附近的**另一段正文**（底部读数
+      // 还是原页码），再由二次收敛跳回，于是**每点一次字号闪一次**，长章尤甚。
+      // 现按已测前缀换算：`章内像素 ≈ 已测正文高 × 目标字符 / 已测字符`
+      // （前缀够长时密度代表性强，探针误差从 ~22 页压进 1 页内）；
+      // 标题占高不参与字符密度，先扣掉。
       final int total = PagePaginator.charCountOf(content.paragraphList);
       final double frac = total > 0
           ? (charOffset / total).clamp(0.0, 1.0)
@@ -2149,11 +2249,30 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       final int windowPos = _window.indexOf(index);
       // 目标章之前的窗口章高**直接取布局表的章顶**（不再按「每章一屏」估：
       // 占位块自 2026-10-08 起不是整页高，按 `pageHeight` 估会高估数倍）。
-      // 目标章自身的章内偏移仍是 `frac × 页高` 的粗估——它的真实页表还没出来，
-      // 随后由 `_pendingLand` 的二次精确落位收敛（`RC1`）。
-      landAt = ((windowPos < 0 ? 0.0 : layout.chapterTops[windowPos]) +
-              frac * cfg.pageHeight)
-          .clamp(0.0, double.infinity);
+      final double chapterTop =
+          windowPos < 0 ? 0.0 : layout.chapterTops[windowPos];
+      // 兜底口径（无已测前缀 / 空章）：仍是旧的 `frac × 页高`。
+      double estInChapter = frac * cfg.pageHeight;
+      if (windowPos >= 0 && windowPos < views.length) {
+        final PagedChapterView view = views[windowPos];
+        final int measuredChars =
+            view.pages.isEmpty ? 0 : view.pages.last.end;
+        // 已测前缀的正文高 = 下一章章顶 − 本章章顶 − 标题占高
+        // （末章用总高；章顶差已含页高与跨页段间距）。
+        final double nextTop = windowPos + 1 < layout.chapterTops.length
+            ? layout.chapterTops[windowPos + 1]
+            : layout.totalHeight;
+        final double measuredBody =
+            nextTop - chapterTop - view.headingHeight;
+        if (measuredChars > 0 && measuredBody > 0) {
+          // **不外推上界**：目标字符本就在已测前缀之后，密度换算出来的
+          // 值必须允许超过 `measuredBody`（那正是「章还有多长」的估算）。
+          estInChapter =
+              (measuredBody * charOffset / measuredChars)
+                  .clamp(0.0, double.infinity);
+        }
+      }
+      landAt = (chapterTop + estInChapter).clamp(0.0, double.infinity);
       _pendingLand = (index: index, charOffset: charOffset);
       _positionConverged = false;
       _positionSampled = false;
