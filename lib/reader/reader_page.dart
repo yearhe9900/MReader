@@ -2206,6 +2206,26 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     } else if (landAt != null) {
       _jumpPaged(landAt, why: 'prime');
     }
+    // ## ⚠️ prime 收尾必须「窗口全量登记 + 起空闲帧链 + 触发补齐」
+    // （2026-10-22，真机「快速缩小字体后视口里连着多条
+    // 『第 N 章 · 载入中…』占位带不消失、读数停在 1/1」）
+    //
+    // 换参 reprime 是停稳流⑧的盲区：`scheduler.open` 的换参路径会把
+    // 缓存与预分页队列**全部作废**（`_acceptConfig`），重新只登记 ±1；
+    // `_repairReachable` 扩窗追加的章（占位带只 ≈96dp，锚点 + 视口高会
+    // 逼着多 append 约 `ceil(vh/96)` 章）与窗口其余章不登记就**永无页表**。
+    // 同理 `_startPagedFrames` 也不在 reprime 路径上：`open` 的 prime 突发
+    // 达 `initialReady`（「1 页即上屏」，统一方案 Phase 1 §6.3）即停，剩余
+    // 页表全靠 [stepIdle] 续排——帧链没起，连已登记 ±1 的预分页任务都没跑过，
+    // 当前章页表更冻结在 1 页（读数「1/1」）。此前任何滚动停稳都会经
+    // 停稳流⑧（`_ensureAutoFill` → 补齐循环每批登记 + 起链）自愈，
+    // 故只在「改完字号不滚动」时暴露。
+    //
+    // 三者均幂等（登记按 href 去重、帧链防重入、补齐有 `_fillRunning` 闸），
+    // 开书 / 跳转 / 停稳路径的既有调用重复经过这里无副作用。
+    _registerWindowUnpaginated();
+    _startPagedFrames();
+    _ensureAutoFill();
     // 精确落位即收敛（上面 `landed` 分支已置 `_positionConverged`）→
     // 开书门闸在此补报放行（估算分支挂 `_pendingLand`，等 [_syncPagedViews]）。
     _checkOpenGate();
