@@ -218,6 +218,108 @@ void main() {
     });
   });
 
+  group('标题剥离（与纯 Dart 抽取同规则）', () {
+    test('首段与章标题重复 → 剥去', () {
+      expect(
+        stripDuplicateHeading(
+            <String>['卷三 第五章 下车伊始', '小蛮兴奋的朝林缚直摇手。'],
+            '卷三 第五章 下车伊始'),
+        <String>['小蛮兴奋的朝林缚直摇手。'],
+      );
+    });
+
+    test('首段与标题不重复 → 原样', () {
+      final List<String> input = <String>['正文开头。', '次段。'];
+      expect(stripDuplicateHeading(input, '第五章'), input);
+    });
+
+    test('前置标记接力到新首段（锚点不失效）', () {
+      expect(
+        stripDuplicateHeading(
+            <String>['\x00IMG:a.png\x00第五章 标题', '正文。'],
+            '第五章 标题'),
+        <String>['\x00IMG:a.png\x00正文。'],
+      );
+    });
+
+    test('仅标题的空段章 → 空表（标题由 UI 单独渲染）', () {
+      expect(stripDuplicateHeading(<String>['第五章'], '第五章'), isEmpty);
+    });
+
+    test('可见文本比对剥离标记（带链接标记的标题也认得出）', () {
+      expect(
+        stripDuplicateHeading(
+            <String>['\x00A:ch.xhtml\x00第五章\x00A\x00 下车', '正文。'],
+            '第五章 下车'),
+        <String>['正文。'],
+      );
+    });
+  });
+
+  group('章节列表构建（TOC 摊平 + href 唯一化）', () {
+    rk.RkChapter e(int id, String href, {String? title}) => rk.RkChapter(
+        id: id,
+        title: title,
+        href: href,
+        charLen: 100,
+        kind: 'text',
+        part_: 0);
+
+    rk.RkTocNode node(String title, int chapter, {int? anchor, List<rk.RkTocNode> children = const <rk.RkTocNode>[]}) =>
+        rk.RkTocNode(
+            title: title, chapter: chapter, anchor: anchor, children: children);
+
+    test('TOC 摊平带层级、未入目章补齐', () {
+      final (List<Chapter> list, List<ChapterRef> refs) = buildChapterList(
+        <rk.RkChapter>[e(0, 'a.xhtml'), e(1, 'b.xhtml'), e(2, 'c.xhtml')],
+        <rk.RkTocNode>[
+          node('卷一', 0,
+              children: <rk.RkTocNode>[node('第一章', 1, anchor: 5)]),
+        ],
+      );
+      expect(<String>[for (final Chapter c in list) c.title],
+          <String>['卷一', '第一章', '第 3 章']);
+      expect(<int>[for (final Chapter c in list) c.level], <int>[0, 1, 0]);
+      expect(list[2].href, 'c.xhtml');
+      // 锚点切段：同章仅一锚点 → to = null（整段到章尾）。
+      expect(refs[1].id, 1);
+      expect(refs[1].from, 5);
+      expect(refs[1].to, isNull);
+    });
+
+    test('同 href 多锚点条目 → href 唯一化且内容按锚点互不重叠', () {
+      final (List<Chapter> list, List<ChapterRef> refs) = buildChapterList(
+        <rk.RkChapter>[e(0, 'book.xhtml')],
+        <rk.RkTocNode>[
+          node('第四章', 0, anchor: 10),
+          node('第五章', 0, anchor: 200),
+          node('第六章', 0, anchor: 500),
+        ],
+      );
+      expect(<String>[for (final Chapter c in list) c.href],
+          <String>['book.xhtml', 'book.xhtml#200', 'book.xhtml#500']);
+      // 切段右界 = 同 id 下一锚点：互不重叠。
+      expect(refs[0].from, 10);
+      expect(refs[0].to, 200);
+      expect(refs[1].from, 200);
+      expect(refs[1].to, 500);
+      expect(refs[2].from, 500);
+      expect(refs[2].to, isNull);
+    });
+
+    test('同章无锚点目录项只留第一个（内容不整章重复）', () {
+      final (List<Chapter> list, List<ChapterRef> refs) = buildChapterList(
+        <rk.RkChapter>[e(0, 'mobi:1')],
+        <rk.RkTocNode>[
+          node('卷三 第四章', 0),
+          node('卷三 第五章', 0),
+        ],
+      );
+      expect(list.length, 1);
+      expect(refs.length, 1);
+    });
+  });
+
   group('Rust 内核源 BookSource 契约（需原生库）', () {
     test('meta / chapters / content / 权重 / 资源 / dispose', () async {
       late RustKernelSource source;

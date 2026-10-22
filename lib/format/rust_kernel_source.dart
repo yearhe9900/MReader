@@ -43,12 +43,126 @@ class WovenParagraph {
 
 /// 章节列表项的解析引用：内核章 id + 锚点切段区间（`from`/`to` 为字节偏移，
 /// `null` = 不设界；`from == null` 即整章）。
-class _ChapterRef {
-  const _ChapterRef(this.id, {this.from, this.to});
+class ChapterRef {
+  const ChapterRef(this.id, {this.from, this.to});
 
   final int id;
   final int? from;
   final int? to;
+}
+
+/// 宿主标记段（`\x00…\x00` 包裹）：剥标记比对可见文本、标题剥离时接力锚点用。
+final RegExp _hostMarker = RegExp('\x00[^\x00]*\x00');
+
+/// 段落的可见文本（剥离全部宿主标记后）。
+String visibleTextOf(String paragraph) =>
+    paragraph.replaceAll(_hostMarker, '').trim();
+
+/// 首段与章标题重复则剥去（与纯 Dart 抽取「标题剥离」同规则，
+/// `epub/section_extractor.dart`：「UI 单独渲染的标题」与「正文首段」不得
+/// 重复显示同一句话）。剥去的首段若带**前置标记**，接力到新的首段
+/// （锚点标记不失效，同 Dart 口径）。
+List<String> stripDuplicateHeading(List<String> paragraphs, String title) {
+  if (paragraphs.isEmpty) return paragraphs;
+  final String first = paragraphs.first;
+  if (visibleTextOf(first) != title.trim() || title.trim().isEmpty) {
+    return paragraphs;
+  }
+  // 只接力**成对完整**的前置标记（图片 / 锚点等）；链接开标记 `A:` 的闭标记
+  // 在被剥去的标题段内，接力会留下失衡开标记 → 一并随标题剥掉。
+  final String leading = _hostMarker
+      .allMatches(first)
+      .map((Match m) => m.group(0)!)
+      .takeWhile((String s) => first.startsWith(s))
+      .where((String s) => !s.startsWith('\x00A:'))
+      .join();
+  if (paragraphs.length == 1) return const <String>[];
+  if (leading.isEmpty) return paragraphs.sublist(1);
+  return <String>[leading + paragraphs[1], ...paragraphs.sublist(2)];
+}
+
+/// 章节列表构建（TOC 树摊平 + 未入目补齐）的**纯函数**：返回宿主 Chapter 列表
+/// 与解析引用（同序）。
+///
+/// ## href 唯一性（2026-10-22 真机「章与页不匹配」定案）
+///
+/// 阅读器把 `Chapter.href` 当**唯一身份键**（分页缓存、视图定位、进度匹配全按
+/// href 查表，见 `_applyPagedSample` 的首匹配）。同文件多目录项（EPUB 锚点书）
+/// 会天然共用内核章 href——第二条起必须**唯一化**（`href#locate`），否则读数行
+/// 的章归属会落到同 href 的第一条上（正文显示第五章、读数报第四章）。
+/// 唯一化后的 href 供身份匹配用；[findChapterIndex] 的链接反查按 `#` 前的
+/// 路径段匹配（`link_navigator.dart`），链接跳转不受影响。
+(List<Chapter>, List<ChapterRef>) buildChapterList(
+  List<rk.RkChapter> entries,
+  List<rk.RkTocNode> toc,
+) {
+  final List<Chapter> out = <Chapter>[];
+  final List<ChapterRef> refs = <ChapterRef>[];
+  final Set<int> covered = <int>{};
+  final Set<String> usedHrefs = <String>{};
+
+  String uniqueHref(String href, String locate) {
+    if (usedHrefs.add(href)) return href;
+    final String alt = locate.isNotEmpty ? '$href#$locate' : href;
+    if (usedHrefs.add(alt)) return alt;
+    int n = 2;
+    while (!usedHrefs.add('$href#$n')) {
+      n++;
+    }
+    return '$href#$n';
+  }
+
+  void walk(List<rk.RkTocNode> nodes, int level) {
+    for (final rk.RkTocNode n in nodes) {
+      if (n.chapter < 0 || n.chapter >= entries.length) continue;
+      final int id = n.chapter;
+      final rk.RkChapter e = entries[id];
+      final String locate = n.anchor?.toString() ?? '';
+      // 同章两个「无锚点」目录项只留第一个（否则内容整章重复）。
+      if (n.anchor == null && covered.contains(id)) continue;
+      covered.add(id);
+      out.add(Chapter(
+        href: uniqueHref(e.href, locate),
+        title: fallbackTitle(
+            n.title, fallbackTitle(e.title ?? '', '第 ${id + 1} 章')),
+        level: level,
+        locate: locate,
+      ));
+      refs.add(ChapterRef(id, from: n.anchor));
+      walk(n.children, level + 1);
+    }
+  }
+
+  walk(toc, 0);
+  for (int i = 0; i < entries.length; i++) {
+    if (covered.contains(i)) continue;
+    out.add(Chapter(
+      href: uniqueHref(entries[i].href, ''),
+      title: fallbackTitle(entries[i].title ?? '', '第 ${i + 1} 章'),
+      level: 0,
+      locate: '',
+    ));
+    refs.add(ChapterRef(i));
+  }
+
+  // 同章锚点切段的右界 = 同 id 下一锚点（按锚点升序），互不重叠。
+  final Map<int, List<int>> byId = <int, List<int>>{};
+  for (int i = 0; i < refs.length; i++) {
+    final int? from = refs[i].from;
+    if (from != null) (byId[refs[i].id] ??= <int>[]).add(from);
+  }
+  for (final List<int> anchors in byId.values) {
+    anchors.sort();
+  }
+  for (int i = 0; i < refs.length; i++) {
+    final ChapterRef r = refs[i];
+    if (r.from == null) continue;
+    final List<int> anchors = byId[r.id]!;
+    final int at = anchors.indexOf(r.from!);
+    refs[i] = ChapterRef(r.id,
+        from: r.from, to: at + 1 < anchors.length ? anchors[at + 1] : null);
+  }
+  return (out, refs);
 }
 
 /// 字节序列扫描定位（`String.indexOf` 的 UTF-8 字节坐标系等价物）。
@@ -149,7 +263,7 @@ class RustKernelSource implements BookSource {
 
   List<rk.RkChapter>? _kChapters;
   List<Chapter>? _chapters;
-  List<_ChapterRef>? _refs;
+  List<ChapterRef>? _refs;
   List<int>? _charCounts;
   List<int>? _weights;
 
@@ -221,63 +335,11 @@ class RustKernelSource implements BookSource {
   /// 章节列表（TOC 树摊平 + 未入目章补齐）与解析引用**成对**构建、同序。
   Future<void> _ensureChapterList() async {
     if (_chapters != null) return;
-    final List<rk.RkChapter> entries = await _kernelChapterList();
-    final List<rk.RkTocNode> toc = await rk.kernelToc(handle: _handle);
-    final List<Chapter> out = <Chapter>[];
-    final List<_ChapterRef> refs = <_ChapterRef>[];
-    final Set<int> covered = <int>{};
-
-    void walk(List<rk.RkTocNode> nodes, int level) {
-      for (final rk.RkTocNode n in nodes) {
-        if (n.chapter < 0 || n.chapter >= entries.length) continue;
-        final int id = n.chapter;
-        final rk.RkChapter e = entries[id];
-        // 同章两个「无锚点」目录项只留第一个（否则内容整章重复）。
-        if (n.anchor == null && covered.contains(id)) continue;
-        covered.add(id);
-        out.add(Chapter(
-          href: e.href,
-          title: fallbackTitle(
-              n.title, fallbackTitle(e.title ?? '', '第 ${id + 1} 章')),
-          level: level,
-          locate: n.anchor?.toString() ?? '',
-        ));
-        refs.add(_ChapterRef(id, from: n.anchor));
-        walk(n.children, level + 1);
-      }
-    }
-
-    walk(toc, 0);
-    for (int i = 0; i < entries.length; i++) {
-      if (covered.contains(i)) continue;
-      out.add(Chapter(
-        href: entries[i].href,
-        title: fallbackTitle(entries[i].title ?? '', '第 ${i + 1} 章'),
-        level: 0,
-        locate: '',
-      ));
-      refs.add(_ChapterRef(i));
-    }
-
-    // 同章锚点切段的右界 = 同 id 下一锚点（按锚点升序），互不重叠。
-    final Map<int, List<int>> byId = <int, List<int>>{};
-    for (int i = 0; i < refs.length; i++) {
-      final int? from = refs[i].from;
-      if (from != null) (byId[refs[i].id] ??= <int>[]).add(from);
-    }
-    for (final List<int> anchors in byId.values) {
-      anchors.sort();
-    }
-    for (int i = 0; i < refs.length; i++) {
-      final _ChapterRef r = refs[i];
-      if (r.from == null) continue;
-      final List<int> anchors = byId[r.id]!;
-      final int at = anchors.indexOf(r.from!);
-      refs[i] = _ChapterRef(r.id,
-          from: r.from, to: at + 1 < anchors.length ? anchors[at + 1] : null);
-    }
-
-    _chapters = out;
+    final (List<Chapter> chapters, List<ChapterRef> refs) = buildChapterList(
+      await _kernelChapterList(),
+      await rk.kernelToc(handle: _handle),
+    );
+    _chapters = chapters;
     _refs = refs;
   }
 
@@ -290,11 +352,11 @@ class RustKernelSource implements BookSource {
   @override
   Future<ChapterContent> content(int chapterIndex) async {
     await _ensureChapterList();
-    final List<_ChapterRef> refs = _refs!;
+    final List<ChapterRef> refs = _refs!;
     if (chapterIndex < 0 || chapterIndex >= refs.length) {
       return const ChapterContent.paragraphs(<String>[]);
     }
-    final _ChapterRef ref = refs[chapterIndex];
+    final ChapterRef ref = refs[chapterIndex];
     final List<rk.RkChapter> entries = await _kernelChapterList();
     if (ref.id < 0 || ref.id >= entries.length) {
       return const ChapterContent.paragraphs(<String>[]);
@@ -311,7 +373,10 @@ class RustKernelSource implements BookSource {
         if ((from == null || w.start >= from) && (to == null || w.start < to))
           w.text,
     ];
-    return ChapterContent.paragraphs(paragraphs);
+    // 标题剥离：UI 单独渲染章标题，正文首段与之重复则剥去（同 Dart 抽取口径）。
+    return ChapterContent.paragraphs(
+      stripDuplicateHeading(paragraphs, _chapters![chapterIndex].title),
+    );
   }
 
   @override
@@ -392,11 +457,11 @@ class RustKernelSource implements BookSource {
       for (final rk.RkWeight e in w) e.id: e.charLen,
     };
     final Map<int, int> splitCount = <int, int>{};
-    for (final _ChapterRef r in _refs!) {
+    for (final ChapterRef r in _refs!) {
       splitCount[r.id] = (splitCount[r.id] ?? 0) + 1;
     }
     return _weights = <int>[
-      for (final _ChapterRef r in _refs!)
+      for (final ChapterRef r in _refs!)
         (byId[r.id] ?? 0) ~/ (splitCount[r.id] ?? 1),
     ];
   }
