@@ -35,6 +35,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RkResource dco_decode_box_autoadd_rk_resource(dynamic raw);
 
   @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
   HighPerfError dco_decode_high_perf_error(dynamic raw);
 
   @protected
@@ -59,6 +62,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RkChapter> dco_decode_list_rk_chapter(dynamic raw);
 
   @protected
+  List<RkLink> dco_decode_list_rk_link(dynamic raw);
+
+  @protected
   List<RkTocNode> dco_decode_list_rk_toc_node(dynamic raw);
 
   @protected
@@ -71,6 +77,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RkResource? dco_decode_opt_box_autoadd_rk_resource(dynamic raw);
 
   @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
+
+  @protected
   RkBlock dco_decode_rk_block(dynamic raw);
 
   @protected
@@ -78,6 +87,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RkChapterText dco_decode_rk_chapter_text(dynamic raw);
+
+  @protected
+  RkLink dco_decode_rk_link(dynamic raw);
 
   @protected
   RkMeta dco_decode_rk_meta(dynamic raw);
@@ -113,6 +125,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RkResource sse_decode_box_autoadd_rk_resource(SseDeserializer deserializer);
 
   @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   HighPerfError sse_decode_high_perf_error(SseDeserializer deserializer);
 
   @protected
@@ -139,6 +154,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RkChapter> sse_decode_list_rk_chapter(SseDeserializer deserializer);
 
   @protected
+  List<RkLink> sse_decode_list_rk_link(SseDeserializer deserializer);
+
+  @protected
   List<RkTocNode> sse_decode_list_rk_toc_node(SseDeserializer deserializer);
 
   @protected
@@ -153,6 +171,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   RkBlock sse_decode_rk_block(SseDeserializer deserializer);
 
   @protected
@@ -160,6 +181,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RkChapterText sse_decode_rk_chapter_text(SseDeserializer deserializer);
+
+  @protected
+  RkLink sse_decode_rk_link(SseDeserializer deserializer);
 
   @protected
   RkMeta sse_decode_rk_meta(SseDeserializer deserializer);
@@ -198,6 +222,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_high_perf_error(HighPerfError self, SseSerializer serializer);
 
   @protected
@@ -231,6 +258,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_rk_link(List<RkLink> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_rk_toc_node(
     List<RkTocNode> self,
     SseSerializer serializer,
@@ -249,6 +279,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_rk_block(RkBlock self, SseSerializer serializer);
 
   @protected
@@ -256,6 +289,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_rk_chapter_text(RkChapterText self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_link(RkLink self, SseSerializer serializer);
 
   @protected
   void sse_encode_rk_meta(RkMeta self, SseSerializer serializer);

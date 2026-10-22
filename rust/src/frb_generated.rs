@@ -511,6 +511,18 @@ impl SseDecode for Vec<crate::api::kernel::RkChapter> {
     }
 }
 
+impl SseDecode for Vec<crate::api::kernel::RkLink> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::kernel::RkLink>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::kernel::RkTocNode> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -551,6 +563,17 @@ impl SseDecode for Option<crate::api::kernel::RkResource> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<crate::api::kernel::RkResource>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<u32>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -602,9 +625,25 @@ impl SseDecode for crate::api::kernel::RkChapterText {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_text = <String>::sse_decode(deserializer);
         let mut var_blocks = <Vec<crate::api::kernel::RkBlock>>::sse_decode(deserializer);
+        let mut var_links = <Vec<crate::api::kernel::RkLink>>::sse_decode(deserializer);
         return crate::api::kernel::RkChapterText {
             text: var_text,
             blocks: var_blocks,
+            links: var_links,
+        };
+    }
+}
+
+impl SseDecode for crate::api::kernel::RkLink {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_start = <u32>::sse_decode(deserializer);
+        let mut var_end = <u32>::sse_decode(deserializer);
+        let mut var_href = <String>::sse_decode(deserializer);
+        return crate::api::kernel::RkLink {
+            start: var_start,
+            end: var_end,
+            href: var_href,
         };
     }
 }
@@ -615,12 +654,14 @@ impl SseDecode for crate::api::kernel::RkMeta {
         let mut var_title = <String>::sse_decode(deserializer);
         let mut var_authors = <Vec<String>>::sse_decode(deserializer);
         let mut var_language = <Option<String>>::sse_decode(deserializer);
+        let mut var_description = <Option<String>>::sse_decode(deserializer);
         let mut var_format = <String>::sse_decode(deserializer);
         let mut var_coverKey = <Option<String>>::sse_decode(deserializer);
         return crate::api::kernel::RkMeta {
             title: var_title,
             authors: var_authors,
             language: var_language,
+            description: var_description,
             format: var_format,
             cover_key: var_coverKey,
         };
@@ -644,10 +685,12 @@ impl SseDecode for crate::api::kernel::RkTocNode {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_title = <String>::sse_decode(deserializer);
         let mut var_chapter = <u32>::sse_decode(deserializer);
+        let mut var_anchor = <Option<u32>>::sse_decode(deserializer);
         let mut var_children = <Vec<crate::api::kernel::RkTocNode>>::sse_decode(deserializer);
         return crate::api::kernel::RkTocNode {
             title: var_title,
             chapter: var_chapter,
+            anchor: var_anchor,
             children: var_children,
         };
     }
@@ -825,6 +868,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::kernel::RkChapterText {
         [
             self.text.into_into_dart().into_dart(),
             self.blocks.into_into_dart().into_dart(),
+            self.links.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -841,12 +885,30 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::kernel::RkChapterText>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::kernel::RkLink {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.start.into_into_dart().into_dart(),
+            self.end.into_into_dart().into_dart(),
+            self.href.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::kernel::RkLink {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::kernel::RkLink> for crate::api::kernel::RkLink {
+    fn into_into_dart(self) -> crate::api::kernel::RkLink {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::kernel::RkMeta {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.title.into_into_dart().into_dart(),
             self.authors.into_into_dart().into_dart(),
             self.language.into_into_dart().into_dart(),
+            self.description.into_into_dart().into_dart(),
             self.format.into_into_dart().into_dart(),
             self.cover_key.into_into_dart().into_dart(),
         ]
@@ -886,6 +948,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::kernel::RkTocNode {
         [
             self.title.into_into_dart().into_dart(),
             self.chapter.into_into_dart().into_dart(),
+            self.anchor.into_into_dart().into_dart(),
             self.children.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -1007,6 +1070,16 @@ impl SseEncode for Vec<crate::api::kernel::RkChapter> {
     }
 }
 
+impl SseEncode for Vec<crate::api::kernel::RkLink> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::kernel::RkLink>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<crate::api::kernel::RkTocNode> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1047,6 +1120,16 @@ impl SseEncode for Option<crate::api::kernel::RkResource> {
     }
 }
 
+impl SseEncode for Option<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <u32>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for crate::api::kernel::RkBlock {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1076,6 +1159,16 @@ impl SseEncode for crate::api::kernel::RkChapterText {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.text, serializer);
         <Vec<crate::api::kernel::RkBlock>>::sse_encode(self.blocks, serializer);
+        <Vec<crate::api::kernel::RkLink>>::sse_encode(self.links, serializer);
+    }
+}
+
+impl SseEncode for crate::api::kernel::RkLink {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.start, serializer);
+        <u32>::sse_encode(self.end, serializer);
+        <String>::sse_encode(self.href, serializer);
     }
 }
 
@@ -1085,6 +1178,7 @@ impl SseEncode for crate::api::kernel::RkMeta {
         <String>::sse_encode(self.title, serializer);
         <Vec<String>>::sse_encode(self.authors, serializer);
         <Option<String>>::sse_encode(self.language, serializer);
+        <Option<String>>::sse_encode(self.description, serializer);
         <String>::sse_encode(self.format, serializer);
         <Option<String>>::sse_encode(self.cover_key, serializer);
     }
@@ -1103,6 +1197,7 @@ impl SseEncode for crate::api::kernel::RkTocNode {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.title, serializer);
         <u32>::sse_encode(self.chapter, serializer);
+        <Option<u32>>::sse_encode(self.anchor, serializer);
         <Vec<crate::api::kernel::RkTocNode>>::sse_encode(self.children, serializer);
     }
 }

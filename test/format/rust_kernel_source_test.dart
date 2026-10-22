@@ -1,10 +1,10 @@
-// Rust 解析内核书源的移植测试（2026-10-22）。
+// Rust 解析内核书源的移植测试（2026-10-22 二次同步）。
 //
 // 三层判别，**无原生库也全绿**（RUST-07 口径）：
-//   1. 块 → 段落映射纯函数（图片占位标记 / 空白段丢弃）；
+//   1. 宿主标记织入纯函数（内核 U+FFFC 图片标记 → `\x00IMG:`、内链区间 →
+//      `\x00A:` 可点链接、空白段丢弃、字节区间定位）；
 //   2. 无加速层时 [BookRegistry] 恒回落纯 Dart 源（implId 取证）；
-//   3. 探测可用但**打开失败**（原生库没构建，FFI 调用抛错）时仍回落 Dart 源
-//      ——「任何失败都回落」的端到端取证。
+//   3. 探测可用但**打开失败**（原生库没构建，FFI 调用抛错）时仍回落 Dart 源。
 // 有原生库（本地 `cargo build` 过）时，第 4 组自动跑内核源的 BookSource 契约；
 // 没有则运行期 `markTestSkipped`，不计失败。
 import 'dart:convert';
@@ -18,7 +18,6 @@ import 'package:mreader/format/dart_txt_source.dart';
 import 'package:mreader/format/mobi_source.dart';
 import 'package:mreader/format/rust_kernel_source.dart';
 import 'package:mreader/highperf/high_perf_capability.dart';
-import 'package:mreader/highperf/high_perf_error.dart';
 import 'package:mreader/highperf/high_perf_registry.dart';
 import 'package:mreader/src/rust/api/kernel.dart' as rk;
 
@@ -83,35 +82,79 @@ Future<HighPerfRegistry> _availableRegistry() async {
 }
 
 void main() {
-  group('块 → 段落映射', () {
+  group('宿主标记织入', () {
     rk.RkBlock p(String text) =>
         rk.RkBlock(kind: 'p', text: text, level: 0, indent: false);
 
-    test('保留文本段与图片标记段，丢弃空白段', () {
-      final List<String> out = paragraphsFromBlocks(<rk.RkBlock>[
-        p('正文一。'),
+    rk.RkChapterText chapter(String text, List<rk.RkBlock> blocks,
+            {List<rk.RkLink> links = const <rk.RkLink>[]}) =>
+        rk.RkChapterText(text: text, blocks: blocks, links: links);
+
+    test('内核图片标记转换为宿主标记，空白段丢弃', () {
+      final List<WovenParagraph> out = weaveChapter(chapter('前文', <rk.RkBlock>[
+        p('前文'),
         p('   '),
-        p('\x00IMG:OEBPS/images/pic.png\x00'),
+        p('\u{FFFC}OEBPS/images/pic.png\u{FFFC}'),
         rk.RkBlock(
             kind: 'img',
-            text: '\x00IMG:OEBPS/images/cover.jpg\x00',
+            text: '\u{FFFC}OEBPS/images/cover.jpg\u{FFFC}',
             level: 0,
             indent: false,
             key: 'OEBPS/images/cover.jpg'),
         p(''),
-      ]);
-      expect(out, <String>[
-        '正文一。',
+      ]));
+      expect(<String>[for (final WovenParagraph w in out) w.text], <String>[
+        '前文',
         '\x00IMG:OEBPS/images/pic.png\x00',
         '\x00IMG:OEBPS/images/cover.jpg\x00',
       ]);
     });
 
-    test('行内图片标记内嵌在段落文本里原样保留', () {
-      final List<String> out = paragraphsFromBlocks(<rk.RkBlock>[
-        p('前文\x00IMG:OEBPS/a.png\x00后文'),
-      ]);
-      expect(out.single, '前文\x00IMG:OEBPS/a.png\x00后文');
+    test('行内图片标记织进段落文本', () {
+      final List<WovenParagraph> out = weaveChapter(
+          chapter('前文后文', <rk.RkBlock>[p('前\u{FFFC}a.png\u{FFFC}后')]));
+      expect(out.single.text, '前\x00IMG:a.png\x00后');
+    });
+
+    test('内链区间织成可点链接标记', () {
+      // "abcLINKdef"：链接 = 字节 3..7（"LINK"）。
+      final List<WovenParagraph> out = weaveChapter(chapter(
+        'abcLINKdef',
+        <rk.RkBlock>[p('abcLINKdef')],
+        links: <rk.RkLink>[
+          rk.RkLink(start: 3, end: 7, href: 'chap.xhtml#x'),
+        ],
+      ));
+      expect(out.single.text, 'abc\x00A:chap.xhtml#x\x00LINK\x00A\x00def');
+    });
+
+    test('多块按序定位、字节区间单调且落在原文上', () {
+      final String text = '第一段内容。第二段内容。';
+      final List<int> bytes = utf8.encode(text);
+      final List<WovenParagraph> out = weaveChapter(chapter(
+        text,
+        <rk.RkBlock>[p('第一段内容。'), p('第二段内容。')],
+        links: <rk.RkLink>[
+          // 链接区间是**字节**偏移：「第一段内容。」= 6 个汉字 = 18 字节。
+          rk.RkLink(start: 0, end: 18, href: '#a'),
+        ],
+      ));
+      expect(out.length, 2);
+      for (final WovenParagraph w in out) {
+        expect(w.start, lessThan(w.end));
+        expect(w.end, lessThanOrEqualTo(bytes.length));
+      }
+      expect(out[0].start, 0);
+      expect(out[1].start, greaterThan(out[0].start));
+      // 第一段整段是链接：标记包住所包文字。
+      expect(out[0].text, '\x00A:#a\x00第一段内容。\x00A\x00');
+    });
+
+    test('indexOfBytes 从游标起定位、不回溯', () {
+      final List<int> hay = utf8.encode('aabaaab');
+      expect(indexOfBytes(hay, utf8.encode('aab'), 0), 0);
+      expect(indexOfBytes(hay, utf8.encode('aab'), 1), 4);
+      expect(indexOfBytes(hay, utf8.encode('zz'), 0), -1);
     });
   });
 
@@ -196,6 +239,7 @@ void main() {
       final List<Chapter> chapters = await source.chapters();
       expect(chapters, isNotEmpty);
       expect(chapters.first.href, isNotEmpty);
+      expect(chapters.first.locate, isNotNull);
 
       final ChapterContent content = await source.content(0);
       expect(content.paragraphList, contains('正文一。'));

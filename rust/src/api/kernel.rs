@@ -6,15 +6,16 @@
 //! 边界纪律：正文**按章单次拉取**（`RkChapterText`），资源字节按需取，
 //! 不做整本搬运；结构面（meta/toc/chapters/weights）都是小结构。
 //!
-//! 段落文本形状与纯 Dart 抽取同构：图片写入 `\x00IMG:<包内绝对路径>\x00` 占位
-//! 标记（`lib/reader/image_dimensions.dart` 的 `_imgMarker` 同一口径），行内图片
-//! 内嵌在段落文本里，块级图片自成一段。已知落差：内核内容模型暂无链接，
-//! EPUB 内链在 Rust 路径下呈纯文本（Dart 路径有 `\x00A:\x00` 可点链接标记）。
+//! **映射口径唯一来源 = `rrk_model::flatten_blocks`**（内核 #4 修复批次定案）：
+//! 本桥不自造「块→文本」映射，只做透传——块文本里的行内图片标记是内核格式
+//! `\u{FFFC}<key>\u{FFFC}`，内链以**区间列表**单独给出（[`RkLink`]）。把它们织成
+//! 宿主段落标记（`\x00IMG:` / `\x00A:`）是**宿主适配层**的事，见
+//! `lib/format/rust_kernel_source.dart`。
 
 use std::sync::Mutex;
 
 use rrk_kernel::Kernel;
-use rrk_model::{Block, ChapterKind, Inline, RrkError, RrkErrorKind, RrkResult};
+use rrk_model::{flatten_blocks, PlainBlock, RrkError, RrkErrorKind, RrkResult};
 
 use crate::api::error::{HighPerfError, HighPerfErrorKind};
 use crate::api::guard::ffi_guard;
@@ -65,9 +66,11 @@ pub struct RkMeta {
     pub title: String,
     pub authors: Vec<String>,
     pub language: Option<String>,
-    /// 格式名：`EPUB` / `TXT` / `MOBI` / `AZW3`。
+    /// 简介（EPUB `dc:description` / MOBI EXTH 103·104）；无则 `None`。
+    pub description: Option<String>,
+    /// 格式名：`EPUB` / `TXT` / `MOBI` / `AZW3` / `CBZ` / `PDF`。
     pub format: String,
-    /// 封面资源 key（包内绝对路径）；无封面为 `None`。
+    /// 封面资源 key（包内绝对路径）；无封面为 `None`（内核含三级回退）。
     pub cover_key: Option<String>,
 }
 
@@ -86,18 +89,21 @@ pub struct RkChapter {
     pub part: u32,
 }
 
-/// 目录节点（树形）。
+/// 目录节点（树形；`anchor` = 章内字节偏移，惰性解析，取不到为 `None`）。
 pub struct RkTocNode {
     pub title: String,
     pub chapter: u32,
+    pub anchor: Option<u32>,
     pub children: Vec<RkTocNode>,
 }
 
-/// 内容块（已摊平引用块；文本含图片占位标记）。
+/// 内容块（`rrk_model::flatten_blocks` 的透传：引用块已摊平、分割线已丢弃）。
+///
+/// 文本里的行内图片标记是**内核格式** `\u{FFFC}<key>\u{FFFC}`（宿主适配层转换）。
 pub struct RkBlock {
     /// `h`（标题）/ `p`（段落）/ `img`（块级图片，[Self::text] 即标记串）。
     pub kind: String,
-    /// 块级纯文本；行内图片以 `\x00IMG:<key>\x00` 内嵌。
+    /// 块级纯文本；行内图片以 `\u{FFFC}<key>\u{FFFC}` 内嵌。
     pub text: String,
     /// 标题级别（仅 `h`）。
     pub level: u8,
@@ -108,10 +114,20 @@ pub struct RkBlock {
     pub alt: Option<String>,
 }
 
-/// 一章的正文（整章 UTF-8 文本 + 块列表）。
+/// 正文内链区间（清洗后章文本的字节区间 → 目标 href）。
+///
+/// 与 [`RkChapterText::text`] 同坐标系；宿主按区间把可点标记织回段落文本。
+pub struct RkLink {
+    pub start: u32,
+    pub end: u32,
+    pub href: String,
+}
+
+/// 一章的正文（整章 UTF-8 文本 + 扁平块表 + 内链区间）。
 pub struct RkChapterText {
     pub text: String,
     pub blocks: Vec<RkBlock>,
+    pub links: Vec<RkLink>,
 }
 
 /// 二进制资源。
@@ -127,58 +143,8 @@ pub struct RkWeight {
 }
 
 // ---------------------------------------------------------------------------
-// 块 → 文本映射
+// 内核模型 → 镜像类型（薄映射，语义归 rrk_model）
 // ---------------------------------------------------------------------------
-
-/// 行内元素 → 段落文本（图片内嵌占位标记，与纯 Dart 抽取同构）。
-fn inline_text(text: &str, inlines: &[Inline]) -> String {
-    let mut out = String::new();
-    for i in inlines {
-        match i {
-            Inline::Text { range, .. } => out.push_str(range.slice(text)),
-            Inline::Image { key } => out.push_str(&img_marker(&key.0)),
-        }
-    }
-    out
-}
-
-fn img_marker(key: &str) -> String {
-    format!("\x00IMG:{key}\x00")
-}
-
-/// 块树 → 扁平块表（引用块摊平为内层块；分割线只作段落分割、不产段落）。
-fn flatten_blocks(text: &str, blocks: &[Block], out: &mut Vec<RkBlock>) {
-    for b in blocks {
-        match b {
-            Block::Heading { level, inlines } => out.push(RkBlock {
-                kind: "h".to_string(),
-                text: inline_text(text, inlines),
-                level: *level,
-                indent: false,
-                key: None,
-                alt: None,
-            }),
-            Block::Paragraph { inlines, indent } => out.push(RkBlock {
-                kind: "p".to_string(),
-                text: inline_text(text, inlines),
-                level: 0,
-                indent: *indent,
-                key: None,
-                alt: None,
-            }),
-            Block::Image { key, alt, .. } => out.push(RkBlock {
-                kind: "img".to_string(),
-                text: img_marker(&key.0),
-                level: 0,
-                indent: false,
-                key: Some(key.0.clone()),
-                alt: alt.clone(),
-            }),
-            Block::Quote { blocks } => flatten_blocks(text, blocks, out),
-            Block::Divider => {}
-        }
-    }
-}
 
 fn toc_nodes(nodes: &[rrk_model::TocNode]) -> Vec<RkTocNode> {
     nodes
@@ -186,7 +152,46 @@ fn toc_nodes(nodes: &[rrk_model::TocNode]) -> Vec<RkTocNode> {
         .map(|n| RkTocNode {
             title: n.title.clone(),
             chapter: n.chapter,
+            anchor: n.anchor,
             children: toc_nodes(&n.children),
+        })
+        .collect()
+}
+
+/// `rrk_model::flatten_blocks`（唯一降维口径）→ 镜像块表；纯透传不改语义。
+fn plain_blocks(text: &str, blocks: &[rrk_model::Block]) -> Vec<RkBlock> {
+    flatten_blocks(text, blocks)
+        .iter()
+        .map(|b| match b {
+            PlainBlock::Heading { level, text } => RkBlock {
+                kind: "h".to_string(),
+                text: text.clone(),
+                level: *level,
+                indent: false,
+                key: None,
+                alt: None,
+            },
+            PlainBlock::Paragraph { text, indent } => RkBlock {
+                kind: "p".to_string(),
+                text: text.clone(),
+                level: 0,
+                indent: *indent,
+                key: None,
+                alt: None,
+            },
+            PlainBlock::Image { key, alt } => RkBlock {
+                kind: "img".to_string(),
+                text: format!(
+                    "{}{}{}",
+                    rrk_model::INLINE_IMAGE_MARKER,
+                    key.0,
+                    rrk_model::INLINE_IMAGE_MARKER
+                ),
+                level: 0,
+                indent: false,
+                key: Some(key.0.clone()),
+                alt: alt.clone(),
+            },
         })
         .collect()
 }
@@ -230,6 +235,7 @@ pub fn kernel_meta(handle: u64) -> Result<RkMeta, HighPerfError> {
                 title: m.title.clone(),
                 authors: m.authors.clone(),
                 language: m.language.clone(),
+                description: m.description.clone(),
                 format: m.format.to_string(),
                 cover_key: m.cover.as_ref().map(|c| c.0.clone()),
             })
@@ -261,8 +267,8 @@ pub fn kernel_chapters(handle: u64) -> Result<Vec<RkChapter>, HighPerfError> {
                     href: e.href.clone(),
                     char_len: e.char_len,
                     kind: match e.kind {
-                        ChapterKind::Text => "text",
-                        ChapterKind::ImageGallery => "image",
+                        rrk_model::ChapterKind::Text => "text",
+                        rrk_model::ChapterKind::ImageGallery => "image",
                     }
                     .to_string(),
                     part: e.part,
@@ -272,20 +278,30 @@ pub fn kernel_chapters(handle: u64) -> Result<Vec<RkChapter>, HighPerfError> {
     })
 }
 
-/// 加载一章（整章文本 + 扁平块表）。
+/// 加载一章（整章文本 + 扁平块表 + 内链区间）。
 pub fn kernel_load_chapter(handle: u64, chapter_id: u32) -> Result<RkChapterText, HighPerfError> {
     ffi_guard(|| {
         with_kernel(|k| {
             let book = k.book(handle)?;
             let content = book.load_chapter(chapter_id)?;
-            let mut blocks = Vec::with_capacity(content.blocks.len());
-            flatten_blocks(&content.text, &content.blocks, &mut blocks);
-            Ok(RkChapterText { text: content.text.to_string(), blocks })
+            Ok(RkChapterText {
+                blocks: plain_blocks(&content.text, &content.blocks),
+                links: content
+                    .link_ranges
+                    .iter()
+                    .map(|l| RkLink {
+                        start: l.range.start,
+                        end: l.range.end,
+                        href: l.href.clone(),
+                    })
+                    .collect(),
+                text: content.text.to_string(),
+            })
         })
     })
 }
 
-/// 封面（无封面返回 `None`）。
+/// 封面（无封面返回 `None`；内核含显式封面 → spine 首图 → manifest 首图回退）。
 pub fn kernel_cover(handle: u64) -> Result<Option<RkResource>, HighPerfError> {
     ffi_guard(|| {
         with_kernel(|k| {
@@ -330,7 +346,7 @@ pub fn kernel_weights(handle: u64) -> Result<Vec<RkWeight>, HighPerfError> {
 
 #[cfg(test)]
 mod tests {
-    use rrk_model::{ResourceKey, StyleFlags, TextRange};
+    use rrk_model::{Block, Inline, ResourceKey, StyleFlags, TextRange};
 
     use super::*;
 
@@ -339,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn flatten_keeps_text_and_image_markers() {
+    fn bridge_passes_through_flatten_contract() {
         // 共享正文缓冲：「前文」= 0..6，「引」= 6..9（UTF-8 字节偏移）。
         let text = "前文引";
         let blocks = vec![
@@ -363,16 +379,16 @@ mod tests {
                 }],
             },
         ];
-        let mut out = Vec::new();
-        flatten_blocks(text, &blocks, &mut out);
+        let out = plain_blocks(text, &blocks);
 
-        // 分割线丢弃；引用块摊平为内层块；行内图片内嵌标记；块级图片自成一段。
+        // 判据即 rrk_model::flatten_blocks 契约的透传：分割线丢弃、引用块摊平、
+        // 行内图片内嵌 U+FFFC 标记、块级图片单列（text = 标记串）。
         assert_eq!(out.len(), 3);
         assert_eq!(out[0].kind, "p");
         assert!(out[0].indent);
-        assert_eq!(out[0].text, "前文\x00IMG:OEBPS/a.png\x00");
+        assert_eq!(out[0].text, "前文\u{FFFC}OEBPS/a.png\u{FFFC}");
         assert_eq!(out[1].kind, "img");
-        assert_eq!(out[1].text, "\x00IMG:OEBPS/b.png\x00");
+        assert_eq!(out[1].text, "\u{FFFC}OEBPS/b.png\u{FFFC}");
         assert_eq!(out[1].key.as_deref(), Some("OEBPS/b.png"));
         assert_eq!(out[2].kind, "p");
         assert_eq!(out[2].text, "引");

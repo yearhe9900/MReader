@@ -1,44 +1,136 @@
-// Rust 解析内核的 `BookSource` 适配层（图书解析核心移植，2026-10-22）。
+// Rust 解析内核的 `BookSource` 适配层（图书解析核心移植，2026-10-22 二次同步）。
 //
 // ## 定位
 //
-// 解析全程走 vendored `rrk-*` 内核（`rust/vendor/`，经 FRB 桥
-// `lib/src/rust/api/kernel.dart`）：EPUB / TXT / MOBI-AZW3 的打开、分章、
-// 正文抽取、资源读取都在 Rust 侧完成；本类只做「内核数据面 → MReader 模型」
-// 的映射与 [BookSource] 契约适配。
+// 解析全程走 vendored `rrk-*` 内核（`rust/vendor/`，上游 v0.1.1 / ABI v5，经 FRB 桥
+// `lib/src/rust/api/kernel.dart`）：EPUB / TXT / MOBI-AZW3 的打开、分章、正文抽取、
+// 资源读取都在 Rust 侧完成。本类负责「内核数据面 → MReader 模型」的映射与
+// [BookSource] 契约适配，包括**宿主标记织入**：
+//   · 内核行内图片标记 `\u{FFFC}<key>\u{FFFC}` → 宿主图片标记 `\x00IMG:<key>\x00`；
+//   · 内链区间（`RkLink`）→ 宿主可点链接标记 `\x00A:<href>\x00文字\x00A\x00`；
+//   · 目录树（层级 + 章内锚点）→ 宿主章节列表（`href` + `locate`）：同文件多目录项
+//     按锚点**切段**（正文按锚点区间归属、互不重叠），细粒度目录不退化。
 //
 // ## ⚠️ 本类**不是** compute() 安全的纯 Dart 类
 //
-// `lib/format/**` 的「不 import Flutter / dart:io」纪律（`PERF-01`）服务的是
-// 「解析丢 isolate」的 Dart 源；本类持 FFI 书句柄（绑定当前 isolate），走的是
-// 架构 §A.1「RUST-03 衔接说明」里的另一条路——**不进 compute()**，由
-// [BookRegistry] 按探测结果择一。这与 Dart 源并存不冲突。
+// 持 FFI 书句柄（绑定当前 isolate），走「Rust 源」这条路（`lib/format/**` 的纯
+// Dart 纪律服务的是可进 `compute()` 的 Dart 源，两者并存不冲突）。由
+// [BookRegistry] 按探测结果择一。
 //
-// ## 与纯 Dart 抽取的形状对齐
+// ## 坐标系
 //
-// · 段落文本里的图片占位标记 `\x00IMG:<包内绝对路径>\x00`（`imageSrcsOf`
-//   同一口径）；行内图片内嵌段落文本，块级图片自成一段；
-// · 分割线只切段、不产段落；引用块摊平为内层段落；
-// · **已知落差**：内核内容模型暂无链接，EPUB 内链在本路径呈纯文本
-//   （纯 Dart 路径有 `\x00A:\x00` 可点链接标记）。
+// 内核的链接区间与目录锚点都是**清洗后章文本的 UTF-8 字节偏移**；Dart `String`
+// 是 UTF-16 code unit。本类的定位/切段全程在**字节坐标系**上做（utf8 编码一次、
+// 字节扫描定位），只在拼最终段落字符串时按字节切片解码——避免两套偏移混算。
+import 'dart:convert';
 import 'dart:typed_data';
 
 import '../meta/meta_source.dart';
 import '../src/rust/api/kernel.dart' as rk;
 import 'book_source.dart';
 
-/// 内核块表 → 段落序列（与纯 Dart 抽取的段落形状对齐）。
+/// 内核图片标记：`\u{FFFC}<key>\u{FFFC}`（key 不含 U+FFFC，无需转义）。
+final RegExp _kernelImageMarker = RegExp('\u{FFFC}([^\u{FFFC}]*)\u{FFFC}');
+
+/// 织好宿主标记的一段正文 + 其在章文本中的**字节**区间（锚点切段用）。
+class WovenParagraph {
+  const WovenParagraph(this.text, this.start, this.end);
+
+  final String text;
+  final int start;
+  final int end;
+}
+
+/// 章节列表项的解析引用：内核章 id + 锚点切段区间（`from`/`to` 为字节偏移，
+/// `null` = 不设界；`from == null` 即整章）。
+class _ChapterRef {
+  const _ChapterRef(this.id, {this.from, this.to});
+
+  final int id;
+  final int? from;
+  final int? to;
+}
+
+/// 字节序列扫描定位（`String.indexOf` 的 UTF-8 字节坐标系等价物）。
+int indexOfBytes(List<int> haystack, List<int> needle, int from) {
+  outer:
+  for (int i = from; i + needle.length <= haystack.length; i++) {
+    for (int j = 0; j < needle.length; j++) {
+      if (haystack[i + j] != needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+/// 一个文本片（UTF-8 字节）按内链区间切分，织入宿主可点链接标记。
+String weaveLinks(List<int> part, int base, List<rk.RkLink> links) {
+  final List<rk.RkLink> hit = <rk.RkLink>[
+    for (final rk.RkLink l in links)
+      if (l.end > base && l.start < base + part.length) l,
+  ]..sort((rk.RkLink a, rk.RkLink b) => a.start.compareTo(b.start));
+  final StringBuffer sb = StringBuffer();
+  int pos = 0;
+  for (final rk.RkLink l in hit) {
+    final int s = (l.start - base).clamp(0, part.length);
+    final int e = (l.end - base).clamp(0, part.length);
+    if (s > pos) sb.write(utf8.decode(part.sublist(pos, s)));
+    if (e > s) {
+      sb.write('\x00A:${l.href}\x00');
+      sb.write(utf8.decode(part.sublist(s, e)));
+      sb.write('\x00A\x00');
+    }
+    if (e > pos) pos = e;
+  }
+  if (pos < part.length) sb.write(utf8.decode(part.sublist(pos)));
+  return sb.toString();
+}
+
+/// 内核块表 → 织好宿主标记的段落序列（含源字节区间）。
 ///
-/// · 空白段丢弃（含全空白的标题/段落）；
-/// · 图片段的文本即 `\x00IMG:<key>\x00` 标记串（`imageSrcsOf` 同一口径），保留；
-/// · 引用块摊平、分割线丢弃都在 Rust 桥完成，这里只见扁平块表。
-///
-/// 顶层函数形态 = 映射纯函数的测试缝（`test/format/rust_kernel_source_test.dart`）。
-List<String> paragraphsFromBlocks(List<rk.RkBlock> blocks) {
-  return <String>[
-    for (final rk.RkBlock b in blocks)
-      if (b.text.trim().isNotEmpty) b.text,
-  ];
+/// 定位方式：块文本去掉图片标记后是章文本的**连续切片**，按块序用游标在字节上
+/// 扫描定位（顺序单调、不回溯）；图片块无文本可定位，位置取当前游标（前向填充）。
+List<WovenParagraph> weaveChapter(rk.RkChapterText chapter) {
+  final List<int> bytes = utf8.encode(chapter.text);
+  final List<rk.RkLink> links = chapter.links;
+  final List<WovenParagraph> out = <WovenParagraph>[];
+  int cursor = 0;
+
+  for (final rk.RkBlock block in chapter.blocks) {
+    final StringBuffer sb = StringBuffer();
+    int blockStart = -1;
+    int blockEnd = -1;
+
+    void handleText(String part) {
+      if (part.isEmpty) return;
+      final List<int> partBytes = utf8.encode(part);
+      final int at = indexOfBytes(bytes, partBytes, cursor);
+      if (at < 0) {
+        // 理论不发生（块文本必是章文本切片）；兜底：原样回填、不推进游标。
+        if (blockStart < 0) blockStart = cursor;
+        sb.write(part);
+        return;
+      }
+      if (blockStart < 0) blockStart = at;
+      sb.write(weaveLinks(partBytes, at, links));
+      cursor = at + partBytes.length;
+      blockEnd = cursor;
+    }
+
+    int pos = 0;
+    for (final RegExpMatch m in _kernelImageMarker.allMatches(block.text)) {
+      handleText(block.text.substring(pos, m.start));
+      sb.write('\x00IMG:${m.group(1)}\x00');
+      pos = m.end;
+    }
+    handleText(block.text.substring(pos));
+
+    final String text = sb.toString();
+    if (text.trim().isEmpty) continue;
+    final int start = blockStart < 0 ? cursor : blockStart;
+    out.add(WovenParagraph(text, start, blockEnd < 0 ? start : blockEnd));
+  }
+  return out;
 }
 
 /// Rust 解析内核书源：一个实例 = 一本打开的书（内核句柄）。
@@ -55,7 +147,9 @@ class RustKernelSource implements BookSource {
   final BigInt _handle;
   final rk.RkMeta _meta;
 
-  List<rk.RkChapter>? _chapters;
+  List<rk.RkChapter>? _kChapters;
+  List<Chapter>? _chapters;
+  List<_ChapterRef>? _refs;
   List<int>? _charCounts;
   List<int>? _weights;
 
@@ -93,15 +187,15 @@ class RustKernelSource implements BookSource {
     final String title = fallbackTitle(_meta.title, fileStem(fileName));
     final String author = fallbackAuthor(_meta.authors.join('、'));
     final bool hasTitleMeta = _meta.title.trim().isNotEmpty;
+    final String intro = _meta.description?.trim() ?? '';
 
     CoverRef cover = const NoCover();
     if (_meta.coverKey != null) {
-      final rk.RkResource? res =
-          await rk.kernelCover(handle: _handle);
+      final rk.RkResource? res = await rk.kernelCover(handle: _handle);
       if (res != null && res.data.isNotEmpty) {
         final CoverFormat format = sniffCoverFormat(res.data);
         if (format != CoverFormat.unknown) {
-          cover = PendingCover(Uint8List.fromList(res.data), format);
+          cover = PendingCover(res.data, format);
         }
       }
     }
@@ -112,45 +206,112 @@ class RustKernelSource implements BookSource {
       author: author,
       authorOrigin:
           _meta.authors.isNotEmpty ? MetaOrigin.metadata : MetaOrigin.none,
-      // 内核书目暂无简介字段（EPUB OPF 的 description 等），记 none。
-      intro: '',
-      introOrigin: MetaOrigin.none,
+      intro: intro,
+      introOrigin: intro.isEmpty ? MetaOrigin.none : MetaOrigin.metadata,
       cover: cover,
       coverOrigin: cover is NoCover ? MetaOrigin.none : MetaOrigin.metadata,
       language: _meta.language ?? '',
-      auto: BookMetaAuto(title: title, author: author, intro: ''),
+      auto: BookMetaAuto(title: title, author: author, intro: intro),
     );
   }
 
-  Future<List<rk.RkChapter>> _chapterList() async =>
-      _chapters ??= await rk.kernelChapters(handle: _handle);
+  Future<List<rk.RkChapter>> _kernelChapterList() async =>
+      _kChapters ??= await rk.kernelChapters(handle: _handle);
+
+  /// 章节列表（TOC 树摊平 + 未入目章补齐）与解析引用**成对**构建、同序。
+  Future<void> _ensureChapterList() async {
+    if (_chapters != null) return;
+    final List<rk.RkChapter> entries = await _kernelChapterList();
+    final List<rk.RkTocNode> toc = await rk.kernelToc(handle: _handle);
+    final List<Chapter> out = <Chapter>[];
+    final List<_ChapterRef> refs = <_ChapterRef>[];
+    final Set<int> covered = <int>{};
+
+    void walk(List<rk.RkTocNode> nodes, int level) {
+      for (final rk.RkTocNode n in nodes) {
+        if (n.chapter < 0 || n.chapter >= entries.length) continue;
+        final int id = n.chapter;
+        final rk.RkChapter e = entries[id];
+        // 同章两个「无锚点」目录项只留第一个（否则内容整章重复）。
+        if (n.anchor == null && covered.contains(id)) continue;
+        covered.add(id);
+        out.add(Chapter(
+          href: e.href,
+          title: fallbackTitle(
+              n.title, fallbackTitle(e.title ?? '', '第 ${id + 1} 章')),
+          level: level,
+          locate: n.anchor?.toString() ?? '',
+        ));
+        refs.add(_ChapterRef(id, from: n.anchor));
+        walk(n.children, level + 1);
+      }
+    }
+
+    walk(toc, 0);
+    for (int i = 0; i < entries.length; i++) {
+      if (covered.contains(i)) continue;
+      out.add(Chapter(
+        href: entries[i].href,
+        title: fallbackTitle(entries[i].title ?? '', '第 ${i + 1} 章'),
+        level: 0,
+        locate: '',
+      ));
+      refs.add(_ChapterRef(i));
+    }
+
+    // 同章锚点切段的右界 = 同 id 下一锚点（按锚点升序），互不重叠。
+    final Map<int, List<int>> byId = <int, List<int>>{};
+    for (int i = 0; i < refs.length; i++) {
+      final int? from = refs[i].from;
+      if (from != null) (byId[refs[i].id] ??= <int>[]).add(from);
+    }
+    for (final List<int> anchors in byId.values) {
+      anchors.sort();
+    }
+    for (int i = 0; i < refs.length; i++) {
+      final _ChapterRef r = refs[i];
+      if (r.from == null) continue;
+      final List<int> anchors = byId[r.id]!;
+      final int at = anchors.indexOf(r.from!);
+      refs[i] = _ChapterRef(r.id,
+          from: r.from, to: at + 1 < anchors.length ? anchors[at + 1] : null);
+    }
+
+    _chapters = out;
+    _refs = refs;
+  }
 
   @override
   Future<List<Chapter>> chapters() async {
-    final List<rk.RkChapter> list = await _chapterList();
-    return <Chapter>[
-      for (int i = 0; i < list.length; i++)
-        Chapter(
-          href: list[i].href,
-          // 无标题章补「第 N 章」占位（与 dart_epub_source 的占位口径一致）。
-          title: fallbackTitle(list[i].title ?? '', '第 ${i + 1} 章'),
-          level: 0,
-          locate: '',
-        ),
-    ];
+    await _ensureChapterList();
+    return List<Chapter>.unmodifiable(_chapters!);
   }
 
   @override
   Future<ChapterContent> content(int chapterIndex) async {
-    final List<rk.RkChapter> list = await _chapterList();
-    if (chapterIndex < 0 || chapterIndex >= list.length) {
+    await _ensureChapterList();
+    final List<_ChapterRef> refs = _refs!;
+    if (chapterIndex < 0 || chapterIndex >= refs.length) {
+      return const ChapterContent.paragraphs(<String>[]);
+    }
+    final _ChapterRef ref = refs[chapterIndex];
+    final List<rk.RkChapter> entries = await _kernelChapterList();
+    if (ref.id < 0 || ref.id >= entries.length) {
       return const ChapterContent.paragraphs(<String>[]);
     }
     final rk.RkChapterText text = await rk.kernelLoadChapter(
       handle: _handle,
-      chapterId: list[chapterIndex].id,
+      chapterId: entries[ref.id].id,
     );
-    return ChapterContent.paragraphs(paragraphsFromBlocks(text.blocks));
+    final List<WovenParagraph> woven = weaveChapter(text);
+    final int? from = ref.from;
+    final int? to = ref.to;
+    final List<String> paragraphs = <String>[
+      for (final WovenParagraph w in woven)
+        if ((from == null || w.start >= from) && (to == null || w.start < to))
+          w.text,
+    ];
+    return ChapterContent.paragraphs(paragraphs);
   }
 
   @override
@@ -163,10 +324,12 @@ class RustKernelSource implements BookSource {
       );
 
   @override
-  Stream<SearchEvent> search(String query, {required CancelToken cancel}) async* {
+  Stream<SearchEvent> search(String query,
+      {required CancelToken cancel}) async* {
     if (query.isEmpty) return;
     final String needle = query.toLowerCase();
-    final List<rk.RkChapter> list = await _chapterList();
+    await _ensureChapterList();
+    final List<Chapter> list = _chapters!;
     for (int i = 0; i < list.length; i++) {
       if (cancel.isCancelled) return;
       yield SearchEvent.progress(i / list.length);
@@ -177,7 +340,7 @@ class RustKernelSource implements BookSource {
         if (at >= 0) {
           yield SearchEvent.hit(SearchHit(
             chapterIndex: i,
-            chapterTitle: list[i].title ?? '第 ${i + 1} 章',
+            chapterTitle: list[i].title,
             offset: offset + at,
             context: p,
           ));
@@ -188,7 +351,8 @@ class RustKernelSource implements BookSource {
   }
 
   @override
-  SearchBookSpec? get searchSpec => SearchBookSpec(fileName: fileName, bytes: bytes);
+  SearchBookSpec? get searchSpec =>
+      SearchBookSpec(fileName: fileName, bytes: bytes);
 
   /// 精确口径（统计用；**阅读页禁调**，见 [BookSource.chapterCharCounts]）：
   /// 逐章加载后按「各段 `paragraph.length` 之和」计，与 Dart 源同一计数规则。
@@ -196,9 +360,9 @@ class RustKernelSource implements BookSource {
   Future<List<int>?> chapterCharCounts() async {
     final List<int>? cached = _charCounts;
     if (cached != null) return cached;
-    final List<rk.RkChapter> list = await _chapterList();
-    final List<int> out = List<int>.filled(list.length, 0);
-    for (int i = 0; i < list.length; i++) {
+    await _ensureChapterList();
+    final List<int> out = List<int>.filled(_chapters!.length, 0);
+    for (int i = 0; i < out.length; i++) {
       int sum = 0;
       for (final String p in (await content(i)).paragraphList) {
         sum += p.length;
@@ -210,32 +374,45 @@ class RustKernelSource implements BookSource {
 
   @override
   Future<int?> totalCharCount() async {
-    final List<int> counts =
-        await chapterCharCounts() ?? const <int>[];
+    final List<int> counts = await chapterCharCounts() ?? const <int>[];
     return counts.fold<int>(0, (int a, int b) => a + b);
   }
 
   /// 廉价权重（内核零解压估算；阅读页进度百分比专用）。
+  ///
+  /// 内核权重按**内核章**给；宿主章节列表可能按锚点把一章拆成多条目——拆分条目
+  /// **均分**该章权重（只求章间相对比例，不承诺绝对值，契约允许）。
   @override
   Future<List<int>?> chapterWeightEstimates() async {
     final List<int>? cached = _weights;
     if (cached != null) return cached;
+    await _ensureChapterList();
     final List<rk.RkWeight> w = await rk.kernelWeights(handle: _handle);
-    // 按章序对齐（内核权重表按 id 升序返回；仍显式排一次防实现漂移）。
-    final List<rk.RkWeight> sorted = w.toList()..sort((a, b) => a.id.compareTo(b.id));
-    return _weights = <int>[for (final rk.RkWeight e in sorted) e.charLen];
+    final Map<int, int> byId = <int, int>{
+      for (final rk.RkWeight e in w) e.id: e.charLen,
+    };
+    final Map<int, int> splitCount = <int, int>{};
+    for (final _ChapterRef r in _refs!) {
+      splitCount[r.id] = (splitCount[r.id] ?? 0) + 1;
+    }
+    return _weights = <int>[
+      for (final _ChapterRef r in _refs!)
+        (byId[r.id] ?? 0) ~/ (splitCount[r.id] ?? 1),
+    ];
   }
 
   @override
   Future<Uint8List?> readResource(String href) async {
     final rk.RkResource? res =
         await rk.kernelLoadResource(handle: _handle, key: href);
-    return res == null ? null : Uint8List.fromList(res.data);
+    return res?.data;
   }
 
   @override
   Future<void> dispose() async {
+    _kChapters = null;
     _chapters = null;
+    _refs = null;
     _charCounts = null;
     _weights = null;
     await rk.kernelClose(handle: _handle);

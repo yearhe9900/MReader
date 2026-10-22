@@ -8,7 +8,7 @@ import 'error.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `flatten_blocks`, `img_marker`, `inline_text`, `map_err`, `toc_nodes`, `with_kernel`
+// These functions are ignored because they are not marked as `pub`: `map_err`, `plain_blocks`, `toc_nodes`, `with_kernel`
 
 /// 按路径打开一本书；返回书句柄（≥1）。
 Future<BigInt> kernelOpenPath({required String path}) =>
@@ -37,7 +37,7 @@ Future<List<RkTocNode>> kernelToc({required BigInt handle}) =>
 Future<List<RkChapter>> kernelChapters({required BigInt handle}) =>
     RustLib.instance.api.crateApiKernelKernelChapters(handle: handle);
 
-/// 加载一章（整章文本 + 扁平块表）。
+/// 加载一章（整章文本 + 扁平块表 + 内链区间）。
 Future<RkChapterText> kernelLoadChapter({
   required BigInt handle,
   required int chapterId,
@@ -46,7 +46,7 @@ Future<RkChapterText> kernelLoadChapter({
   chapterId: chapterId,
 );
 
-/// 封面（无封面返回 `None`）。
+/// 封面（无封面返回 `None`；内核含显式封面 → spine 首图 → manifest 首图回退）。
 Future<RkResource?> kernelCover({required BigInt handle}) =>
     RustLib.instance.api.crateApiKernelKernelCover(handle: handle);
 
@@ -63,12 +63,14 @@ Future<RkResource?> kernelLoadResource({
 Future<List<RkWeight>> kernelWeights({required BigInt handle}) =>
     RustLib.instance.api.crateApiKernelKernelWeights(handle: handle);
 
-/// 内容块（已摊平引用块；文本含图片占位标记）。
+/// 内容块（`rrk_model::flatten_blocks` 的透传：引用块已摊平、分割线已丢弃）。
+///
+/// 文本里的行内图片标记是**内核格式** `\u{FFFC}<key>\u{FFFC}`（宿主适配层转换）。
 class RkBlock {
   /// `h`（标题）/ `p`（段落）/ `img`（块级图片，[Self::text] 即标记串）。
   final String kind;
 
-  /// 块级纯文本；行内图片以 `\x00IMG:<key>\x00` 内嵌。
+  /// 块级纯文本；行内图片以 `\u{FFFC}<key>\u{FFFC}` 内嵌。
   final String text;
 
   /// 标题级别（仅 `h`）。
@@ -161,15 +163,20 @@ class RkChapter {
           part_ == other.part_;
 }
 
-/// 一章的正文（整章 UTF-8 文本 + 块列表）。
+/// 一章的正文（整章 UTF-8 文本 + 扁平块表 + 内链区间）。
 class RkChapterText {
   final String text;
   final List<RkBlock> blocks;
+  final List<RkLink> links;
 
-  const RkChapterText({required this.text, required this.blocks});
+  const RkChapterText({
+    required this.text,
+    required this.blocks,
+    required this.links,
+  });
 
   @override
-  int get hashCode => text.hashCode ^ blocks.hashCode;
+  int get hashCode => text.hashCode ^ blocks.hashCode ^ links.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -177,7 +184,31 @@ class RkChapterText {
       other is RkChapterText &&
           runtimeType == other.runtimeType &&
           text == other.text &&
-          blocks == other.blocks;
+          blocks == other.blocks &&
+          links == other.links;
+}
+
+/// 正文内链区间（清洗后章文本的字节区间 → 目标 href）。
+///
+/// 与 [`RkChapterText::text`] 同坐标系；宿主按区间把可点标记织回段落文本。
+class RkLink {
+  final int start;
+  final int end;
+  final String href;
+
+  const RkLink({required this.start, required this.end, required this.href});
+
+  @override
+  int get hashCode => start.hashCode ^ end.hashCode ^ href.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RkLink &&
+          runtimeType == other.runtimeType &&
+          start == other.start &&
+          end == other.end &&
+          href == other.href;
 }
 
 /// 书目元数据。
@@ -186,16 +217,20 @@ class RkMeta {
   final List<String> authors;
   final String? language;
 
-  /// 格式名：`EPUB` / `TXT` / `MOBI` / `AZW3`。
+  /// 简介（EPUB `dc:description` / MOBI EXTH 103·104）；无则 `None`。
+  final String? description;
+
+  /// 格式名：`EPUB` / `TXT` / `MOBI` / `AZW3` / `CBZ` / `PDF`。
   final String format;
 
-  /// 封面资源 key（包内绝对路径）；无封面为 `None`。
+  /// 封面资源 key（包内绝对路径）；无封面为 `None`（内核含三级回退）。
   final String? coverKey;
 
   const RkMeta({
     required this.title,
     required this.authors,
     this.language,
+    this.description,
     required this.format,
     this.coverKey,
   });
@@ -205,6 +240,7 @@ class RkMeta {
       title.hashCode ^
       authors.hashCode ^
       language.hashCode ^
+      description.hashCode ^
       format.hashCode ^
       coverKey.hashCode;
 
@@ -216,6 +252,7 @@ class RkMeta {
           title == other.title &&
           authors == other.authors &&
           language == other.language &&
+          description == other.description &&
           format == other.format &&
           coverKey == other.coverKey;
 }
@@ -239,20 +276,23 @@ class RkResource {
           data == other.data;
 }
 
-/// 目录节点（树形）。
+/// 目录节点（树形；`anchor` = 章内字节偏移，惰性解析，取不到为 `None`）。
 class RkTocNode {
   final String title;
   final int chapter;
+  final int? anchor;
   final List<RkTocNode> children;
 
   const RkTocNode({
     required this.title,
     required this.chapter,
+    this.anchor,
     required this.children,
   });
 
   @override
-  int get hashCode => title.hashCode ^ chapter.hashCode ^ children.hashCode;
+  int get hashCode =>
+      title.hashCode ^ chapter.hashCode ^ anchor.hashCode ^ children.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -261,6 +301,7 @@ class RkTocNode {
           runtimeType == other.runtimeType &&
           title == other.title &&
           chapter == other.chapter &&
+          anchor == other.anchor &&
           children == other.children;
 }
 
