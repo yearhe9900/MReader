@@ -5,7 +5,7 @@
 //! - **章内容**：XHTML → [`clean::clean_xhtml`] 清洗管线（标签白名单 + CSS 最小集）；
 //! - **DRM**：`encryption.xml` 加密正文 → 明确 `UnsupportedFormat`，不静默。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use rrk_format::{BookSource, ContentSource, FormatAdapter};
@@ -38,7 +38,8 @@ pub struct EpubBook {
     /// href（相对 OPF 目录、无锚点）→ 章 id。
     href_to_chapter: HashMap<String, ChapterId>,
     entries: Vec<ChapterEntry>,
-    toc: Vec<TocNode>,
+    /// 目录原始树（含 href+fragment；`toc()` 时惰性解析锚点）。
+    toc_raw: Vec<TocRaw>,
 }
 
 fn resolve_href(base_dir: &str, href: &str) -> String {
@@ -68,6 +69,17 @@ fn dir_of(href: &str) -> String {
     match href.rsplit_once('/') {
         Some((d, _)) => d.to_string(),
         None => String::new(),
+    }
+}
+
+/// 内链 href 归一化：非 `#frag` 的路径按文档目录解析为包内绝对路径，fragment 原样保留。
+fn resolve_link_href(base_dir: &str, href: &str) -> String {
+    if href.starts_with('#') {
+        return href.to_string();
+    }
+    match href.split_once('#') {
+        Some((path, frag)) => format!("{}#{frag}", resolve_href(base_dir, path)),
+        None => resolve_href(base_dir, href),
     }
 }
 
@@ -160,19 +172,9 @@ impl EpubBook {
             return Err(RrkError::corrupt("EPUB: spine 无可渲染文档"));
         }
 
-        // 目录：nav 优先，NCX 回退；并用目录标题回填章标题
+        // 目录：nav 优先，NCX 回退；用目录标题回填章标题（锚点惰性解析，见 toc()）
         let toc_raw = build_toc_raw(&zip, &opf, &opf_dir);
-        let mut toc: Vec<TocNode> = Vec::new();
-        for (title, href) in toc_raw {
-            let path = normalize_path(href.split('#').next().unwrap_or(""));
-            let Some(&chapter) = href_to_chapter.get(&path) else { continue };
-            if let Some(entry) = entries.iter_mut().find(|e| e.id == chapter) {
-                if entry.title.is_none() {
-                    entry.title = Some(title.clone());
-                }
-            }
-            toc.push(TocNode { title, chapter, anchor: None, children: Vec::new() });
-        }
+        backfill_titles(&toc_raw, &href_to_chapter, &mut entries);
 
         let title = opf
             .title
@@ -186,6 +188,7 @@ impl EpubBook {
             title,
             authors: opf.authors.clone(),
             language: opf.language.clone(),
+            description: opf.description.clone(),
             format: FormatId::Epub,
             content_hash: fnv1a64(&opf_xml.as_bytes()[..opf_xml.len().min(64 * 1024)]),
             // cover 字段存的是 manifest **href**（包内绝对路径），不是 manifest id：
@@ -205,8 +208,68 @@ impl EpubBook {
             spine: opf.spine,
             href_to_chapter,
             entries,
-            toc,
+            toc_raw,
         })
+    }
+
+    /// 目录原始树 → `TocNode` 树（按需解析锚点；只清洗被 fragment 引用的文档）。
+    fn build_toc_nodes(
+        &self,
+        raws: &[TocRaw],
+        cache: &mut HashMap<ChapterId, BTreeMap<String, u32>>,
+    ) -> Vec<TocNode> {
+        let mut out = Vec::new();
+        for r in raws {
+            let path = normalize_path(r.href.split('#').next().unwrap_or(""));
+            let Some(&chapter) = self.href_to_chapter.get(&path) else { continue };
+            let anchor = match r.href.split_once('#') {
+                Some((_, frag)) if !frag.is_empty() => {
+                    if !cache.contains_key(&chapter) {
+                        let m = self.chapter_anchors(chapter).unwrap_or_default();
+                        cache.insert(chapter, m);
+                    }
+                    cache.get(&chapter).and_then(|m| m.get(frag)).copied()
+                }
+                _ => None,
+            };
+            out.push(TocNode {
+                title: r.title.clone(),
+                chapter,
+                anchor,
+                children: self.build_toc_nodes(&r.children, cache),
+            });
+        }
+        out
+    }
+
+    /// 章内锚点表：清洗该章后 `id → 文本字节偏移`。
+    fn chapter_anchors(&self, chapter: ChapterId) -> RrkResult<BTreeMap<String, u32>> {
+        let entry = self.entry_for_chapter(chapter)?;
+        let html = self.zip.read_string(entry)?;
+        Ok(clean_xhtml(&html).anchors)
+    }
+
+    /// 回退 2：spine 首个可渲染文档里的首个 `<img src>` → 包内绝对路径。
+    fn first_spine_image(&self) -> Option<ResourceKey> {
+        let first_id = self.spine.first()?;
+        let item = self.manifest.get(first_id)?;
+        let doc_path = resolve_href(&self.opf_dir, &item.href);
+        let entry = self.zip.entry(&doc_path)?;
+        let html = self.zip.read_string(entry).ok()?;
+        let base = dir_of(&doc_path);
+        for t in tokenize(&html) {
+            if let Token::Open { name, attrs, .. } = &t {
+                if local_name(name) == "img" {
+                    if let Some(src) = attr(attrs, "src") {
+                        let src = src.trim();
+                        if !src.is_empty() {
+                            return Some(ResourceKey(resolve_href(&base, src)));
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn entry_for_chapter(&self, id: ChapterId) -> RrkResult<&ZipEntry> {
@@ -230,6 +293,7 @@ struct OpfData {
     title: Option<String>,
     authors: Vec<String>,
     language: Option<String>,
+    description: Option<String>,
     manifest: HashMap<String, ManifestItem>,
     spine: Vec<String>,
     cover_id: Option<String>,
@@ -253,6 +317,7 @@ fn parse_opf(opf_xml: &str) -> OpfData {
         title: None,
         authors: Vec::new(),
         language: None,
+        description: None,
         manifest: HashMap::new(),
         spine: Vec::new(),
         cover_id: None,
@@ -264,7 +329,7 @@ fn parse_opf(opf_xml: &str) -> OpfData {
         match t {
             Token::Open { name, attrs, self_closing } => {
                 match local_name(&name) {
-                    "title" | "creator" | "language" => {
+                    "title" | "creator" | "language" | "description" => {
                         ctx = Some(local_name(&name).to_string());
                     }
                     "meta" => {
@@ -324,10 +389,20 @@ fn parse_opf(opf_xml: &str) -> OpfData {
                         data.language = Some(t.to_string());
                     }
                 }
+                Some("description") if data.description.is_none() => {
+                    // 折叠空白（OPF 里常见多行/缩进），截断上限 4000 字符
+                    let mut t = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                    if t.chars().count() > 4000 {
+                        t = t.chars().take(4000).collect();
+                    }
+                    if !t.is_empty() {
+                        data.description = Some(t);
+                    }
+                }
                 _ => {}
             },
             Token::Close(name) => {
-                if matches!(local_name(&name), "title" | "creator" | "language") {
+                if matches!(local_name(&name), "title" | "creator" | "language" | "description") {
                     ctx = None;
                 }
             }
@@ -353,7 +428,46 @@ fn parse_opf(opf_xml: &str) -> OpfData {
 }
 
 /// 目录原始项（title, **zip 根相对路径**）；nav 优先，NCX 回退。
-fn build_toc_raw(zip: &Arc<ZipArchive>, opf: &OpfData, opf_dir: &str) -> Vec<(String, String)> {
+/// 目录原始树（解析期；href 已归一化为包内绝对路径、保留 fragment）。
+#[derive(Debug, Clone)]
+struct TocRaw {
+    title: String,
+    href: String,
+    children: Vec<TocRaw>,
+}
+
+/// 递归归一化目录树 href（路径按 base 解析，fragment 保留）。
+fn resolve_toc_tree(items: Vec<TocRaw>, base: &str) -> Vec<TocRaw> {
+    items
+        .into_iter()
+        .map(|mut r| {
+            r.href = resolve_link_href(base, &r.href);
+            r.children = resolve_toc_tree(r.children, base);
+            r
+        })
+        .collect()
+}
+
+/// 用目录标题回填章标题（仅填空缺，不覆盖已解析出的标题）。
+fn backfill_titles(
+    raws: &[TocRaw],
+    href_to_chapter: &HashMap<String, ChapterId>,
+    entries: &mut [ChapterEntry],
+) {
+    for r in raws {
+        let path = normalize_path(r.href.split('#').next().unwrap_or(""));
+        if let Some(&ch) = href_to_chapter.get(&path) {
+            if let Some(e) = entries.iter_mut().find(|e| e.id == ch) {
+                if e.title.is_none() {
+                    e.title = Some(r.title.clone());
+                }
+            }
+        }
+        backfill_titles(&r.children, href_to_chapter, entries);
+    }
+}
+
+fn build_toc_raw(zip: &Arc<ZipArchive>, opf: &OpfData, opf_dir: &str) -> Vec<TocRaw> {
     // EPUB3 nav：manifest 中 properties 含 nav
     if let Some(item) = opf.manifest.values().find(|i| i.properties.contains("nav")) {
         let href = resolve_href(opf_dir, &item.href);
@@ -362,10 +476,7 @@ fn build_toc_raw(zip: &Arc<ZipArchive>, opf: &OpfData, opf_dir: &str) -> Vec<(St
                 let items = parse_nav_toc(&xml);
                 if !items.is_empty() {
                     let base = dir_of(&href);
-                    return items
-                        .into_iter()
-                        .map(|(t, h)| (t, resolve_href(&base, &h)))
-                        .collect();
+                    return resolve_toc_tree(items, &base);
                 }
             }
         }
@@ -378,10 +489,7 @@ fn build_toc_raw(zip: &Arc<ZipArchive>, opf: &OpfData, opf_dir: &str) -> Vec<(St
                 let items = parse_ncx_toc(&xml);
                 if !items.is_empty() {
                     let base = dir_of(&href);
-                    return items
-                        .into_iter()
-                        .map(|(t, h)| (t, resolve_href(&base, &h)))
-                        .collect();
+                    return resolve_toc_tree(items, &base);
                 }
             }
         }
@@ -392,96 +500,132 @@ fn build_toc_raw(zip: &Arc<ZipArchive>, opf: &OpfData, opf_dir: &str) -> Vec<(St
             let items = parse_ncx_toc(&xml);
             if !items.is_empty() {
                 let base = dir_of(&entry.name);
-                return items
-                    .into_iter()
-                    .map(|(t, h)| (t, resolve_href(&base, &h)))
-                    .collect();
+                return resolve_toc_tree(items, &base);
             }
         }
     }
     Vec::new()
 }
 
-/// nav.xhtml：收集 `<a href="...">标题</a>`（文档序即阅读序）。
-fn parse_nav_toc(xml: &str) -> Vec<(String, String)> {
-    let mut items = Vec::new();
+/// nav.xhtml：按 `<ol>/<li>` 嵌套构建目录树（文档序即阅读序）。
+fn parse_nav_toc(xml: &str) -> Vec<TocRaw> {
+    let mut root: Vec<TocRaw> = Vec::new();
+    let mut levels: Vec<Vec<TocRaw>> = Vec::new(); // 嵌套 ol 层级
     let mut in_nav = 0u32;
-    let mut current: Option<(String, String)> = None; // (href, accumulating title)
+    let mut pending: Option<String> = None; // 当前 <a> 的 href
+    let mut title = String::new();
     for t in tokenize(xml) {
         match t {
-            Token::Open { name, attrs, self_closing } => match local_name(&name) {
+            Token::Open { name, attrs, .. } => match local_name(&name) {
                 "nav" => in_nav += 1,
+                "ol" if in_nav > 0 => levels.push(Vec::new()),
                 "a" if in_nav > 0 => {
                     if let Some(href) = attr(&attrs, "href") {
-                        current = Some((href.to_string(), String::new()));
-                    }
-                    if self_closing {
-                        if let Some((h, title)) = current.take() {
-                            items.push((title, h));
-                        }
+                        pending = Some(href.to_string());
+                        title.clear();
                     }
                 }
                 _ => {}
             },
             Token::Text(text) => {
-                if let Some((_, title)) = &mut current {
+                if pending.is_some() {
                     title.push_str(&text);
                 }
             }
             Token::Close(name) => match local_name(&name) {
                 "nav" => in_nav = in_nav.saturating_sub(1),
                 "a" => {
-                    if let Some((h, title)) = current.take() {
+                    if let Some(href) = pending.take() {
                         let title = title.trim().to_string();
                         if !title.is_empty() {
-                            items.push((title, h));
+                            let item = TocRaw { title, href, children: Vec::new() };
+                            match levels.last_mut() {
+                                Some(level) => level.push(item),
+                                None => root.push(item),
+                            }
+                        }
+                    }
+                }
+                "ol" => {
+                    if let Some(mut kids) = levels.pop() {
+                        match levels.last_mut().and_then(|p| p.last_mut()) {
+                            Some(parent) => parent.children.append(&mut kids),
+                            None => root.append(&mut kids),
                         }
                     }
                 }
                 _ => {}
             },
+            _ => {}
         }
     }
-    items
+    root
 }
 
-/// NCX：`<navPoint><navLabel><text>..</text></navLabel><content src=".."/>`。
-fn parse_ncx_toc(xml: &str) -> Vec<(String, String)> {
-    let mut items = Vec::new();
-    let mut in_text = false;
-    let mut title = String::new();
+/// NCX：`<navPoint>` 递归构建目录树。
+fn parse_ncx_toc(xml: &str) -> Vec<TocRaw> {
+    let mut root: Vec<TocRaw> = Vec::new();
+    let mut stack: Vec<TocRaw> = Vec::new();
+    let mut in_text = 0u32;
+    let mut text_buf = String::new();
     for t in tokenize(xml) {
         match t {
-            Token::Open { name, attrs, self_closing } => match local_name(&name) {
+            Token::Open { name, attrs, .. } => match local_name(&name) {
+                "navpoint" => stack.push(TocRaw {
+                    title: String::new(),
+                    href: String::new(),
+                    children: Vec::new(),
+                }),
                 "text" => {
-                    in_text = true;
-                    title.clear(); // 嵌套 navPoint 各有各的标题，不串接
+                    in_text += 1;
+                    text_buf.clear();
                 }
                 "content" => {
-                    if let Some(src) = attr(&attrs, "src") {
-                        let title_taken = std::mem::take(&mut title);
-                        items.push((title_taken, src.to_string()));
-                    }
-                    if self_closing {
-                        in_text = false;
+                    if let (Some(src), Some(top)) = (attr(&attrs, "src"), stack.last_mut()) {
+                        top.href = src.to_string();
                     }
                 }
                 _ => {}
             },
             Token::Text(text) => {
-                if in_text {
-                    title.push_str(&text);
+                if in_text > 0 {
+                    text_buf.push_str(&text);
                 }
             }
-            Token::Close(name) => {
-                if local_name(&name) == "text" {
-                    in_text = false;
+            Token::Close(name) => match local_name(&name) {
+                "text" => {
+                    in_text = in_text.saturating_sub(1);
+                    if let Some(top) = stack.last_mut() {
+                        if top.title.is_empty() {
+                            top.title = text_buf.trim().to_string();
+                        }
+                    }
                 }
-            }
+                "navpoint" => {
+                    if let Some(np) = stack.pop() {
+                        let attach = if !np.title.is_empty() && !np.href.is_empty() {
+                            Some(np)
+                        } else {
+                            // 无标题/无 src 的容器：子项上提
+                            if let Some(parent) = stack.last_mut() {
+                                parent.children.extend(np.children);
+                            }
+                            None
+                        };
+                        if let Some(np) = attach {
+                            match stack.last_mut() {
+                                Some(parent) => parent.children.push(np),
+                                None => root.push(np),
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
         }
     }
-    items.retain(|(t, _)| !t.trim().is_empty());
-    items
+    root
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +665,9 @@ impl BookSource for EpubBook {
     }
 
     fn toc(&self) -> RrkResult<Vec<TocNode>> {
-        Ok(self.toc.clone())
+        // 锚点惰性解析：只在 toc() 时按需清洗目标文档取 `id → 偏移`，打开书不做全量预扫。
+        let mut cache: HashMap<ChapterId, BTreeMap<String, u32>> = HashMap::new();
+        Ok(self.build_toc_nodes(&self.toc_raw, &mut cache))
     }
 
     fn chapters(&self) -> RrkResult<Vec<ChapterEntry>> {
@@ -536,7 +682,17 @@ impl BookSource for EpubBook {
         // （相对**文档**目录），在出口统一归一化，宿主可直接拿去 `load_resource`。
         let base = dir_of(&entry.name);
         resolve_image_keys(&mut cleaned.blocks, &base);
-        Ok(ChapterContent { id, text: Arc::from(cleaned.text), blocks: cleaned.blocks })
+        // 内链出口契约：路径部分按文档目录归一化为包内绝对路径，`#frag` 原样保留。
+        for l in &mut cleaned.links {
+            l.href = resolve_link_href(&base, &l.href);
+        }
+        let link_ranges = std::mem::take(&mut cleaned.links);
+        Ok(ChapterContent {
+            id,
+            text: Arc::from(cleaned.text),
+            blocks: cleaned.blocks,
+            link_ranges,
+        })
     }
 
     fn load_resource(&self, key: &ResourceKey) -> RrkResult<Resource> {
@@ -566,11 +722,28 @@ impl BookSource for EpubBook {
     }
 
     fn cover(&self) -> RrkResult<Option<Resource>> {
-        let Some(cover_key) = &self.meta.cover else {
-            // 三级回退之「spine 首图」略：P0 只走显式封面
-            return Ok(None);
-        };
-        Ok(Some(self.load_resource(cover_key)?))
+        // 1) 显式封面（EPUB3 properties=cover-image / EPUB2 meta name=cover）
+        if let Some(cover_key) = &self.meta.cover {
+            return Ok(Some(self.load_resource(cover_key)?));
+        }
+        // 2) spine 首个文档里的首个图片资源
+        if let Some(key) = self.first_spine_image() {
+            if let Ok(r) = self.load_resource(&key) {
+                return Ok(Some(r));
+            }
+        }
+        // 3) manifest 里首个 image/* 资源
+        if let Some(item) = self
+            .manifest
+            .values()
+            .find(|i| i.media_type.to_ascii_lowercase().starts_with("image/"))
+        {
+            let key = ResourceKey(resolve_href(&self.opf_dir, &item.href));
+            if let Ok(r) = self.load_resource(&key) {
+                return Ok(Some(r));
+            }
+        }
+        Ok(None)
     }
 
     fn estimate_weights(&self) -> RrkResult<Vec<(ChapterId, u32)>> {
@@ -724,5 +897,156 @@ mod tests {
             .load_resource(&ResourceKey("images/cover.jpg".into()))
             .unwrap();
         assert_eq!(res.data.as_ref(), b"\xff\xd8\xff-fake");
+    }
+
+    #[test]
+    fn opf_description_parsed_and_whitespace_collapsed() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <metadata>
+    <dc:title>书名</dc:title>
+    <dc:description>
+        第一段  简介
+        第二段  简介
+    </dc:description>
+  </metadata>
+</package>"#;
+        let d = parse_opf(opf);
+        assert_eq!(d.description.as_deref(), Some("第一段 简介 第二段 简介"));
+    }
+
+    #[test]
+    fn opf_without_description_is_none() {
+        let opf = r#"<package><metadata><dc:title>无简介</dc:title></metadata></package>"#;
+        assert!(parse_opf(opf).description.is_none());
+    }
+
+    /// #1：内链 href 归一化——路径按文档目录解析为包内绝对路径，fragment 原样保留。
+    #[test]
+    fn link_href_normalized_fragment_preserved() {
+        assert_eq!(resolve_link_href("OEBPS/text", "ch2.xhtml#s1"), "OEBPS/text/ch2.xhtml#s1");
+        assert_eq!(resolve_link_href("OEBPS/text", "../images/a.png"), "OEBPS/images/a.png");
+        assert_eq!(resolve_link_href("OEBPS/text", "#note1"), "#note1");
+    }
+
+    // ---- #5 封面三级回退 ----
+
+    fn book_with(opf: &str, ch1: &str, extra: &[(&str, &[u8])]) -> EpubBook {
+        let mut files: Vec<(&str, &[u8])> = vec![
+            ("META-INF/container.xml", CONTAINER.as_bytes()),
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/text/ch1.xhtml", ch1.as_bytes()),
+        ];
+        files.extend_from_slice(extra);
+        let zip = build_zip(&files);
+        let src = ContentSource::from_bytes(
+            Some("t.epub".to_string()),
+            Arc::<[u8]>::from(zip.into_boxed_slice()),
+        );
+        EpubBook::parse(&src).unwrap()
+    }
+
+    const OPF_NO_COVER_META: &str = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>无显式封面</dc:title></metadata>
+  <manifest>
+    <item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+
+    const OPF_MANIFEST_IMAGE: &str = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>manifest 首图</dc:title></metadata>
+  <manifest>
+    <item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="pic" href="images/pic.png" media-type="image/png"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+
+    const CH1_NO_IMG: &str = r#"<html><body><p>纯文字</p></body></html>"#;
+
+    #[test]
+    fn cover_falls_back_to_first_spine_image() {
+        // spine 首文档含首图（manifest 未登记该图）→ 回退 2 命中
+        let book = book_with(
+            OPF_NO_COVER_META,
+            CH1,
+            &[("OEBPS/images/pic.png", b"\x89PNG-fake")],
+        );
+        let cover = book.cover().unwrap().expect("应回退到 spine 首图");
+        assert_eq!(cover.key.0, "OEBPS/images/pic.png");
+    }
+
+    #[test]
+    fn cover_falls_back_to_manifest_image() {
+        // spine 首文档无图 → 回退 3：manifest 首个 image/*
+        let book = book_with(
+            OPF_MANIFEST_IMAGE,
+            CH1_NO_IMG,
+            &[("OEBPS/images/pic.png", b"\x89PNG-fake")],
+        );
+        let cover = book.cover().unwrap().expect("应回退到 manifest 首图");
+        assert_eq!(cover.key.0, "OEBPS/images/pic.png");
+    }
+
+    #[test]
+    fn cover_none_when_no_image_anywhere() {
+        let book = book_with(OPF_NO_COVER_META, CH1_NO_IMG, &[]);
+        assert!(book.cover().unwrap().is_none());
+    }
+
+    // ---- #3 目录层级 + 章内锚点 ----
+
+    const OPF_NAV: &str = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>目录书</dc:title></metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+
+    const NAV_NESTED: &str = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<nav epub:type="toc"><ol>
+  <li><a href="text/ch1.xhtml#sec1">第一节</a>
+    <ol><li><a href="text/ch1.xhtml#sec2">小节</a></li></ol>
+  </li>
+</ol></nav></body></html>"#;
+
+    const CH1_WITH_IDS: &str = r#"<html><body>
+<p id="sec1">第一节内容</p><p id="sec2">小节内容</p>
+</body></html>"#;
+
+    #[test]
+    fn toc_nesting_and_anchor_resolved() {
+        let book = book_with(
+            OPF_NAV,
+            CH1_WITH_IDS,
+            &[("OEBPS/nav.xhtml", NAV_NESTED.as_bytes())],
+        );
+        let toc = book.toc().unwrap();
+        assert_eq!(toc.len(), 1);
+        assert_eq!(toc[0].title, "第一节");
+        assert_eq!(toc[0].children.len(), 1, "nav 嵌套应保留层级");
+        assert_eq!(toc[0].children[0].title, "小节");
+        // 锚点 = 目标元素在清洗后章文本中的字节偏移
+        assert_eq!(toc[0].anchor, Some(0));
+        assert_eq!(toc[0].children[0].anchor, Some("第一节内容".len() as u32));
+    }
+
+    #[test]
+    fn toc_without_fragment_has_no_anchor() {
+        let nav = r#"<html><body><nav><ol><li><a href="text/ch1.xhtml">整章</a></li></ol></nav></body></html>"#;
+        let book = book_with(
+            OPF_NAV,
+            CH1_WITH_IDS,
+            &[("OEBPS/nav.xhtml", nav.as_bytes())],
+        );
+        let toc = book.toc().unwrap();
+        assert_eq!(toc.len(), 1);
+        assert!(toc[0].anchor.is_none());
     }
 }

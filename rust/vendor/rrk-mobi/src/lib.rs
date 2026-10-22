@@ -366,6 +366,12 @@ impl MobiBook {
             title,
             authors,
             language: container.exth_text(524),
+            // EXTH 103（description）/ 104（ISBN 附近的描述位）——清洗空白后取首个非空
+            description: container
+                .exth_text(103)
+                .or_else(|| container.exth_text(104))
+                .map(|s| clean_multiline(&s))
+                .filter(|s| !s.is_empty()),
             format,
             content_hash: fnv1a64(&raw_arc[..raw_arc.len().min(1024 * 1024)]),
             cover: container.cover_record.map(|r| ResourceKey(format!("rec:{}", r))),
@@ -378,11 +384,43 @@ impl MobiBook {
     fn resource_record(&self, index: u32) -> RrkResult<&[u8]> {
         self.container.record(index as usize)
     }
+
+    /// 回退：EXTH 201 缺失时，从资源记录里找首个图片签名匹配项。
+    fn first_image_record(&self) -> Option<u32> {
+        let start = self.container.resource_start as usize;
+        let total = self.container.record_offsets.len();
+        for i in start..total {
+            if let Ok(d) = self.container.record(i) {
+                if looks_like_image(d) {
+                    return Some(i as u32);
+                }
+            }
+        }
+        None
+    }
+}
+
+/// 按魔数判断是否图片（MOBI 资源记录无扩展名/媒体类型）。
+fn looks_like_image(d: &[u8]) -> bool {
+    d.starts_with(&[0xFF, 0xD8, 0xFF])
+        || d.starts_with(b"\x89PNG\r\n\x1a\n")
+        || d.starts_with(b"GIF8")
+        || d.starts_with(b"BM")
+        || (d.len() > 12 && &d[0..4] == b"RIFF" && &d[8..12] == b"WEBP")
 }
 
 // ---------------------------------------------------------------------------
 // FormatAdapter / BookSource
 // ---------------------------------------------------------------------------
+
+/// 简介清洗：折叠连续空白（含 EXTH 里的 `\r\n`）为单空格，并截断到 4000 字符。
+fn clean_multiline(s: &str) -> String {
+    let mut out = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if out.chars().count() > 4000 {
+        out = out.chars().take(4000).collect();
+    }
+    out
+}
 
 /// MOBI/AZW3 适配器（同一实现，按扩展名区分元数据格式标识）。
 pub struct MobiAdapter;
@@ -448,6 +486,7 @@ impl BookSource for MobiBook {
             id,
             text: Arc::from(cleaned.text),
             blocks: cleaned.blocks,
+            link_ranges: cleaned.links,
         })
     }
 
@@ -466,10 +505,18 @@ impl BookSource for MobiBook {
     }
 
     fn cover(&self) -> RrkResult<Option<Resource>> {
-        let Some(cover_key) = &self.meta.cover else {
-            return Ok(None);
-        };
-        Ok(Some(self.load_resource(cover_key)?))
+        // 1) EXTH 201 声明的封面
+        if let Some(cover_key) = &self.meta.cover {
+            return Ok(Some(self.load_resource(cover_key)?));
+        }
+        // 2) 回退：资源记录里首个图片签名匹配项（部分 MOBI 不写 EXTH 201）
+        if let Some(idx) = self.first_image_record() {
+            let key = ResourceKey(format!("rec:{idx}"));
+            if let Ok(r) = self.load_resource(&key) {
+                return Ok(Some(r));
+            }
+        }
+        Ok(None)
     }
 
     fn estimate_weights(&self) -> RrkResult<Vec<(ChapterId, u32)>> {
