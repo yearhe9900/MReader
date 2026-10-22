@@ -4,6 +4,33 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 
+# 移植自 `rust_reader_kernel` 的解析内核以 vendored crates 形式挂在
+# `vendor/rrk-*`（见 `rust/vendor/README.md`）；本清单同时是 workspace 根。
+[workspace]
+resolver = "2"
+members = ["vendor/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+# 与内核上游一致：MIT OR Apache-2.0（vendored 代码的许可）。
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+rrk-model = { path = "vendor/rrk-model" }
+rrk-format = { path = "vendor/rrk-format" }
+rrk-markup = { path = "vendor/rrk-markup" }
+rrk-zip = { path = "vendor/rrk-zip" }
+rrk-txt = { path = "vendor/rrk-txt" }
+rrk-epub = { path = "vendor/rrk-epub" }
+rrk-mobi = { path = "vendor/rrk-mobi" }
+rrk-kernel = { path = "vendor/rrk-kernel" }
+# 内核依赖白名单（上游 `rust_reader_kernel` Cargo.toml §3.2 同源）：
+# 纯 Rust、可审计、可 fork、许可宽松。
+encoding_rs = "0.8"      # 编码转换（Firefox 同源，纯 Rust）
+chardetng = "0.1"        # 编码检测（纯 Rust）
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] } # inflate（miniz_oxide 纯 Rust）
+
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
@@ -14,6 +41,9 @@ thiserror = "2"
 # `M35-T03` ③：KF8 最小验证对象（PRD `Q25`；测试 rust/tests/kf8_gate.rs）。
 # 结论未出前不进任何业务链路——只被该 gate 测试引用。
 mobi = "0.8"
+# 移植的 Rust 阅读内核（图书解析核心）：会话编排（句柄表）+ 统一数据模型。
+rrk-kernel.workspace = true
+rrk-model.workspace = true
 
 # `RUST-04` / 架构 §D.2：panic 必须显式 unwind——`catch_unwind` 在 abort 下失效，
 # panic 会直接终止进程。两处显式写死，让「改成 abort」变成一次显眼的 diff
