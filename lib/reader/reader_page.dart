@@ -178,7 +178,7 @@ const double _kHeadingGapBottom = 12;
 ///
 /// 2026-10-09（`TYP-09`）：底部层改挂 Scaffold 的 `bottomNavigationBar` 槽 +
 /// `extendBody`，这段让位因此**不再**依赖「全屏时 `Scaffold` 恰好不
-/// `removeBottomPadding`」那种巧合——一律取外层系统 inset（`systemMq`），
+/// `removeBottomPadding`」那种巧合——一律取外层系统 inset（`systemPadding`），
 /// chrome 显隐不影响它。
 const double _kProgressIndicatorReserve = 28;
 
@@ -4202,7 +4202,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // （`scaffold.dart:960-985`）再按 extendBody* 改写），唤出 chrome 时
     // 顶部 44→0、底部 34→0（探针实测）。正文几何若跟着它走，就等于让 chrome
     // 参与排版 —— 正是本次要修掉的缺陷。
-    final MediaQueryData systemMq = MediaQuery.of(context);
+    // ⚠️ **按需订阅**（`paddingOf` / `textScalerOf`）而非全量 `MediaQuery.of`
+    // （2026-10-23 真机「搜索页进书仍有丢帧感」定案）：键盘收起动画会让
+    // `viewInsets` 逐帧变化，全量订阅使本 build 每帧重跑、整棵正文树逐帧
+    // 重建——首帧重活被放大数倍。这里只需要系统 inset 与文字缩放，
+    // 二者都不随键盘变。
+    final EdgeInsets systemPadding = MediaQuery.paddingOf(context);
+    final TextScaler systemTextScaler = MediaQuery.textScalerOf(context);
 
     return Scaffold(
       backgroundColor: _pageColor(theme),
@@ -4333,7 +4339,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               // 只有落在**屏幕底边**（chrome 收起）时才让开系统手势导航条；
               // 控制条在它下面时，那一条由控制条自己的 `SafeArea(bottom: true)`
               // 承担——重复计入会在两者之间留一条 34dp 空带。
-              bottomInset: _fullscreen ? systemMq.padding.bottom : 0,
+              bottomInset: _fullscreen ? systemPadding.bottom : 0,
             ),
           ),
           if (ready && !_fullscreen)
@@ -4367,7 +4373,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               child: const Icon(Icons.arrow_back),
             )
           : null,
-      body: _buildBody(theme, systemMq),
+      body: _buildBody(theme, systemPadding, systemTextScaler),
     );
   }
 
@@ -5174,9 +5180,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 正文容器。
   ///
-  /// [systemMq] 必须是 **Scaffold 外层**的 MediaQuery（由 [build] 传入）：正文预算
+  /// [systemPadding] / [systemTextScaler] 必须取自 **Scaffold 外层**的 MediaQuery
+/// （由 [build] 按需订阅后传入，**不订阅 viewInsets**——键盘收起期逐帧变）：正文预算
   /// 只吃系统 inset，不吃 chrome（见下方 `topInset` / `bottomInset` 注释）。
-  Widget _buildBody(ThemeData theme, MediaQueryData systemMq) {
+  Widget _buildBody(
+    ThemeData theme, EdgeInsets systemPadding, TextScaler systemTextScaler) {
     final Object? error = _error;
     if (error != null) {
       // 打开 / 解析失败：给出可读提示（格式错误的 `message` 已中文化）。
@@ -5247,20 +5255,20 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         // `MediaQuery.of(context)` 拿到的是 `Scaffold` 给 **body** 加工过的那份：
         // 唤出 chrome 时 `appBar != null` ⇒ `removeTop`、`bottomNavigationBar != null`
         // ⇒ `removeBottom`（`scaffold.dart:3030-3033`），于是顶部 44→0、底部 34→0
-        // （探针实测）。**几何一律取外层的 [systemMq]**——body 那份只该影响其子孙
+        // （探针实测）。**几何一律取外层的 [systemPadding]**——body 那份只该影响其子孙
         // 自己的 `SafeArea`，不该影响排版。
         //
         // 这是 `TYP-09` 契约（chrome 不改正文排版区高度）的另一半：`Scaffold` 侧已用
         // `extendBody*` 把 body 钉成满屏，此处再把两条 inset 钉成系统值 ⇒
         // `usableHeight` 与 chrome 状态**完全无关**（探针实测 746 → 恒定 746，
         // 改前唤出 chrome 会掉到 587）。
-        final double topInset = systemMq.padding.top;
+        final double topInset = systemPadding.top;
         // 底部系统栏让位（手势导航条，真机约 34dp）。
         //
         // ⚠️ 只让开「文字」不让开「底色」：让位由 [ReaderProgressIndicator] 内部
         // 吃掉（它的底色须铺到屏幕下缘）。同一个量已由 [build] 传给底部层，
         // 这里负责把它算进正文预算——两处**必须同源**，否则正文会被多盖住一条。
-        final double bottomInset = systemMq.padding.bottom;
+        final double bottomInset = systemPadding.bottom;
         final double reserve = _kProgressIndicatorReserve + bottomInset;
         final double usableHeight = math.max(
           0.0,
@@ -5274,7 +5282,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               : constraints.maxHeight,
           textStyle: bodyStyle,
           paragraphSpacing: 16,
-          textScaleFactor: systemMq.textScaler.scale(1.0),
+          textScaleFactor: systemTextScaler.scale(1.0),
         ));
         _ensureController();
         // 划词操作条（选区非空时钉在选区上方——构建期算好，按层序插入）。

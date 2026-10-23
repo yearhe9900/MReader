@@ -61,6 +61,26 @@ void main() {
           ),
         );
 
+    test('源码钉：阅读页热路径不得订阅全量 MediaQuery（键盘期逐帧重建的病根）', () {
+      // `MediaQuery.of` 对 viewInsets 也建立依赖：键盘收起期逐帧触发重建——
+      // 阅读页 build（整棵正文树）与 PageRenderer（每页）都必须改用按需订阅
+      // / 非订阅式读取。注释行豁免（文档里允许提到该 API 名）。
+      for (final String path in <String>[
+        'lib/reader/reader_page.dart',
+        'lib/reader/pagination/page_renderer.dart',
+      ]) {
+        final Iterable<String> codeLines = File(path)
+            .readAsStringSync()
+            .split('\n')
+            .where((String l) => !l.trimLeft().startsWith('//'));
+        expect(
+          codeLines.any((String l) => l.contains('MediaQuery.of(')),
+          isFalse,
+          reason: '$path 热路径出现全量 MediaQuery 订阅：键盘收起期会逐帧重建',
+        );
+      }
+    });
+
     testWidgets('结构钉：阅读页 Scaffold 键盘免疫', (WidgetTester tester) async {
       await tester.pumpWidget(buildApp());
       await settle(tester);

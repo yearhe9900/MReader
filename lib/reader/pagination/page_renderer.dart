@@ -169,7 +169,13 @@ class PageContent extends StatelessWidget {
           maxHeight: double.infinity,
           alignment: Alignment.topLeft,
           child: MediaQuery(
-            data: MediaQuery.of(context).copyWith(
+            // ⚠️ **非订阅式**读取（2026-10-23「搜索页进书丢帧感」定案）：
+            // 这里只是覆写 textScaler、其余继承环境；若用 `MediaQuery.of` 全量
+            // 订阅，键盘收起期 `viewInsets` 逐帧变会让**每一页**逐帧重建。
+            // `getInheritedWidgetOfExactType` 读值不建立依赖。
+            data: (context.getInheritedWidgetOfExactType<MediaQuery>()?.data ??
+                    const MediaQueryData())
+                .copyWith(
               textScaler: TextScaler.linear(config.textScaleFactor),
             ),
             child: DefaultTextStyle(
