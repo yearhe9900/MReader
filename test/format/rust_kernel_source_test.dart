@@ -13,6 +13,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/format/book_registry.dart';
 import 'package:mreader/format/book_source.dart';
+import 'package:mreader/format/cbz_source.dart';
 import 'package:mreader/format/dart_epub_source.dart';
 import 'package:mreader/format/dart_txt_source.dart';
 import 'package:mreader/format/mobi_source.dart';
@@ -20,6 +21,7 @@ import 'package:mreader/format/rust_kernel_source.dart';
 import 'package:mreader/highperf/high_perf_capability.dart';
 import 'package:mreader/highperf/high_perf_registry.dart';
 import 'package:mreader/src/rust/api/kernel.dart' as rk;
+import 'package:mreader/src/rust/frb_generated.dart';
 
 import 'epub_builder.dart';
 
@@ -61,6 +63,22 @@ Uint8List _minimalMobiBytes() {
   return b.toBytes();
 }
 
+/// 伪 PNG 字节（同 `cbz_source_test`：真实 PNG 魔数 + 可辨识标签尾）。
+Uint8List _pngTagged(String tag) => Uint8List.fromList(<int>[
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+      ...utf8.encode(tag),
+    ]);
+
+/// CBZ 样本：乱序图片页 + macOS 垃圾 + 非图片条目（等价性对照与回落共用）。
+/// 页序期望 = 自然序 `pages/1.png` → `pages/2.jpg` → `pages/10.jpg`。
+Uint8List _cbzBytes() => zipEntries(<EpubEntry>[
+      EpubEntry('pages/10.jpg', _pngTagged('10')),
+      EpubEntry('__MACOSX/._1.png', _pngTagged('junk')),
+      EpubEntry('pages/2.jpg', _pngTagged('2')),
+      EpubEntry('pages/1.png', _pngTagged('1')),
+      EpubEntry('ComicInfo.xml', utf8.encode('<ComicInfo/>')),
+    ]);
+
 /// 声称「全部能力可用」的假引擎：只测分发与回落，不碰 FFI。
 class _FakeEngine implements HighPerfEngine {
   @override
@@ -79,6 +97,24 @@ Future<HighPerfRegistry> _availableRegistry() async {
   final HighPerfRegistry r = HighPerfRegistry(engine: _FakeEngine());
   await r.warmUp();
   return r;
+}
+
+/// 真内核组的 FRB 初始化（进程内只试一次）。
+///
+/// 2026-10-23 修：此前真内核组直接调 `RustKernelSource.open`，而 FRB 生成的
+/// API 要求先 `RustLib.init()`——没初始化时 `open` 抛 “has not been
+/// initialized”，整组被 `markTestSkipped` 吞掉（看起来跳过是「无原生库」，
+/// 实际是「没 init」，用例从未真正跑过）。现在先 init，失败才判「原生库不可用」。
+bool? _kernelReady;
+Future<bool> _ensureKernel() async {
+  final bool? cached = _kernelReady;
+  if (cached != null) return cached;
+  try {
+    await RustLib.init();
+    return _kernelReady = true;
+  } catch (_) {
+    return _kernelReady = false;
+  }
 }
 
 void main() {
@@ -320,8 +356,115 @@ void main() {
     });
   });
 
+  group('CBZ 页表构建（纯函数，口径对齐 CbzSource）', () {
+    rk.RkChapter page(int id, String href) => rk.RkChapter(
+        id: id,
+        title: '第 ${id + 1} 页',
+        href: href,
+        charLen: 0,
+        kind: 'image',
+        part_: 0);
+
+    test('过滤 macOS 垃圾 / 隐藏文件 / 非图片条目', () {
+      final List<CbzPageRef> pages = buildCbzPageList(<rk.RkChapter>[
+        page(0, 'pages/2.jpg'),
+        page(1, '__MACOSX/._2.jpg'),
+        page(2, '.DS_Store'),
+        page(3, '._cover.png'),
+        page(4, 'ComicInfo.xml'),
+        page(5, 'info.txt'),
+      ]);
+      expect(<String>[for (final CbzPageRef p in pages) p.href],
+          <String>['pages/2.jpg']);
+    });
+
+    test('归一化条目名（./ 前缀与反斜杠）', () {
+      final List<CbzPageRef> pages =
+          buildCbzPageList(<rk.RkChapter>[page(7, r'./a\b/1.png')]);
+      expect(pages.single.href, 'a/b/1.png');
+      expect(pages.single.kernelId, 7);
+    });
+
+    test('自然序排序：数值序且大小写不敏感（内核 natural_cmp 对齐 compareNatural）', () {
+      // 内核 natural_cmp 大小写**敏感**（'Page10' 会排到 'page1' 前）；
+      // 宿主用 compareNatural 重排后 = Dart 基线口径（大小写不敏感、数值序）。
+      final List<CbzPageRef> pages = buildCbzPageList(<rk.RkChapter>[
+        page(0, 'Page10.jpg'),
+        page(1, 'page2.jpg'),
+        page(2, 'page1.jpg'),
+      ]);
+      expect(<String>[for (final CbzPageRef p in pages) p.href],
+          <String>['page1.jpg', 'page2.jpg', 'Page10.jpg']);
+      // 内核页索引跟随排序重排（资源键映射不随位置错位）。
+      expect(<int>[for (final CbzPageRef p in pages) p.kernelId],
+          <int>[2, 1, 0]);
+    });
+
+    test('大小写撞名去重（小写键只收第一件）', () {
+      final List<CbzPageRef> pages = buildCbzPageList(<rk.RkChapter>[
+        page(0, 'Page1.png'),
+        page(1, 'page1.png'),
+        page(2, 'page2.png'),
+      ]);
+      expect(pages.length, 2);
+      expect(
+          pages
+              .where((CbzPageRef p) => p.href.toLowerCase() == 'page1.png')
+              .single
+              .kernelId,
+          0);
+    });
+
+    test('全为垃圾条目 → 空页表（上层抛 noImagePages、回落 CbzSource 报同型错）', () {
+      expect(
+        buildCbzPageList(<rk.RkChapter>[page(0, '__MACOSX/._1.png')]),
+        isEmpty,
+      );
+    });
+  });
+
+  group('CBZ 择实现与回落', () {
+    test('capabilityFor(cbz) = cbzPages；cbr / pdf 仍无候选', () {
+      const BookRegistry registry = BookRegistry();
+      expect(registry.capabilityFor(FormatKind.cbz),
+          HighPerfCapability.cbzPages);
+      expect(registry.capabilityFor(FormatKind.cbr), isNull);
+      expect(registry.capabilityFor(FormatKind.pdf), isNull);
+    });
+
+    test('无加速层 → CbzSource', () async {
+      final BookRegistry registry =
+          BookRegistry(highPerf: HighPerfRegistry.fallback());
+      final BookSource source = await openBook(
+        fileName: 'a.cbz',
+        bytes: _cbzBytes(),
+        registry: registry,
+      );
+      expect(source, isA<CbzSource>());
+      expect(source.implId, 'dart-cbz');
+      await source.dispose();
+    });
+
+    test('探测可用但 Rust 打开失败 → CbzSource（失败不冒泡）', () async {
+      final HighPerfRegistry hp = await _availableRegistry();
+      expect(hp.has(HighPerfCapability.cbzPages), isTrue);
+      final BookSource source = await openBook(
+        fileName: 'a.cbz',
+        bytes: _cbzBytes(),
+        registry: BookRegistry(highPerf: hp),
+      );
+      // 本机恰好构建了原生库时 Rust 源打开成功亦可（与 epub 组同口径）。
+      expect(source.implId, anyOf('dart-cbz', 'rust-cbz'));
+      await source.dispose();
+    });
+  });
+
   group('Rust 内核源 BookSource 契约（需原生库）', () {
     test('meta / chapters / content / 权重 / 资源 / dispose', () async {
+      if (!await _ensureKernel()) {
+        markTestSkipped('原生库不可用，跳过内核源契约（RustLib.init 失败）');
+        return;
+      }
       late RustKernelSource source;
       try {
         source = await RustKernelSource.open(
@@ -354,6 +497,65 @@ void main() {
       expect(total, greaterThan(0));
 
       await source.dispose();
+    });
+
+    test('CBZ：内核源与 CbzSource 等价（页表 / 内容 / 元数据 / 封面 / 资源）',
+        () async {
+      if (!await _ensureKernel()) {
+        markTestSkipped('原生库不可用，跳过 CBZ 内核源契约（RustLib.init 失败）');
+        return;
+      }
+      late RustKernelSource source;
+      try {
+        source = await RustKernelSource.open(
+          fileName: '张三 - 样本.cbz',
+          bytes: _cbzBytes(),
+        );
+      } catch (e) {
+        markTestSkipped('原生库不可用，跳过 CBZ 内核源契约：$e');
+        return;
+      }
+      final CbzSource dart =
+          CbzSource(fileName: '张三 - 样本.cbz', bytes: _cbzBytes());
+      expect(source.implId, 'rust-cbz');
+
+      // 章节列表逐条对齐（href = 归一化条目名、标题「第 N 页」、自然序）。
+      final List<Chapter> rustChapters = await source.chapters();
+      final List<Chapter> dartChapters = await dart.chapters();
+      expect(<String>[for (final Chapter c in rustChapters) c.href],
+          <String>['pages/1.png', 'pages/2.jpg', 'pages/10.jpg']);
+      expect(<String>[for (final Chapter c in rustChapters) c.href],
+          <String>[for (final Chapter c in dartChapters) c.href]);
+      expect(<String>[for (final Chapter c in rustChapters) c.title],
+          <String>[for (final Chapter c in dartChapters) c.title]);
+
+      // 内容 = 单元素图片页序列（元素 = 条目名）。
+      for (int i = 0; i < rustChapters.length; i++) {
+        final ChapterContent a = await source.content(i);
+        final ChapterContent b = await dart.content(i);
+        expect(a.imagePages, b.imagePages);
+        expect(a.paragraphs, isNull);
+      }
+
+      // 元数据：META-04 文件名规则链（标题/作者）+ 封面 = 自然序首页原始字节。
+      final BookMeta ma = await source.load();
+      final BookMeta mb = await dart.load();
+      expect(ma.title, mb.title);
+      expect(ma.author, mb.author);
+      expect(ma.titleOrigin, mb.titleOrigin);
+      expect(ma.authorOrigin, mb.authorOrigin);
+      expect((ma.cover as PendingCover).bytes,
+          (mb.cover as PendingCover).bytes);
+      expect((ma.cover as PendingCover).format,
+          (mb.cover as PendingCover).format);
+
+      // 资源字节逐页一致（读出的正是对应页的可辨识标签）。
+      for (final Chapter c in rustChapters) {
+        expect(await source.readResource(c.href),
+            await dart.readResource(c.href));
+      }
+      await source.dispose();
+      await dart.dispose();
     });
   });
 }

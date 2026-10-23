@@ -30,13 +30,14 @@ class HighPerfFfiEngine implements HighPerfEngine {
   @override
   String get abiVersion => _abiVersion;
 
-  /// 解析内核已落地的三项（EPUB / TXT / MOBI 全解析走内核）；
+  /// 解析内核已落地的四项（EPUB / TXT / MOBI / CBZ 全解析走内核）；
   /// 全书搜索与 BM25 索引尚未接入，不声明。
   @override
   Set<HighPerfCapability> get capabilities => const <HighPerfCapability>{
         HighPerfCapability.epubDecompress,
         HighPerfCapability.txtChapterize,
         HighPerfCapability.mobiDecompress,
+        HighPerfCapability.cbzPages,
       };
 
   @override

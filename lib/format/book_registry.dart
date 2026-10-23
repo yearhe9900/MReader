@@ -64,17 +64,20 @@ class BookRegistry {
   /// 「开这本 EPUB 时加速层到底生效了没」的入口：
   /// `highPerf.has(registry.capabilityFor(FormatKind.epub)!)`。
   ///
-  /// 语义（2026-10-22 解析内核移植后）：`epub` / `txt` / `mobi` 三档 = **整条
-  /// 解析链走 Rust 内核**（打开 / 分章 / 正文抽取 / 资源，`rust/vendor/` 的
-  /// `rrk-*`）；探测失败或单本解析失败一律回落纯 Dart 实现（`RUST-01` 口径）。
-  ///   · `cbz` / `cbr` / `pdf` → **无候选**：内核未接（CBR 内核明确不支持；
-  ///     PDF 渲染走 `pdfrx` 原生引擎、CBZ 瓶颈在图片解码），保持纯 Dart。
+  /// 语义（2026-10-22 解析内核移植后；2026-10-23 CBZ 接线）：`epub` / `txt` /
+  /// `mobi` / `cbz` 四档 = **整条解析链走 Rust 内核**（打开 / 分章 / 正文抽取 /
+  /// 资源，`rust/vendor/` 的 `rrk-*`）；探测失败或单本解析失败一律回落纯 Dart
+  /// 实现（`RUST-01` 口径）。
+  ///   · `cbz` 的内核源（[RustKernelSource]）在宿主侧补齐与 [CbzSource] 的口径
+  ///     对齐（页过滤 / 自然序 / 文件名元数据），保证切换实现**行为不变**；
+  ///   · `cbr` / `pdf` → **无候选**：CBR 内核明确不支持（识别 + 拒绝）；
+  ///     PDF 渲染走 `pdfrx` 原生引擎（产品路径），内核 PDF 视图未接线；
   ///   · `unsupported` → 无候选（打不开的东西没有加速一说）。
   HighPerfCapability? capabilityFor(FormatKind kind) => switch (kind) {
         FormatKind.epub => HighPerfCapability.epubDecompress,
         FormatKind.txt => HighPerfCapability.txtChapterize,
         FormatKind.mobi => HighPerfCapability.mobiDecompress,
-        FormatKind.cbz => null,
+        FormatKind.cbz => HighPerfCapability.cbzPages,
         FormatKind.cbr => null,
         FormatKind.pdf => null,
         FormatKind.unsupported => null,
@@ -109,9 +112,9 @@ class BookRegistry {
   /// 其余格式忽略）：搜索后台重建路径传 `false` 跳过无目录书的全书标题预取，
   /// 见 `DartEpubSource.prefetchFlatTitles`。
   ///
-  /// ## 加速层择实现（2026-10-22 解析内核移植落地）
+  /// ## 加速层择实现（2026-10-22 解析内核移植落地；2026-10-23 CBZ 接线）
   ///
-  /// `epub` / `txt` / `mobi` 三路按 `highPerf.has(capabilityFor(kind))` 在
+  /// `epub` / `txt` / `mobi` / `cbz` 四路按 `highPerf.has(capabilityFor(kind))` 在
   /// 「Rust 解析内核源（[RustKernelSource]）」与「纯 Dart 源」之间择一：
   /// 探测通过先开 Rust 源，**任何失败都回落 Dart 源**（单本坏字节不改探测结论，
   /// 只记失败计数，连续失败才惰性降级该能力）。纯 Dart 回落永远存在
@@ -154,7 +157,14 @@ class BookRegistry {
               chapterTextCache: chapterTextCache,
             );
       case FormatKind.cbz:
-        return CbzSource(fileName: fileName, bytes: bytes);
+        // 2026-10-23 接线内核 rrk-cbz：探测可用先开 Rust 源（页过滤 / 自然序 /
+        // 文件名元数据口径与 CbzSource 对齐），失败回落 [CbzSource]。
+        return await _openRust(
+              kind: FormatKind.cbz,
+              fileName: fileName,
+              bytes: bytes,
+            ) ??
+            CbzSource(fileName: fileName, bytes: bytes);
       case FormatKind.cbr:
         return CbrSource(fileName: fileName, bytes: bytes);
       case FormatKind.pdf:

@@ -33,11 +33,13 @@ const bool kRustSupportedPlatform = true;
 
 /// 加速层候选能力（`RUST-06` 的候选清单，PRD §15.6.2 六项候选的落地形态）。
 ///
-/// **为什么是 5 项而不是 6 项**：候选 2 在 v2.5 拆成 2a（EPUB 解压 / zip 层）与
+/// **为什么候选是 5 项而不是 6 项**：候选 2 在 v2.5 拆成 2a（EPUB 解压 / zip 层）与
 /// 2b（XHTML → 段落 / 正文抽取层），而 **2b 首版明确不纳入**（`package:html` 的
 /// 切段行为是特定实现的隐式行为，Rust 几乎不可能逐字节复现 → `RUST-02` 的 L2
-/// 等价性不可验收）。因此 2b **不占枚举值**：需先完成「切段规则规格化」并独立
-/// 过阈值，届时再走一次本枚举的变更流程（与 `RUST-09` 固化清单的变更纪律一致）。
+/// 等价性不可验收）。因此 2b **不占枚举值**。
+///
+/// **2026-10-23 增补 [cbzPages]**：不属于阈值表候选，而是解析内核统一后
+/// CBZ 解析实现的择一开关（`thresholdNo` = `null`），枚举总数 5 → 6。
 enum HighPerfCapability {
   /// 候选 1 · MOBI / AZW3 解压（PDB 容器 + KF6/KF8 + Huff/CDIC）。
   mobiDecompress,
@@ -53,6 +55,12 @@ enum HighPerfCapability {
 
   /// 候选 5 · RAG / BM25 索引构建（`AI-06`）。
   bm25Index,
+
+  /// CBZ 页级解析（2026-10-23 接线内核 `rrk-cbz`：zip 解压 + 自然序页表）。
+  ///
+  /// **不占阈值表编号**（[thresholdNo] = `null`）：它不是「先测后引」的加速候选，
+  /// 而是解析内核统一后 CBZ 解析实现的择一开关——纯 Dart `CbzSource` 仍为回落。
+  cbzPages,
 }
 
 /// 能力的元信息：稳定标识、中文名、**阈值表编号**。
@@ -64,6 +72,7 @@ extension HighPerfCapabilityInfo on HighPerfCapability {
         HighPerfCapability.txtChapterize => 'txt-chapterize',
         HighPerfCapability.fullTextSearch => 'full-text-search',
         HighPerfCapability.bm25Index => 'bm25-index',
+        HighPerfCapability.cbzPages => 'cbz-pages',
       };
 
   /// 中文能力名。**只进调试日志与留档文档，不进用户可见文案**
@@ -74,6 +83,7 @@ extension HighPerfCapabilityInfo on HighPerfCapability {
         HighPerfCapability.txtChapterize => 'TXT 编码探测与大文件分章',
         HighPerfCapability.fullTextSearch => '全书搜索',
         HighPerfCapability.bm25Index => 'RAG/BM25 索引构建',
+        HighPerfCapability.cbzPages => 'CBZ 页级解析',
       };
 
   /// PRD §15.6.3 阈值表中的**候选编号**（1 / 2 / 3 / 4 / 5）。
@@ -83,12 +93,15 @@ extension HighPerfCapabilityInfo on HighPerfCapability {
   ///
   /// **注意**：编号 2 在阈值表里是「2a + 2b 合计判定」，本枚举的 [epubDecompress]
   /// 即 2a；**分层的 400ms 只是归因值，不作独立触发条件**（v2.6 写死，防门槛拆松）。
-  int get thresholdNo => switch (this) {
+  ///
+  /// `null` = 不在阈值表内（如 [cbzPages]：解析实现择一，非先测后引候选）。
+  int? get thresholdNo => switch (this) {
         HighPerfCapability.mobiDecompress => 1,
         HighPerfCapability.epubDecompress => 2,
         HighPerfCapability.txtChapterize => 3,
         HighPerfCapability.fullTextSearch => 4,
         HighPerfCapability.bm25Index => 5,
+        HighPerfCapability.cbzPages => null,
       };
 }
 

@@ -85,13 +85,16 @@ void main() {
     });
 
     test('候选项数与阈值编号：1 MOBI / 2 EPUB / 3 TXT / 4 搜索 / 5 BM25', () {
-      // 「5 项」是 §A.4 与 §J.1 的写死口径（2b 不占枚举值，见 HighPerfCapability 注释）。
-      expect(HighPerfCapability.values.length, 5);
+      // 「5 项阈值候选」是 §A.4 与 §J.1 的写死口径（2b 不占枚举值，见
+      // HighPerfCapability 注释）；2026-10-23 增补 cbzPages（解析实现择一，
+      // 不占阈值编号）后枚举总数为 6。
+      expect(HighPerfCapability.values.length, 6);
       expect(HighPerfCapability.mobiDecompress.thresholdNo, 1);
       expect(HighPerfCapability.epubDecompress.thresholdNo, 2);
       expect(HighPerfCapability.txtChapterize.thresholdNo, 3);
       expect(HighPerfCapability.fullTextSearch.thresholdNo, 4);
       expect(HighPerfCapability.bm25Index.thresholdNo, 5);
+      expect(HighPerfCapability.cbzPages.thresholdNo, isNull);
     });
 
     test('labelZh 全非空且互不相同', () {
@@ -371,7 +374,7 @@ void main() {
   });
 
   group('BookRegistry 注入缝与格式↔能力映射（§A.1）', () {
-    test('capabilityFor：epub/txt/mobi 有候选；cbz/cbr/pdf/unsupported 没有', () {
+    test('capabilityFor：epub/txt/mobi/cbz 有候选；cbr/pdf/unsupported 没有', () {
       const BookRegistry registry = BookRegistry();
       expect(
         registry.capabilityFor(FormatKind.epub),
@@ -385,8 +388,12 @@ void main() {
         registry.capabilityFor(FormatKind.mobi),
         HighPerfCapability.mobiDecompress,
       );
-      // PRD §15.6.2 的六项候选里没有 CBZ / CBR / PDF——不得「顺手」挂上去（RUST-06）。
-      expect(registry.capabilityFor(FormatKind.cbz), isNull);
+      // 2026-10-23 CBZ 接线内核（负责人指示）：cbz → cbzPages；
+      // CBR 内核无 rar 能力、PDF 渲染走 pdfrx 产品路径——保持无候选。
+      expect(
+        registry.capabilityFor(FormatKind.cbz),
+        HighPerfCapability.cbzPages,
+      );
       expect(registry.capabilityFor(FormatKind.cbr), isNull);
       expect(registry.capabilityFor(FormatKind.pdf), isNull);
       expect(registry.capabilityFor(FormatKind.unsupported), isNull);
