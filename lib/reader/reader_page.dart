@@ -1,84 +1,25 @@
-// `RD-03` / `RD-04` / `NAV-01` / `PERF-02` / `PERF-03`：阅读页——**章节连续滚动**
-// （从第 1 章一路滚到最后一章），且正文**增量加载**（不一次性解析全书）。
+// `RD-03`/`RD-04`/`NAV-01`/`PERF-02`/`PERF-03`：阅读页——章节连续滚动 + 正文增量加载。
 //
-// 设计要点：
-//   · **双模式（T05-c c3 分叉）**：目标章是**文本**（EPUB/TXT）→ `_pagedMode = true`
-//     走 [PagedScroller] 页拼接（`PaginationScheduler` 增量分页 + 三章窗口，
-//     分页层细节见 `lib/reader/pagination/`）；目标章是**图片页**（CBZ/CBR/PDF）
-//     → `_pagedMode = false` 保留下面的旧 `ListView` 路径（异步图片高不进静态
-//     布局表，FMT-02 P1 不迁）。分页模式一次落位、无可见中间跳转（不盖遮罩）；
-//   · **连续滚动**：**全部章节塞进一个 `ListView.builder`**，每章一个 item（`Column`：
-//     章节标题 + 该章全部段落）。章与章之间不切页，滚到底自然进入下一章；
-//   · **正文增量加载（`PERF-02`）**：首帧**只等恢复目标章**（±1 邻章预取不阻塞；见
-//     [ChapterAutoLoader.loadFirstBatch]），其余章节由后台按「离当前章由近及远」
-//     逐批补齐；未加载的章渲染**占位块**，高度取「已加载章渲染高度的中位数」以抑制
-//     总高跳变；已加载正文由 [ChapterCache] **有界 LRU**（[kMaxLoadedChapters]=30）兜底，
-//     超出即淘汰回落占位；
-//   · **正文逐段渲染**：每段各自成 widget（`PERF-03`：**禁 `join('\n\n')` 巨型 `Text`**）；
-//   · **当前章 + 章内位置**：每章块挂 `GlobalKey`；滚动停止时**全量扫描已构建的
-//     章块**（`RC4`：原先「上次索引 ±4」的小窗口在落点偏差一大时会拿**窗口边缘章**
-//     顶替真章，于是每次「开→关」都把错误章写回存档、越偏越多——这正是「多次进出后
-//     已经偏离原章节太多」），找出**真正覆盖视口顶**的章块，算出 `chapterIndex` 与
-//     `chapterPos = (视口顶 - 章块顶) / 章块高`；命中**估算占位高**的章时
-//     **不采样** `chapterPos`（`RC3`：分母是估的，会污染跨会话的语义坐标）；
-//   · **进度以 `Chapter.href` 为稳定身份**：恢复时先按 href 匹配，匹配不到退回 index 并 clamp；
-//   · **恢复（`RD-04`「落点误差 ≤ 1 屏」）**：`localHint.scrollOffset` **只是首帧初始
-//     近似**（仅用于减首帧跳动；它是依赖「当时已加载集合」的像素值，加载集合一变就
-//     指向别处），落点一律由**语义坐标 `(chapterIndex, chapterPos)` 校正收敛**（`RC2`）：
-//     「估算 + `addPostFrameCallback` 校正（≤8 帧、偏移差 ≤1px 停）」；
-//   · **开书可见滚动优化（backlog① 2026-09-23）**：冷启动读中段时 `coversPrefix`
-//     恒 false（首帧只载「目标章 ±1」），若从 0 起跳，用户会先看到「前几页」再被
-//     拉到「当前页」。两个互补的对策：
-//     **A. 回退分支 seed**——同版面签名时用 `hint.scrollOffset` 做首帧初始近似
-//     （像素仍只作 seed，落点照旧走语义坐标校正）：目标章大概率首帧即进布局窗口，
-//     `_chapterPointOffset` 直接可测，跳过「`maxScrollExtent` 外推估计」的比例估算
-//     （ListView 懒构建下该值 = 已布局子项均值 × 剩余项数，探针实测同夹具内
-//     26157 ↔ 290816 振荡，估算落点会一路冲到书尾占位区）；
-//     **B. 首跳遮罩**——恢复校正全程（含超帧数放弃）盖住正文滚动区
-//     （[_restoreMask]），中间跳转一律不可见，[_finishRestore] 统一撤除。
-//   · **布局突变语义重锚（修 A，2026-09-23）**：占位→真实合入 / 占位高估计
-//     刷新会改 ListView 总高——像素偏移不动即指向别处（「进书从 40 多章跳到
-//     300 多章」的漂移源）。突变前 [ScrollAnchor] 记「视口顶在当前章的相对
-//     位置」，突变后 [_beginScrollTo] 按语义坐标重锚（等价于 567Reader
-//     「已发布页高不可变、增量刷新不动滚动锚点」的保障，见 [_applyLayoutChange]）；
-//     **采样置后（修 C）**：重锚收敛后才 [_detectCurrentChapter]，突变中间态
-//     不进存档（旧 `_resampleAfterLoad` 合入后立即采样，会把漂移位置当真值）；
-//   · **进度保存时机**：滚动停止 / 切章（含目录跳转）/ `dispose()`，**但都过 `RC1`
-//     写盘闸门**——恢复**未收敛**（校正超帧数中途放弃）、位置**未采样**（占位高 /
-//     探不到章）一律**不写盘**，否则误差会被当真值存进 `ReadingProgress` / `localHint`，
-//     下一轮开书再放大（误差**复利**回路）。
-//   · **`RD-03`**：AppBar 标题取 `BookRecord.title`、副标题为「第N章 · X%」，不出现 implId 诊断；
-//   · **`NAV-01`**：AppBar 目录按钮 → 底部 [TocSheet]，当前章高亮、点击跳章；
-//   · **`CNT-04c` 链接跳转与返回**：点正文链接（`link_navigator` 解析 href）→
-//     章内锚点 / 跨文件跳章（+ 章内锚点），跳前 [ScrollAnchor.capture] 压入
-//     [LinkBackStack]；栈非空显示浮动「返回」按钮，弹栈恢复原位置。
-//     段落级精确定位：目标段落懒挂 `GlobalKey`，恢复迭代里优先按段落 box
-//     对齐视口顶（未构建时回落「章内相对位置」估算）。目标不存在一律静默忽略。
-//   · **`TYP-06` 书签**：当前位置添加书签 / 列表逐条删除，按书持久化
-//     （[BookmarkStore]，增删即时落盘）；列表行点击跳回该语义位置
-//     （href 优先，回退 index）；
-//   · **`CNT-06` 书内搜索**：AppBar 搜索按钮 → [SearchSheet] 全书搜索
-//     （[SearchSession] 按源能力分流后台 isolate / 本 isolate 流式，可取消）；
-//     点命中 → 章内字符偏移换算段落下标 → [_jumpToLink] 段落级对齐 +
-//     关键词高亮（[InlineParagraph.highlightQuery]）；
-//   · **`TYP-07` 字体族**：外观面板三选一（系统默认 / 衬线 / 无衬线），
-//     **不内嵌字体文件**（`pubspec.yaml` 无 `fonts:` 段）——平台族名 +
-//     `reader_fonts.dart` 回退链（Windows 不认通用族名，回退链保中文无豆腐块）；
-//     字体族只能由外观面板改：控制条的 `ReaderSettings.copyWith` 会把
-//     未传入的 fontFamily 清掉，故 [_onSettingsChanged] 在页面边界续上现值；
-//   · **`TYP-08` 亮度与背景色**：应用内亮度遮罩（黑色叠加层，不透明度
-//     `1 - brightness`，实时 + 持久化）+ 预设背景色板（白 / 米黄 / 灰 / 纯黑，
-//     夜间一律映射暗色——验收③「夜间模式不产生白底」）；
-//   · **`TYP-09` 默认全屏与进度指示**：进阅读页**默认沉浸全屏**（隐藏 AppBar
-//     与底部控制条），**不设全屏切换按钮**——chrome 由点正文**九宫格中宫**
-//     唤出 / 收起（2026-10-10 改口径：整屏划 3×3，只有最中间宫格的落点响应，
-//     见 [_onContentTapUp] / [_toggleFullscreen]）；底部常驻读数「当前章标题 · 当前章 n/N · 全书 x.y%」
-//     **随滚动 / 翻页实时更新**（[_updateLiveProgress] 只写显示字段 `_liveIndex` /
-//     `_livePos`，滚动中间态**不进** `_currentIndex` / `_chapterPos`，
-//     `RC1` 写盘闸门与「采样置后」原则不动）。
+// 要点：
+//   · **双模式**：文本章（EPUB/TXT）→ 分页模式（[PagedScroller]，分页层见
+//     `lib/reader/pagination/`）；图片章（CBZ/CBR/PDF）→ 旧 `ListView` 路径；
+//   · **增量加载（`PERF-02`）**：首帧只等目标章 ±1（[ChapterAutoLoader.loadFirstBatch]），
+//     其余后台补齐；未加载章渲染占位块（高度取已加载章中位数），正文由
+//     [ChapterCache] 有界 LRU 兜底；**逐段渲染（`PERF-03`）**，禁 `join('\n\n')` 巨型 `Text`；
+//   · **进度真值 = 语义坐标 `(chapterHref, chapterPos)`**（href 是稳定身份）：
+//     `scrollOffset` 只作首帧 seed，落点一律语义校正收敛（`RC2`：≤8 帧、≤1px 停）；
+//     布局突变必须 [ScrollAnchor] 语义重锚（**禁单跳 correction**），收敛后才采样；
+//   · **`RC1` 写盘闸门**：未收敛 / 未采样（`RC3` 占位高、`RC4` 探不到章）**不写盘**，
+//     误差不当真值。`RC4` 判章 = 全量扫描已构建章块（小窗口会拿边缘章顶替真章）；
+//   · **`TYP-09`**：默认沉浸全屏、**不设全屏按钮**；chrome 是**覆盖层**（不改正文
+//     排版几何），点正文九宫格中宫唤出 / 收起（[_onContentTapUp]），跳转后自动收起；
+//     底部读数只写显示字段 `_liveIndex`/`_livePos`，滚动中间态不进存档字段；
+//   · 功能接线：`NAV-01` 目录、`CNT-04c` 链接跳转+返回栈（段落级对齐）、
+//     `TYP-06` 书签、`CNT-06` 书内搜索、`TYP-07` 字体族（不内嵌字体，回退链防豆腐块）、
+//     `TYP-08` 亮度遮罩 + 背景色板（夜间映射暗色）。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider / Freezed）。
-// **不引入任何新依赖**（不使用 `scrollable_positioned_list` 等）。
+// **不引入任何新依赖**。
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -157,50 +98,31 @@ const int _kMaxRestoreFrames = 8;
 /// 占位块在「尚无任何已加载章可测」时的默认高度（逻辑像素）。
 const double _kDefaultChapterHeight = 480;
 
-/// 章标题块顶部空档（**章间空行隔离**，2026-10-09 负责人拍板）。
-///
-/// 每个章标题块都带这段空档 ⇒ 分页长卷里章与章之间恒隔一个空行量级
-/// （改前两章几乎贴着——旧版的 `Divider` 是题-文分隔，不管章间距）。
+/// 章标题块顶部空档（**章间空行隔离**）：每个标题块都带 ⇒ 章与章恒隔一个空行量级。
 const double _kHeadingGapTop = 24;
 
-/// 章标题与正文的呼吸（旧留白链 6+1+12 里的「12」；横线删除后保留题-文间距）。
+/// 章标题与正文的呼吸间距。
 const double _kHeadingGapBottom = 12;
 
 /// 正文底部为常驻 [ReaderProgressIndicator] 预留的高度（dp，**不含**底部系统栏）。
 ///
-/// 实测：该条= 2dp 细条 + `EdgeInsets.symmetric(vertical: 4)` + 一行 `bodySmall`
-/// ≈ 26dp，留 2dp 余量。改前分页模式页高 = 满屏视口高，**末页最后一行被这条压住**
-/// （真机截图「字没显示全」）。此常量给正文留出这段高度。
-///
-/// 2026-10-08：默认全屏后指示器还要让开手势导航条，那部分**另算**——正文预算取
-/// `本常量 + 系统 padding.bottom`（Scaffold **外层**的 MediaQuery，见 `_buildBody`
-/// 的 `reserve`），本常量只描述指示器自身的文字高度，不随机型变。
-///
-/// 2026-10-09（`TYP-09`）：底部层改挂 Scaffold 的 `bottomNavigationBar` 槽 +
-/// `extendBody`，这段让位因此**不再**依赖「全屏时 `Scaffold` 恰好不
-/// `removeBottomPadding`」那种巧合——一律取外层系统 inset（`systemPadding`），
-/// chrome 显隐不影响它。
+/// ≈26dp 实测（细条 + padding + 一行文字）+ 2dp 余量；不给会压住末页最后一行。
+/// 正文预算 = 本常量 + 系统 `padding.bottom`（取 Scaffold **外层** MediaQuery 的
+/// `systemPadding`，见 `_buildBody` 的 `reserve`）——chrome 显隐不影响它。
 const double _kProgressIndicatorReserve = 28;
 
-/// R1②：交互挂起后台补齐的**兜底帧数**（到期自动恢复，见 `ReaderPage._pauseAutoFill`）。
+/// R1②：交互挂起后台补齐的**兜底帧数**（到期自动恢复，见 [_pauseAutoFill]）。
 ///
-/// 不做成「秒」而做成「补齐批次数」：补齐循环每批递减一次（[_autoFillLoop]），
-/// 不依赖任何定时器（定时器在 widget 测试的 `FakeAsync` 下会留下未清的挂起物，
-/// 见 `_idleGap` 头注的教训）。`kAutoFillBatchSize` 默认 5 章 ⇒ 约 20~30 批
-/// ≈ 2s 量级的让位，对「一次连续滚动」足够，对「滚动中途停手」也不过太久。
+/// 按补齐批次数计而非定时器——定时器在 widget 测试 `FakeAsync` 下会留未清挂起物
+/// （见 [_idleGap]）。约 20~30 批 ≈ 2s 量级的让位。
 const int kAutoFillPauseFrames = 20;
 
 /// 换参 reprime 的首屏突发预算（字号 / 行距 / 页边距 / 视口变更后的重分页）。
 ///
-/// 比开书 / 跳章的 `kFirstPaintBudget`（16ms）宽 3 倍。理由：换参会把**页表
-/// 整体作废**（`_acceptConfig`），而突发覆盖不到目标就只能走「估算落位」——
-/// 估算落位必然先闪一帧别处正文再收敛（真机录屏 2026-10-22「切换字体大小会
-/// 闪一下」）。32 页级长章的深位置实测：16ms 只排到 ~40%（探针每次点字号都
-/// 打 `paged.estimate`），48ms 可覆盖到 ~70% 的常见落点。
-///
-/// 代价是**一次性的 3 帧停顿**（用户主动点字号，不在滚动 / 翻页手势里），
-/// 远小于「闪一屏错正文 + 再跳回」的观感代价；覆盖不到时仍回落估算
-/// （按已测前缀密度外推，见 `_primeOpenSync` 估算分支）+ 帧链收敛。
+/// 比开书 / 跳章的 `kFirstPaintBudget`（16ms）宽 3 倍：换参会**整体作废页表**，
+/// 突发覆盖不到目标就只能估算落位 = 必然闪一帧别处正文（长章深位置 16ms 只排到
+/// ~40%，48ms 可覆盖 ~70% 常见落点）。代价是一次性 3 帧停顿（用户主动点字号，
+/// 不在手势里），远小于闪一屏的观感代价；覆盖不到仍回落估算 + 帧链收敛。
 const Duration kReprimeBurstBudget = Duration(milliseconds: 48);
 
 /// 连续滚动 + 正文增量加载的阅读页。
@@ -227,9 +149,7 @@ class ReaderPage extends StatefulWidget {
     this.initialJump,
   });
 
-  /// 书籍内容来源（`BookSource` 抽象，EPUB / TXT 通用）。
-  ///
-  /// 生命周期：**由本页持有**，在 [State.dispose] 时释放。
+  /// 书籍内容来源（`BookSource` 抽象，EPUB / TXT 通用）。由本页持有，dispose 时释放。
   final BookSource source;
 
   /// 本书在库记录（标题 / bookId）。
@@ -241,26 +161,17 @@ class ReaderPage extends StatefulWidget {
   /// 书库仓库（进度变化时回写 `BookRecord.lastReadAt` / `readProgress`）。
   final LibraryRepository repository;
 
-  /// 书签持久化（`TYP-06`）。
-  ///
-  /// `null` = 尚未接线（main.dart 接线前的降级）：书签功能照常可用，
-  /// 但只保留在本会话内存里，不落盘。
+  /// 书签持久化（`TYP-06`）。`null` = 未接线：书签只存本会话内存、不落盘。
   final BookmarkStore? bookmarkStore;
 
-  /// 阅读偏好持久化（`TYP-07~09`：排版 / 亮度 / 背景色）。
-  ///
-  /// `null` = 尚未接线：偏好本会话内有效，不落盘。
+  /// 阅读偏好持久化（`TYP-07~09`：排版 / 亮度 / 背景色）。`null` = 未接线：只在会话内有效。
   final ReadingPrefsStore? readingPrefsStore;
 
-  /// 阅读时长采集（`STAT-01`），由书架从组合根透传。
-  ///
-  /// `null` = 尚未接线：不计时、不写库（与 [bookmarkStore] 同款降级口径）。
+  /// 阅读时长采集（`STAT-01`），组合根透传。`null` = 未接线：不计时、不写库。
   final StatsService? statsService;
 
-  /// AI 配置存储（划词翻译 / 释义，`AI-02`/`AI-03`），由组合根透传。
-  ///
-  /// **三个 AI 参数任一为 null → 划词功能整体禁用**（长按不选词、不出操作条，
-  /// 与 [statsService] 同款降级口径；`AI-09` ② 全局开关另由 prefs.aiEnabled 控制）。
+  /// AI 配置存储（划词翻译 / 释义，`AI-02`/`AI-03`）。**AI 三参数任一为 null →
+  /// 划词整体禁用**（`AI-09` ② 全局开关另由 prefs.aiEnabled 控制）。
   final ProviderStore? aiStore;
 
   /// AI 客户端（流式调用，组合根进程内唯一实例）。
@@ -269,52 +180,30 @@ class ReaderPage extends StatefulWidget {
   /// 生词本存储（释义面板「存生词本」入口）。
   final VocabStore? vocabStore;
 
-  /// 摘要缓存（章节摘要 / 全书摘要 / 前情回顾，`AI-04`/`AI-05`），组合根透传。
-  ///
-  /// `null` = 未接线：摘要入口整体隐藏（与划词同款降级口径）。
+  /// 摘要缓存（章节摘要 / 全书摘要 / 前情回顾，`AI-04`/`AI-05`）。`null` = 入口隐藏。
   final SummaryCache? summaryCache;
 
-  /// 跟书问答索引存储（`AI-06`，`M3-T04`），组合根透传。
-  ///
-  /// `null` = 未接线：问答入口整体隐藏（与摘要同款降级口径）。
+  /// 跟书问答索引存储（`AI-06`）。`null` = 入口隐藏。
   final RagIndexStore? ragStore;
 
-  /// 系统 TTS 引擎注入（`TTS-01`，`M3-T06`）。
-  ///
-  /// `null` = 用 [SystemTts] 默认实例（生产接线）；测试注入假引擎。
-  /// 与 [aiStore] 同款可空降级形制。
+  /// 系统 TTS 引擎（`TTS-01`）。`null` = 用 [SystemTts] 默认实例；测试注入假引擎。
   final TtsEngine? ttsEngine;
 
-  /// 朗读设置存储（语速 / 音色 / 定时停止，`TTS-04`/`TTS-05`；`M3-T08`），
-  /// 组合根透传。
-  ///
-  /// `null` = 未接线：朗读设置入口隐藏、按默认值运行（同款降级口径）。
+  /// 朗读设置存储（语速 / 音色 / 定时停止，`TTS-04`/`TTS-05`）。`null` = 按默认值运行。
   final TtsSettingsStore? ttsSettings;
 
-  /// 在线 TTS 配置存储（URL 模板 / OpenAI 兼容，`TTS-07`；`M3-T09`），
-  /// 组合根透传。
-  ///
-  /// `null` = 未接线：引擎选择区整体隐藏、只用系统引擎（同款降级口径）。
+  /// 在线 TTS 配置（URL 模板 / OpenAI 兼容，`TTS-07`）。`null` = 只用系统引擎。
   final OnlineTtsStore? onlineTts;
 
-  /// 同步触发器（`M4-T05` `SYNC-06`）：退出阅读页时上报本书进度。
-  ///
-  /// `null` = 未接线：关页只落本地盘（同款降级口径）。
+  /// 同步触发器（`SYNC-06`）：退出阅读页时上报本书进度。`null` = 只落本地盘。
   final SyncTrigger? syncTrigger;
 
-  /// 开书链路追踪（`OpenTrace`）：由书架在「用户按下书卡」时创建并透传，
-  /// 本页负责补齐**阅读侧**的段落（`routeInit` / `ready` / `firstFrame` /
-  /// `restoreEnd`）并输出 `open.total`（按下→首帧上屏）。
-  ///
-  /// `null` = 未接线（直接进本页的测试 / 深链）：本页照常打既有 [PerfLog]
-  /// 分段点，只是不产出端到端的 `open.total`（同款降级口径）。
+  /// 开书链路追踪（[OpenTrace]）：本页补齐阅读侧段落并输出 `open.total`（按下→首帧）。
+  /// `null` = 未接线（测试 / 深链直进）：只打既有 [PerfLog] 分段点。
   final OpenTrace? openTrace;
 
-  /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度，
-  /// 段落级对齐。`null` = 按存档进度恢复（正常开书）。
-  ///
-  /// 融入既有恢复链路（ListView `_beginScrollTo(paraIndex:)` / 分页
-  /// `_pagedJumpTo(charOffset:)`），**不压返回栈**（跳回不是导航历史）。
+  /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度、段落级对齐；
+  /// **不压返回栈**。`null` = 按存档进度恢复（正常开书）。
   final ({String href, int paraIndex})? initialJump;
 
   @override
@@ -327,15 +216,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   BookMeta? _meta;
   List<Chapter>? _chapters;
 
-  /// 每章**权重估算**（`M-PAGE` T03：全书进度加权；`null` = 尚未取到 /
-  /// 该源不支持（PDF/CBZ/CBR）→ 等权退化，与迁移前公式一致）。
+  /// 每章**权重估算**（全书进度加权；`null` = 取不到 / 源不支持（PDF/CBZ/CBR）→ 等权退化）。
   ///
-  /// 来源 `BookSource.chapterWeightEstimates()`（**廉价估算**，EPUB = zip 条目
-  /// 解压后长度、TXT = 分段长度），`_open()` 内**不阻塞**首帧异步取
-  /// （取到前按等权显示，取到后 `setState` 切换；不改变开书时序）。
-  ///
-  /// ⚠️ 刻意**不用**精确口径 `chapterCharCounts()`：真机 1152 章的书会在主
-  /// isolate 上冻住秒级（实测 300 章 = 270ms 停顿）。详见 [_loadChapterWeights]。
+  /// 来源 `BookSource.chapterWeightEstimates()`（**廉价估算**），`_open()` 内不阻塞首帧。
+  /// ⚠️ 刻意**不用**精确口径 `chapterCharCounts()`：会在主 isolate 冻住秒级
+  /// （300 章实测 270ms）。详见 [_loadChapterWeights]。
   List<int>? _chapterWeights;
 
   Object? _error;
@@ -393,10 +278,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 本会话最后一次**成功测得**的版面快照（关书时兜底）。
   ///
-  /// 关书时 `Scrollable` 子节点**先于本 State** 卸载，控制器已 detach
-  /// （`hasClients == false`）→ 现场读不到 `offset`。若无兜底，最后一次保存会把
-  /// `localHint` **写成 null**、覆盖掉会话中已存的有效快照，下次开书即失去
-  /// 首帧精确落点（`RC2` 的 `initialScrollOffset` 前提被自己抹掉）。
+  /// 关书时 `Scrollable` 先于本 State 卸载、控制器已 detach ⇒ 现场读不到 `offset`；
+  /// 无兜底会把 `localHint` 写成 null 覆盖有效快照（`RC2` 的 seed 前提被自己抹掉）。
   LocalLayoutHint? _lastLocalHint;
 
   /// 占位块高度估计：已加载章渲染高度的中位数（随加载推进收敛）。
@@ -404,32 +287,18 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// **章高模型**（`RD-04` 恢复定位的坐标底座）：已实测过的**真实章**高度（像素）。
   ///
-  /// 为什么需要它：`ListView` 懒构建下 `maxScrollExtent` 是「**已构建子项均值 ×
-  /// 剩余项数**」的**外推估计**——本工程的布局是「少数真实章（数千 px）+ 大量等高
-  /// 占位块（`_estimatedChapterHeight`，初始 480）」的混合体，一旦构建窗口里混进
-  /// 真实章，该外推就会在数倍量级间摆动。真机实证（2026-09-28，绍宋 447 章 EPUB）：
-  /// 恢复期间 `maxScrollExtent` 在 214009 / 602772 / 1133858 / 706186 之间振荡，
-  /// 按比例 (`maxExtent × (index+pos)/total`) 算出的落点来回乱跳，**8 帧全是
-  /// `kind=estimate`、`converged=false`**，遮罩白等 1.2s 且最终没落到目标章。
-  ///
-  /// 模型口径（与真实布局**逐项一致**）：
-  ///   · 未构建 / 未加载的章 → 渲染的就是占位块，高度恒为 `_estimatedChapterHeight`；
-  ///   · 已加载且已构建的章 → 实测 `RenderBox.size.height`（写回本表）；
-  ///   · **只有**「已加载但从未构建过」的章是未知量——首帧只载「目标章 ±1」
-  ///     （`kFirstBatchRadius`）时未知量 ≤ 1 章，故模型误差 ≤ 一章高度。
-  ///
-  /// 维护规则见 [_captureBuiltHeights]：构建中的章被**回落成占位块**（LRU 淘汰后
-  /// 重新渲染）时删除旧记忆，避免用「过期的真实高度」当占位高。
+  /// 不用 `maxScrollExtent` 比例外推：懒构建下它是「已构建子项均值 × 剩余项数」的
+  /// 外推估计，在「少数真实章 + 大量等高占位块」的混合布局里数倍量级间振荡、
+  /// 落点乱跳。模型口径：未加载章 = `_estimatedChapterHeight`；已构建章 = 实测高；
+  /// 仅「已加载但从未构建」是未知量（首帧只载 ±1 ⇒ 误差 ≤ 一章高）。
+  /// 维护规则见 [_captureBuiltHeights]（回落占位块的章删旧记忆）。
   final Map<int, double> _chapterHeights = <int, double>{};
 
   /// 正在程序化恢复 / 跳转：期间忽略滚动停止的保存，避免把中间值写回磁盘。
   bool _restoring = false;
 
-  /// 开书首跳遮罩（backlog① 方案 B）：校正全程盖住正文滚动区，
-  /// 用户看不到「前几页 → 当前页」的中间跳转；[_finishRestore] 统一撤除。
-  ///
-  /// 仅**开书恢复**（目标非书首）时点亮；目录 / 链接 / 上下章等用户主动跳转
-  /// 有明确预期、校正一两帧即完，不遮。
+  /// 开书首跳遮罩：校正全程盖住正文滚动区、中间跳转不可见；[_finishRestore] 统一撤除。
+  /// 仅开书恢复（目标非书首）时点亮；目录 / 链接等用户主动跳转不遮。
   bool _restoreMask = false;
 
   /// 恢复 / 跳转目标：章索引 + 章内位置。
@@ -444,32 +313,23 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// `RC1` 写盘闸门分量①：当前位置是否**已收敛**。
   ///
-  /// 程序化恢复 / 跳转（[_beginScrollTo]）开始时清零；仅当校正真正收敛
-  /// （落点偏移差 ≤1px）或**用户主动滚动**后才置回 `true`。
-  /// 校正超帧数中途放弃 → 保持 `false`：误差不得当真值写回存档，
-  /// 否则下一轮开书把它当真值放大（误差**复利**回路，即「多次进出后
-  /// 偏离原章节太多」的来源之一）。
+  /// [_beginScrollTo] 开始时清零；校正收敛（偏移差 ≤1px）或**用户主动滚动**后置回
+  /// `true`。中途放弃保持 `false`：误差不当真值写回存档，否则下轮开书再放大
+  /// （误差**复利**回路）。
   bool _positionConverged = false;
 
   /// `RC1` 写盘闸门分量②：当前位置是否**已完整采样**。
   ///
-  /// [_detectCurrentChapter] 拿到完整语义坐标 → `true`；命中估算占位高章
-  /// （`RC3`）或一个章块都没探到（`RC4`）→ `false`：保持 `_chapterPos`
-  /// 原值、且本轮不得写盘。占位章真正加载后由 [_applyLayoutChange] 的
-  /// 语义重锚收敛（[_finishRestore] 内）重采样置回。
+  /// [_detectCurrentChapter] 拿到完整语义坐标 → `true`；命中估算占位高章（`RC3`）
+  /// 或探不到章（`RC4`）→ `false`：保持 `_chapterPos` 原值、本轮不写盘。
   bool _positionSampled = false;
 
   /// 目标段落的 `GlobalKey`（懒创建，键 = `'章索引:段落下标'`；`CNT-04c`）。
-  ///
-  /// 只给「要跳过去的那一段」建 key（一本书几百段全挂 key 太重），
-  /// [_buildChapterItem] 渲染时挂到对应段落的 Padding 上，
-  /// [_paragraphPointOffset] 据此精确测量段落顶。
+  /// 只给跳转目标段落建 key（全书全挂太重），[_paragraphPointOffset] 据此测段落顶。
   final Map<String, GlobalKey> _paraKeys = <String, GlobalKey>{};
 
-  /// 搜索高亮关键词（`CNT-06` 验收②；空串 = 不高亮）。
-  ///
-  /// 搜索跳转（[_jumpToSearchHit]）时写入，喂给正文 [InlineParagraph] 的
-  /// `highlightQuery` 做命中高亮；下次跳转到新命中时更新。
+  /// 搜索高亮关键词（`CNT-06`；空串 = 不高亮）。跳转命中时写入，喂给
+  /// [InlineParagraph.highlightQuery]。
   String _searchHighlight = '';
 
   /// 链接返回栈（`CNT-04c` 验收②）：跳转前压入原位置快照，「返回」按钮弹栈恢复。
@@ -519,10 +379,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// `TTS-06` 朗读进度直写坐标：每段朗读推进时记下的**朗读语义真值**。
   ///
-  /// 视口可能落后于朗读（跟随被手动滚动暂停）——[_saveProgress]（含
-  /// dispose 收尾）优先取它，防陈旧视口坐标覆盖朗读落点；用户重新接管
-  /// 视口（手动滚动 / 翻页起手）或程序化改位（[_beginScrollTo] /
-  /// [_pagedJumpTo]）即清空，让位回视口语义值。
+  /// 视口可能落后于朗读（跟随被手动滚动暂停）——[_saveProgress] 优先取它，防陈旧
+  /// 视口坐标覆盖朗读落点；用户接管视口或程序化改位即清空、让位回视口语义值。
   ({int chapterIndex, double chapterPos})? _ttsProgress;
 
   /// `TTS-05` 定时停止计时器（懒建于首次开读；到点停朗读 + 提示）。
@@ -543,60 +401,44 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 沉浸全屏（`TYP-09`）：`true` = 隐藏 AppBar 与底部控制条。
   ///
-  /// **默认 `true`**（2026-10-08 负责人拍板「默认改为全屏」）：进阅读页即沉浸。
-  /// 顶栏里原来的「进入全屏」按钮（`reader-fullscreen-enter`）与全屏时右上角的
-  /// 「退出全屏」浮层按钮（`reader-fullscreen-exit`）**都已移除**——全屏是静息态、
-  /// 不再是需要按钮切换的模式；两侧 chrome 一律由点正文**九宫格中宫**唤出
-  /// （`reader-chrome-toggle`，落点闸门 [_onContentTapUp]，见 `_buildBody`），
-  /// `TYP-09` 验收①「点中宫可唤出与收起」由此承担。
-  ///
-  /// 不落盘：每次进阅读页都回到全屏静息态（负责人未要求记住 chrome 显隐）。
-  ///
-  /// 2026-10-09（`TYP-09`，负责人拍板「点中间菜单不应修改阅读区高度」）：chrome
-  /// 是**覆盖层**（`extendBody*`，见 [build]）——唤出 / 收起它**不改变正文排版区
-  /// 几何**（护栏见 `reader_inset_test.dart` 的同名用例）。因为跳转类入口
-  /// （搜索 / 目录 / 书签 / 摘要）落位在**页顶**、会被顶栏压住，故跳转后自动
-  /// 收起 chrome（[_exitChrome]）。
+  /// **默认 `true`**、不落盘（每次进页回到全屏静息态）；**不设全屏切换按钮**，
+  /// chrome 由点正文九宫格中宫唤出 / 收起（落点闸门 [_onContentTapUp]）。
+  /// chrome 是**覆盖层**（`extendBody*`，见 [build]）：显隐**不改变正文排版区几何**
+  /// （护栏 `reader_inset_test.dart`）；跳转类入口（搜索 / 目录 / 书签 / 摘要）落位在
+  /// 页顶会被顶栏压住，故跳转后自动收起 chrome（[_exitChrome]）。
   bool _fullscreen = true;
 
   /// 滚动**实时显示**用的章索引 / 章内位置（`TYP-09` 验收②）。
   ///
-  /// 只喂进度显示（副标题 / 控制条 / [ReaderProgressIndicator]），
-  /// **绝不进存档**：存档只采信滚动停止时的采样（`RC1` 闸门语义不变），
-  /// 滚动中间态、占位章探测（`RC3`）都不污染 `_currentIndex` / `_chapterPos`。
+  /// 只喂进度显示，**绝不进存档**：滚动中间态、占位章探测（`RC3`）都不污染
+  /// `_currentIndex` / `_chapterPos`（`RC1` 闸门语义不变）。
   int _liveIndex = 0;
   double _livePos = 0.0;
 
-  /// 当前渲染几何所对应的滚动偏移（帧末 post-frame 采样，即「布局生效时的
-  /// `pixels`」）。
+  /// 当前渲染几何所对应的滚动偏移（帧末 post-frame 采样 =「布局生效时的 `pixels`」）。
   ///
-  /// 为什么需要：`ScrollUpdateNotification` 派发于 layout **之前**
-  /// （`setPixels` → 派发通知 + `markNeedsLayout`，布局在本帧稍后才跑），
-  /// 通知处理器里读 `localToGlobal` 拿到的是**上一帧**几何——「滚动已发生、
-  /// 布局未跟上」的滞后会被当成真实位置（实证：拖 150px 后块顶仍报旧值，
-  /// 章内位置算出 0，进度不动）。故采样时按
-  /// `top - (pixels - _laidOutPixels)` 把滞后补回（见 [_buildBlockSnapshots]）。
-  /// `null` = 尚无布局基线，不校正。
+  /// `ScrollUpdateNotification` 派发于 layout **之前**，处理器里读 `localToGlobal`
+  /// 拿到的是上一帧几何 ⇒ 采样时按 `top - (pixels - _laidOutPixels)` 补回滞后
+  /// （见 [_buildBlockSnapshots]）。`null` = 尚无布局基线，不校正。
   double? _laidOutPixels;
 
-  // ── T05-c c3：分页模式状态（`_pagedMode == false` 时全部闲置）──
+  // ── 分页模式状态（`_pagedMode == false` 时全部闲置）──
 
-  /// 分页模式（c3 分叉）：首帧批次的目标章是**文本**（EPUB/TXT）→ `true`
-  /// 走 `PagedScroller` 页拼接；**图片章**（CBZ/CBR/PDF 出图）→ `false`
-  /// 保留旧 `ListView` 路径（异步图片高不进静态布局表，FMT-02 P1 不迁）。
+  /// 分页模式：目标章是**文本**（EPUB/TXT）→ `true` 走 `PagedScroller` 页拼接；
+  /// **图片章**（CBZ/CBR/PDF 出图）→ `false` 保留旧 `ListView` 路径（异步图片高
+  /// 不进静态布局表，FMT-02 P1 不迁）。
   bool _pagedMode = false;
 
-  /// 翻页方式（`M-PAGE T05-d`）：`scroll` = 滚动拼接（[PagedScroller] 可见）；
-  /// 其余（slide / cover / none）= 翻页体叠层（[PageTurnBody] 可见，滚动体
-  /// 藏进 `Offstage` 但保持挂载——布局 / 采样 / `jumpToCharOffset` 照常有效）。
+  /// 翻页方式：`scroll` = 滚动拼接（[PagedScroller] 可见）；其余（slide / cover /
+  /// none）= 翻页体叠层（[PageTurnBody] 可见，滚动体藏进 `Offstage` 保持挂载——
+  /// 布局 / 采样 / `jumpToCharOffset` 照常有效）。
   ReaderPageMode _pageTurnMode = ReaderPageMode.scroll;
 
   /// 当前是否处于翻页形态（`scroll` 之外皆是）。
   bool get _pageTurnModeAsTurn => _pageTurnMode != ReaderPageMode.scroll;
 
-  /// 翻页手势活跃中（拖拽或 settle 动画未落定）。
-  /// 为 `true` 时：[`_kickReprime`] 让位、父级换视图 / 跳转被抑制，
-  /// 防止动画期底下的页表被抽换（`T05-d` 三重闸之一）。
+  /// 翻页手势活跃中（拖拽或 settle 动画未落定）：[_kickReprime] 让位、父级换视图 /
+  /// 跳转被抑制——动画期不许抽换页表。
   bool _turnGestureActive = false;
 
   /// 分页调度器（目标页优先 + ±1 章窗口预分页；文本模式在 `_open` 创建）。
@@ -610,18 +452,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   List<PagedChapterView> _pageViews = const <PagedChapterView>[];
 
   /// 「上次真实渲染的章高」（href → 章块高），换参重排期间供占位带沿用。
-  ///
-  /// 见 [_refreshStickyHeights]：换参把页表整体作废后，已分页的邻章若立即
-  /// 塌回 96dp 占位带，当前章章顶会瞬移一整章高，补偿跳只能帧末补发
-  /// ⇒ 中间一帧显示错章正文（闪动）。
+  /// 换参作废页表后已分页邻章若塌回 96dp 占位带，章顶瞬移一整章高 ⇒ 中间一帧
+  /// 显示错章正文（闪动）。见 [_refreshStickyHeights]。
   final Map<String, double> _stickyChapterHeights = <String, double>{};
 
   /// 本书最近一次见到的**真实章高**（窗口内已分页章的章高中位数）。
-  ///
-  /// 未登记 [sticky] 的占位带（典型是**目录远跳**：目标章的前置章从没分过页）
-  /// 用它估高，而不是 96dp——否则目标章章顶先塌成 176、前置章真页表到货后再
-  /// 涨回 19000+，补偿跳超出旧布局滚动域 → 帧末补跳 → 中间那一帧显示上一章
-  /// （真机录屏 2026-10-22 16:15「切换章节也会闪」）。
+  /// 未登记 [sticky] 的占位带（典型是目录远跳）用它估高而非 96dp——否则章顶
+  /// 先塌后涨、补偿跳超旧布局滚动域 → 帧末补跳 → 中间帧显示上一章。
   double _lastRealChapterHeight = 0;
 
   /// 已应用视图的签名（`_computeSignature` 产物；链式补页后比对判重建）。
@@ -637,14 +474,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 二次落位；`null` = 无挂起）。
   ({int index, int charOffset})? _pendingLand;
 
-  /// 开书门闸挂起中：就绪信号已具备（正文可上屏）但放行条件还没齐
-  /// ——转场继续按住，补报点（[_checkOpenGate]）复查后放行。
+  /// 开书门闸挂起中：就绪信号已具备但放行条件没齐——转场继续按住，
+  /// 等 [_checkOpenGate] 复查后放行。
   ///
-  /// 路线 A 纪律②「排到目标页才上屏」（路线 A §7①②）：
-  /// ① 估算落位只是过渡帧，`_pendingLand` 二次精确落位完成前不放行——否则
-  /// 「估算位置 → 精确位置」的大跳发生在纸张滑入中，就是「开书闪动」主链；
-  /// ② 放行时刻视口必须是**真身**（[_viewportReal]）——残留「载入中…」占位带
-  /// 时随后「占位→真」换血的高度突变同样发生在滑入中（闪动链②）。
+  /// 路线 A 纪律②「排到目标页才上屏」（路线 A §7①②）：① [_pendingLand] 二次
+  /// 精确落位完成前不放行——「估算→精确」大跳发生在纸张滑入中就是开书闪动主链；
+  /// ② 放行时刻视口必须是**真身**（[_viewportReal]），残留占位带的换血突变同理。
   bool _openGatePending = false;
 
   /// [_checkOpenGate] 的复查回调已挂上（postFrame 单飞：防回调堆积）。
@@ -680,17 +515,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   final GlobalKey<PagedScrollerState> _scrollerKey = GlobalKey<PagedScrollerState>();
 
   /// 正文 tap 判定框 key（九宫格中宫闸门 [_onContentTapUp] 取 RenderBox 用）。
-  ///
-  /// 挂在 `reader-chrome-toggle` 外面的 `KeyedSubtree` 上——`GestureDetector`
-  /// 的 key 位已被测试锚点 `Key('reader-chrome-toggle')` 占用，且这里要的
-  /// 就是同一块盒（KeyedSubtree 无自身 RenderObject，落点即手势层的盒）。
+  /// 挂在 `reader-chrome-toggle` 外的 `KeyedSubtree` 上（key 位已被测试锚点占用，
+  /// 且 KeyedSubtree 无自身 RenderObject，落点即手势层的盒）。
   final GlobalKey _chromeToggleKey = GlobalKey(debugLabel: 'chrome-toggle-box');
 
   /// 停稳流程序号：用户再次滚动即作废在途的 async 停稳序列。
   int _pagedStopSeq = 0;
 
   /// 阅读会话采集器（`STAT-01`）：进页起表、离页 / 切后台收尾；`null` = 不采集。
-  ///
   /// 切后台收尾后置空、回前台重建——两次会话、总时长不重复（验收④）。
   SessionTracker? _tracker;
 
@@ -710,10 +542,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    // 关闭阅读页：先保存进度（不能 await，故 unawaited），再释放书籍资源。
-    // 注：`Scrollable` 子节点**先于本 State** 卸载，进到这里控制器通常已 detach
-    // （`hasClients == false`）→ 现场版面快照读不到，`_saveProgress` 会回退
-    // [_lastLocalHint]（见 [_buildLocalHint]），**不会用 null 覆盖已存快照**。
+    // 关闭阅读页：先保存进度（unawaited）再释放资源。控制器到此通常已 detach，
+    // `_saveProgress` 会回退 [_lastLocalHint]、不用 null 覆盖已存快照。
     WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
     _sleepTimer?.cancel(); // `TTS-05`：关页撤定时（回调防呆双保险）
@@ -743,9 +573,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     _imageCache.dispose();
     _controller?.dispose();
-    // 书源不在这里直接销毁：交回仓库的**复用池**（§2.108）——同一本书再打开时
-    // 就是零读盘零解析。池内部按字节上限判定，超限/不可驻留者当场 dispose，
-    // 故这条路径恒不泄漏；`repository` 是必填参数（`shelf_page` / 详情页都传）。
+    // 书源不直接销毁：交回仓库**复用池**（§2.108）——同书再开零读盘零解析。
+    // 池内按字节上限淘汰即 dispose，此路径恒不泄漏。
     unawaited(widget.repository.recycleBookSource(widget.record, widget.source));
     super.dispose();
   }
@@ -804,16 +633,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   Future<void> _open() async {
     final Stopwatch openClock = Stopwatch()..start();
     try {
-      // ## 开书关键路径（2026-10-08 改：三份 store 并发起跑）
-      //
-      // 改前是 `load() → chapters() → progress → bookmarks → prefs` 六段**串行**
-      // await；探针（`_probe_layout`）实测开书 222ms 里 `reader.stores` 占
-      // **130ms（59%）**，而这三份都是互不依赖的小 JSON 读——纯属白等。
-      // 现在三份 store 与书源解析**同时起跑**，只 await 首帧真正要用的部分：
-      //   · `progress`：决定恢复章节 / 章内位置；
-      //   · `prefs`：决定排版参数（字号 / 行距 / 页边距 / 翻页方式）；
-      //   · `bookmarks`：首帧用不到 → 同一批 IO 照跑，到手后再 setState 补进树
-      //     （顺带把「书签读取失败」从「整本书打不开」降级成「书签暂时没有」）。
+      // ## 开书关键路径：三份 store 与书源解析**并发起跑**（§2.107），只 await
+      // 首帧要用的（`progress` 定恢复位置、`prefs` 定排版）；`bookmarks` 首帧用不到，
+      // 后到再 setState 补进（读取失败降级为空表、不拖垮开书）。
       final PerfWatch storesWatch = PerfLog.watch('reader.stores');
       final Future<ReadingProgress?> progressF =
           widget.progressStore.load(widget.record.bookId);
@@ -823,19 +645,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           widget.bookmarkStore?.load(widget.record.bookId) ??
               Future<List<Bookmark>>.value(const <Bookmark>[]);
 
-      // ## 元数据（含封面解码）**不在首帧关键路径上**（2026-10-20，§2.107）
-      //
-      // 改前这里是 `await widget.source.load()` 再 `await chapters()`：而 `load()`
-      // 内部的 `buildEpubMeta` 会把封面候选**解压出来嗅探图片格式**（最大一块
-      // 是 1~3MB 的 JPEG inflate）——首帧一个字都用不到它：`_meta` 唯一的消费者
-      // 是 `_title` 的兜底（`record.title` 非空时根本不看）。真机开书 335~509ms
-      // 的分解里，这一段属于纯属白等。
-      // 现在：首帧只等章节表；`load()` 推迟到首帧上屏后、且**只有书名缺记录时**才跑。
+      // 元数据（含封面 inflate，§2.107）**不在首帧关键路径上**：首帧只等章节表，
+      // `load()` 延后到 [_loadMetaAfterReady]。
       final PerfWatch chaptersWatch = PerfLog.watch('reader.chapters');
       final List<Chapter> chapters = await widget.source.chapters();
       chaptersWatch.done('count=${chapters.length}');
-      // `reader.stores` 现在量的是**关键路径上的净等待**（store 起跑早于
-      // `reader.chapters`，源解析期间它们已完成 ⇒ 取值趋 0 即「已不在关键路径上」）。
+      // `reader.stores` 量的是关键路径上的**净等待**（取值趋 0 = 已不在关键路径上）。
       final ReadingProgress? progress = await progressF;
       final ReadingPrefs? prefs = await prefsF;
       storesWatch.done('concurrent');
@@ -855,9 +670,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 定位：先按 href（稳定身份）匹配，匹配不到退回 index 并 clamp。
       int index = _resolveIndex(chapters, progress);
       double pos = progress?.chapterPos ?? 0.0;
-      // `AI-03` ③ 生词跳回：[ReaderPage.initialJump] 覆盖存档进度（href 匹配
-      // 不到则忽略、照常按进度恢复）；段落级落点由 [_ensureController] 消费
-      // [_jumpPara]——融入既有恢复链路，不新增并行跳转（无竞态）。
+      // `AI-03` ③ 生词跳回：[ReaderPage.initialJump] 覆盖存档进度（href 匹配不到
+      // 则忽略）；段落级落点由 [_ensureController] 消费 [_jumpPara]，融入既有
+      // 恢复链路、不新增并行跳转。
       final ({String href, int paraIndex})? jump = widget.initialJump;
       if (jump != null) {
         final int jumpIndex =
@@ -879,9 +694,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           _background = prefs.background;
           _pageTurnMode = prefs.pageMode;
         }
-        // `_bookmarks` 不在这里赋值：它是异步后到的（见上面 `bookmarksF`），
-        // 首帧按空表渲染、到手后单独 setState 补进（不再阻塞开书）。
-        // `_meta` 同理：见 [_loadMetaAfterReady]（首帧后、且只有书名缺记录时才取）。
+        // `_bookmarks` 异步后到（见 `bookmarksF`），[_loadMetaAfterReady] 同理。
         _chapters = chapters;
         _currentIndex = index;
         _chapterPos = pos;
@@ -897,19 +710,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               lastReadAtMs: progress?.updatedAt,
               nowMs: DateTime.now().millisecondsSinceEpoch,
             );
-        // backlog① 方案 B：恢复目标非书首时，校正全程遮罩（从头开书首帧即到位，不遮）。
+        // 恢复目标非书首时校正全程遮罩（从头开书首帧即到位，不遮）。
         _restoreMask = index != 0 || pos > 0;
-        // 章块 key **不预分配**（§2.107）：旧实现在这里
-        // `for (i < chapters.length) _chapterKeys[i] = GlobalKey()`，1152 章的书
-        // 一次开书就要造 1152 个 GlobalKey，而首帧真正进树的只有窗口那几章——
-        // 其余全是白烧的分配。改为 `_chapterKeyAt(index)` 按需懒建（同一 index
-        // 复用同一 key，`putIfAbsent` 保证稳定）。
+        // 章块 key **不预分配**（§2.107）：按需懒建（[_chapterKeyAt]，putIfAbsent
+        // 保证同 index 同 key，Element 复用语义与预分配版一致）。
       });
       if (chapters.isEmpty) return;
       _noteReading(); // 定位完成：补记一次带真实坐标的活跃（起表在 initState）
 
-      // `M-PAGE` T03：字数权重**不阻塞**首帧——fire-and-forget，取到前全书
-      // 进度按等权显示（与旧行为一致），取到后切换为字数加权。
+      // 字数权重不阻塞首帧：fire-and-forget，取到前等权显示、取到后切加权。
       _loadChapterWeights();
 
       final ChapterAutoLoader loader = ChapterAutoLoader(
@@ -924,17 +733,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       await loader.loadFirstBatch(index);
       firstWatch.done('target=$index');
       if (!mounted || _disposed) return;
-      // T05-c c3 分叉：首帧批次的目标章是文本 → 分页模式（图片章保留 ListView）。
+      // 分页分叉：目标章是文本 → 分页模式（图片章保留 ListView）。
       final bool paged = _cache.peek(index)?.imagePages == null;
       setState(() {
         _ready = true;
         _pagedMode = paged;
         if (paged) {
-          // 修法③「冷缓存收口」（路线 A §7③）：
-          // 调度器按书**进程级驻留**（[sharedPaginationSchedulers]），重开书
-          // 命中定稿页表、一次精确落位——不再随 State 新建冷缓存（开书闪动
-          // 机制链③）。`unfreeze()`：上一 State 若在翻页动画中被 dispose，
-          // 冻结态会跨开书残留（`stepIdle` 有活不动）。
+          // 冷缓存收口（路线 A §7③）：调度器按书**进程级驻留**
+          // （[sharedPaginationSchedulers]），重开书命中定稿页表、一次精确落位。
+          // `unfreeze()`：上一 State 翻页动画中被 dispose 时冻结态会跨开书残留。
           _scheduler = sharedPaginationSchedulers
               .forBook(widget.record.bookId)
             ..unfreeze();
@@ -944,43 +751,30 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 开书到「首帧可渲染」的总时长（用户感知的等待上限；恢复校正另计 restore.*）。
       PerfLog.step('reader.ready', openClock.elapsedMilliseconds,
           'target=$index pos=${pos.toStringAsFixed(3)} chapters=${chapters.length} paged=$paged');
-      // 链路点「数据就绪」+ **立刻挂首帧探针**：
-      // 上面的 `reader.ready` 打在 setState 之后、正文尚未 build/layout/paint，
-      // 用户屏幕上仍是空白。探针量到的那一帧才是「看到书」，两者之差即渲染段。
+      // 链路点「数据就绪」+ 立刻挂首帧探针（`reader.ready` 打在 setState 后、
+      // 正文尚未 paint；探针量到的那一帧才是「看到书」，两者之差即渲染段）。
       widget.openTrace?.mark('ready', 'paged=$paged chapters=${chapters.length}');
       widget.openTrace?.attachFirstFrameProbe();
-      // 放行开书转场的纸张滑入（`ReaderOpenTransition`）。**必须等下一帧真正上屏**：
-      // 此刻正文还没被 paint，提前放行会让纸张带着一张空白滑进来——那正是
-      // 「打开书闪一下」的成因。分页模式再加一道门闸（`requireLanded`）：
-      // 精确落位收敛才放行（估算落位的视口大跳不许发生在滑入中）。
-      // 无门闸（深链 / 测试直进）时是 no-op。
+      // 放行纸张滑入。**必须等下一帧真正上屏**（此刻正文还没 paint，提前放行
+      // 纸张会带空白滑入 = 「打开书闪一下」）；分页模式再加门闸（`requireLanded`）：
+      // 精确落位收敛才放行。无门闸（深链 / 测试直进）时是 no-op。
       _signalOpenReady(requireLanded: paged);
       // 元数据后到（不阻塞首帧；见 [_loadMetaAfterReady]）。
       _loadMetaAfterReady();
       if (!paged) _scheduleEstimateRefresh(); // 估高只服务 ListView
-      // **不在此处启动后台补齐**（`PERF-02` 时序修正 2026-09-28）：补齐会逐批
-      // 「占位→真实」合入、改动总高，而此刻控制器还没建、首次恢复校正也还没跑
-      // （真机日志：本行让 9 批合入抢在 `restore.begin` 之前，全部
-      // `layout.reanchor anchored=false` 空重锚，恢复期总高被改）。
-      // 补齐统一由 [_finishRestore] 触发——先落定、后补齐。
+      // **不在此处启动后台补齐**：合入会改总高，而控制器还没建、恢复校正没跑
+      // （补齐会抢在 `restore.begin` 之前空重锚）。补齐统一由 [_finishRestore] 触发。
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error);
-      // 失败也要放行滑入——否则纸张会一直停在屏幕右侧之外，
-      // 用户盯着书架以为卡死了（转场被「按住」时没有任何其他退出路径）。
+      // 失败也要放行滑入——转场被「按住」时没有其他退出路径。
       _signalOpenReady();
     }
   }
 
-  /// 首帧后补取元数据（**只在该取时才取**）。
-  ///
-  /// `_meta` 唯一的消费者是 [_title] 的兜底：`record.title` 非空时永远不看它。
-  /// 而 `source.load()` 内部（`buildEpubMeta`）会把封面候选**解压出来嗅探图片
-  /// 格式**（常见 1~3MB JPEG inflate）——首帧一个字都用不到。故把它整体移出
-  /// 开书关键路径：书名有记录时一次都不跑，缺记录时才在首帧之后补，到手后
-  /// `setState` 补进（此时正文早已上屏，用户无感）。
-  ///
-  /// 失败静默：`_title` 会回落到「阅读」，不影响任何阅读行为。
+  /// 首帧后补取元数据——**只在书名缺记录时才跑**（`_meta` 唯一消费者是 [_title]
+  /// 的兜底；`source.load()` 内含封面 inflate，故整体移出开书关键路径，§2.107）。
+  /// 失败静默：`_title` 回落到「阅读」。
   void _loadMetaAfterReady() {
     if (widget.record.title.isNotEmpty) return;
     unawaited(() async {
@@ -998,15 +792,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 报「阅读页就绪」，放行开书转场的纸张滑入。
   ///
-  /// 走**帧回调**而不是直接调：`_ready` 的 `setState` 之后这一帧还没绘制，
-  /// 放行早了纸张会带着一张空白滑进来。也刻意不用 `Future.delayed`——
-  /// `testWidgets` 跑在 `FakeAsync` 里，定时器会在页面 dispose 后留下未清挂起物。
+  /// 走**帧回调**（不是直接调——此刻帧还没绘制，放行早了纸张带空白滑入），也不用
+  /// `Future.delayed`（`testWidgets` FakeAsync 会留未清定时器）。
   ///
-  /// [requireLanded]：分页模式的「就绪」= **目标语义坐标精确落位收敛** 且
-  /// **视口真身**（路线 A 纪律②，路线 A §7①②）。
-  /// 估算落位只是过渡帧——`_pendingLand` 二次精确落位完成前不放行，挂
-  /// [_openGatePending] 等补报点（[_checkOpenGate]）复查；3s 兜底
-  /// （`kReaderOpenHoldTimeout`）仍是「漏报就绪不卡死」的最后防线。
+  /// [requireLanded]：分页模式的「就绪」= 精确落位收敛 + **视口真身**（路线 A
+  /// 纪律②）；未满足挂 [_openGatePending] 等 [_checkOpenGate] 复查；3s 兜底
+  /// （`kReaderOpenHoldTimeout`）保证「漏报就绪不卡死」。
   void _signalOpenReady({bool requireLanded = false}) {
     if (requireLanded && !_positionConverged) {
       _openGatePending = true;
@@ -1021,16 +812,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.scheduleFrame();
   }
 
-  /// 开书门闸补报：[_openGatePending] 期间每次收敛 / 换视图都来戳一下，
-  /// **postFrame 复查**放行条件后补发就绪信号（幂等：放行过 / 未挂起时 no-op）。
+  /// 开书门闸补报：[_openGatePending] 期间每次收敛 / 换视图都来戳一下，**postFrame
+  /// 复查**放行条件后补发就绪信号（幂等）。
   ///
-  /// 复查放在 postFrame（而不是调用点当场判）有两个原因：
-  ///   · [_applyPagedViews] 的 setState 之后布局还没重建，当场读到的是旧视图；
-  ///   · [_jumpPaged] 超域目标的帧末 clamp 也是 postFrame 回调、注册更早
-  ///     （[_primeOpenSync] 收敛点在 `_jumpPaged` 之后才戳本方法）——本回调
-  ///     后注册后执行，读到的像素已是 clamp 后的「放行时刻现场」。
-  /// 复查不过（落位反复 / 占位带还在视口里）就保持挂起，等下一个戳点
-  /// （[_syncPagedViews] 换视图后必戳）再查；单飞标记防回调堆积。
+  /// 复查放 postFrame 而非当场判：① [_applyPagedViews] setState 后布局未重建，
+  /// 当场读到旧视图；② [_jumpPaged] 超域 clamp 也是 postFrame、注册更早——本回调
+  /// 后注册后执行，读到的已是「放行时刻现场」。复查不过保持挂起等下个戳点；
+  /// 单飞标记防回调堆积。
   void _checkOpenGate() {
     if (!_openGatePending || _openGateCheckScheduled) return;
     _openGateCheckScheduled = true;
@@ -1044,17 +832,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.scheduleFrame();
   }
 
-  /// 「视口真身」判据（路线 A 纪律②，路线 A §7②）：
-  /// 可见区间 `[pixels, pixels + 视口高)` 内没有「载入中…」占位带。
+  /// 「视口真身」判据（路线 A 纪律②）：可见区间内没有「载入中…」占位带
+  /// （[PagedChapterView.pages] 为空的窗口视图）。
   ///
-  /// 占位带 = [PagedChapterView.pages] 为空的窗口视图（未分页章只占
-  /// [_placeholderBandHeight] ≈96dp 一条带，区间 `[章顶, 章顶 + headingHeight)`）。
-  /// 空段章（一张空页、`pages` **非空**）是真身，不挡放行——真身判据与
-  /// [_buildPageViews] 同源，刻意不看段落数。
-  ///
-  /// 量不到现场（滚动体 / 视口未挂）时放行（`true`）：宁可早放也不把门闸
-  /// 死等到 3s 兜底，「漏报就绪不卡死」优先。本判据只管放行时机，**不约束
-  /// 窗口形状**——`_repairReachable` 的扩窗红线（窗口不加上界）不变。
+  /// 空段章（一张空页、`pages` **非空**）是真身、不挡放行——真身判据与
+  /// [_buildPageViews] 同源，刻意不看段落数。量不到现场时放行（宁可早放，
+  /// 「漏报就绪不卡死」优先）；本判据只管放行时机，**不约束窗口形状**。
   bool _viewportReal() {
     final PagedScrollerState? scroller = _scroller;
     final double vh = _viewportHeight;
@@ -1113,11 +896,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return bytes;
   }
 
-  /// 点页 → 全屏缩放查看（`FMT-02` 验收②「缩放后不糊」，M2b-T02）。
-  ///
-  /// 「不糊」口径：全屏查看器对**原始字节**解码（不设 `cacheWidth` 降采样），
-  /// 捏合缩放矩阵作用在原始分辨率位图上；列表内的 fitWidth 适配只影响显示层。
-  /// 单/双页切换（US-12 描述面）不在 FMT-02 验收①②③内，本批未覆盖。
+  /// 点页 → 全屏缩放查看（`FMT-02` 验收②「缩放后不糊」）：查看器对**原始字节**
+  /// 解码（不设 `cacheWidth` 降采样），缩放矩阵作用在原始分辨率位图上。
   void _openImageZoom(Uint8List bytes) {
     unawaited(Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -1128,21 +908,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 内容就绪后创建控制器（仅一次）。
   ///
-  /// 同版面签名时用 `initialScrollOffset` 给出**首帧初始近似**（`RC2`：仅减首帧
-  /// 跳动）；无论哪条路径，落点都由 [_beginScrollTo] 按**语义坐标
-  /// `(chapterIndex, chapterPos)` 校正收敛**——`scrollOffset` 依赖「当时已加载
-  /// 集合」（`PERF-02` 增量加载下未载章是估算高），加载集合一变同一像素就指向
-  /// 别处，单独照搬不校正即进度漂移（`RC2`）。
-  ///
-  /// 两条分支的差别只在 seed 的「贴合度」（backlog① 方案 A）：
-  ///   · **精确分支**（同版面 + `coversPrefix`）：目标前所有章已驻留，像素语义
-  ///     完整一致 → `hint.scrollOffset` 即首帧落点，校正 1~2 帧内确认收敛；
-  ///   · **回退分支**（其余一切）：同版面时**仍 seed** `hint.scrollOffset`——
-  ///     冷启动读中段 `coversPrefix` 恒 false（首帧只载 ±1），若从 0 起跳，
-  ///     目标章不在首帧布局窗口里，只能走「`maxScrollExtent` 外推估计」的比例
-  ///     估算（探针实测 26157 ↔ 290816 振荡、8 帧不收敛）；seed 让目标章大概率
-  ///     首帧即可精确测量，跳过估算直接校正。签名不匹配（字号 / 视口变了）
-  ///     则像素语义已失效，seed 无意义 → 从 0 起跳照常估算。
+  /// 同版面签名时用 `initialScrollOffset` 给出首帧 seed（`RC2`：只减首帧跳动）；
+  /// 无论哪条路径，落点都由 [_beginScrollTo] 按**语义坐标校正收敛**——像素依赖
+  /// 「当时已加载集合」，加载集合一变同一像素就指向别处。
+  /// 分支：**精确**（同版面 + `coversPrefix`）seed 即首帧落点；**回退**（其余）
+  /// 同版面时仍 seed（跳过 `maxScrollExtent` 外推估算——懒构建下该外推数倍量级
+  /// 振荡）；签名不匹配（字号 / 视口变了）像素语义失效 → 从 0 起跳照常估算。
   void _ensureController() {
     if (_controller != null) return;
     if (_pagedMode) {
@@ -1242,8 +1013,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   void _restoreStep() {
     final ScrollController? controller = _controller;
     if (!mounted || controller == null || !controller.hasClients) {
-      // 统一收口（backlog① 方案 B）：异常路径也要经 [_finishRestore] 撤遮罩，
-      // 否则遮罩永久留在屏幕上；`converged: false` → `RC1` 闸门照旧关闭不写盘。
+      // 统一收口：异常路径也要经 [_finishRestore] 撤遮罩，否则遮罩永久留在屏幕上；
+      // `converged: false` → `RC1` 闸门照旧关闭不写盘。
       _finishRestore(converged: false);
       return;
     }
@@ -1261,17 +1032,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (target == null) {
       // 目标章尚未布局：用**章高模型**把它的章首带进布局窗口。
       //
-      // 这里**刻意不用** `maxScrollExtent × (index + pos) / total` 的比例外推：
-      // 懒构建下 `maxScrollExtent` 是 sliver 按「已构建子项均值 × 剩余项数」的
-      // 外推值，在「少数真实章 + 大量等高占位块」的混合布局里会在数倍量级间摆动
-      // → 估算落点来回乱跳（真机 8 帧全 estimate、`converged=false`，见
-      // [_chapterHeights] 注释）。模型只依赖「占位高已知 + 实测高已记忆」两件事，
-      // 误差上界 ≈ 目标章附近**未知高度**的章数（首帧批次下 ≤1 章），因此每次
-      // seek 都是**朝目标单向逼近**，通常 1~3 帧即测到 box 转入精确校正。
+      // **刻意不用** `maxScrollExtent` 比例外推：懒构建下它按均值外推，会在数倍
+      // 量级间摆动 → 估算落点乱跳（见 [_chapterHeights]）；章高模型只依赖
+      // 「占位高已知 + 实测高已记忆」，每次 seek 都朝目标单向逼近。
       //
-      // 只 seek **章首**（不含 `_restorePos`）：落到章内即可测到 box，`pos` 部分
-      // 留给下一帧的实测校正 `_chapterPointOffset(index, pos)`（否则把章首顶到
-      // 视口上方过远、超出构建缓存区时 box 反而建不出来）。
+      // 只 seek **章首**（不含 `_restorePos`）：落到章内即可测到 box，`pos` 留给
+      // 下一帧实测校正（章首顶太远、超出构建缓存区时 box 反而建不出来）。
       final double seek = _chapterTopModel(_restoreIndex);
       PerfLog.mark('restore.step',
           'frame=${_restoreFrames + 1} kind=model jumpTo=${seek.clamp(0.0, maxExtent).toStringAsFixed(0)} maxExtent=${maxExtent.toStringAsFixed(0)}');
@@ -1313,19 +1079,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 未收敛 / 未采样一律不写。
   void _finishRestore({required bool converged}) {
     _restoring = false;
-    _restoreMask = false; // backlog① 方案 B：校正结束（含放弃）即撤遮罩
+    _restoreMask = false; // 校正结束（含放弃）即撤遮罩
     _positionConverged = converged;
     if (!mounted) return;
     _positionSampled = _detectCurrentChapter();
     PerfLog.mark('restore.end',
         'frames=$_restoreFrames converged=$converged sampled=$_positionSampled');
-    // 链路点「位置落定」：首帧早已上屏，但内容可能还停在估算位置；到这一行
-    // 才真正停在目标段落。它不进 `open.total`（那量的是「看到书」），
+    // 链路点「位置落定」：不进 `open.total`（那量的是「看到书」），
     // 只作为「打开后是否还在跳」的观感指标。
     widget.openTrace?.mark('restoreEnd',
         'frames=$_restoreFrames converged=$converged');
-    // 首帧早已上报 `open.total`；这里补一条 `open.chain`，把「上屏之后又花了
-    // 多久才停在目标段落」也纳入账——`chain` 与 `total` 的差即位置漂移耗时。
+    // 补一条 `open.chain`：与 `open.total` 之差 = 上屏后停到目标段落的漂移耗时。
     widget.openTrace?.reportChain();
     _cache.touch(_currentIndex);
     setState(() {});
@@ -1369,13 +1133,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 探测当前章与章内位置（`RD-04`：章索引 + 章内 0.0~1.0；`RC3` / `RC4`）。
   ///
-  /// **全量扫描已构建的章块**，交给纯函数 [detectChapterAt] 判定：
-  ///   · 覆盖视口顶的是**真实加载章** → 更新 `_currentIndex` + `_chapterPos`，返回 `true`；
-  ///   · 是**估算占位高章**（`RC3`）→ 只更新 `_currentIndex`（章级身份可信），
-  ///     保持 `_chapterPos` 原值（分母是估的，采样会污染语义坐标），返回 `false`；
-  ///   · 一个章块都没探到（`RC4`）→ 全部保持原值，返回 `false`。
-  ///
-  /// 返回值 = 是否拿到完整语义坐标（`RC1` 写盘闸门的「已采样」分量）。
+  /// **全量扫描已构建的章块**，交纯函数 [detectChapterAt] 判定：覆盖视口顶是真实
+  /// 加载章 → 更新坐标、返回 `true`；是估算占位高章（`RC3`）→ 只更新 `_currentIndex`
+  /// （章内位置不可采样）；探不到章（`RC4`）→ 全部保持原值。返回值 = 是否拿到完整
+  /// 语义坐标（`RC1` 写盘闸门的「已采样」分量）。
   bool _detectCurrentChapter() {
     final List<Chapter>? chapters = _chapters;
     final ScrollController? controller = _controller;
@@ -1425,10 +1186,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 构建**全部已布局章块**的几何 / 加载态快照（[detectChapterAt] 的输入）。
   ///
-  /// `RC4`：全量扫描已构建的章块，不再只探「上次索引 ±4」——落点偏差一大，
-  /// 真章就在小窗口之外，旧逻辑会拿**窗口边缘章**顶替并写回存档，每轮「开→关」
-  /// 都把错误章写回去，越偏越多（「多次进出后偏离原章节太多」的来源）。
-  ///
+  /// `RC4`：全量扫描已构建章块而非「上次索引 ±4」小窗口——小窗口会拿**边缘章**
+  /// 顶替真章写回存档、越偏越多（「多次进出后偏离原章节」的来源）。
   /// 返回的 `top` 已按 [_laidOutPixels] **补回布局滞后**（滚动通知派发于
   /// layout 之前，此刻几何还是上一帧的）。
   List<ChapterBlockSnapshot> _buildBlockSnapshots(RenderBox viewport) {
@@ -1472,10 +1231,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 滚动过程中的**显示级**位置采样（`TYP-09` 验收②「进度随滚动实时更新」）。
   ///
   /// 与 [_detectCurrentChapter] 同一判定（[detectChapterAt]），但**只写显示字段**
-  /// `_liveIndex` / `_livePos`：滚动中间态不进 `_currentIndex` / `_chapterPos`，
-  /// `RC1` 写盘闸门与「采样置后」原则一点不动。命中占位高章时
-  /// （`detectChapterAt` 返回 `chapterPos == null`）章级身份照常刷新、
-  /// 章内位置保持原显示值。
+  /// `_liveIndex` / `_livePos`（滚动中间态不进存档字段，`RC1` 闸门不动）；
+  /// 命中占位高章时章级身份照常刷新、章内位置保持原显示值。
   void _updateLiveProgress() {
     final ScrollController? controller = _controller;
     if (_chapters == null ||
@@ -1524,9 +1281,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 第 [index] 章的稳定 `GlobalKey`（首次使用时创建）。
   ///
-  /// 替代旧实现「开书时一次性给全书每章预分配 GlobalKey」——那对 1000+ 章的书
-  /// 是纯浪费（只有窗口内几章会真正进树）。`putIfAbsent` 保证同一 index 拿到的
-  /// 永远是同一个实例，故 Element 复用语义与预分配版**完全一致**。
+  /// 懒建（1000+ 章的书只有窗口内几章真正进树）；`putIfAbsent` 保证同 index 恒拿
+  /// 同一实例，Element 复用语义与全量预分配一致。
   GlobalKey _chapterKeyAt(int index) => _chapterKeys.putIfAbsent(
         index,
         () => GlobalKey(debugLabel: 'reader-chapter-$index'),
@@ -1546,8 +1302,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 章高模型算出的「第 [index] 章块顶的内容绝对偏移」= 上方各章高度之和。
   ///
-  /// 不再用 `maxScrollExtent` 做比例外推（理由见 [_chapterHeights] 字段注释与
-  /// [_restoreStep] 的 seek 分支）。O(章数) 纯算术，恢复期每帧一次，可忽略。
+  /// 不用 `maxScrollExtent` 比例外推（理由见 [_restoreStep] 的 seek 分支）。
+  /// O(章数) 纯算术，恢复期每帧一次，可忽略。
   double _chapterTopModel(int index) {
     double sum = 0;
     for (int i = 0; i < index; i++) {
@@ -1604,25 +1360,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// R1②：用户交互中挂起后台补齐（滚动 / 拖动 / 翻页）。
   ///
-  /// 补齐只为**预热邻章**（`PERF-02` 的内存收敛口径），晚几秒开始没有任何
-  /// 正确性影响；而 CPU Profiler 实测它占补齐阶段 **56% 的纯 CPU**
-  /// （见 [_autoFillLoop] 头注）——用户正在翻页时这些 CPU 应当让位。
+  /// 补齐只为**预热邻章**（`PERF-02` 的内存收敛口径），晚几秒无正确性影响；
+  /// 而实测它占补齐阶段大半纯 CPU（见 [_autoFillLoop] 头注）——翻页时应当让位。
   ///
-  /// ##⚠️ 必须带时限兜底（2026-10-06，被 `reader_page_test` 回归④ 打回）
-  ///
-  /// 初版只有「[_onScrollEnd] 恢复」一条路径，**结果补齐被永久挂起**：
-  /// 回归④ 用 `tester.drag(...)` 制造滚动，但**滚动通知链里 `_onScrollEnd`
-  /// 并未按预期送达**（`drag` 结束后视口已被拖动逻辑接管），于是
-  /// `_autoFillPaused` 永远为 `true` ⇒ 上方章的占位永不换真
-  /// ⇒ `expect(find.text('第一章'), findsOneWidget)` 判红。
-  ///
-  /// 教训：**「靠某个事件恢复」必须同时有「靠时间恢复」的兜底**——事件可能不来
-  /// （手势被接管、通知被拦截、页面路径不同），而时间一定会到。
-  /// 2s 取「一次连续滚动通常不超过」的量级：既让滚动期间的 CPU 让位，
-  /// 又保证任何路径下补齐都会自己恢复。
+  /// ##⚠️ 必须带时限兜底：「靠某个事件恢复」必须同时有「靠时间恢复」的兜底——
+  /// 事件可能不来（手势被接管、通知被拦截），而时间一定会到。兜底用帧计数
+  /// （每次 pause 重置），避开 [_idleGap] 的定时器坑。
   void _pauseAutoFill() {
     _autoFillPaused = true;
-    // 兜底恢复：不用定时器（见 [_idleGap] 的定时器坑），改用帧计数——
+    // 兜底恢复：帧计数而非定时器（见 [_idleGap] 的定时器坑），
     // 每次 pause 重置计数，[_autoFillLoop] 每轮检查，到期自动恢复。
     _autoFillPauseFrames = kAutoFillPauseFrames;
   }
@@ -1637,20 +1383,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 后台补齐循环：每批 [kLoadBatchSize] 章，逐批合入（经 [_applyLayoutChange]
   /// 做语义重锚）；直到「当前窗口内全部驻留」为止。滚动后由 [_ensureAutoFill] 再触发。
   ///
-  /// ## R1：批次间让出帧 + 空闲门（2026-10-06，CPU Profiler 定案，见§2.69 附九）
+  /// ## R1：批次间让出帧 + 空闲门（见§2.69 附九）
   ///
-  /// Profiler 实测：补齐阶段的 `RegExp` 占 **34.9%**、HTML 词法 15%、日志 7%
-  /// ⇒ 后 820ms 里 **478ms（56%）是纯 CPU 空转**，且按 50ms 分桶**均匀分布**
-  /// （每桶稳定 17~23ms）——它不卡首屏，但**持续吃电与发热**。
-  ///
-  /// 两处调整（**不改动任何正确性逻辑**：补齐范围、批大小、落库时机全不变）：
+  /// 实测补齐阶段大半是纯 CPU 空转（不卡首屏，但持续吃电发热）。两处调整
+  /// （**不改动任何正确性逻辑**：补齐范围、批大小、落库时机全不变）：
   /// ① **批次间让出一帧**（[_idleGap]）：一批 `extractSection` 是长同步段，
-  ///    批间让出控制权，使下一帧绘制与用户输入有机会被处理，而不是连续占住
-  ///    主isolate；
-  /// ② **不在交互中补**（[_autoFillPaused]）：用户滚动 / 拖动 / 翻页期间挂起，
-  ///    由 [_resumeAutoFillIfIdle] 在交互结束（停稳 [_onScrollEnd] 等）后恢复，
-  ///    **并有帧计数兜底**（[kAutoFillPauseFrames]）——事件可能不来（手势被接管、
-  ///    通知被拦截），时间/帧一定会到。补齐只为「预热邻章」，晚几秒无正确性影响。
+  ///    批间让出控制权，使绘制与用户输入有机会被处理；
+  /// ② **不在交互中补**（[_autoFillPaused]）：交互中挂起、停稳恢复
+  ///    （[_resumeAutoFillIfIdle]），**并有帧计数兜底**（[kAutoFillPauseFrames]）。
   Future<void> _autoFillLoop() async {
     int batches = 0;
     final Stopwatch clock = Stopwatch()..start();
@@ -1659,11 +1399,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         final ChapterAutoLoader? loader = _loader;
         if (loader == null) return;
         // R1②：交互中不补（滚动/拖动/翻页优先级高于预热）。
-        //
-        // 「挂起」不是 `return` 了事——那样循环直接退出、计数永不递减、兜底恢复
-        // 形同虚设（初版正是这样把 `reader_page_test` 回归④ 判红：占位永不换真）。
-        // 也不能裸`continue`——那会变成**忙等死循环**（没有 await 让出事件循环）。
-        // 正确做法：**挂起时让出一帧再进下一轮**，计数随之递减，到期自动恢复。
+        // 「挂起」不是 `return`（循环退出、计数永不递减、兜底形同虚设）也不是
+        // 裸 `continue`（无 await ⇒ **忙等死循环**）——**让出一帧再进下一轮**，
+        // 计数随之递减，到期自动恢复。
         if (_autoFillPaused) {
           if (--_autoFillPauseFrames <= 0) _autoFillPaused = false;
           await _idleGap();
@@ -1694,7 +1432,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               'batches=$batches ms=${clock.elapsedMilliseconds}');
           return;
         }
-        // 修 A：占位→真实合入会改总高，重锚后再采样（修 C，随收敛走）。
+        // 占位→真实合入会改总高，重锚后再采样（随收敛走）。
         _applyLayoutChange(() => setState(() {}), reason: 'autofill-merge');
         _scheduleEstimateRefresh();
         // R1①：批间让出一帧再继续下一批。
@@ -1706,26 +1444,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
   }
 
-  /// R1①：批次之间让出**一帧**（R1① 的实现）。
+  /// R1①：批次之间让出**一帧**。
   ///
-  /// ## 三次迭代的教训（2026-10-06，都是被测试打回来的）
-  ///
-  /// ① `Future<void>.delayed(4ms)` → **测试判红**：`testWidgets` 跑在 `FakeAsync`
-  ///    里，页面 dispose 后仍留下**未清的定时器**
-  ///    ⇒ `A Timer is still pending even after the widget tree was disposed`。
-  /// ② 只用 `SchedulerBinding.addPostFrameCallback` → **测试判红**（回归④
-  ///    「第一章」消失）：静止态（无 `pump`）下**没有下一帧**，回调永不触发
-  ///    ⇒ 补齐循环**死锁**，占位永不换真。**这是比①更严重的功能缺陷。**
-  /// ③ 现方案：**微任务 + 帧回调双保险**。
-  ///
-  /// 微任务（`scheduleMicrotask`）保证**控制权立刻还给事件循环**（后续
-  /// `scheduleFrameCallback` / 定时器 / 用户事件都能排进来），且**不留挂起
-  /// 定时器**、**不依赖帧**（静止态也能推进）——① ② 两个坑同时避开。
-  /// `scheduleFrameCallback` 则保证「至少让出一帧」：真机上帧驱动下，微任务
-  /// 只让出一个事件循环回合，渲染仍可能被排在同一批，故额外挂一个帧回调，
-  /// 下一帧真正开始绘制时补齐才继续。
-  ///
-  /// `[kAutoFillIdleGap]` 因此不再需要固定时长（已删除该常量）。
+  /// **微任务 + 帧回调双保险**：微任务保证控制权立刻还给事件循环（不留挂起
+  /// 定时器——`Future.delayed` 在 `testWidgets` FakeAsync 下会留未清定时器；
+  /// 也不依赖帧——静止态无 `pump` 时纯帧回调永不触发、循环死锁）；
+  /// 帧回调保证「至少让出一帧」，下一帧开始绘制时补齐才继续。
   Future<void> _idleGap() {
     if (!mounted || _disposed) return Future<void>.value();
     final Completer<void> micro = Completer<void>();
@@ -1743,29 +1467,21 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return micro.future;
   }
 
-  /// 布局突变（占位→真实合入 / 占位高估计刷新）后的**语义重锚**（修 A）。
+  /// 布局突变（占位→真实合入 / 占位高估计刷新）后的**语义重锚**。
   ///
-  /// `PERF-02` 增量加载下「占位块 ↔ 真实章」互换会改 ListView 总高——像素
-  /// 偏移不动、同一 offset 就指向别处：上方占位补齐后缩短，视口内容整体后移
-  /// （实机「进书从 40 多章跳到 300 多章」即此漂移在长书上的放大形态）。
-  /// 567Reader 的等价保障是「已发布排版页高度不可变、增量刷新不动滚动锚点」；
-  /// 连续滚动模型高度必变，故在突变前用 [ScrollAnchor] 记「视口顶在当前章的
-  /// 相对位置」，突变后按**语义坐标** [_beginScrollTo] 重锚。
+  /// `PERF-02` 增量加载下「占位块 ↔ 真实章」互换会改 ListView 总高——像素偏移
+  /// 不动、同一 offset 就指向别处（长书上会放大成整章级漂移）。突变前用
+  /// [ScrollAnchor] 记「视口顶在当前章的相对位置」，突变后按**语义坐标**
+  /// [_beginScrollTo] 重锚。
   ///
-  /// 为何走「估算 + 校正收敛」而非 [_onSettingsChanged] 式单跳 `correction`：
-  /// 单跳校正在「跳转尚未渲染就因再次突变而再次捕获」时，会把多个 delta
-  /// **叠加**（过校正）；[_beginScrollTo] 每帧重测目标、按语义坐标收敛，
-  /// 天然吸收后续突变（重锚迭代中再突变 → [_restoreStep] 下一帧重测即纠偏）。
+  /// **禁单跳 correction**：单跳校正在「跳转未渲染又遇再次突变」时会叠加 delta
+  /// 过校正；[_beginScrollTo] 每帧重测目标、按语义坐标收敛，天然吸收后续突变。
+  /// 采样也天然置后：[_finishRestore] 收敛后才 [_detectCurrentChapter]，
+  /// 不会把突变中间态当真值写进 `_currentIndex` / `_chapterPos`。
   ///
-  /// 采样（修 C）天然置后：[_finishRestore] 在收敛后才 [_detectCurrentChapter]，
-  /// 不会把突变中间态写进 `_currentIndex` / `_chapterPos`（旧 `_resampleAfterLoad`
-  /// 在 `setState` 后立即采样，会把漂移位置当真值采走入档）。
-  ///
-  /// 不重锚的三种情形（保持原状，交给既有采样点兜底）：
-  ///   · 恢复 / 重锚迭代进行中（[_restoring]）——在跑的迭代每帧重测目标，
-  ///     自会吸收本次突变（也防叠加过校正）；
-  ///   · 用户手势滚动中（`isScrolling`）——`jumpTo` 会掐掉用户的甩动；
-  ///   · 锚点抓取失败（章块未布局 / 控制器未挂）——无可锚语义。
+  /// 不重锚的三种情形（保持原状，交给既有采样点兜底）：恢复 / 重锚迭代进行中
+  /// （在跑的迭代每帧重测目标，自会吸收本次突变）；用户手势滚动中（`jumpTo`
+  /// 会掐掉用户的甩动）；锚点抓取失败（章块未布局 / 控制器未挂）。
   void _applyLayoutChange(VoidCallback mutate, {String reason = 'merge'}) {
     final ScrollController? controller = _controller;
     final bool canAnchor = !_restoring &&
@@ -1810,7 +1526,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     heights.sort();
     final double median = heights[heights.length ~/ 2];
     if ((median - _estimatedChapterHeight).abs() > 0.5) {
-      // 修 A：占位高是**所有**未加载章的渲染高度——一改就是全局高度突变，
+      // 占位高是**所有**未加载章的渲染高度——一改就是全局高度突变，
       // 与合入同样走语义重锚（`_applyLayoutChange`）。
       PerfLog.mark('layout.height',
           'old=${_estimatedChapterHeight.toStringAsFixed(1)} new=${median.toStringAsFixed(1)}');
@@ -1875,9 +1591,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 章标题 widget（与 [_headingHeightOf] 同一文本 / 样式 / 缩放）。
   ///
-  /// 2026-10-09 负责人拍板（改 `TYP-04`「标题居中」旧口径）：**左对齐、加粗、
-  /// 不要横线**；章间空行隔离 = 标题块顶部 [_kHeadingGapTop] 空档——每个章
-  /// 标题块都带，章与章之间因此恒隔一个空行（此前分页长卷里两章几乎贴着）。
+  /// `TYP-04`：**左对齐、加粗、不要横线**；章间空行隔离 = 标题块顶部
+  /// [_kHeadingGapTop] 空档（每个标题块都带 ⇒ 章与章恒隔一个空行量级）。
   Widget _headingWidget(int index, PaginationConfig cfg) {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -1897,21 +1612,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 未分页占位块的高度：**章标题占高 + 一行「载入中」+ 呼吸**。
   ///
-  /// ## ⚠️ 改前 = `cfg.pageHeight`（整屏）——2026-10-08 改（真机「章节间有大段空白」）
+  /// 滚动是**连续长卷**，占位不能给整屏高——否则滚过去是「一整屏空白 + 一行
+  /// 载入中」，且占位→真实章高突变量级过大（实测数倍），是滚动跳动的最大来源。
+  /// 小占位块把空白压成一行、高度突变压到同一量级；真实章高测出后仍走既有
+  /// 语义重锚（`_applyPagedViews` 的 `chapterTops` 差补偿），机制不变。
   ///
-  /// 滚动是**连续长卷**：每个还没排完版的章都先占一整屏空白，用户往下滚时看到
-  /// 的就是「上一章正文 → 一整屏空白（只有中间一行『载入中』）→ 下一章正文」。
-  /// 更糟的是**占位→真实的章高突变**：占位 1 屏（探针实测 572）→ 真实章 N 屏
-  /// （同夹具实测 2727，约 4.8 倍），这是滚动跳动最大的单一来源（与
-  /// `_applyPagedSample` 的陈旧章内比例叠加后，视口会直接落到新章末尾）。
-  ///
-  /// 小占位块把两件事同时压小：空白从「一整屏」变成「一行」，高度突变从
-  /// 4.8 倍压到同一量级——真实章高由测量得出后仍走既有语义重锚（
-  /// `_applyPagedViews` 的 `chapterTops` 差补偿），机制不变。
-  ///
-  /// 占位语义（`Center('第 N 章 · 载入中…')`）刻意**不**换成真标题：占位块
-  /// 与真章的区分是多条既有用例的判据（`reader_page_test` 回归①靠
-  /// 「占位块只显示载入中、无正文段落」判「第 1 章还没补齐」）。
+  /// 占位语义（`Center('第 N 章 · 载入中…')`）刻意**不**换成真标题：占位块与
+  /// 真章的区分是既有用例的判据（占位块只显示载入中、无正文段落）。
   double _placeholderBandHeight(int index, PaginationConfig cfg) {
     final double line = (cfg.textStyle.fontSize ?? 16) *
         (cfg.textStyle.height ?? 1.2) *
@@ -1929,15 +1636,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       if (i < 0 || i >= chapters.length) continue;
       final ChapterContent? content = _cache.peek(i);
       final PaginatedChapter? pag = _paginatedOf(i);
-      // ## ⚠️ 真身判据 = 「内容已就绪 + 页表已出」，**刻意不看段落数**
-      // （2026-10-09，真机「初次打开《枭臣》章间卡住一条『载入中…』」）
-      //
-      // 分章产物里存在**定稿的空段章**（如 TOC 规则把孤行「正文」切成一章、
-      // 正文区间只有空行 ⇒ `_splitParagraphs` 后 0 段）。分页内核对空章天生
-      // 一页空页（`PageBreaker.paginate`「每章至少一页」，`IncrementalPaginator`
-      // 空段构造即完成），它就是「**只有章标题**」的真身块。判据若掺
-      // `paragraphList.isNotEmpty`，空段章会**永驻**「载入中…」占位——把
-      // 「这一章没有正文」错当成「正文还没来」。
+      // ## ⚠️ 真身判据 = 「内容已就绪 + 页表已出」，**刻意不看段落数**：
+      // 定稿的空段章（正文区间只有空行 ⇒ 0 段）在分页内核下是「只有章标题」
+      // 的一页空页真身块；判据若掺 `paragraphList.isNotEmpty`，空段章会
+      // **永驻**「载入中…」占位——把「这一章没有正文」错当成「正文还没来」。
       if (content != null &&
           content.imagePages == null &&
           pag != null) {
@@ -1950,22 +1652,16 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           heading: _headingWidget(i, cfg),
         ));
       } else {
-        // ## ⚠️ 换参重排期间：**已分页章不许塌成 96dp 占位带**
-        // （2026-10-22，真机「切换字体大小会闪一下」）
+        // ## ⚠️ 换参重排期间：**已分页章不许塌成 96dp 占位带**——
+        // 换参 `open` 把页表整体作废（`_acceptConfig`），已分页邻章退化成
+        // [_placeholderBandHeight] 会让当前章章顶瞬移一整章高，而补偿目标常超出
+        // 旧布局的 `maxScrollExtent`（新布局未上屏）、[_jumpPaged] 只能推迟到帧末
+        // ⇒ **中间那一帧显示错章正文**。
         //
-        // 换参 `open` 把页表整体作废（`_acceptConfig`），窗口里已分页的邻章
-        // 立即退化成 [_placeholderBandHeight]（≈96dp）：当前章章顶随之从
-        // 「上一章一整章高」塌到 96dp，补偿跳要一次跳掉整整一章高；而补偿
-        // 目标常超出**旧布局**的 `maxScrollExtent`（新布局还没上屏），
-        // [_jumpPaged] 只能推迟到帧末 ⇒ **中间那一帧显示错章正文**（探针实录
-        // `paged.move why=views.late from=12502 to=30832`，d=18330）。
-        //
-        // 沿用 [sticky]（上一次真实渲染的章高；没登记过就用本书最近的真实
-        // 章高估，见 [_lastRealChapterHeight]）后章顶基本不动，补偿只剩
-        // 字体自身重排量（数十 px、同帧完成）。**只在正文已驻留且非空段时
-        // 沿用**：内容没来的章仍用 96dp 小占位带——否则会退回 2026-10-08
-        // 修掉的「章间一大段空白」（网络 / 解压慢的真机现场）；空段章真实
-        // 高只有标题（≈60），估成整章高会把窗口几何整体撑错。
+        // 沿用 [sticky]（上一次真实渲染的章高，见 [_lastRealChapterHeight]）后
+        // 章顶基本不动，补偿只剩字体自身重排量（同帧完成）。**只在正文已驻留
+        // 且非空段时沿用**：内容没来的章仍用小占位带（否则退回「章间一大段
+        // 空白」）；空段章真实高只有标题，估成整章高会把窗口几何撑错。
         final bool hasBody = content != null && content.paragraphList.isNotEmpty;
         final double sticky = hasBody
             ? (_stickyChapterHeights[chapters[i].href] ??
@@ -1990,23 +1686,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return out;
   }
 
-  /// 记下「当前正在渲染的章高」（href → 章块高），换参重排期间供占位带沿用。
-  ///
-  /// ## 为什么需要（2026-10-22，真机「切换字体大小会闪一下」）
-  ///
-  /// 换参 `open` 把页表整体作废（`_acceptConfig`），窗口里**已分页的邻章**
-  /// 立即退化成 [_placeholderBandHeight]（≈96dp）⇒ 当前章章顶瞬移一整章高，
-  /// 补偿跳要一次跳掉那么多；而补偿目标常超出**旧布局**的
-  /// `maxScrollExtent`（新布局尚未上屏）⇒ [_jumpPaged] 推迟到帧末补发
-  /// ⇒ 中间那一帧显示错章正文（探针实录
-  /// `paged.move why=views.late from=12502 to=30832`，d=18330）。
-  ///
-  /// 占位带沿用旧章高后章顶不动（Δ = 字体自身重排量），补偿同帧完成。
+  /// 记下「当前正在渲染的章高」（href → 章块高），换参重排期间供占位带沿用
+  /// （不沿用会章顶瞬移一整章高、中间帧显示错章正文，见 [_buildPageViews] 头注）。
   ///
   /// 每次 prime 前从**当前正在渲染的** `_pageViews` 重算一次。**占位带必须
-  /// 继承上一轮的值**（连续换参时：上一轮已把邻章变成占位带，那一轮的真章高
-  /// 只能从 `_stickyChapterHeights` 里取，重新从视图读会读成空 ⇒ 章顶再塌一次，
-  /// 补偿跳又推迟一帧——快速连点字号时正是这么闪的）。窗口外的条目顺手剪掉。
+  /// 继承上一轮的值**：连续换参时上一轮已把邻章变成占位带，真章高只能从
+  /// [_stickyChapterHeights] 取，重新从视图读会读成空 ⇒ 章顶再塌一次、
+  /// 补偿跳又推迟一帧（快速连点字号时闪动的来源）。窗口外的条目顺手剪掉。
   void _refreshStickyHeights() {
     final List<PagedChapterView> views = _pageViews;
     final PaginationConfig? cfg = _pageConfig;
@@ -2033,7 +1719,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       }
     }
     // 本书真实章高的中位数：给「未登记 sticky 的占位带」当估高（见
-    // [_lastRealChapterHeight]）。取中位数而不是均值——章长偶尔悬殊。
+    // [_lastRealChapterHeight]）。取中位数而非均值——章长偶尔悬殊。
     if (realHeights.isNotEmpty) {
       realHeights.sort();
       _lastRealChapterHeight = realHeights[realHeights.length ~/ 2];
@@ -2202,18 +1888,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _pageConfig = cfg; // 消费待换参数（视图与 config 同批换新）
 
     final String href = chapters[index].href;
-    // ## ⚠️ 自然停手必须保留「行内像素余量」（2026-10-09 真机「每次滚动都跳动」）
+    // ## ⚠️ 自然停手必须保留「行内像素余量」
     //
     // `offsetFor` 落位口径 = **页顶 + 目标行行顶**（`§2.70`，为「开书/跳转后
-    // 不从半行开始读」而设）。但**自由滚动**的视口顶几乎不会正好落在行顶，于是
-    // 每次停手都被吸附过去一次：内容整块下移「该行已被滚过的余量」⇒ 顶端原本
-    // 被切掉上半截的那一行**突然露全**。探针实测（`_probe_scroll_jump_test`）
-    // 连续四次停手位移恒为 **−12.0px**。
-    //
-    // 语义上「用户滚到哪就是哪」，`§2.71` 已定「视口顶落在行中间」不是缺陷——
-    // 故把余量补回行顶，等于**位置没动**。布局未变时 `landAt_new == lineTop`
-    // ⇒ 目标值与现场像素**恰好相等** ⇒ [`_jumpPaged`] 因 `|Δ| < 0.01` 直接
-    // 跳过，位移为 0；布局真变了（章顶移动 / 页表增长）时仍按语义坐标跟着走。
+    // 不从半行开始读」而设）。但**自由滚动**的视口顶几乎不会正好落在行顶，
+    // 每次停手都被吸附过去一次 ⇒ 顶端被切掉上半截的那行突然露全（实测会跳动）。
+    // 语义上「用户滚到哪就是哪」（`§2.71`：「视口顶落在行中间」不是缺陷）——
+    // 故把余量补回行顶，等于**位置没动**：布局未变时 [`_jumpPaged`] 因
+    // `|Δ| < 0.01` 直接跳过、位移为 0；布局真变了仍按语义坐标跟着走。
     final double remainder = keepScrollRemainder
         ? (_scrollRemainderOf(href, charOffset) ?? 0.0)
         : 0.0;
@@ -2256,23 +1938,18 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 页表未覆盖目标（占位/部分页）：估算落位，挂 pending 等空闲帧补完后
       // 二次精确落位（`RC1`：期间不写盘）。
       //
-      // ## ⚠️ 章内偏移必须按「已测前缀的像素/字符密度」外推
-      // （2026-10-22，真机录屏「切换字体大小会闪一下」）
-      //
-      // 改前 = `frac × cfg.pageHeight`，等于**把整章当成一页高**：34 页的章、
-      // 章内 66% 处被落成 0.66 页（探针实录 `paged.estimate index=0 char=2052
-      // off=380`，真值 12480）——视口先闪到章首附近的**另一段正文**（底部读数
-      // 还是原页码），再由二次收敛跳回，于是**每点一次字号闪一次**，长章尤甚。
-      // 现按已测前缀换算：`章内像素 ≈ 已测正文高 × 目标字符 / 已测字符`
-      // （前缀够长时密度代表性强，探针误差从 ~22 页压进 1 页内）；
-      // 标题占高不参与字符密度，先扣掉。
+      // ## ⚠️ 章内偏移必须按「已测前缀的像素/字符密度」外推：
+      // 旧口径 `frac × cfg.pageHeight` 等于**把整章当成一页高**，长章里估算
+      // 落点会闪到章首附近的另一段正文再二次收敛跳回（每次换参闪一帧）。
+      // 现按已测前缀换算（`章内像素 ≈ 已测正文高 × 目标字符 / 已测字符`，
+      // 前缀够长时密度代表性强）；标题占高不参与字符密度，先扣掉。
       final int total = PagePaginator.charCountOf(content.paragraphList);
       final double frac = total > 0
           ? (charOffset / total).clamp(0.0, 1.0)
           : _chapterPos.clamp(0.0, 1.0);
       final int windowPos = _window.indexOf(index);
-      // 目标章之前的窗口章高**直接取布局表的章顶**（不再按「每章一屏」估：
-      // 占位块自 2026-10-08 起不是整页高，按 `pageHeight` 估会高估数倍）。
+      // 目标章之前的窗口章高**直接取布局表的章顶**（占位块不是整页高，
+      // 按 `pageHeight` 估会高估数倍）。
       final double chapterTop =
           windowPos < 0 ? 0.0 : layout.chapterTops[windowPos];
       // 兜底口径（无已测前缀 / 空章）：仍是旧的 `frac × 页高`。
@@ -2307,10 +1984,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 补余量没有意义，其二次收敛（`_syncPagedViews(tryPendingLand: true)`）
       // 属程序化落位、按行顶对齐即可。
       landAt += remainder;
-      // `at` = 落位**前**的现场像素：`off - at` 就是这一次落位真正造成的位移
-      // （真机排查用；布局未变时二者必须相等，差 0 = 用户看不见移动）。
-      // 域外被验收拦下时本条后面**没有** `paged.move`（跳转被抑制、
-      // 等帧链补完后由 `paged.land` 收口）——排查时以此判「deferred」。
+      // `at` = 落位**前**的现场像素（`off - at` = 本次实际位移；布局未变时应为 0）。
+      // 域外被验收拦下时本条后面**没有** `paged.move`（跳转被抑制、等帧链补完后
+      // 由 `paged.land` 收口）——排查时以此判「deferred」。
       PerfLog.mark(
           'paged.prime',
           'index=$index char=$charOffset off=${landAt.toStringAsFixed(0)}'
@@ -2349,20 +2025,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     } else if (landAt != null) {
       _jumpPaged(landAt, why: 'prime');
     }
-    // ## ⚠️ prime 收尾必须「窗口全量登记 + 起空闲帧链 + 触发补齐」
-    // （2026-10-22，真机「快速缩小字体后视口里连着多条
-    // 『第 N 章 · 载入中…』占位带不消失、读数停在 1/1」）
-    //
-    // 换参 reprime 是停稳流⑧的盲区：`scheduler.open` 的换参路径会把
-    // 缓存与预分页队列**全部作废**（`_acceptConfig`），重新只登记 ±1；
-    // `_repairReachable` 扩窗追加的章（占位带只 ≈96dp，锚点 + 视口高会
-    // 逼着多 append 约 `ceil(vh/96)` 章）与窗口其余章不登记就**永无页表**。
-    // 同理 `_startPagedFrames` 也不在 reprime 路径上：`open` 的 prime 突发
-    // 达 `initialReady`（「1 页即上屏」，统一方案 Phase 1 §6.3）即停，剩余
-    // 页表全靠 [stepIdle] 续排——帧链没起，连已登记 ±1 的预分页任务都没跑过，
-    // 当前章页表更冻结在 1 页（读数「1/1」）。此前任何滚动停稳都会经
-    // 停稳流⑧（`_ensureAutoFill` → 补齐循环每批登记 + 起链）自愈，
-    // 故只在「改完字号不滚动」时暴露。
+    // ## ⚠️ prime 收尾必须「窗口全量登记 + 起空闲帧链 + 触发补齐」：
+    // 换参 reprime 是停稳流⑧的盲区——`scheduler.open` 的换参路径把缓存与
+    // 预分页队列全部作废（`_acceptConfig`）后只登记 ±1，`_repairReachable`
+    // 扩窗追加的章与窗口其余章不登记就**永无页表**；`_startPagedFrames` 也不在
+    // reprime 路径上，帧链没起则页表冻结在 1 页（读数「1/1」）。滚动停稳路径
+    // 会经停稳流⑧自愈，故只在「改完字号不滚动」时暴露。
     //
     // 三者均幂等（登记按 href 去重、帧链防重入、补齐有 `_fillRunning` 闸），
     // 开书 / 跳转 / 停稳路径的既有调用重复经过这里无副作用。
@@ -2377,29 +2045,16 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 视口顶相对「其所在行行顶」的像素余量（**自然滚动停手**再锚定用）。
   ///
-  /// ## 为什么需要它（2026-10-09 真机「每次滚动，顶部文字显示一半，弹跳一下显示全部」）
+  /// 落位口径 [`PagedScrollerState.offsetFor`] = 页顶 + **目标行行顶**（为程序化
+  /// 落位「从这一行开始读」而设，`§2.70`）。但**自由滚动**的视口顶几乎不会正好
+  /// 落在行顶，每次停手都被吸附一次 ⇒ 顶端那行突然露全（实测会跳动）。
+  /// `§2.71` 已定「视口顶落在行中间」**不是缺陷**——故把余量补回行顶 = **位置没动**：
+  /// 布局未变时 [`_jumpPaged`] 被 `|Δ| < 0.01` 挡掉、位移为 0；布局真变了则目标值
+  /// 随语义坐标移动并保住行内位置。返回 `null` = 不可得 → 调用方按行顶对齐落位。
   ///
-  /// 落位口径 [`PagedScrollerState.offsetFor`] = 页顶 + **目标行行顶**，这是为
-  /// **程序化落位**定的（开书恢复 / 跳章 / 跳书签 / 跳目录 / 搜索命中都要「从这一行
-  /// 开始读」而不是从半行，见 `§2.70`）。但**自由滚动**的视口顶几乎不会正好落在行顶，
-  /// 于是每次停手都被吸附一次：内容整块下移「该行已被滚过的余量」⇒ 顶端那行突然露全。
-  /// 探针实测连续四次停手位移恒为 **−12.0px**（`_probe_scroll_jump_test`）。
-  ///
-  /// `§2.71` 已定「视口顶落在行中间」是连续排版的固有形态、**不是缺陷**；语义上
-  /// 「用户滚到哪就是哪」。故把余量补回行顶 = **位置没动**：
-  ///   · 布局未变 ⇒ `landAt_new == lineTop` ⇒ 目标值与现场像素**恰好相等** ⇒
-  ///     [`_jumpPaged`] 被 `|Δ| < 0.01` 挡掉，位移为 0；
-  ///   · 布局真变了（章顶移动 / 页表增长）⇒ 目标值随语义坐标一起移动，且保住
-  ///     行内位置——比「跳到行顶」更贴近用户预期。
-  ///
-  /// 返回 `null` = 不可得（无滚动体 / 采样 href 对不上 / 数值异常）→ 调用方按
-  /// 行顶对齐落位（等价改前行为，不做无依据的平移）。
-  ///
-  /// 上下界取 `±cfg.pageHeight` 作防御：采样已与落位共用行表口径（§2.84），
-  /// 布局未变时余量恒等于「视口顶 − 所在行行顶」（0 ~ 行高，视口顶在段间距
-  /// 空白时为负、|rem| ≤ 段间距），clamp 不会触发；但布局突变后（章顶移动 /
-  /// 重排）行表已换代，旧行表余量可能越界——夹到一页以内，不至于把落点甩出
-  /// 可视范围。
+  /// 上下界取 `±cfg.pageHeight` 作防御：布局未变时余量恒为「视口顶 − 行顶」
+  /// （clamp 不触发）；布局突变后行表已换代，旧行表余量可能越界——夹到一页以内，
+  /// 不至于把落点甩出可视范围（采样与落位共用行表口径，§2.84）。
   double? _scrollRemainderOf(String href, int charOffset) {
     final PagedScrollerState? scroller = _scroller;
     final PaginationConfig? cfg = _pageConfig;
@@ -2436,19 +2091,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 超出则帧末补跳（setState 后新布局已建，接受 1 帧滑移——
   /// 同帧先跳会被旧 `maxScrollExtent` 弹簧拉回）。
   ///
-  /// [why] 只进日志（`paged.move`）：真机「跳动」排查需要**每一条程序化位移**
-  /// 都留痕，光看 `paged.prime` 分不清「算出来的目标」与「真的跳了」。记的是
-  /// **实际**前后值，故 `d` 就是用户看到的那次平移量。
+  /// [why] 只进日志（`paged.move`）：每一条程序化位移都要留痕（记实际前后值），
+  /// 光看 `paged.prime` 分不清「算出来的目标」与「真的跳了」。
   ///
-  /// ## ⚠️ 延迟补跳必须带序号作废（2026-10-12 回归①③判红实证）
+  /// ## ⚠️ 延迟补跳必须带序号作废
   ///
-  /// 帧末 clamp 回调执行时，世界可能已被**更新的跳转**改写：实测
-  /// `paged.move why=views from=0 to=1544`（收敛落位，正确）之后又来
-  /// `why=views.late from=1544 to=888`——后者是更早排队的陈旧目标
-  /// （占位→真合入期 delta 重锚的 888），回调晚到一步把**已收敛的落点
-  /// 拖回旧目标**，采样从此停在错章（章 0 尾）。故回调开头先比
+  /// 帧末 clamp 回调执行时世界可能已被**更新的跳转**改写：更早排队的陈旧目标
+  /// 晚到一步会把**已收敛的落点拖回旧目标**，采样从此停在错章。故回调开头先比
   /// [`_jumpSeq`]：期间有任何更新的跳转即作废（`skip=superseded`），
-  /// 新意图永远压过旧意图，「clamp 截短/拖回 + 永不重试」的又一变体。
+  /// 新意图永远压过旧意图。
   void _jumpPaged(double target, {String why = 'prime'}) {
     final ScrollController? controller = _controller;
     if (controller == null || !controller.hasClients) return;
@@ -2507,16 +2158,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       return (views: views, layout: layout, sig: sig);
     }
     final int before = _window.length;
-    // ## ⚠️ 这里**不能**给窗口加上界（2026-10-09 实测，反向证据）
-    //
-    // 未排页表的章只贡献一条 `_placeholderBandHeight`（≈96dp）占位带，`totalHeight`
-    // 因此很难够到 `anchor + vh` ⇒ 该循环会多 append 出约 `ceil(vh / 96)` 章。
-    // 看起来该收口（并会让分页缓存 LRU 挤掉当前章），但把窗口压到缓存容量
-    // （5 章）后 `reader_page_test` 回归②（深章节恢复）立刻判红：窗口布局总高
-    // 小于视口时 `maxScrollExtent == 0`，`_jumpPaged` 的目标被 clamp 成 0 且
-    // 「与现场相等 ⇒ 直接 return」，**落位被静默丢弃且永不重试**（无 `paged.move`
-    // 留痕），目标章自然进不了视图。真正该修的是「淘汰不能碰正在渲染的章」——
-    // 见 `PaginationCache.setProtected`；窗口多 append 只是浪费，不是错。
+    // ## ⚠️ 这里**不能**给窗口加上界：
+    // 占位带只 ≈96dp，`totalHeight` 很难够到 `anchor + vh` ⇒ 循环会多 append
+    // 约 `ceil(vh / 96)` 章（看起来该收口，且会让 LRU 挤掉当前章），但压到缓存
+    // 容量后深章节恢复立刻失败：窗口布局总高小于视口时 `maxScrollExtent == 0`，
+    // `_jumpPaged` 目标被 clamp 成 0 且「与现场相等 ⇒ 直接 return」，**落位被
+    // 静默丢弃且永不重试**。真正该修的是「淘汰不能碰正在渲染的章」（
+    // `PaginationCache.setProtected`）；窗口多 append 只是浪费，不是错。
     while (layout.totalHeight < anchor + vh &&
         _window.last < chapters.length - 1) {
       _window.add(_window.last + 1);
@@ -2536,17 +2184,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 落位可达性验收（`paged.land` / `paged.prime` 的收敛前置；`RC1` 同门）：
   /// 目标行下方必须还有 ≥ 视口高的布局内容（`landAt ≤ maxScrollExtent`）。
   ///
-  /// ## ⚠️ 为什么必须验收（2026-10-12 探针 `_probe_landing` 实证）
+  /// ## ⚠️ 为什么必须验收
   ///
   /// `offsetFor` 只要页表覆盖目标行就返回值，**不要求目标可滚动到位**——
-  /// 页表刚排到目标页页尾时，「目标行行顶 → 已排内容底」通常不足一屏
-  /// （实测差 60px 起步、随切片粒度放大），`_jumpPaged` 的超域目标会被
-  /// postFrame clamp **静默截短**。而收敛一旦宣告（`_pendingLand` 已清、
-  /// `_positionConverged=true`）就**永不重试**——采样从此停在截短位。
-  /// 实测现场：`paged.land off=130236` → `paged.move why=views.late
-  /// to=129744`（截 492px）→ 采样停在 23202（目标 23304，偏 102 字符）；
-  /// 竞态另一结局只截 12px、落进段间距空隙反而贴回目标行（23301）——
-  /// 同一机制两种结局，即「长章深位恢复落点偶发偏一截 / 不收敛」的根因。
+  /// 页表刚排到目标页页尾时，「目标行行顶 → 已排内容底」常不足一屏，
+  /// `_jumpPaged` 的超域目标会被 postFrame clamp **静默截短**。而收敛一旦宣告
+  /// （`_pendingLand` 已清、`_positionConverged=true`）就**永不重试**——
+  /// 采样从此停在截短位（实测同一机制有「截一大段」与「恰好贴回目标行」
+  /// 两种结局，即「长章深位恢复落点偶发偏一截 / 不收敛」的根因）。
   ///
   /// 分页排干（`scheduler.hasWork == false`）仍不可达 = **真书尾**：
   /// 布局不会再长，诚实 clamp（`§2.70`「由 clamp 兜住」）就是终点，验收放行。
@@ -2596,7 +2241,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     if (target != null) _jumpPaged(target, why: 'views'); // pre-jump 在 setState 前
     // 窗口章 = 正在渲染的章：必须留在分页缓存里（读路径 [_paginatedOf] 走只读
-    // `peek`，不参与 LRU 提位 ⇒ 被淘汰即静默退化为占位带、锚点以上布局塌陷
+    // `peek`、不参与 LRU 提位 ⇒ 被淘汰即静默退化为占位带、锚点以上布局塌陷
     // ⇒ 像素→章 采样错位并落盘。见 `PaginationCache.put`）。
     _scheduler?.cache.setProtected(
       <String>[for (final PagedChapterView v in views) v.href],
@@ -2638,9 +2283,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           paragraphSpacing: cfg.paragraphSpacing,
         );
         // 命中 ≠ 收敛：可达性验收挪到 `_repairReachable` 之后（见下方
-        // `landTarget` 收口段）——`offsetFor` 只要页表覆盖目标行就给值，
-        // 此刻「目标行到已排内容底」常不足一屏，立即宣告收敛会被
-        // `_jumpPaged` 的超域 clamp 截短且永不重试（[_landingReachable]）。
+        // `landTarget` 收口段）——立即宣告收敛会被 `_jumpPaged` 的超域 clamp
+        // 截短且永不重试（[_landingReachable]）。
         if (landOffset != null) landTarget = pending;
       }
     }
@@ -2682,10 +2326,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         _checkOpenGate();
         PerfLog.mark('paged.land',
             'index=${landTarget.index} off=${landOffset.toStringAsFixed(0)}');
-        // **分页模式的落定信号**：`paged.land` 是分页路径（`_pagedJumpTo` 一次
-        // 落位）的终点，**不经过 [_finishRestore]**（那是 ListView 路径的收口）。
-        // 故「打开后是否还在跳」这条链路指标必须挂在这里，否则分页模式下
-        // `open.chain` / `restoreEnd` 永不出现（真机日志实证：11 次开书全部缺失）。
+        // **分页模式的落定信号**：`paged.land` 是分页路径的终点，**不经
+        // [_finishRestore]**（那是 ListView 路径的收口）——「打开后是否还在跳」
+        // 这条链路指标必须挂在这里，否则分页模式下 `open.chain` / `restoreEnd`
+        // 永不出现。
         widget.openTrace?.mark('restoreEnd', 'branch=paged index=${landTarget.index}');
         widget.openTrace?.reportChain();
       } else {
@@ -2757,11 +2401,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 把窗口内「已就绪但未分页」的章登记进预分页队列（prev 槽位复用，
   /// 队列按 href 去重；当前章 / 已有定稿的自动跳过）。
   ///
-  /// **空段章也登记**（2026-10-09）：它是「一张空页」的定稿章（内核
-  /// `PageBreaker.paginate` 空行表返回一页空页、`IncrementalPaginator` 空段
-  /// 构造即完成），登记即秒完成入缓存——否则 `_paginatedOf` 恒 `null`，
-  /// `_buildPageViews` 永远把它当「载入中…」占位（真机《枭臣》孤行「正文」
-  /// 切出的空段章卡在章间实证）。
+  /// **空段章也登记**：它是「一张空页」的定稿章（内核空行表返回一页空页、
+  /// 空段构造即完成），登记即秒完成入缓存——否则 `_paginatedOf` 恒 `null`，
+  /// `_buildPageViews` 永远把它当「载入中…」占位（空段章也算真身）。
   void _registerWindowUnpaginated() {
     final PaginationScheduler? scheduler = _scheduler;
     final PaginationConfig? cfg = _pageConfig;
@@ -2784,17 +2426,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 窗口**尾追加**时立刻预热新章正文（直译 legado「预载下一章」的语义）。
   ///
-  /// ## 为什么不能在停稳才载
+  /// 正文若等停稳才载，用户快滑到窗口尾部时新章要**等停手**才看到正文；改成
+  /// 「追加的那一刻就起 IO」（读取异步、不占滚动帧），到手后登记未分页章 +
+  /// 启动空闲分页帧，正文通常在被滑到之前已就位。
   ///
-  /// 改前正文只在 [_onPagedStopped] ③（`loadFirstBatch`）才载：用户快滑到窗口
-  /// 尾部 → 新章先以占位块上屏 → **要等停手**才看到正文（真机「章节间有大段
-  /// 空白」，探针实测占位块曾是整屏 572dp）。这里改成「追加的那一刻就起 IO」：
-  /// 正文读取本身异步、不占滚动帧；到手后登记未分页章 + 启动空闲分页帧，
-  /// 于是正文通常在被滑到之前已就位，占位块只在网络/解压慢时短暂出现。
-  ///
-  /// 与 [`R1②`][_pauseAutoFill] 的分工：那边挂起的是**全书预热**（Profiler 实测
-  /// 占补齐阶段 56% 纯 CPU，交互期该让位）；这里只为**紧邻视口的那一章**起一次
-  /// IO，是「翻页不空等」的必要代价，量级是单章而非整本。
+  /// 与 [`R1②`][_pauseAutoFill] 的分工：那边挂起的是**全书预热**（交互期该让位）；
+  /// 这里只为**紧邻视口的那一章**起一次 IO，是「翻页不空等」的必要代价。
   Future<void> _preloadWindowTail(int index) async {
     final ChapterAutoLoader? loader = _loader;
     if (loader == null || index < 0 || _disposed) return;
@@ -2920,8 +2557,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   Future<void> _onPagedStopped() async {
     final int seq = ++_pagedStopSeq;
     if (!mounted || _disposed || !_pagedMode) return;
-    // 每次停手一行：真机录屏的「哪一帧跳了」只能靠这里对齐（`px` = 停手时
-    // 的现场像素；后续 `paged.move` 的 `d` 就是那次位移）。
+    // 每次停手一行日志：用于对齐「哪一帧跳了」（`px` = 停手现场像素，
+    // 后续 `paged.move` 的 `d` 就是那次位移）。
     PerfLog.mark(
         'paged.stop',
         'px=${_pagedPixelsOrNull()?.toStringAsFixed(1) ?? '-'} '
@@ -3006,14 +2643,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       final int book = _window[c].clamp(0, chapters.length - 1);
       _positionSampled = false; // `RC3`：章内位置不可信，不写盘
       if (book != _currentIndex || book != _liveIndex) {
-        // ## ⚠️ 章内比例必须一起归零（2026-10-08 修，真机「滚动时跳动」）
-        //
+        // ## ⚠️ 章内比例必须一起归零：
         // `_chapterPos` 是**章内**比例，只对本章有意义。落到占位章（页表还没
-        // 出来）时若只换章身份、留着上一章的比例，等该章排完版后
-        // `_ensurePagedActive → _primeOpenSync(charOffset: _currentCharOffset())`
-        // 会拿这个「别人的比例」去落位——探针实测：读第 2 章末 → 滚进第 3 章
-        // 占位块（比例仍是第 2 章的 0.9）→ 第 3 章排版完成后视口直接落到
-        // **第 3 章末尾**（offset 5454→4882 = 该章最后一屏），等于整章被跳过。
+        // 出来）时若只换章身份、留着上一章的比例，等该章排完版后会拿这个
+        // 「别人的比例」落位——实测视口直接落到**该章末尾**，等于整章被跳过。
         // 占位块只表示「这一章还没排」，视口落在它的上沿 ⇒ 语义就是章首。
         setState(() {
           _currentIndex = book;
@@ -3086,11 +2719,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             _positionConverged = true;
           });
           // 「即达」只是落位语义；视口真身还要这一章**成真**：空段章天生
-          // 「一张空页」的定稿页表（`IncrementalPaginator` 空段构造即完成，
-          // `open` 突发即定稿入缓存）——不入缓存它就永驻「载入中…」占位带，
-          // [_viewportReal] 恒假、门闸死等到 3s 兜底。**必须走 `open`**：
-          // 调度器配置（`_config`）只由它立起，在此之前 [setWindow] 是 no-op，
-          // 邻章登记会被静默吞掉（2026-10-12 空段章用例判红实证）。
+          // 「一张空页」的定稿页表（空段构造即完成、`open` 突发即定稿入缓存）
+          // ——不入缓存它就永驻「载入中…」占位带，[_viewportReal] 恒假、门闸
+          // 死等到 3s 兜底。**必须走 `open`**：调度器配置只由它立起，在此之前
+          // [setWindow] 是 no-op，邻章登记会被静默吞掉。
           final PaginationScheduler? scheduler = _scheduler;
           final PaginationConfig? cfg = _pageConfig;
           if (scheduler != null && cfg != null) {
@@ -3374,18 +3006,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // 内容外裹 `SingleChildScrollView(physics: Never)`：**只**为了让它给 Column
     // 无界主轴约束 + 自己裁到页框。
     //
-    // ## ⚠️ 为什么不能直接返回 Column（2026-10-08，真机「滑动模式顶/底被截断」）
-    //
-    // 本 widget 被 `PageTurnLayers` 放进 `Stack(fit: StackFit.expand)` ⇒ **紧约束**
-    // （宽高都 = 可视区）。而排版参数（页高）来自上一帧的 `_pageConfig`：chrome
-    // 切换那一帧可视区已经变小、页表还是旧的 ⇒ `标题占高 + 页高 > 可视区高`
-    // ⇒ Column 直接**溢出**（探针实测 debug 报 `RenderFlex overflowed by 154`，
-    // 即底部约 5 行被黄黑斜纹盖住 → 用户看到的就是「底部文字被截断」）。
-    // 下一帧 reprime 完成后自愈（探针：越界 142px 只存在 1 帧）。
-    //
-    // 换 `SingleChildScrollView` 后：Column 拿到无界高（不再触发溢出断言），
-    // 外层按页框裁切——**像素结果与改前一致**（本来就该被裁），但不再有
-    // 溢出条纹，也不再在 debug 控制台刷断言。
+    // ## ⚠️ 不能直接返回 Column：
+    // 本 widget 被放进 `Stack(fit: StackFit.expand)` ⇒ **紧约束**（宽高都 =
+    // 可视区），而排版参数（页高）来自上一帧的 `_pageConfig`——chrome 切换那一帧
+    // 可视区已变小、页表还是旧的 ⇒ `标题占高 + 页高 > 可视区高` ⇒ Column 直接
+    // **溢出**（底部文字被截断，下一帧 reprime 完成后自愈）。
+    // 换 `SingleChildScrollView` 后 Column 拿到无界高（不触发溢出断言），
+    // 外层按页框裁切——**像素结果一致**（本来就该被裁），但不再有溢出条纹。
     return SingleChildScrollView(
       physics: const NeverScrollableScrollPhysics(),
       child:
@@ -3646,12 +3273,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 保存当前阅读进度（进度文件 + 回写 `BookRecord` 阅读字段）。
   ///
-  /// **`RC1` 写盘闸门**：恢复进行中 / 未收敛（校正超帧数放弃）/ 未采样
-  /// （占位高章盖顶、探不到章）一律不写——否则误差被当真值存进
-  /// `ReadingProgress` / `localHint`，下一轮开书再放大（误差**复利**回路）。
-  /// 所有保存路径（滚动停止 / 切章 / `dispose()`）都经此闸门。
-  ///
-  /// 失败静默（不影响阅读，下次保存重试）。
+  /// **`RC1` 写盘闸门**：恢复进行中 / 未收敛 / 未采样（`RC3` 占位高章盖顶、
+  /// `RC4` 探不到章）一律不写——否则误差被当真值存进 `ReadingProgress` /
+  /// `localHint`，下一轮开书再放大（误差**复利**回路）。所有保存路径
+  /// （滚动停止 / 切章 / `dispose()`）都经此闸门。失败静默（下次保存重试）。
   Future<void> _saveProgress() async {
     if (_restoring || !_positionConverged || !_positionSampled) return;
     final List<Chapter>? chapters = _chapters;
@@ -3721,18 +3346,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 异步取每章**权重估算**（fire-and-forget，见 [_chapterWeights] 注释）。
   ///
-  /// ## ⚠️ 只走 `chapterWeightEstimates`，**绝不**回落 `chapterCharCounts`
-  /// （2026-10-08 真机「EPUB 章节加载特别慢 / 快滑多章没加载」定案）
+  /// ## ⚠️ 只走 `chapterWeightEstimates`，**绝不**回落 `chapterCharCounts`：
+  /// 精确口径在 EPUB 上是「逐章解压 + 解析 XHTML」，长书实测把主 isolate
+  /// **独占秒级**且随章数线性增长，正好落在开书后用户开始滚动的那一刻——
+  /// 帧回调与分页 `step` 全部停摆（「章节要等很久才出来」）。
   ///
-  /// 这里的返回值只喂给一个**一位小数的进度百分比**，而精确口径
-  /// （`chapterCharCounts`）在 EPUB 上是「逐章解压 + 解析 XHTML」——真机 1152 章
-  /// 的书实测把主 isolate **独占秒级**（探针：300 章 301ms，其中停顿 270ms；
-  /// 随章数线性增长），且正好落在开书后、用户开始滚动的那一刻：帧回调与分页
-  /// `step` 全部停摆 ⇒ 「章节要等很久才出来」「快滑过去好几章还是空的」。
-  ///
-  /// 故本方法**无条件**保证「开书路径零全书遍历」：估算取不到（源不支持）就
-  /// 直接保持等权——不回落精确口径，不给自己留一条会让 UI 冻住的后路。
-  /// 代价只是百分比从「精确字数加权」退化为「等权」，与迁移前公式同形。
+  /// 故本方法**无条件**保证「开书路径零全书遍历」：估算取不到就保持等权，
+  /// 不给自己留一条会让 UI 冻住的后路。代价只是百分比退化为等权（同迁移前公式）。
   ///
   /// `null`（源不支持）保持等权；dispose / 竞态静默放弃，不写状态。
   Future<void> _loadChapterWeights() async {
@@ -3756,8 +3376,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 显示用全书进度百分比（**一位小数**，同样向下取整到 0.1）。
   ///
-  /// 底部常驻指示器口径（负责人 2026-10-08 指定截图格式「22.2%」）。
-  /// 向下取整的理由与 [_livePercent] 同：`overall` 即使 0.9999 也显示 99.9%，
+  /// 底部常驻指示器口径（截图格式「22.2%」）。向下取整同 [_livePercent]：
   /// 只有真的读完（= 1.0）才显示 100.0%——避免「差一点就满格」的观感。
   double get _livePercentValue {
     final List<Chapter>? chapters = _chapters;
@@ -3817,8 +3436,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     GlassOverlays.showSheet<void>(
       context: context,
       isScrollable: false,
-      // 库该路径给的是**无界高度**（探针实测 h<=Infinity），Flexible+ListView
-      // 视口会炸 → 这里补 maxHeight 约束（60% 屏高，内容矮时仍收缩）。
+      // 库该路径给的是**无界高度**，Flexible+ListView 视口会炸 → 这里补
+      // maxHeight 约束（60% 屏高，内容矮时仍收缩）。
       // `UI-04`：目录列表行不透明——玻璃 sheet 底上垫 OpaqueContentSurface，
       // 玻璃只留外壳（弹窗背景 / 拖拽把手），列表行下不透出玻璃。
       builder: (BuildContext sheetContext) => ConstrainedBox(
@@ -4098,31 +3717,28 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 沉浸全屏切换（`TYP-09`）：隐藏 / 恢复 AppBar 与底部控制条。
   ///
   /// 两个入口，都在 `_buildBody`：点正文**九宫格中宫**（`reader-chrome-toggle`，
-  /// 落点判定见 [_onContentTapUp]）与点常驻读数行
-  /// （`reader-chrome-toggle-status`，图片页里中央点击被「点页全屏缩放」占用，
-  /// 故需要一个模式无关的入口）；顶栏与全屏浮层的两个切换按钮已按负责人要求移除
-  /// （详见 `_fullscreen` 字段注释）。
+  /// 落点判定见 [_onContentTapUp]）与点常驻读数行（`reader-chrome-toggle-status`，
+  /// 图片页里中央点击被「点页全屏缩放」占用，故需要一个模式无关的入口）；
+  /// 顶栏与全屏浮层的切换按钮已移除（详见 `_fullscreen` 字段注释）。
   void _toggleFullscreen() {
     setState(() => _fullscreen = !_fullscreen);
   }
 
-  /// 正文层 tap 的落点闸门（2026-10-10 负责人拍板：「将阅读页划为9宫格，
-  /// 只有最中间的宫格位置，才能点击呼出菜单」）。
+  /// 正文层 tap 的落点闸门：阅读页划为九宫格，**只有最中间的宫格**能点击呼出菜单。
   ///
-  /// 判定框 = `reader-chrome-toggle` 自身的盒（与正文排版区同框）；按
-  /// **三分线**划 3×3，只有落进中宫 `[w/3, 2w/3] × [h/3, 2h/3]`（含边界）的
-  /// tap 才调 [_toggleFullscreen]，其余八格落点一律无事（防阅读时侧边 / 角落
-  /// 误触把 chrome 翻出来）。
+  /// 判定框 = `reader-chrome-toggle` 自身的盒（与正文排版区同框）；按**三分线**
+  /// 划 3×3，只有落进中宫 `[w/3, 2w/3] × [h/3, 2h/3]`（含边界）的 tap 才调
+  /// [_toggleFullscreen]，其余八格落点一律无事（防阅读时侧边 / 角落误触翻出 chrome）。
   ///
   /// ⚠️ 落点换算用 **`globalToLocal(globalPosition)`**，不用
-  /// `TapUpDetails.localPosition`：后者构造兜底是 `localPosition ?? globalPosition`
-  /// （`gestures/tap.dart`）——两处坐标系不一致时会静默退化成全局坐标，
-  /// 而测试窗原点即全局原点、两种写法**恒等**，这类错位测试照绿真机才炸。
-  /// 显式过一次 `RenderBox.globalToLocal` 把口径钉死在判定框上。
+  /// `TapUpDetails.localPosition`：后者构造兜底是 `localPosition ?? globalPosition`，
+  /// 两处坐标系不一致时会静默退化成全局坐标，而测试窗原点即全局原点、两种写法
+  /// **恒等**——这类错位测试照绿真机才炸。显式过一次 `RenderBox.globalToLocal`
+  /// 把口径钉死在判定框上。
   ///
   /// 语义不变的邻居：正文链接（`CNT-04`）、图片页点页缩放（`FMT-02`）、
-  /// 长按划词（`AI-02`）各有自己的识别器，赢竞技场后本回调根本不触发
-  /// （`handleTapUp` 只在本识别器胜出时走），中宫判定不碰它们。
+  /// 长按划词（`AI-02`）各有自己的识别器，赢竞技场后本回调根本不触发，
+  /// 中宫判定不碰它们。
   void _onContentTapUp(TapUpDetails details) {
     final RenderObject? obj =
         _chromeToggleKey.currentContext?.findRenderObject();
@@ -4139,16 +3755,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 从弹层里选定一个位置跳过去后**收起 chrome**（`TYP-09`）。
   ///
-  /// 为什么必须有这一步：chrome 现在是**覆盖层**（`extendBody*`，见 [build]），
-  /// 顶栏压在正文上沿 56dp；而搜索命中 / 目录 / 书签 / 摘要的落位一律是
-  /// 「目标在页顶」（`§2.70` 行顶对齐）⇒ 若跳转时 chrome 还开着，用户跳过去
-  /// 第一眼看到的目标恰好压在顶栏底下（探针实测：目标段落矩形
-  /// `Rect(8,0,792,29)` 落在顶栏 `0..56` 之内 ⇒ 不可命中、看不见）。
+  /// chrome 是**覆盖层**（`extendBody*`，见 [build]），顶栏压在正文上沿；而
+  /// 搜索命中 / 目录 / 书签 / 摘要的落位一律是「目标在页顶」（`§2.70` 行顶对齐）
+  /// ⇒ chrome 还开着时跳过去，目标恰好压在顶栏底下（不可命中、看不见）。
+  /// 语义上也本该如此：「从弹层里挑一个位置」＝「我要开始读这里」。
   ///
-  /// 语义上也本该如此：「从弹层里挑一个位置」＝「我要开始读这里」，
-  /// 参考实现（legado）的目录 / 搜索是独立页面，回到阅读页时菜单本就是收起的。
-  ///
-  /// 只在「控制条上/下一章」这类**就地操作**里保持 chrome（那时用户正在用控制条，
+  /// 只在「控制条上/下一章」这类**就地操作**里保持 chrome（用户正在用控制条，
   /// 收掉会让他找不到按钮）。
   void _exitChrome() {
     if (_fullscreen) return;
@@ -4197,42 +3809,29 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final bool ready = _ready && chapters != null && chapters.isNotEmpty;
     // 正文预算与底部读数**只吃系统 inset**，故取 Scaffold **外层**的 MediaQuery。
     //
-    // ⚠️ 不能用 body 里那份：`Scaffold` 会给 body 单独加工一个 MediaQuery
-    // （`scaffold.dart:3030-3033` 定 removeTop/removeBottom，`_BodyBuilder`
-    // （`scaffold.dart:960-985`）再按 extendBody* 改写），唤出 chrome 时
-    // 顶部 44→0、底部 34→0（探针实测）。正文几何若跟着它走，就等于让 chrome
-    // 参与排版 —— 正是本次要修掉的缺陷。
-    // ⚠️ **按需订阅**（`paddingOf` / `textScalerOf`）而非全量 `MediaQuery.of`
-    // （2026-10-23 真机「搜索页进书仍有丢帧感」定案）：键盘收起动画会让
-    // `viewInsets` 逐帧变化，全量订阅使本 build 每帧重跑、整棵正文树逐帧
-    // 重建——首帧重活被放大数倍。这里只需要系统 inset 与文字缩放，
+    // ⚠️ 不能用 body 里那份：`Scaffold` 会给 body 单独加工一个 MediaQuery 并按
+    // `extendBody*` 改写，唤出 chrome 时顶部 / 底部 inset 归零，正文几何若跟着
+    // 它走就等于让 chrome 参与排版。⚠️ **按需订阅**（`paddingOf` / `textScalerOf`）
+    // 而非全量 `MediaQuery.of`：键盘收起动画会让 `viewInsets` 逐帧变化，全量订阅
+    // 使本 build 每帧重跑、整棵正文树逐帧重建。这里只需要系统 inset 与文字缩放，
     // 二者都不随键盘变。
     final EdgeInsets systemPadding = MediaQuery.paddingOf(context);
     final TextScaler systemTextScaler = MediaQuery.textScalerOf(context);
 
     return Scaffold(
       backgroundColor: _pageColor(theme),
-      // `TYP-09` 契约（2026-10-09 负责人拍板）：**唤出 / 收起 chrome 不得改变
-      // 正文排版区高度**。
+      // `TYP-09` 契约：**唤出 / 收起 chrome 不得改变正文排版区高度**。
       //
-      // 改前 `appBar` / `bottomNavigationBar` 是**占位**槽：`_ScaffoldLayout`
-      // 用 `contentTop = appBarHeight`、`contentBottom = bottom −
-      // max(minInsets.bottom, bottomWidgetsHeight)` 把 body 挤矮
-      // （`scaffold.dart:1041-1104`），探针实测 body 高 852 → 615 ⇒ 正文可排版高
-      // 746 → 587（−159px，约 5 行），整页重排、阅读位置肉眼可见地跳。
-      //
-      // 两个 `extendBody*` 让 body **恒占满整屏**（`contentTop = 0`；`extendBody`
-      // 还会把底部层高度加回 `bodyMaxHeight`，见 `scaffold.dart:1098-1101`），
-      // chrome 退化成**覆盖层**：顶栏盖住正文上沿、底部层盖住正文下沿，
-      // 正文自己一像素都不动。
+      // `appBar` / `bottomNavigationBar` 是**占位**槽，会把 body 挤矮
+      // （chrome 显隐 ⇒ 整页重排、阅读位置肉眼可见地跳）。两个 `extendBody*`
+      // 让 body **恒占满整屏**，chrome 退化成**覆盖层**：顶栏盖住正文上沿、
+      // 底部层盖住正文下沿，正文自己一像素都不动。
       extendBody: true,
       extendBodyBehindAppBar: true,
-      // `TYP-09` 同契约第三条（2026-10-22 真机「搜索页进书剧烈闪动」定案）：
-      // **键盘收起动画不得改正文排版区高度**。搜索页点书开读时输入法还在收起
-      // 途中，`resizeToAvoidBottomInset` 默认 true 会让 body 逐帧变高 ⇒
-      // `_syncPageConfig` 的 `pageHeight` 每帧都在变 ⇒ 整章反复重排 = 剧烈闪动。
-      // 正文区没有任何输入框（书内搜索走独立弹层），置 false 即与
-      // `extendBody*` 同款「正文一像素都不动」语义。
+      // `TYP-09` 同契约第三条：**键盘收起动画不得改正文排版区高度**。开书时
+      // 输入法还在收起途中，`resizeToAvoidBottomInset` 默认 true 会让 body 逐帧
+      // 变高 ⇒ `pageHeight` 每帧都在变 ⇒ 整章反复重排 = 剧烈闪动。正文区没有
+      // 输入框（书内搜索走独立弹层），置 false 即「正文一像素都不动」语义。
       resizeToAvoidBottomInset: false,
       // `TYP-09` 验收①：默认全屏 ⇒ `_fullscreen` 初值 `true`，此处即 `null`；
       // 点正文唤出 chrome 后顶栏原样出现（验收①「唤出与收起」）。
@@ -4291,8 +3890,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     ],
                   ),
                 // 分组③ 外观与视图：外观面板（`TYP-03`/`TYP-07`/`TYP-08`）、
-                // 目录（`NAV-01` 要求 AppBar 目录按钮）。
-                // 全屏切换按钮（`reader-fullscreen-enter`）已移除（2026-10-08）：
+                // 目录（`NAV-01` 要求 AppBar 目录按钮）。全屏切换按钮已移除：
                 // 默认即全屏、切换改走点正文，详见 `_fullscreen` 字段注释。
                 ReaderAppBarGroup(
                   children: <Widget>[
@@ -4315,15 +3913,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 底部层 = 常驻读数（恒在）+ 控制条（chrome 唤出时）。
       //
       // 合成**同一个槽**、且读数排在**上面**（`[读数, 控制条]`）：
-      //   ① 读数必须落在控制条**正上方**——`control_bar.dart` 的窄屏让位
-      //      （`kReaderControlProgressMinWidth`）明确依赖这一条；
-      //   ② 收起 chrome 时槽里只剩读数 ⇒ 它自然贴屏幕底边（与改前逐像素一致）；
+      //   ① 读数必须落在控制条**正上方**（`control_bar.dart` 的窄屏让位依赖它）；
+      //   ② 收起 chrome 时槽里只剩读数 ⇒ 自然贴屏幕底边；
       //   ③ 配合 `extendBody`，二者只是**覆盖**正文、不参与正文预算 ⇒
-      //      增删控制条不会改动正文排版区高度（`TYP-09`）。
+      //      增删控制条不改正文排版区高度（`TYP-09`）。
       //
-      // 读数在槽内**恒在**（`TYP-09` 验收①：chrome 全隐藏时它必须仍在），
-      // 且它自身就是 chrome 切换入口（`reader-chrome-toggle-status`）——
-      // 图片页中央点击被「点页全屏缩放」占用，需要一个模式无关的入口。
+      // 读数在槽内**恒在**（`TYP-09` 验收①），且它自身就是 chrome 切换入口
+      // （`reader-chrome-toggle-status`）——图片页中央点击被「点页全屏缩放」占用，
+      // 需要一个模式无关的入口。
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
@@ -4420,8 +4017,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   /// AI 分组入口是否可用：**摘要 / 问答 / 人物** 任一可用即渲染该分组按钮
-  /// （`AI-04`~`AI-07` + `AI-09` ② 全局开关；三者全关时分组整体隐藏，与改前
-  /// 「三个按钮各自隐藏」的总可见效果一致）。
+  /// （`AI-04`~`AI-07` + `AI-09` ② 全局开关；三者全关时分组整体隐藏）。
   ///
   /// 前情回顾（`AI-05` ②）**不计入**本判定：它是会话内一次性的提醒入口
   /// （[_showRecapEntrance]），只在面板内作为附加行出现，不单独撑起分组按钮。
@@ -4430,8 +4026,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 打开 AI 助手面板（`AI-04`~`AI-07` 的分组入口）。
   ///
-  /// 面板内每行 = 改前 AppBar 的一个按钮，回调原样传入（[_openSummarySheet] /
-  /// [_openAskSheet] / [_openEntityPage]），故功能与可用性判定完全不变。
+  /// 面板内每行 = 原 AppBar 的一个按钮，回调原样传入（[_openSummarySheet] /
+  /// [_openAskSheet] / [_openEntityPage]），功能与可用性判定完全不变。
   void _openAiPanel() {
     unawaited(showReaderAiPanel(
       context: context,
@@ -4441,7 +4037,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // `AI-05` ②：停读 ≥7 天开书出现的前情回顾入口（会话内一次性）。
       onRecap: _showRecapEntrance && _summaryEnabled
           ? () {
-              // 与改前一致：进入回顾后本会话不再提示，故在**开面板前**即复位。
+              // 进入回顾后本会话不再提示，故在**开面板前**即复位。
               setState(() => _showRecapEntrance = false);
               _openSummarySheet(SummaryMode.recap);
             }
@@ -5252,18 +4848,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         // 正文**可用**高度：扣掉顶部系统栏 + 底部常驻读数让位。
         //
         // ⚠️ 这里的 `context` 是 **LayoutBuilder 的**（遮蔽了 `State.context`），
-        // `MediaQuery.of(context)` 拿到的是 `Scaffold` 给 **body** 加工过的那份：
-        // 唤出 chrome 时 `appBar != null` ⇒ `removeTop`、`bottomNavigationBar != null`
-        // ⇒ `removeBottom`（`scaffold.dart:3030-3033`），于是顶部 44→0、底部 34→0
-        // （探针实测）。**几何一律取外层的 [systemPadding]**——body 那份只该影响其子孙
-        // 自己的 `SafeArea`，不该影响排版。
+        // `MediaQuery.of(context)` 拿到的是 `Scaffold` 给 **body** 加工过的那份
+        // （chrome 显隐会改写其 inset）。**几何一律取外层的 [systemPadding]**——
+        // body 那份只该影响其子孙自己的 `SafeArea`，不该影响排版。
         //
-        // 这是 `TYP-09` 契约（chrome 不改正文排版区高度）的另一半：`Scaffold` 侧已用
-        // `extendBody*` 把 body 钉成满屏，此处再把两条 inset 钉成系统值 ⇒
-        // `usableHeight` 与 chrome 状态**完全无关**（探针实测 746 → 恒定 746，
-        // 改前唤出 chrome 会掉到 587）。
+        // 这是 `TYP-09` 契约（chrome 不改正文排版区高度）的另一半：`Scaffold` 侧
+        // 已用 `extendBody*` 把 body 钉成满屏，此处再把两条 inset 钉成系统值 ⇒
+        // `usableHeight` 与 chrome 状态**完全无关**。
         final double topInset = systemPadding.top;
-        // 底部系统栏让位（手势导航条，真机约 34dp）。
+        // 底部系统栏让位（手势导航条）。
         //
         // ⚠️ 只让开「文字」不让开「底色」：让位由 [ReaderProgressIndicator] 内部
         // 吃掉（它的底色须铺到屏幕下缘）。同一个量已由 [build] 传给底部层，
@@ -5293,17 +4886,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           //
           // 顶部让位与 chrome 无关：`topInset` 取自 Scaffold **外层**的系统 inset
           // （见上方注释），且 `extendBodyBehindAppBar: true` 让 body 从 y=0 起画，
-          // 所以**两种 chrome 状态下这里都是同一个值**——正文顶不会因为唤出顶栏
-          // 而挪位（改前非全屏时 body 被 `contentTop = appBarHeight` 顶下去）。
+          // **两种 chrome 状态下都是同一个值**——正文顶不会因唤出顶栏而挪位。
           //
-          // 底部**不能**加在这一层：常驻读数挂在 Stack 的 `bottom: 0`（现在移到了
-          // Scaffold 的底部层，见 [build]），把 28dp 加在 Stack **外面**只会把
-          // 「正文 + 读数」整体上移、两者照旧重叠，还在控制条上方白留一条 28dp
-          // 空带——真机截图实测即「末行被读数盖住变暗 + 被切」。正确做法：在 Stack
+          // 底部**不能**加在这一层：把 28dp 加在 Stack **外面**只会把「正文 + 读数」
+          // 整体上移、两者照旧重叠，还在控制条上方白留一条空带。正确做法：在 Stack
           // **内部**只给正文让位（见 `Positioned.fill` 里那个 Padding）。
           //
           // 底部也不加系统 inset：那个量由底部层（[ReaderProgressIndicator] 的
-          // `bottomInset`）自己吃掉，它的底色要铺到屏幕下缘；这里重复计入会让正文
+          // `bottomInset`）自己吃掉（它的底色要铺到屏幕下缘）；重复计入会让正文
           // 白让一条、且与控制条口径打架。
           padding: EdgeInsets.only(top: topInset),
           // 正文容器（已让开上下 inset）：测试与选区定位都以此为视口基准。
@@ -5331,17 +4921,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   child: NotificationListener<ScrollEndNotification>(
                     onNotification:
                         _pagedMode ? _onPagedScrollEnd : _onScrollEnd,
-                    // `TYP-09` 验收③（2026-10-08 改口径；2026-10-10 再收窄）：
-                    // chrome 切换的唯一入口——点正文**九宫格中宫**（落点闸门
-                    // [_onContentTapUp]：整屏 3×3，只有落进中宫的 tap 响应，
-                    // 其余八格无事——防阅读时侧边 / 角落误触翻出 chrome）。
+                    // `TYP-09` 验收③：chrome 切换的唯一入口——点正文**九宫格
+                    // 中宫**（落点闸门 [_onContentTapUp]，其余八格无事）。
                     //
                     // ⚠️ 这一层**必须是正文的祖先**（包在外面），不能做 Stack 里
                     // 覆盖在正文之上的兄弟层：`HitTestBehavior.translucent` 的
                     // 兄弟层会把自己先加进 `HitTestResult.path`，而手势竞技场按
-                    // path 顺序判定（`GestureBinding.dispatchEvent` 从 index 0 起
-                    // 派发、`sweep` 取首个成员）⇒ 覆盖层的 tap 会**抢掉**正文里
-                    // 链接的 `TapGestureRecognizer`（`CNT-04` 链接点击会失效）。
+                    // path 顺序判定 ⇒ 覆盖层的 tap 会**抢掉**正文里链接的
+                    // `TapGestureRecognizer`（`CNT-04` 链接点击会失效）。
                     // 做祖先时 path 是「链接 → 本层」，链接先入竞技场即胜出。
                     //
                     // 不干扰滚动：`TapGestureRecognizer` 一旦超出 `kTouchSlop`
@@ -5357,8 +4944,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                             : ListView.builder(
                                 controller: _controller,
                                 // 进度指示条的占位已由**上方那个 Padding**
-                                // （`reserve`）统一提供，
-                                // 此处只需章节间的呼吸留白（改前 40 是在重复为同一条让位）。
+                                // （`reserve`）统一提供，此处只需章节间的呼吸留白。
                                 padding:
                                     const EdgeInsets.only(top: 8, bottom: 12),
                                 itemCount: chapters.length,
@@ -5391,9 +4977,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     child: const SizedBox.expand(),
                   ),
                 ),
-              // backlog① 方案 B：开书首跳校正全程遮罩——中间跳转不可见，
-              // [_finishRestore] 撤除。opaque 手势层顺带吞掉恢复期间的拖动，
-              // 防止用户滚动与 `jumpTo` 校正互相打架。
+              // 开书首跳校正全程遮罩——中间跳转不可见，[_finishRestore] 撤除。
+              // opaque 手势层顺带吞掉恢复期间的拖动，防止用户滚动与 `jumpTo`
+              // 校正互相打架。
               if (_restoreMask)
                 Positioned.fill(
                   child: GestureDetector(
@@ -5402,8 +4988,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     onTap: () {},
                     child: ColoredBox(
                       // `TYP-08` 验收③：遮罩底色跟页面底色——纯黑 / 夜间背景时
-                      // 不得闪白底（旧值 `theme.scaffoldBackgroundColor` 在亮色
-                      // 主题下是白的）。
+                      // 不得闪白底。
                       color: pageColor,
                       child: const Center(child: CircularProgressIndicator()),
                     ),
@@ -5422,13 +5007,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-              // `TYP-09`：常驻读数**不在这里**——它已移到 Scaffold 的底部层
+              // `TYP-09`：常驻读数**不在这里**——它在 Scaffold 的底部层
               // （见 [build] 的 `bottomNavigationBar`），与控制条同槽、上下相邻。
               //
-              // 为什么必须挪出去：`extendBody: true` 之后正文铺满整屏，读数的
+              // 必须放底部层：`extendBody: true` 后正文铺满整屏，读数的
               // `bottom: 0` 会被控制条整块盖住（`control_bar.dart` 的窄屏让位
-              // 明确依赖「读数在控制条正上方」）。放进底部层则两态都正确：
-              // chrome 收起时它贴屏幕底边，唤出时自动排在控制条之上。
+              // 依赖「读数在控制条正上方」）。底部层则两态都正确：chrome 收起时
+              // 它贴屏幕底边，唤出时自动排在控制条之上。
               ],
               ),
             ),
@@ -5552,10 +5137,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          // 标题左对齐加粗、无横线（2026-10-09 负责人拍板，改 TYP-04「居中」旧
-          // 口径）；颜色随背景色板（TYP-08 对比度 / 夜间无白底）。章间空行由
-          // 本块外层 Padding（top 16 + 上一章 bottom 24）提供，分页路径则挂在
-          // 标题块顶部 [_kHeadingGapTop]——两条路径都保证章与章隔开。
+          // 标题左对齐加粗、无横线（`TYP-04`）；颜色随背景色板（TYP-08 对比度 /
+          // 夜间无白底）。章间空行由本块外层 Padding（top 16 + 上一章 bottom 24）
+          // 提供，分页路径则挂在标题块顶部 [_kHeadingGapTop]——两条路径都保证
+          // 章与章隔开。
           Text(
             heading,
             textAlign: TextAlign.left,
