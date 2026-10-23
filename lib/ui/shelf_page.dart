@@ -199,21 +199,63 @@ class ShelfPageState extends State<ShelfPage> {
           onOpenBook: (BookRecord record) {
             // 关搜索页再开书：阅读页压在书架之上，返回时不该回到搜索页。
             //
-            // ⚠️ 用 [Navigator.removeRoute] **瞬时移除**而非 `pop()`
-            // （2026-10-22 真机「搜索页进书剧烈闪动」）：`pop()` 的反向转场
-            // （搜索页滑出 + 书架视差恢复，400ms）会与紧随其后的
-            // [ReaderOpenRoute] 纸张滑入抢同一个下层——转场期下层在「滑出 /
-            // 视差 / 被 scrim 压暗」之间跳，叠加开书排版即闪动。瞬时移除让
-            // 背景直接回到**静止书架**，正是 [ReaderOpenTransition] 设计
-            // 假定的背景形态（「书架静止在后被压暗」）。
-            Navigator.of(pageContext)
-                .removeRoute(ModalRoute.of(pageContext)!);
-            unawaited(_openBook(record));
+            // ⚠️ 但**不能在开书瞬间立刻移除本页**（2026-10-23 真机录屏定案）：
+            // 立刻 removeRoute 会让书架在纸张就绪前闪现（「搜索页瞬灭 → 书架
+            // 闪现（键盘还在收）→ 纸张滑入」三段跳 = 丢帧感 + 闪动）。正确编排
+            // 与书架开书一致——**纸张滑入时背景就是点它的那一页**：本页一直留着
+            // 当背景，等纸张转场完成（全覆盖，此刻移除不可见）再摘掉。
+            final Route<void> searchRoute = ModalRoute.of(pageContext)!;
+            final NavigatorState nav = Navigator.of(pageContext);
+            unawaited(_openBook(record, onPushed: (PageRoute<void> readerRoute) {
+              _removeUnderWhenCovered(readerRoute, searchRoute, nav);
+            }));
           },
           onBookActions: _showBookActions,
         ),
       ),
     );
+  }
+
+  /// 等 [route]（阅读页纸张）转场**完成、完全覆盖屏幕**后移除下层 [under]——
+  /// 此刻移除对用户不可见（背景早被纸张盖住）。
+  ///
+  /// 双保险：状态监听（正常路径）+ 转场时长兜底 Timer（动画被跳过 / 提前返回
+  /// 时绝不把下层路由泄漏在栈上——返回会回到已关掉的搜索页）。
+  void _removeUnderWhenCovered(
+    PageRoute<void> route,
+    Route<void> under,
+    NavigatorState nav,
+  ) {
+    bool done = false;
+    void remove() {
+      if (done) return;
+      done = true;
+      if (under.isActive) {
+        try {
+          nav.removeRoute(under);
+        } catch (_) {
+          // 已不在栈上（并发摘除）→ 无事可做。
+        }
+      }
+    }
+
+    final Animation<double>? anim = route.animation;
+    void onStatus(AnimationStatus status) {
+      if (status == AnimationStatus.completed) {
+        anim?.removeStatusListener(onStatus);
+        remove();
+      }
+    }
+
+    anim?.addStatusListener(onStatus);
+    // 兜底：ReaderOpenRoute 按住待就绪的时长不定；动画没走完（中途返回 /
+    // 转场被跳过）也必须摘掉下层，否则「返回回到已关搜索页」。
+    unawaited(Future<void>.delayed(
+      kReaderOpenDuration + const Duration(milliseconds: 800),
+    ).then((_) {
+      anim?.removeStatusListener(onStatus);
+      remove();
+    }));
   }
 
   @override
@@ -498,7 +540,13 @@ class ShelfPageState extends State<ShelfPage> {
   /// 守卫 [_opening] **只覆盖 push 前的准备阶段**（防准备期连点重复 push）；
   /// 路由一入栈立即释放——阅读会话期间绝不占用，否则关书后首点被静默吞掉。
   /// 准备期被点的卡片显示 loading 覆盖层（[BookCard.loading]）。
-  Future<void> _openBook(BookRecord record) async {
+  ///
+  /// [onPushed]：阅读页路由一入栈即回调（供调用方安排「覆盖后移除下层路由」
+  /// 等收尾——见 [_enterSearch] 的开书回调）。
+  Future<void> _openBook(
+    BookRecord record, {
+    void Function(PageRoute<void> route)? onPushed,
+  }) async {
     if (_opening) return; // 准备期防双击重复开书
     _opening = true;
     // 「用户按下书卡」是整条链路的计时原点——必须**先于任何 await**打点，
@@ -602,6 +650,7 @@ class ShelfPageState extends State<ShelfPage> {
       // 入栈）就往下走，finally 立即释放守卫。关书刷新走 route.popped，不占守卫。
       unawaited(Navigator.of(context).push(route));
       trace.mark('pushed');
+      onPushed?.call(route);
       pending = null; // 所有权已交给阅读页（它关书时归还仓库）
       unawaited(route.popped.then((_) {
         // 阅读页关闭后刷新（lastReadAt / readProgress 已在 M1-T04 更新）。
