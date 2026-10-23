@@ -89,6 +89,14 @@ class _ShelfSearchPageState extends State<ShelfSearchPage> {
   /// 当前查询串（已 trim、已小写；中文不受影响）。
   String _query = '';
 
+  /// 点结果开书后冻结布局（2026-10-23 真机「搜索页进书有点丢帧」定案）：
+  /// 键盘收起动画期间 body 若继续跟随 `viewInsets` 逐帧变高，结果网格会
+  /// 逐帧重排——正是阅读页已修过的「外因改排版区」病灶，只是发生在背景上。
+  /// **只在点书那一刻冻结**：打字时照常随键盘适配（结果区可见性不变）；
+  /// 冻结瞬间 body 撑回全高的那一次重排发生在键盘下方（可见区无跳变），
+  /// 随后键盘收起全程布局稳定。
+  bool _openingFrozen = false;
+
   @override
   void initState() {
     super.initState();
@@ -136,6 +144,9 @@ class _ShelfSearchPageState extends State<ShelfSearchPage> {
 
     return Scaffold(
       backgroundColor: MiColors.pageBackgroundFor(mode),
+      // 点书开读后冻结键盘响应（[_openingFrozen]）：收起动画不得逐帧改写
+      // body 高度——打字期间照常适配，点书那刻起布局稳定。
+      resizeToAvoidBottomInset: !_openingFrozen,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -200,9 +211,11 @@ class _ShelfSearchPageState extends State<ShelfSearchPage> {
       // 头部行底缘 → 结果列表：上游示例同一档（`MiDimens.spaceXl`）。
       padding: EdgeInsets.fromLTRB(inset, MiDimens.spaceXl, inset, 20),
       onOpenBook: (BookRecord record) {
-        // 点结果先收键盘（2026-10-22 真机「搜索页进书剧烈闪动」）：输入法
-        // 收起动画与开书转场叠在一起会放大闪动；阅读页侧已置
-        // `resizeToAvoidBottomInset: false` 免疫键盘，这里再让键盘尽早收。
+        // 点结果先收键盘 + 冻结布局（2026-10-22/23 真机两轮定案）：输入法
+        // 收起动画与开书转场叠在一起会掉帧；阅读页侧已置
+        // `resizeToAvoidBottomInset: false` 免疫键盘，本页在点书这一刻
+        // 冻结布局（见 [_openingFrozen]），键盘收起不再逐帧重排背景。
+        setState(() => _openingFrozen = true);
         FocusScope.of(context).unfocus();
         widget.onOpenBook(record);
       },

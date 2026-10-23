@@ -108,6 +108,13 @@ void main() {
       await tester.pump();
       expect(tester.binding.focusManager.primaryFocus?.hasPrimaryFocus, isTrue,
           reason: '前置条件：输入框应处于聚焦态');
+      // 前置：打字期间搜索页照常随键盘适配（结果区可见性）。
+      expect(
+        tester.widget<Scaffold>(find.byType(Scaffold).first)
+            .resizeToAvoidBottomInset,
+        isTrue,
+        reason: '打字期间应保持键盘适配；冻结只发生在点书那一刻',
+      );
       await tester.enterText(find.byType(TextField), '书架');
       await tester.pump();
       expect(find.text(fakeRecord().title), findsWidgets,
@@ -123,6 +130,13 @@ void main() {
         field.focusNode?.hasPrimaryFocus ?? false,
         isFalse,
         reason: '点结果应先收键盘（输入框失焦），输入法收起不得与开书转场叠加',
+      );
+      // 点书后冻结布局：键盘收起动画不得逐帧改写 body 高度（背景重排=掉帧）。
+      expect(
+        tester.widget<Scaffold>(find.byType(Scaffold).first)
+            .resizeToAvoidBottomInset,
+        isFalse,
+        reason: '点书开读后应冻结键盘响应，收起动画期间布局稳定',
       );
     });
   });
