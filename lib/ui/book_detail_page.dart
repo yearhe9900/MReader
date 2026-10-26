@@ -744,8 +744,8 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 
   /// 无封面 / 合成封面 → **默认封面**（与书架书卡同源：[DefaultBookCover]）。
-  /// 圆角沿用本页自有的 6（`_buildCover` 的真封面分支也是 6）——书架那份是
-  /// `kBookCoverRadius` = 8，两处不一致是**既有状态**，刻意不擅自统一。
+  /// 圆角沿用本页自有的 6（`_buildCover` 的真封面分支也是 6）——书架那份已随
+  /// Mi 布局改为 `kBookCoverRadius` = 20，两处不一致是**既有状态**，刻意不擅自统一。
   Widget _buildCoverPlaceholder() {
     return DefaultBookCover(
       title: _record.title,

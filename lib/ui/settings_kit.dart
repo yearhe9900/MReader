@@ -1,49 +1,90 @@
-// 设置页的视觉组件集（2026-09-29 参考 HyperOS / 小米系统设置页风格重做）。
+// 设置页的视觉组件集 —— **对齐上游 mi_like_ui demo「我的」页**（上游 `a12d6f3`
+// 「我的」页改版为系统设置页风格 + `5fb8199` 行尾前进箭头，2026-10-27 拍板
+// 「全跟上游」）。参考素材：系统设置页明暗截图（1220×2656）；卡片 / 按压色与
+// 几何是上游**目测推导值**，逐项收在 [SettingsKitMetrics]（改那里前先核对上游
+// `demo/mock_pages.dart` 的 `_SettingsStyle`，两边不得悄悄分叉）。
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 四条口径
-// ══════════════════════════════════════════════════════════════════════════════
-// 1. **卡片与行一律不透明**。PRD §11.2 原把「设置页内的控件」「设置页的分组卡片」
-//    列为玻璃；本批落**实心卡片**（与参考图一致，也让设置页能继续滚动）。
-//    依据与边界（已上报负责人并拍板，PRD §11.2 随 v2.10 改文）：
-//      · 同节理由①「库的设计哲学是『导航层用玻璃、内容层不透明』」与理由③
-//        「`premium` 禁进滚动区、放进滚动区有渲染成本」都指向实心卡片——
-//        整屏滚动的玻璃卡片正落在理由③的成本论据里；
-//      · `UI-04` ②「玻璃控件不出现在任何滚动列表行内」条文上是**任何**行，
-//        但其枚举范围限于内容层行（书架 / 目录 / 搜索 / 统计 / 正文），
-//        故本条**不是**「原文自相矛盾」，而是取向相左 → 由负责人裁量。
-//    **浮层仍走玻璃**（§11.2「浮层 = 玻璃」不变，本页的选择弹层经
-//    [GlassOverlays.showSheet] 弹出）。
-// 2. 行的形态照参考图：leading **40×40 圆角方形彩色图标** + 标题（+ 可选副标题）+
-//    右侧「当前值 + 箭头」，或右侧直接放 Switch（二选一，见 [SettingsTile.trailing]）。
-// 3. 图标底色是**装饰性**的（参考图每行一色），不承担语义，故不进 `ColorScheme`；
-//    图标一律白色描边，保证浅色 / 深色主题下都可读。
-// 4. 本文件的公开出口共五个：[SettingsAccents]（色板）、[SettingsGroupCard] /
-//    [SettingsTile]（卡片与行）、[SettingsPickerSheet] / [showSettingsPicker]
-//    （选择弹层，与 [GlassOverlays] 同一档位口径）。
+// 四条口径：
+// 1. **卡片与行一律不透明**（PRD §11.2 实心卡片拍板仍有效）：库的设计哲学是
+//    「导航层用玻璃、内容层不透明」，且 `premium` 禁进滚动区。
+//    **单选弹层已换 mi_like_ui [MiDialog]**（2026-10-27 拍板「主题模式弹框也
+//    改为 mi_like_ui 弹框」，与书架长按操作弹框同款、档位无关）；其余浮层仍走玻璃。
+// 2. 行的形态照上游：leading **38×38 圆角 10 彩色图标块** + 主文案 16/w400
+//    （+ 副标题 13）+ 右侧「当前值 14 + 前进箭头」，或右侧直接放 Switch
+//   （二选一，见 [SettingsTile.trailing]）；行最小高 56。
+// 3. **点击反馈 = 整行满铺高亮带**（亮 #E7E7E7 / 暗 #3A3A3A、120ms 渐变渐隐，
+//    上游同款），**不再是 `InkWell` 水波纹**。图标底色仍是**装饰性**的（上游
+//    每行一色），不进 `ColorScheme`；图标一律白色描边，明暗主题下都可读。
+// 4. 本文件的公开出口共五个：[SettingsKitMetrics]（度量）、[SettingsAccents]
+//    （色板）、[SettingsGroupCard] / [SettingsTile]（卡片与行）、
+//    [showSettingsPicker]（选择弹框，内部走 [MiDialog]，旧 [SettingsPickerSheet]
+//    已退场）。
 //
-// 卡片用 [Material] 而不是 `Container + BoxDecoration`：`InkWell` 的水波纹画在最近的
-// `Material` 上，若卡片只是「画在 Material 之上的装饰」，水波纹会被卡片底色盖住。
+// 卡片仍用 [Material]（而不是上游的 `ClipRRect + ColoredBox`）：卡片内部有
+// [ListTile] / [Switch]（AI 设置与同步页），它们要求最近处有 Material 祖先；
+// 圆角裁剪由 `clipBehavior: Clip.antiAlias` 承担，观感与上游一致，行高亮带
+// 随卡片圆角被裁（与素材一致）。
 import 'package:flutter/material.dart';
 
-import 'glass_kit.dart';
+import 'mi_like_ui/mi_like_ui.dart'
+    show ForwardChevronIconPainter, MiDialog, MiDialogItem, MiDialogLayout, MiThemeMode;
 
-/// 行图标的装饰色板（照参考图取色；**无语义**，勿当状态色用）。
+/// 行图标的装饰色板（**上游「我的」页取色**；**无语义**，勿当状态色用）。
 abstract final class SettingsAccents {
-  /// 蓝（网络 / 通用）。
-  static const Color blue = Color(0xFF3B82F6);
+  /// 蓝（网络 / 通用，上游 WLAN / 蓝牙行同色）。
+  static const Color blue = Color(0xFF2F9BFF);
 
-  /// 紫（外观 / 主题）。
-  static const Color purple = Color(0xFF8B5CF6);
+  /// 紫（外观 / 主题，上游「外观模式」行同色）。
+  static const Color purple = Color(0xFF7A5CFA);
 
-  /// 绿（开关 / 绿色状态）。
-  static const Color green = Color(0xFF22C55E);
+  /// 绿（开关 / 绿色状态，上游「移动网络」行同色）。
+  static const Color green = Color(0xFF34C759);
 
-  /// 橙（性能 / 警示）。
-  static const Color orange = Color(0xFFF59E0B);
+  /// 橙（性能 / 警示，上游「居中弹框」行同色）。
+  static const Color orange = Color(0xFFFF9500);
 
-  /// 灰（次要 / 禁用项）。
-  static const Color gray = Color(0xFF6B7280);
+  /// 灰（次要 / 禁用项，上游「我的设备」行同色）。
+  static const Color gray = Color(0xFF8E8E93);
+}
+
+/// 设置页风格度量（**上游 demo「我的」页 `_SettingsStyle` 逐项照抄**，上游
+/// `a12d6f3`；参考素材：系统设置页明暗截图 1220×2656，色值与几何为上游
+/// **目测推导值**）。
+///
+/// 改这里 = 与上游观感分叉；先回核上游 `demo/mock_pages.dart`。
+abstract final class SettingsKitMetrics {
+  SettingsKitMetrics._();
+
+  /// 分组卡片圆角。
+  static const double cardRadius = 20;
+
+  /// 卡片填充（亮 #FFFFFF / 暗 #1E1E1E）。
+  ///
+  /// ⚠️ 这对色值依赖 **Mi 页底色**（亮 #F3F3F3 / 暗 #000000）才有对比——
+  /// 用它们的页面底色须取 `MiColors.pageBackgroundFor`（`我的` 页即如此，
+  /// 与 `shelf_search_page` 同先例），不能用近白的 M3 surface。
+  static Color cardFor(Brightness brightness) => brightness == Brightness.light
+      ? const Color(0xFFFFFFFF)
+      : const Color(0xFF1E1E1E);
+
+  /// 整行按压高亮带（亮 #E7E7E7 / 暗 #3A3A3A；与搜索框填充同语言）。
+  static Color pressFor(Brightness brightness) => brightness == Brightness.light
+      ? const Color(0xFFE7E7E7)
+      : const Color(0xFF3A3A3A);
+
+  /// 按压渐变时长（上游推导：MIUI 行按压为快闪档，~120ms）。
+  static const Duration pressDuration = Duration(milliseconds: 120);
+
+  /// 行最小高度（副标题行随内容增高）。
+  static const double rowMinHeight = 56;
+
+  /// 前导图标块边长 / 圆角。
+  static const double tileSide = 38;
+  static const double tileRadius = 10;
+
+  /// 行尾前进箭头墨盒（`ForwardChevronIconPainter`，返回箭头的水平镜像）。
+  static const double chevronWidth = 11.7;
+  static const double chevronHeight = 21.3;
 }
 
 /// 设置分组卡片（不透明圆角容器 + 可选组标题 / 组脚注）。
@@ -83,8 +124,9 @@ class SettingsGroupCard extends StatelessWidget {
             child: Text(header!, style: caption),
           ),
         Material(
-          color: theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(20),
+          // 卡片填充随明暗（上游 #FFFFFF / #1E1E1E，见 [SettingsKitMetrics.cardFor]）。
+          color: SettingsKitMetrics.cardFor(theme.brightness),
+          borderRadius: BorderRadius.circular(SettingsKitMetrics.cardRadius),
           clipBehavior: Clip.antiAlias,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -97,14 +139,20 @@ class SettingsGroupCard extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
             child: Text(footer!, style: caption),
           ),
-        const SizedBox(height: 16),
+        // 卡间距 = 上游「我的」页的 14（组标题不在卡内时，分组间距全由它承担）。
+        const SizedBox(height: 14),
       ],
     );
   }
 }
 
-/// 设置行：彩色圆角方形图标 + 标题（+ 副标题）+ 右侧「值 + 箭头」或自定义控件。
-class SettingsTile extends StatelessWidget {
+/// 设置行：彩色圆角方形图标块 + 主文案（+ 副标题）+ 右侧「值 + 前进箭头」或
+/// 自定义控件。形态与点击反馈**对齐上游「我的」页**（见 [SettingsKitMetrics]）。
+///
+/// **点击反馈 = 整行满铺高亮带**（`AnimatedContainer` 底色，120ms easeOut 渐隐，
+/// 方角、与卡片同宽、压在图标与文字之下、随卡片圆角裁切）——上游同款，
+/// **不是 `InkWell` 水波纹**。
+class SettingsTile extends StatefulWidget {
   /// 创建设置行。
   const SettingsTile({
     super.key,
@@ -124,16 +172,16 @@ class SettingsTile extends StatelessWidget {
   /// 图标底色（取 [SettingsAccents]）。
   final Color accent;
 
-  /// 主标题。
+  /// 主标题（上游口径：16 / w400）。
   final String title;
 
-  /// 副标题（可选，最多两行）。
+  /// 副标题（可选；13，前景 55% 墨）。
   final String? subtitle;
 
-  /// 右侧当前值（可选，次要色）；有 [onTap] 时表示「可点进选择」。
+  /// 右侧当前值（可选，14，前景 55% 墨）；有 [onTap] 时表示「可点进选择」。
   final String? value;
 
-  /// 整行点击；为空则本行不可点（此时右侧画箭头——除非给了 [trailing]）。
+  /// 整行点击；为空则本行不可点（此时右侧画前进箭头——除非给了 [trailing]）。
   ///
   /// 可与 [trailing] 同时给（如「开关行」：点开关或点整行都能切换）；
   /// 但不能与 [value] 同时给（「值 + 箭头」与「自定义右侧控件」互斥）。
@@ -142,34 +190,70 @@ class SettingsTile extends StatelessWidget {
   /// 完全自定义的右侧控件（如 Switch）。**与 [value] 互斥**；给了它就不画箭头。
   final Widget? trailing;
 
-  /// 是否可用；不可用时整体降透明度且不响应点击（如关档下的「降低视觉特效」）。
+  /// 是否可用；不可用时整体降透明度且不响应点击 / 不起高亮带。
   final bool enabled;
+
+  @override
+  State<SettingsTile> createState() => _SettingsTileState();
+}
+
+class _SettingsTileState extends State<SettingsTile> {
+  /// 按压态（驱动整行高亮带；松开 / 取消后渐隐）。
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (widget.onTap == null || !widget.enabled || _pressed == value) return;
+    setState(() => _pressed = value);
+  }
 
   @override
   Widget build(BuildContext context) {
     assert(
-      trailing == null || value == null,
+      widget.trailing == null || widget.value == null,
       'SettingsTile：trailing（自定义右侧）与 value（「值 + 箭头」）互斥。',
     );
     final ThemeData theme = Theme.of(context);
+    final Color fg = theme.colorScheme.onSurface;
     // 不可用态：与 Material 的 disabled 口径一致（0.38 不透明度）。
-    final Color titleColor = enabled
-        ? theme.colorScheme.onSurface
-        : theme.colorScheme.onSurface.withValues(alpha: 0.38);
-    final Color subColor = theme.colorScheme.onSurfaceVariant;
+    final Color titleColor = widget.enabled
+        ? fg
+        : fg.withValues(alpha: 0.38);
+    final Color sub = widget.enabled
+        ? fg.withValues(alpha: 0.55)
+        : fg.withValues(alpha: 0.38);
+    final Color chevronColor = fg.withValues(alpha: 0.30);
 
-    final Widget row = Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+    final Widget row = AnimatedContainer(
+      duration: SettingsKitMetrics.pressDuration,
+      curve: Curves.easeOut,
+      // 高亮带经 `decoration` 传色（而不是 `color:`）：`AnimatedContainer` 不公开
+      // `color` 字段，契约测试读不到——`decoration` 是公开字段，压色可被钉住。
+      decoration: BoxDecoration(
+        color: _pressed
+            ? SettingsKitMetrics.pressFor(theme.brightness)
+            : Colors.transparent,
+      ),
+      constraints: const BoxConstraints(
+        minHeight: SettingsKitMetrics.rowMinHeight,
+      ),
+      padding: EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: widget.subtitle == null ? 0 : 10,
+      ),
       child: Row(
         children: <Widget>[
           Container(
-            width: 40,
-            height: 40,
+            width: SettingsKitMetrics.tileSide,
+            height: SettingsKitMetrics.tileSide,
             decoration: BoxDecoration(
-              color: enabled ? accent : accent.withValues(alpha: 0.38),
-              borderRadius: BorderRadius.circular(12),
+              color: widget.enabled
+                  ? widget.accent
+                  : widget.accent.withValues(alpha: 0.38),
+              borderRadius: BorderRadius.circular(
+                SettingsKitMetrics.tileRadius,
+              ),
             ),
-            child: Icon(icon, size: 22, color: Colors.white),
+            child: Icon(widget.icon, size: 22, color: Colors.white),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -178,46 +262,57 @@ class SettingsTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  title,
-                  style: theme.textTheme.bodyLarge?.copyWith(
+                  widget.title,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w400,
                     color: titleColor,
-                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                if (subtitle != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      subtitle!,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: enabled
-                            ? subColor
-                            : subColor.withValues(alpha: 0.38),
-                      ),
-                    ),
+                if (widget.subtitle != null) ...<Widget>[
+                  const SizedBox(height: 3),
+                  Text(
+                    widget.subtitle!,
+                    style: TextStyle(fontSize: 13, color: sub),
                   ),
+                ],
               ],
             ),
           ),
-          if (value != null) ...<Widget>[
+          if (widget.value != null) ...<Widget>[
             const SizedBox(width: 8),
-            Text(value!, style: theme.textTheme.bodyMedium?.copyWith(
-              color: subColor,
-            )),
+            Text(widget.value!, style: TextStyle(fontSize: 14, color: sub)),
           ],
-          if (trailing != null) ...<Widget>[
+          if (widget.trailing != null) ...<Widget>[
             const SizedBox(width: 8),
-            trailing!,
-          ] else if (onTap != null) ...<Widget>[
-            const SizedBox(width: 2),
-            Icon(Icons.chevron_right, size: 20, color: subColor),
+            widget.trailing!,
+          ] else if (widget.onTap != null) ...<Widget>[
+            const SizedBox(width: 10),
+            // chevron 墨盒 11.7×21.3（前进箭头 = 返回箭头的水平镜像，上游
+            // `5fb8199` 修正：行尾饰不再误用顶栏返回箭头「‹」）。
+            SizedBox(
+              width: SettingsKitMetrics.chevronWidth,
+              height: SettingsKitMetrics.chevronHeight,
+              child: CustomPaint(
+                painter: ForwardChevronIconPainter(chevronColor),
+              ),
+            ),
           ],
         ],
       ),
     );
 
-    if (onTap == null) return row;
-    return InkWell(onTap: enabled ? onTap : null, child: row);
+    return Semantics(
+      button: widget.onTap != null,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.enabled ? widget.onTap : null,
+        onTapDown: (_) => _setPressed(true),
+        onTapUp: (_) => _setPressed(false),
+        onTapCancel: () => _setPressed(false),
+        child: row,
+      ),
+    );
   }
 }
 
@@ -240,89 +335,52 @@ class SettingsPickerOption<T> {
   final String? description;
 }
 
-/// 设置项单选弹层（玻璃浮层内容；点选即 pop 回值）。
+/// 弹出设置项单选弹框；返回选中值（取消 / 点遮罩 / 系统返回返回 `null`）。
 ///
-/// 形态照搬既有的 `book_detail_page.dart` `_GroupPickerSheet`（同为本项目
-/// **玻璃底部弹窗 + 单选列表**的唯一已验证写法）：
-/// 标题常驻、`Divider` 分隔、当前值打勾、点选 `Navigator.pop(value)`。
+/// 载体 = mi_like_ui [MiDialog]（**纵向操作列表形态**，2026-10-27 拍板「主题
+/// 模式弹框也改为 mi_like_ui 弹框」）：与书架长按操作弹框同一形制 ——
+/// `showDialog` + **透明路由遮罩**（遮罩由 MiDialog 自绘，两层不可叠加），
+/// 当前项以行首 ✓ 标记（组件按「任一项带图标」给全员预留图标位，文字列
+/// 对齐不参差），[SettingsPickerOption.description] 走行副标题，点遮罩 /
+/// 系统返回 = 取消。
 ///
-/// 首层必须是 [Material]（`MaterialType.transparency`）——玻璃浮层**没有
-/// Material 祖先**（PRD §11.4），缺了它 `ListTile` 的水波纹与文字会渲染异常
-/// （黄色双下划线）。透明类型不画底色，不破坏玻璃观感。
-class SettingsPickerSheet<T> extends StatelessWidget {
-  /// 创建单选弹层内容。
-  const SettingsPickerSheet({
-    super.key,
-    required this.title,
-    required this.options,
-    required this.current,
-  });
-
-  /// 弹层标题（如「主题模式」）。
-  final String title;
-
-  /// 候选项（顺序即渲染顺序）。
-  final List<SettingsPickerOption<T>> options;
-
-  /// 当前值（打勾的那一项）。
-  final T current;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return Material(
-      type: MaterialType.transparency,
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-              child: Text(title, style: theme.textTheme.titleMedium),
-            ),
-            const Divider(height: 1),
-            for (final SettingsPickerOption<T> option in options)
-              ListTile(
-                title: Text(option.label),
-                subtitle: option.description == null
-                    ? null
-                    : Text(option.description!),
-                trailing: option.value == current
-                    ? Icon(Icons.check, color: theme.colorScheme.primary)
-                    : null,
-                onTap: () => Navigator.of(context).pop(option.value),
-              ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 弹出设置项单选弹层；返回选中值（取消 / 点遮罩返回 `null`）。
-///
-/// **档位随环境**：玻璃档经 [GlassOverlays.showSheet] 出玻璃底部弹窗，
-/// 「关」档自动退化为 Material `showModalBottomSheet`（`UI-06` ②）。
-///
-/// `isScrollable: false`：内容是不可滚动的 [Column]（候选项最多 4 个），
-/// 关掉外层滚动包装可避免「纵向滚动视图嵌套」（见 [GlassOverlays.showSheet]
-/// 对 `isScrollable` 的说明）。
+/// **档位无关**：MiDialog 不是玻璃件，玻璃开 / 关两档同形；旧的玻璃底部
+/// 弹窗载体（`SettingsPickerSheet`）已随之退场 —— `UI-06` ② 的关档退化
+/// 路径对本弹框不再适用（它本就不出玻璃）。
 Future<T?> showSettingsPicker<T>({
   required BuildContext context,
   required String title,
   required List<SettingsPickerOption<T>> options,
   required T current,
 }) {
-  return GlassOverlays.showSheet<T>(
+  return showDialog<T>(
     context: context,
-    isScrollable: false,
-    builder: (BuildContext sheetContext) => SettingsPickerSheet<T>(
-      title: title,
-      options: options,
-      current: current,
-    ),
+    // 路由遮罩透明：遮罩由 MiDialog 自绘（同 `shelf_page._showBookActions`）。
+    barrierColor: Colors.transparent,
+    builder: (BuildContext dialogContext) {
+      final MiThemeMode mode =
+          Theme.of(dialogContext).brightness == Brightness.light
+          ? MiThemeMode.light
+          : MiThemeMode.dark;
+      return MiDialog(
+        layout: MiDialogLayout.list,
+        title: title,
+        themeMode: mode,
+        items: <MiDialogItem>[
+          for (final SettingsPickerOption<T> option in options)
+            MiDialogItem(
+              label: option.label,
+              subtitle: option.description,
+              // 当前项行首 ✓（行组件无 trailing 槽，勾随行墨色，不另配强调色）。
+              icon: option.value == current
+                  ? const Icon(Icons.check, size: 22)
+                  : null,
+              onPressed: () => Navigator.of(dialogContext).pop(option.value),
+            ),
+        ],
+        // 点遮罩 = 取消（pop 无值；与系统返回同路）。
+        onScrimTap: () => Navigator.of(dialogContext).pop(),
+      );
+    },
   );
 }

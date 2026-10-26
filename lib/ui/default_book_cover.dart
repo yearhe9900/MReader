@@ -1,42 +1,26 @@
-// 无封面书籍的**默认封面**（`META-07` ② 的「默认占位图」，2026-09-29 拍板
-// 「采用 anx 无封面书籍的默认封面」）。
+// 无封面书籍的**默认封面**（`META-07` ② 的「默认占位图」）。
 //
-// 视觉照抄 anx-reader 的默认封面（`widgets/bookshelf/book_cover.dart:45-123`，
-// 即「封面文件不存在」那条 else 分支）：
-//   · 底色 = `Colors.primaries[书名.hashCode % Colors.primaries.length].shade200`
-//     （anx `:57-59`）——每本书按书名哈希拿一张**浅色**卡片（浅粉/浅青/浅黄…）；
-//   · 文字色按底色亮度**自适应黑/白**（anx `:23-26` 的 `estimateBrightnessForColor`）；
-//   · 顶部书名（最多 3 行，`:78-88`）+ 底部作者（`:92-100`），中间 `Spacer`；
-//   · 右下角一颗**旋转 15°** 的书本水印（`:106-117`），色 = 文字色 10% 透明；
-//   · 四个尺寸**全部与封面宽度成比例**（anx 用 `LayoutBuilder` 取
-//     `constraints.maxWidth`，`:48-49`）：标题 = 宽 ×0.12、作者 = 宽 ×0.08、
-//     水印 = 宽 ×0.8、内边距 = 宽 ×0.08 —— 故同一本书在书架（≈120 宽）与详情页
-//     （120 宽）里大小一致，换列数也不会跳。
+// 视觉照抄 anx-reader 的默认封面（`widgets/bookshelf/book_cover.dart:45-123`）：
+//   · 底色 = `Colors.primaries[书名.hashCode % length].shade200`——每本书按书名
+//     哈希拿一张**浅色**卡片；文字色按底色亮度**自适应黑/白**；
+//   · 顶部书名（最多 3 行）+ 底部作者 + 中间 `Spacer`；右下角一颗**旋转 15°** 的
+//     书本水印（文字色 10% 透明，负偏移故意探出封面、由外层裁切）；
+//   · 四个尺寸**全部与封面宽度成比例**（标题 ×0.12 / 作者 ×0.08 / 水印 ×0.8 /
+//     内边距 ×0.08）——同一本书在书架与详情页大小一致，换列数也不会跳。
 //
-// 未采纳（anx 有、本项目不做；口径同上一批「封面投影/圆角」）：
-//   · 封面的 `ClipRSuperellipse` 超椭圆裁剪 + `RoundedSuperellipseBorder` 描边；
-//   · anx 的两个显示开关 `Prefs().showBookTitleOnDefaultCover` /
-//     `…showAuthorOnDefaultCover`（`:62-63`）——本项目没有这两个设置项，恒显示。
-//     **不采纳开关 ≠ 改变默认观感**：两者默认值都是 `true`
-//     （`config/shared_preference_provider.dart:1133` / `:1142` 的 `?? true`），
-//     所以「恒显示」= anx 未改设置时的默认表现（已核源码，2026-09-29）。
+// 未采纳（anx 有、本项目不做）：封面超椭圆裁剪 + 描边；anx 的两个显示开关
+// （本项目无这两个设置项，恒显示）。**不采纳开关 ≠ 改变默认观感**：两开关默认
+// 都是 `true`，「恒显示」即 anx 未改设置时的默认表现。
 //
 // 三处刻意的本工程处理：
 //   · **10% 透明的水印不是「半透明内容层」**：它叠在**不透明**底色之上，`UI-04`
-//     约束的是容器 / 背景，不是前景笔画，故红线不破（同 `shelfGradientBackground`
-//     用 `alphaBlend` 合规的理由）。
-//   · **自带裁切**：anx 的水印故意画出封面之外（`right: -padding*0.8`、
-//     `bottom: -padding*0.5`），本组件用 `ClipRRect` 兜住，调用方不必再管；
-//     圆角由 [radius] 传入（书架 = `kBookCoverRadius`，详情页沿用其自有值）。
-//   · **底色画在子树内（`ColoredBox`），不用 `Ink`**：`Ink` 是**墨迹特性**，
-//     由更上层的 `Material` 绘制，于是有两条像素级实证的坑（2026-09-29 修）：
-//     ① 它**逃逸本组件的 `ClipRRect`**（裁切只作用于该 Material 的子**树**）⇒ 封面
-//        是**方角**；② 它位于外层 `DecoratedBox` 的**投影填充之下**（`BoxShadow` 是
-//        填充整个盒子的形状，`box_decoration.dart:448-470`）⇒ 整张封面被投影染上
-//        一层 α0.39 的色（浅色 = 灰、深色 = 黑）⇒「太暗了」。
-//     代价（如实登记）：`InkWell` 的水波纹/高亮画在墨迹层，因而**不再压在封面之上**，
-//     只在透明的信息区可见——这正是 anx 的形态（其封面用 `Container(color:)` /
-//     `Container(decoration: image)`，同样不在墨迹层）。
+//     约束的是容器 / 背景，不是前景笔画，故红线不破；
+//   · **自带裁切**：anx 的水印故意画出封面之外，本组件用 `ClipRRect` 兜住，
+//     调用方不必再管；圆角由 [radius] 传入；
+//   · **底色画在子树内（`ColoredBox`），不用 `Ink`**：`Ink` 是墨迹特性、由更上层
+//     的 `Material` 绘制——会**逃逸本组件的 `ClipRRect`**（封面变方角），且位于
+//     外层 `DecoratedBox` 的**投影填充之下**被染暗（「太暗了」）。代价：`InkWell`
+//     水波纹不再压在封面之上、只在透明信息区可见（同 anx 的非墨迹层形态）。
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -45,15 +29,13 @@ import 'package:flutter/material.dart';
 ///
 /// ⚠️ 用 `String.hashCode`：Dart 的 `%` 是欧几里得取模，负数结果也非负，故无需
 /// `abs()`（anx 同此写法）。**代价**：`String.hashCode` 只保证同一 SDK 版本内稳定，
-/// 换 SDK 版本可能让同一本书换色（纯观感、无功能影响）。若哪天要求「跨版本稳定」，
-/// 换成项目已有的确定性 FNV-1a（`lib/meta/synth_cover.dart` 的
-/// `synthCoverCacheKey`）即可，一行。
+/// 换 SDK 版本可能让同一本书换色（纯观感）；要跨版本稳定换 `lib/meta/synth_cover.dart`
+/// 的确定性 FNV-1a（`synthCoverCacheKey`）即可。
 Color defaultBookCoverColor(String title) =>
     Colors.primaries[title.hashCode % Colors.primaries.length].shade200;
 
-/// 叠在 [defaultBookCoverColor] 之上的文字 / 水印色（anx `book_cover.dart:23-26`）。
-///
-/// 口径与 anx 一致：按底色亮度自适应，浅底给黑字、深底给白字。
+/// 叠在 [defaultBookCoverColor] 之上的文字 / 水印色（anx `book_cover.dart:23-26`）：
+/// 按底色亮度自适应，浅底给黑字、深底给白字。
 Color defaultBookCoverInk(Color background) =>
     ThemeData.estimateBrightnessForColor(background) == Brightness.dark
     ? Colors.white
@@ -75,7 +57,8 @@ class DefaultBookCover extends StatelessWidget {
   /// 作者（anx 画在底部，单行）。为空时该行不占可见空间（anx 亦画空串）。
   final String author;
 
-  /// 圆角（本组件负责裁切）。缺省 8 = 书架封面的 `kBookCoverRadius`。
+  /// 圆角（本组件负责裁切）。缺省 8 是本组件的既有默认（详情页等处直接用）；
+  /// 书架书卡显式传 `kBookCoverRadius`（= Mi 圆角 20），不依赖本默认值。
   final double radius;
 
   @override

@@ -1,21 +1,16 @@
-// 书卡「长按抬起反馈」的形态契约
-// （2026-09-29 拍板「采用 anx 的书卡长按动画和效果」）。
+// 书卡「长按抬起反馈」的形态契约（采用 anx 的书卡长按动画和效果）。
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 这个效果的真实出身（写下来，免得以后按表象去错地方找）
-// ══════════════════════════════════════════════════════════════════════════════
-// anx 的 `book_item.dart:54-56` 里 `onLongPress` 只有一句裸的 `showModalBottomSheet`，
-// **没有任何动画**。抬起反馈的真身在 `bookshelf_page.dart:388-405`：它用 pub 包
-// `flutter_reorderable_grid_view` 的 `ReorderableBuilder` **借长按拖拽拿反馈**
-// （`onReorder` 是空实现——只为反馈、不为重排）。本项目书架已去拖拽化，不引该包，
-// 照抄其数值自己实现，故本测试把三个数钉死：放大 1.05 / 150ms、阴影渐入 250ms。
+// 效果的真实出身（写下来，免得以后按表象去错地方找）：anx 的 `onLongPress` 只有一句
+// 裸 `showModalBottomSheet`、**没有任何动画**；抬起反馈的真身在 `bookshelf_page.dart
+// :388-405`——借 pub 包 `flutter_reorderable_grid_view` 的长按拖拽拿反馈（`onReorder`
+// 是空实现，只为反馈不为重排）。本项目书架已去拖拽化、不引该包，照抄其数值自己实现：
+// 放大 1.05 / 150ms、阴影渐入 250ms。
 //
-// ⚠️ 量放大的**正确姿势**（本测试踩过）：放大走的是 `Transform` 变换，而
-// `tester.getRect` 的 `localToGlobal` 计入的是**祖先**变换——直接量
-// `find.byType(BookCard)` 量到的是「变换的宿主」`RenderTransform` 自己，
-// 它的尺寸**不含**自身变换（实测恒为 120，即缩放前的值，看着像「没生效」）。
-// 故这里统一量变换**子树内**的 [Card]（`_card`），才能量到真实渲染尺寸。
-// 期望值一律硬编码字面量（回来引用 `kBookLiftScale` 之类常量 = 同义反复，红不了）。
+// ⚠️ 量放大的**正确姿势**（本测试踩过）：放大走 `Transform` 变换，而 `tester.getRect`
+// 的 `localToGlobal` 计入的是**祖先**变换——直接量 `find.byType(BookCard)` 量到的是
+// 变换宿主自己，尺寸**不含**自身变换（恒为 120，看着像「没生效」）。故统一量变换
+// **子树内**的 [Card]（`_card`）。期望值一律硬编码字面量（引用 `kBookLiftScale` 之类
+// 常量 = 同义反复，红不了）。
 // ══════════════════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:typed_data';
@@ -109,7 +104,7 @@ void main() {
   testWidgets('长按 → 放大 1.05 / 150ms + 阴影 250ms；回调 Future 完成后复位', (
     WidgetTester tester,
   ) async {
-    // 书架侧语义：这个 Future 在**操作单关闭时**完成（`shelf_page._showBookActions`）。
+    // 书架侧语义：这个 Future 在**长按弹框关闭时**完成（`shelf_page._showBookActions`）。
     final Completer<void> sheetClosed = Completer<void>();
     await _pumpCard(tester, onLongPress: () => sheetClosed.future);
 
@@ -167,14 +162,14 @@ void main() {
         offset: Offset(0, 3),
       ),
     ], reason: '抬起阴影须为包内 `_defaultBoxDecoration` 的四参数');
-    // ⚠️ 形状必须是**封面的圆角**，不是卡片外框的方角：`BoxShadow` 是填充形状，
-    // 画在整张卡外面（卡片无底板、信息区透明）会变成一张**方角灰板**——盖住封面圆角、
-    // 长按时整卡变暗（负责人 2026-09-29 反馈的原话）。故这颗 `AnimatedContainer`
-    // 现在挂在**封面外框**上（`kBookCoverSurfaceKey` 的祖先），并带 8 圆角。
+    // ⚠️ 形状必须是**封面的圆角**，不是卡片外框的方角：`BoxShadow` 是填充形状，画在
+    // 整张卡外面（卡片无底板、信息区透明）会变成一张**方角灰板**——盖住封面圆角、
+    // 长按时整卡变暗。故这颗 `AnimatedContainer` 挂在**封面外框**上
+    // （`kBookCoverSurfaceKey` 的祖先），并带 20 圆角（Mi 预览图圆角）。
     expect(
       (shadow.decoration! as BoxDecoration).borderRadius,
-      BorderRadius.circular(8),
-      reason: '抬起阴影的形状须跟封面圆角一致（8），否则长按时出现方角灰板',
+      BorderRadius.circular(20),
+      reason: '抬起阴影的形状须跟封面圆角一致（20），否则长按时出现方角灰板',
     );
     expect(
       find.ancestor(
@@ -185,7 +180,7 @@ void main() {
       reason: '抬起阴影须画在封面外框这一层，不能像原先那样包整张卡',
     );
 
-    // ③ 操作单关闭 → 卡片落回原位。
+    // ③ 长按弹框关闭 → 卡片落回原位。
     sheetClosed.complete();
     await tester.pump(); // 微任务：`await` 返回 → setState 复位
     await tester.pump(const Duration(milliseconds: 250));

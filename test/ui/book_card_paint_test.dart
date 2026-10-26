@@ -1,27 +1,14 @@
-// 书卡封面的**绘制层次契约**（像素级）——2026-09-29 新建。
+// 书卡封面的**绘制层次契约**（像素级）。
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 这个测试在防什么
-// ══════════════════════════════════════════════════════════════════════════════
-// 其余 UI 测试都只断言 **widget 属性**（颜色值、圆角值、阴影参数），因此**看不见
-// 绘制顺序**。而 2026-09-29 的两个真实缺陷恰恰全出在顺序上（负责人反馈
-// 「书籍封面没有圆角，太暗了」），属性断言当时**全是绿的**：
+// 防什么：widget 属性断言（颜色/圆角/阴影参数）**看不见绘制顺序**。封面底色曾走
+// `Ink`/`Ink.image` 墨迹层（由上层 `Material` 绘制）⇒ 逃逸封面外框的 `ClipRRect`
+// （裁切只作用于子树）成方角；且墨迹层落在外框投影的填充之下被 α 染暗（「太暗了」）。
+// 修法：封面一律**子树内**不透明绘制（`Image.memory` / `ColoredBox`）。本测试用**真实像素**
+// 钉死这层契约——属性断言再绿也没用，顺序回潮这里就红。
 //
-//   ① 封面底色/图片曾用 `Ink` / `Ink.image` 画（**墨迹特性**，由上层 `Material`
-//      绘制：`material.dart:621-634` 先画 ink 特性、再画子树）⇒ **逃逸**封面外框的
-//      `ClipRRect`（裁切只作用于该 Material 的子**树**）⇒ 封面是**方角**；
-//   ② 同一个墨迹层落在封面外框 `DecoratedBox` 的投影**填充**之下
-//      （`BoxShadow` 是填充形状：`box_decoration.dart:448-470` 直接 `drawRRect` 填充）
-//      ⇒ 整张封面被染上一层 α0.39 的色：浅色主题 = 灰（实测 `#9FA8DA` → `#9FA4C2`）、
-//      深色主题 = 黑（→ `#616685`）⇒「太暗了」。
-//
-// 修法：封面（含占位底色）一律改成**子树内**不透明绘制（`Image.memory` /
-// `ColoredBox`）。本测试用**真实像素**把这层契约钉死——属性断言再变绿也没用，
-// 只要顺序回潮这里就红。
-//
-// 手法：把书卡放进 `RepaintBoundary` → `toImage()` → 读 RGBA 原始字节采样。
-// ⚠️ `toImage()` 必须在 `tester.runAsync` 里 await（FakeAsync 不排空真异步）。
-// ⚠️ 必须钉 `devicePixelRatio = 1`：默认 3 会把采样坐标算错。
+// 手法：书卡放进 `RepaintBoundary` → `toImage()` → 读 RGBA 原始字节采样。
+// ⚠️ `toImage()` 必须在 `tester.runAsync` 里 await（FakeAsync 不排空真异步）；
+// ⚠️ 必须钉 `devicePixelRatio = 1`（默认 3 会把采样坐标算错）。
 // ══════════════════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:typed_data';
@@ -45,9 +32,9 @@ const Key _kBoundaryKey = ValueKey<String>('paint-probe-boundary');
 const double _kCoverWidth = 120;
 const double _kCoverHeight = 192;
 
-/// 卡片**全高** = 封面 192 + 间距 [kBookCoverToInfoGap] 5 + 信息区 [kBookInfoHeight] 55。
+/// 卡片**全高** = 封面 192 + 间距 [kBookCoverToInfoGap] 8 + 信息区 [kBookInfoHeight] 30。
 /// boundary 必须取全高，否则信息区被挤出可视区、下面的采点会越界。
-const double _kCardHeight = _kCoverHeight + 5 + 55;
+const double _kCardHeight = _kCoverHeight + 8 + 30;
 
 /// 几何无关的假封面存储（本测试的书全是 [NoCover]，读方法不会被调用）。
 class _FakeCoverStore implements CoverStore {
@@ -80,10 +67,9 @@ class _FakeCoverStore implements CoverStore {
 
 /// 返回**真图封面**字节的假存储（用于 [StoredCover] 路径）。
 ///
-/// 为什么必须单独覆盖这条路径（2026-09-29 补）：[DefaultBookCover] **自带**
-/// 一个 `ClipRRect`，所以「外层裁切失效」在它身上**看不出来**（内层还会兜住）；
-/// 而真图封面走 [Image.memory]，**完全依赖** `_buildCoverSurface` 里那一层
-/// `ClipRRect`。这正是负责人截图里 `绍宋`（真图）与其它书同时方角的那条路径。
+/// 为什么单列这条路径：[DefaultBookCover] **自带** `ClipRRect`，外层裁切失效它也圆、
+/// 看不出来；真图封面走 [Image.memory] **完全依赖** `_buildCoverSurface` 里那一层
+/// `ClipRRect`，必须自己钉住。
 class _ImageCoverStore implements CoverStore {
   _ImageCoverStore(this.bytes);
 
@@ -134,7 +120,6 @@ Future<Uint8List> _solidPng(Color color) async {
   return data.buffer.asUint8List();
 }
 
-/// 渲染一张无封面书卡并返回「封面区域内的像素读取器」。
 /// 渲染一张书卡并返回「封面区域内的像素读取器」。
 ///
 /// [imageBytes] 非空时走**真图封面**路径（[StoredCover] → `Image.memory`）；
@@ -237,8 +222,8 @@ void main() {
         brightness,
       );
 
-      // ① 封面内部（避开左上书名与右下角水印）：必须**精确等于**调色板底色。
-      //    曾经这里浅色得 `#9FA4C2`、深色得 `#616685`（α0.39 的投影填充盖在封面上）。
+      // ① 封面内部（避开左上书名与右下角水印）：必须**精确等于**调色板底色
+      //    （曾被外框投影的 α 填充染暗过）。
       final int inner = pixel(12, _kCoverHeight * 0.55);
       expect(
         inner,
@@ -248,9 +233,9 @@ void main() {
             '（实测 ${_hex(inner)} 说明有东西盖在封面上——通常是外框投影的填充）',
       );
 
-      // ② 左上角 (2,2)：圆角 8 的弧**外**（到弧心 (8,8) 距离 ≈ 8.49 > 8），
-      //    故这里**不该**是封面色（应是背景 / 投影）。曾测到这里仍是封面色
-      //    —— 因为底色走墨迹层、逃逸了 `ClipRRect`，封面成了方角。
+      // ② 左上角 (2,2) 在圆角 20 的弧**外**（角弧中心 (20,20)，(2,2) 距它
+      //    √(18²+18²) ≈ 25.5 > 20），**不该**是封面色（应是背景 / 投影）；
+      //    底色走墨迹层逃逸 `ClipRRect` 时这里会读到封面色（方角回潮即红）。
       final int corner = pixel(2, 2);
       expect(
         corner,
@@ -260,9 +245,8 @@ void main() {
     });
   }
 
-  // 2026-09-29 负责人反馈「点击后会有灰色背景」→ 根因是**开书准备中的蒙层原先铺满
-  // 整张卡**（在 `ClipRRect` 之外 ⇒ 方角、且连信息区一起压暗）。改为只蒙封面后，
-  // 这里用真实像素钉死「蒙层在场时封面确实被压暗、但信息区一个字都不受影响」。
+  // 开书准备蒙层**只蒙封面**（曾在 `ClipRRect` 外铺满整卡 ⇒ 方角 + 连信息区一起压暗）。
+  // 用真实像素钉死：蒙层在场时封面确实被压暗、但信息区一个字都不受影响。
   for (final Brightness brightness in Brightness.values) {
     testWidgets('$brightness：打开准备中——蒙层只盖封面，不碰信息区', (WidgetTester tester) async {
       // 同一个读像素器（封面坐标原点）分别在「静止」与「蒙层」两态各取一遍。
@@ -289,18 +273,16 @@ void main() {
             '——若仍等于底色 ${_hex(coverColor)}，说明蒙层没盖到封面',
       );
 
-      // ② **圆角仍然生效**：蒙层若画在 `ClipRRect` 之外（原先正是在外面），
-      //    封面左上角的弧外区域会被蒙成一整块方角。这里断言弧外**不是**被蒙过的
-      //    封面色——即蒙层确实被裁进了圆角内。
+      // ② **圆角仍然生效**：蒙层若画在 `ClipRRect` 之外，弧外会被蒙成一整块方角——
+      //    断言弧外**不是**被蒙过的封面色（即蒙层确实被裁进圆角内）。
       expect(
         overlay(2, 2),
         isNot(loadingInside),
         reason: '圆角外不该出现「被蒙过的封面色」——蒙层逃逸了圆角裁切',
       );
 
-      // ③ **信息区完全不受影响**：书名行（封面下缘再往下 20px，落在信息区里）
-      //    在两态下必须**逐位相等**。原先整卡蒙层会把它一起压暗（深色实测
-      //    静止 `#000000` → 蒙层 `#0b0b0e`；浅色 `#000000` → `#979599`）。
+      // ③ **信息区完全不受影响**：书名行（封面下缘再往下 20px，仍在 13.85 高的
+      //    书名行盒内）两态必须**逐位相等**（整卡蒙层的老毛病会把它一起压暗）。
       final double infoY = _kCoverHeight + 20;
       expect(
         overlay(12, infoY),
@@ -312,11 +294,9 @@ void main() {
     });
   }
 
-  // 2026-09-29 追加：**真图封面**（`StoredCover` → `Image.memory`）的圆角契约。
-  //
-  // 为什么单列：默认封面 [DefaultBookCover] **自带** `ClipRRect`，外层裁切即使失效
-  // 它也会圆；真图封面**完全依赖** `_buildCoverSurface` 那一层裁切。负责人截图里
-  // `绍宋`（真图）与默认封面的书**同时**方角，这条路径必须自己钉住。
+  // **真图封面**（`StoredCover` → `Image.memory`）的圆角契约。为什么单列：默认封面
+  // [DefaultBookCover] **自带** `ClipRRect`，外层裁切失效它也会圆；真图封面**完全依赖**
+  // `_buildCoverSurface` 那一层裁切，这条路径必须自己钉住。
   for (final Brightness brightness in Brightness.values) {
     testWidgets('$brightness：真图封面被裁进圆角（不逃逸 ClipRRect）', (WidgetTester tester) async {
       // 纯色封面：内部像素必须**精确等于**该色，圆角外必须**不是**它。
@@ -340,8 +320,8 @@ void main() {
         reason: '真图封面内部须精确等于纯色 ${_hex(coverRgb)}（实测 ${_hex(inner)}）',
       );
 
-      // ② 圆角外（半径 8 的弧外，到弧心 (8,8) 距离 ≈ 8.49 > 8）不得出现封面色。
-      //    若 `Image.memory` 逃逸了 `ClipRRect`，这里会读到封面色 ⇒ 方角。
+      // ② 圆角外不得出现封面色；若 `Image.memory` 逃逸 `ClipRRect`，这里会读到封面色
+      //    ⇒ 方角回潮即红。
       final int corner = pixel(2, 2);
       expect(
         corner,
@@ -353,24 +333,15 @@ void main() {
     });
   }
 
-  // 2026-09-29 二次修正：**墨迹（高亮 + 水波纹）整体关闭**。
-  //
-  // 负责人原话：「长按某个书籍弹起弹框前，该书籍**文字和圆角**会有灰色背景」。
-  //
-  // 机制（全部源码实证，逐条见 `book_card.dart` 的 InkWell 注）：
-  //   · `theme_data.dart:502`  `splashColor ??= isDark ? Color(0x40CCCCCC)` —— **灰**；
-  //   · `ink_sparkle.dart:269` `canvas.drawRect(_clipCallback(), paint)` —— 整块矩形；
-  //   · `ink_well.dart:1242-1251` `handleLongPress` 只 `confirm()` 水波纹、**不撤**；
-  //   · `material.dart:621-634` ink 特性画在**子树之下** ⇒ 只从卡片仅有的两个透明处
-  //     露出来：**信息区（文字）** 与 **封面圆角缺口**。封面内部不透明，看不到。
+  // **墨迹（高亮 + 水波纹）必须整体关闭**：ink 特性画在子树之下，只从卡片仅有的两处
+  // 透明区（信息区文字 / 封面圆角缺口）露出来，长按时会糊灰底（机制详 `book_card.dart`
+  // 的 InkWell 注）。
   //
   // 两条断言（互为兜底）：
-  //   ① **确定性属性**——`InkWell` 的墨迹取色与工厂必须是「透明 / `NoSplash`」。
-  //      不受 shader 异步就绪影响，是「关掉墨迹」的直接契约（读 widget 自己的公开
-  //      字段，不用本仓常量，避免同义反复）。
-  //   ② **像素**——按住不放、在长按阈值之前（水波纹已起、放大 1.05 未起），
-  //      信息区与圆角缺口必须与静止态**逐位相同**。反向验证：把 splash 改回默认，
-  //      信息区实测 `#000000` → `#333333`（= `0x40CCCCCC` 叠在黑底上）。
+  //   ① **确定性属性**——`InkWell` 的墨迹取色与工厂必须是「透明 / `NoSplash`」（读 widget
+  //      自己的公开字段，不用本仓常量，避免同义反复）。
+  //   ② **像素**——按住不放、长按阈值之前采样（水波纹已起、放大未起），信息区与圆角缺口
+  //      必须与静止态**逐位相同**；反向验证：把 splash 改回默认即染灰判红。
   testWidgets('书卡墨迹：按下/长按不得在文字区与圆角缺口留下灰底', (
     WidgetTester tester,
   ) async {

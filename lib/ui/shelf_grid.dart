@@ -1,30 +1,25 @@
 // 书架网格（`LIB-01` 的展示层）。
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 布局几何：复刻 anx-reader（2026-09-28 拍板「只动布局几何」）
-// ══════════════════════════════════════════════════════════════════════════════
-// 列数 = 容器宽 ~/ 120、比例 1/2.1、行距 30 / 列距 20、内边距 (20, 12, 20, ·)，
-// 出处与取值见 [kShelfCoverTargetWidth] / [kShelfGridPadding]。
-// 字号、颜色保持本项目现状（不照搬 anx）；**封面投影与圆角已于 2026-09-29 对齐
-// anx**（改口径，见 `book_card.dart` 顶部总注与 `kBookCoverShadow`）。
+// 布局几何**对齐 mi_like_ui 首页卡片**（拍板「整体全换 Mi 度量」，2026-10-27）：
+// 列数 = 容器宽 ~/ 120（anx 口径保留，与 Mi 参考图同为三列）、单元格高宽比由
+// 列宽经 [shelfChildAspectRatio] 推导（封面 2:3 + 间距 8 + 信息区 30）、
+// 行距 15 / 列距 11.9 / 页面左右边距 11.9，出处与取值集中在 `shelf_geometry.dart`
+// （事实源）；字号、颜色保持本项目现状，封面投影随主题（见 `book_card.dart`
+// 顶部总注与 `kBookCoverShadow`）。
 //
 // PRD 取舍（anx 没有但必须留的两处）：
 //   · 格式标签（US-06 / LIB-01）→ 挪到封面右下角作角标（`book_card.dart`）；
 //   · 空态「导入书籍」按钮（LIB-01 ②）→ 保留，不复刻 anx 的纯颜文字空态。
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 2026-09-29 拍板：**去拖拽化**（拖拽归类 → 分组）
-// ══════════════════════════════════════════════════════════════════════════════
-// 拖拽（建文件夹 / 移入文件夹 / 重排）**整体移除**，本文件只剩「按几何排布书卡」：
+// **去拖拽化**（拖拽归类 → 分组）：拖拽（建文件夹 / 移入文件夹 / 重排）**整体移除**，
+// 本文件只剩「按几何排布书卡」：
 //   · 归类改由**书籍详情页的「分组」行**完成（需求 `P2-02`，见 `book_detail_page`）；
 //   · 书架按分组筛选（顶部 chips，见 `shelf_page`），网格**平铺**当前可见书，
 //     没有文件夹卡、没有文件夹内页；
-//   · 长按书卡仍弹操作单（`LIB-06` 语义），改由 `BookCard.onLongPress` 直接承载
-//     ——没有外层 `LongPressDraggable` 了，不存在手势竞技场冲突（原先网格内把
-//     书卡 `onLongPress` 置 `null` 正是为了避让拖拽容器）。
-//   · 2026-09-29 追加：长按的**抬起反馈**（放大 1.05 + 浮起阴影）在 `BookCard`
-//     内部实现——照抄 anx 借 `flutter_reorderable_grid_view` 拿到的数值，但
-//     **不跟手**，故依旧不引该包（`book_card.dart` 顶部总注记了全部出处）。
+//   · 长按书卡仍弹操作弹框（`LIB-06` 语义，书架页用 mi_like_ui `MiDialog` 承载），
+//     由 `BookCard.onLongPress` 直接承载——不存在手势竞技场冲突；长按抬起反馈
+//     （放大 1.05 + 浮起阴影）在 `BookCard` 内部实现，**不引**
+//     `flutter_reorderable_grid_view`（其抬起反馈不跟手）。
 //
 // 本文件**无状态**：不涉及 `setState`（状态管理红线针对有状态组件）。
 import 'package:flutter/material.dart';
@@ -81,15 +76,14 @@ class ShelfGrid extends StatelessWidget {
   /// 正在准备打开的书（bookId）：对应卡显示 loading 覆盖层。
   final String? openingBookId;
 
-  /// 点书卡（**直接进阅读页**；2026-09-29 改道，原先进详情页）。
+  /// 点书卡（**直接进阅读页**）。
   final void Function(BookRecord record) onOpenBook;
 
-  /// 长按书卡（弹底部操作单，`LIB-06`）。
+  /// 长按书卡（弹操作弹框，`LIB-06`）。
   ///
-  /// 返回的 Future **在操作单关闭时即完成**，不等操作单里选定的动作
-  /// （开书 / 详情 / 删除）走完——书卡拿它当**长按抬起反馈的复位时机**
-  /// （`book_card.dart` 的 `_handleLongPress`）。若做成「动作走完才完成」，
-  /// 用户点「继续阅读」后卡片会一直保持抬起状态。
+  /// 返回的 Future **在弹框关闭时即完成**，不等弹框里选定的动作走完——书卡
+  /// 拿它当**长按抬起反馈的复位时机**（`book_card.dart` 的 `_handleLongPress`）。
+  /// 若做成「动作走完才完成」，用户点「继续阅读」后卡片会一直保持抬起状态。
   final Future<void> Function(BookRecord record) onBookActions;
 
   /// 网格内边距（默认给壳层浮动胶囊留出底部空白，见 [kShelfGridPadding]）。
@@ -98,8 +92,8 @@ class ShelfGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 列数按 anx-reader 的口径算：**容器宽 ~/ 单列目标宽**（不是「最大列宽」式）。
-    // 用 LayoutBuilder 拿到 GridView 自身的可用宽——与 anx 的
-    // `Expanded > LayoutBuilder > GridView` 结构一致（其 `constraints.maxWidth`
+    // LayoutBuilder 拿 GridView 自身的可用宽（与 anx 的
+    // `Expanded > LayoutBuilder > GridView` 结构一致，`constraints.maxWidth`
     // 同样是**含 padding 的整宽**）。
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
@@ -112,14 +106,27 @@ class ShelfGrid extends StatelessWidget {
         // 极窄窗口（<120px）下 `~/` 会算出 0。上限纯属防御。
         if (columns < kShelfMinColumns) columns = kShelfMinColumns;
         if (columns > kShelfMaxColumns) columns = kShelfMaxColumns;
+        // 单元格宽 =（内容宽 − 列距 × (列数 − 1)）/ 列数。封面区按书本比例 2:3
+        // 随列宽等比定高，故高宽比**不再用固定值**，而是由列宽推导（事实源
+        // `shelfChildAspectRatio`）。`padding` 是 EdgeInsetsGeometry，先按当前
+        // 方向解析出左右值。
+        final EdgeInsets resolved = padding.resolve(
+          Directionality.of(context),
+        );
+        final double contentWidth = width - resolved.left - resolved.right;
+        final double cellWidth =
+            width.isFinite && contentWidth.isFinite && columns > 0
+            ? (contentWidth - kShelfCrossAxisSpacing * (columns - 1)) /
+                  columns
+            : kShelfCoverTargetWidth;
         return GridView.builder(
           // 浮动胶囊不占布局高度，底部留白由 kShellBottomInset 提供
           // （已随 `kShelfGridPadding` 进入本文件的 padding 默认值）。
           padding: padding,
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,
-            // 几何数值全部取自 `shelf_geometry.dart`（每条附 anx 出处行号）。
-            childAspectRatio: kShelfChildAspectRatio,
+            // 几何数值全部取自 `shelf_geometry.dart`（Mi 实测度量，每条附出处）。
+            childAspectRatio: shelfChildAspectRatio(cellWidth),
             mainAxisSpacing: kShelfMainAxisSpacing,
             crossAxisSpacing: kShelfCrossAxisSpacing,
           ),

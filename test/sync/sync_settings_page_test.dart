@@ -1,17 +1,15 @@
-// `M4-T01`：同步设置页 widget 测试（`SYNC-01` 五要素界面 / 预设回填 /
-// 测试连接成功与错误可见 `SYNC-07` / `DATA-02` ③ 明文标注）+ 设置页入口接线。
+// `SYNC-01` 五要素界面 / 预设回填 / 测试连接成功与错误可见 `SYNC-07` /
+// `DATA-02` ③ 明文标注 + 设置页入口接线：同步设置页 widget 测试。
 //
 // 三条测试口径（沿用既有测试的既定做法）：
-//   ① 宿主钉「关」档（`settings_page_test.dart` 的 `host(tier, …)` 同款）——
-//      玻璃档浮层在 `flutter test` 软件光栅下每帧数百 ms 真实异步开销，
-//      需要弹层交互的用例一律在关档跑（关档退化走 Material 对话框）；
+//   ① 宿主钉「关」档（玻璃档浮层在 `flutter test` 软件光栅下每帧数百 ms 真实
+//      异步开销，需要弹层交互的用例一律在关档跑）；
 //   ② 测试体内**真异步 IO**（落盘 / 读密码）必须用交替 `runAsync` / `pump`
 //      排空（`settleReal` 口径）；
-//   ③ **真实 socket 断言不进 widget 测试**：`TestWidgetsFlutterBinding` 装了
-//      `HttpOverrides`，把 suite 内所有 `HttpClient` 请求拦成 400（框架自警：
-//      "all HTTP requests will return status code 400"）——故「测试连接」三个用例
-//      注入 [_StubWebdavClient] 只验**结果如何呈现**；状态码 → 分类的真网络语义在
-//      纯 `test()` 的 `webdav_client_test.dart` 逐条覆盖（`SYNC-01` ①②③ / `SYNC-07`）。
+//   ③ ⚠️ **真实 socket 断言不进 widget 测试**——`TestWidgetsFlutterBinding` 装了
+//      `HttpOverrides`，suite 内所有 `HttpClient` 请求被拦成 400：「测试连接」
+//      用例注入 [_StubWebdavClient] 只验**结果如何呈现**；状态码 → 分类的真网络
+//      语义在纯 `test()` 的 `webdav_client_test.dart`（`SYNC-01` ①②③ / `SYNC-07`）。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -42,12 +40,8 @@ Widget host(GlassQualityTier tier, Widget home) {
   );
 }
 
-/// 记录调用参数 / 按需抛错的 [WebdavClient] 测试替身。
-///
-/// 为什么不用真 socket：`TestWidgetsFlutterBinding` 装了 `HttpOverrides`，
-/// suite 内所有 `HttpClient` 请求都会被拦成 400（框架自警原文，见文件头口径③）。
-/// 本替身只验「UI 如何呈现结果」；状态码 → 分类的真网络语义在纯 `test()` 的
-/// `webdav_client_test.dart` 覆盖。
+/// 记录调用参数 / 按需抛错的 [WebdavClient] 测试替身（⚠️ 不用真 socket 的原因
+/// 见文件头口径③）；只验「UI 如何呈现结果」，真网络语义在 `webdav_client_test.dart`。
 class _StubWebdavClient extends WebdavClient {
   _StubWebdavClient({this.toThrow});
 
@@ -324,8 +318,10 @@ void main() {
       await aiStore.load();
     });
 
-    testWidgets('传入 syncStore/syncClient → 「同步备份」组与入口行在场（未配置）',
-        (WidgetTester tester) async {
+    // 组标题已随「对齐上游我的页」拍板移除（2026-10-27）：入口契约落在**行**上。
+    testWidgets('传入 syncStore/syncClient → 同步入口行在场（未配置）', (
+      WidgetTester tester,
+    ) async {
       tall(tester);
       await tester.pumpWidget(
         host(
@@ -341,7 +337,6 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('同步备份'), findsOneWidget);
       expect(find.text('WebDAV 同步'), findsOneWidget);
       expect(find.text('未配置'), findsOneWidget);
     });
@@ -365,7 +360,6 @@ void main() {
       );
       await settleReal(tester, rounds: 6);
 
-      expect(find.text('同步备份'), findsOneWidget);
       expect(find.text('已配置'), findsOneWidget);
     });
 
@@ -383,8 +377,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('同步备份'), findsNothing);
+      // 组标题已移除（2026-10-27）：降级口径改钉两行入口文案都不得在场。
       expect(find.text('WebDAV 同步'), findsNothing);
+      expect(find.text('同步状态与备份'), findsNothing);
     });
   });
 }
