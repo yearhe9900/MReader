@@ -414,35 +414,38 @@ void main() {
       expect(const BookRegistry().highPerf.isPureDart, isTrue);
     });
 
-    test(
-      '状态钉：T01 阶段探测通过也不改分发结果（Rust 源属 T04，gate 未过）',
-      () async {
-        // 这条断言**故意钉住当前状态**，不是目标行为：
-        // 架构 §A.1 的终态是「epub/txt 按 has(...) 择 Rust 源」，但 Rust 源是 M35-T04
-        // 且依赖 T03 的 FRB gate。T01 不预置恒不被选中的 Rust 分支，故此处仍为纯 Dart。
-        // **T04 落地本接缝时，本用例必须同步改写**（改成断言实现了 Rust 源）。
-        final HighPerfRegistry probed = await _probed(_FakeEngine());
-        expect(probed.has(HighPerfCapability.txtChapterize), isTrue);
+    test('状态钉：探测结论不择实现（内核唯一实现，2026-10-26）', () async {
+      // 原「T01 阶段仍为纯 Dart」的状态钉已随 Dart 源删除失效。现在的判据：
+      // 探测通过与否都**不改**分发结果——有原生库 = 内核源；没有 = 格式层报错。
+      final HighPerfRegistry probed = await _probed(_FakeEngine());
+      expect(probed.has(HighPerfCapability.txtChapterize), isTrue);
 
-        final BookRegistry registry = BookRegistry(highPerf: probed);
+      final BookRegistry registry = BookRegistry(highPerf: probed);
+      try {
         final BookSource source = await registry.open(
           fileName: 'a.txt',
           bytes: Uint8List.fromList(utf8.encode('第1章 开始\n正文内容')),
         );
-        expect(source.implId, 'dart-txt');
+        expect(source.implId, startsWith('rust-'));
         await source.dispose();
-      },
-    );
+      } on MReaderFormatException catch (e) {
+        expect(e.code, FormatErrorCode.corruptFile);
+      }
+    });
 
     test('openBook() 默认走组合根注入点，签名向后兼容', () async {
       final HighPerfRegistry provider = HighPerfRegistry(engine: _FakeEngine());
       HighPerfRegistryProvider.current = provider;
-      final BookSource source = await openBook(
-        fileName: 'a.txt',
-        bytes: Uint8List.fromList(utf8.encode('第1章 开始\n正文内容')),
-      );
-      expect(source.implId, 'dart-txt');
-      await source.dispose();
+      try {
+        final BookSource source = await openBook(
+          fileName: 'a.txt',
+          bytes: Uint8List.fromList(utf8.encode('第1章 开始\n正文内容')),
+        );
+        expect(source.implId, startsWith('rust-'));
+        await source.dispose();
+      } on MReaderFormatException catch (e) {
+        expect(e.code, FormatErrorCode.corruptFile);
+      }
     });
   });
 }

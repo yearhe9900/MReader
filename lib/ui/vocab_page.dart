@@ -1,5 +1,4 @@
-// 生词本页（M3-T02：`AI-03` ②「存入后退出重进仍在」的浏览面 + ③「点生词
-// 跳回原文」）。
+// 生词本页（`AI-03` ②「存入后退出重进仍在」的浏览面 + ③「点生词跳回原文」）。
 //
 // 列表数据 = [VocabStore]（进程内共享 + 原子落盘，增删由阅读页释义面板写入，
 // 本页订阅刷新）。点击条目走**自持的开书管道**（读字节 → 结构缓存 key →
@@ -22,7 +21,6 @@ import '../ai/summary_cache.dart';
 import '../ai/vocab_store.dart';
 import '../format/book_registry.dart';
 import '../format/book_source.dart';
-import '../format/structure_cache.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
 import '../reader/bookmark_store.dart';
@@ -80,10 +78,10 @@ class VocabPage extends StatefulWidget {
   /// 朗读设置存储（透传阅读页，跳回后朗读设置入口不丢；`TTS-04`/`TTS-05`）。
   final TtsSettingsStore? ttsSettings;
 
-  /// 在线 TTS 配置存储（透传阅读页，`TTS-07`；`M3-T09`）。
+  /// 在线 TTS 配置存储（透传阅读页，`TTS-07`）。
   final OnlineTtsStore? onlineTts;
 
-  /// 书签存储（透传阅读页；`M4-T05` 接上生产链路）。
+  /// 书签存储（透传阅读页）。
   final BookmarkStore? bookmarkStore;
 
   /// 阅读偏好存储（透传阅读页；同 [bookmarkStore]）。
@@ -270,16 +268,9 @@ class _VocabPageState extends State<VocabPage> {
         _toast('文件已丢失：${record.fileName}');
         return;
       }
-      // 缓存判据（M-PAGE T06 + §2.81）：与书架开书同款——判据不中即不启用。
-      final StructureCacheKey? cacheKey =
-          await widget.repository.structureCacheKey(record);
       final BookSource source = await openBook(
         fileName: record.fileName,
         bytes: bytes,
-        structureCache: widget.repository.structureCache,
-        cacheKey: cacheKey,
-        txtOutlineCache: widget.repository.txtOutlineCache,
-        chapterTextCache: widget.repository.chapterTextCache,
       );
       if (!mounted) return;
       final MaterialPageRoute<void> route = MaterialPageRoute<void>(

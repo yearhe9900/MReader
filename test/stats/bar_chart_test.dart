@@ -1,4 +1,4 @@
-// `M3-T11`：周期柱状图 + 下钻明细测试（`STAT-04`）。
+// `STAT-04`：周期柱状图 + 下钻明细测试。
 //
 // 纯聚合用**固定 now = 2026-09-16（周三）**断言柱数 / 标签 / 高亮 / since 过滤 /
 // 「下钻求和 = 柱高」；widget 级用真实时钟只断言结构（周恒 7 柱 / 月当月天数 /
@@ -369,9 +369,7 @@ void main() {
         expect(find.text(imported.record.title), findsOneWidget);
         expect(find.text(imported.record.bookId), findsNothing);
       } finally {
-        // 导入预热收尾再删目录（真 IO 须经 runAsync 让真事件循环换气；
         // 防「后台写盘 vs 删目录」竞态，§2.81）。
-        await tester.runAsync(() => repo.pendingWarmUps);
         if (tempDir.existsSync()) {
           tempDir.deleteSync(recursive: true);
         }

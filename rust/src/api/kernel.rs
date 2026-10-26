@@ -72,6 +72,9 @@ pub struct RkMeta {
     pub format: String,
     /// 封面资源 key（包内绝对路径）；无封面为 `None`（内核含三级回退）。
     pub cover_key: Option<String>,
+    /// 内容哈希（内容级缓存的 key 前缀；`0` = 未提供）：删书时用它整本失效
+    /// 内容缓存（`rrk-cache`，上游 issue #12）。
+    pub content_hash: u64,
 }
 
 /// 章索引项。
@@ -238,17 +241,72 @@ pub fn kernel_meta(handle: u64) -> Result<RkMeta, HighPerfError> {
                 description: m.description.clone(),
                 format: m.format.to_string(),
                 cover_key: m.cover.as_ref().map(|c| c.0.clone()),
+                content_hash: m.content_hash,
             })
         })
     })
+}
+
+/// 内容级缓存命中统计快照（体检 / 日志用；未配置缓存时全 0）。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RkCacheStats {
+    pub toc_hits: u64,
+    pub toc_misses: u64,
+    pub chapter_hits: u64,
+    pub chapter_misses: u64,
+    pub outline_hits: u64,
+    pub outline_misses: u64,
+}
+
+/// 配置内容级缓存（目录 + 内存上限字节；空目录 = 关闭）。幂等，可重复调用。
+///
+/// key = `content_hash`（内容级，不随样式/视口变）：同文件重开命中，内容变了整本
+/// 失效；payload 自带 schema 号，内核升级 / 损坏自动丢弃重算。
+#[flutter_rust_bridge::frb(sync)]
+pub fn kernel_cache_configure(dir: String, mem_bytes: u64) -> Result<(), HighPerfError> {
+    ffi_guard(|| {
+        with_kernel(|k| {
+            k.configure_content_cache(&dir, mem_bytes as usize)?;
+            Ok(())
+        })
+    })
+}
+
+/// 内容级缓存命中统计快照（只读、无 IO，适合体检页 / 日志）。
+#[flutter_rust_bridge::frb(sync)]
+pub fn kernel_cache_stats() -> RkCacheStats {
+    ffi_guard(|| {
+        with_kernel(|k| {
+            let s = k.content_cache_stats();
+            Ok(RkCacheStats {
+                toc_hits: s.toc_hits,
+                toc_misses: s.toc_misses,
+                chapter_hits: s.chapter_hits,
+                chapter_misses: s.chapter_misses,
+                outline_hits: s.outline_hits,
+                outline_misses: s.outline_misses,
+            })
+        })
+    })
+    .unwrap_or_default()
+}
+
+/// 按内容哈希整本失效（删书时调用）；返回删除条数（内存 + 磁盘）。
+///
+/// 幂等：哈希不存在 = 返回 0；缓存未配置同样返回 0。
+#[flutter_rust_bridge::frb(sync)]
+pub fn kernel_cache_invalidate(content_hash: u64) -> u64 {
+    ffi_guard(|| with_kernel(|k| k.invalidate_content_cache(content_hash).map(|n| n as u64)))
+        .unwrap_or(0)
 }
 
 /// 目录树。
 pub fn kernel_toc(handle: u64) -> Result<Vec<RkTocNode>, HighPerfError> {
     ffi_guard(|| {
         with_kernel(|k| {
-            let book = k.book(handle)?;
-            Ok(toc_nodes(&book.toc()?))
+            // 内容级缓存（`rrk-cache`，上游 issue #12）：命中免 nav/NCX 解析；
+            // 未配置缓存时行为与直调 `toc()` 逐字节一致。
+            Ok(toc_nodes(&k.toc_cached(handle)?))
         })
     })
 }
@@ -257,9 +315,9 @@ pub fn kernel_toc(handle: u64) -> Result<Vec<RkTocNode>, HighPerfError> {
 pub fn kernel_chapters(handle: u64) -> Result<Vec<RkChapter>, HighPerfError> {
     ffi_guard(|| {
         with_kernel(|k| {
-            let book = k.book(handle)?;
-            Ok(book
-                .chapters()?
+            // 内容级缓存：命中免分章扫描（TXT 大纲重建受益最大）。
+            let entries = k.chapters_cached(handle)?;
+            Ok(entries
                 .iter()
                 .map(|e| RkChapter {
                     id: e.id,
@@ -282,8 +340,8 @@ pub fn kernel_chapters(handle: u64) -> Result<Vec<RkChapter>, HighPerfError> {
 pub fn kernel_load_chapter(handle: u64, chapter_id: u32) -> Result<RkChapterText, HighPerfError> {
     ffi_guard(|| {
         with_kernel(|k| {
-            let book = k.book(handle)?;
-            let content = book.load_chapter(chapter_id)?;
+            // 内容级缓存：命中免 inflate + 清洗 + 分块。
+            let content = k.load_chapter_cached(handle, chapter_id)?;
             Ok(RkChapterText {
                 blocks: plain_blocks(&content.text, &content.blocks),
                 links: content

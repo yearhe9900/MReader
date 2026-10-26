@@ -113,7 +113,7 @@ pub struct BookMeta {
 }
 
 /// 目录节点（树形；`anchor` 为章内字节偏移锚点）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TocNode {
     pub title: String,
     pub chapter: ChapterId,
@@ -131,7 +131,7 @@ pub enum ChapterKind {
 }
 
 /// 章索引项：标题 + 稳定定位串 + 字节范围 + 字数权重 + 锚点。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChapterEntry {
     pub id: ChapterId,
     pub title: Option<String>,
@@ -299,34 +299,152 @@ pub fn inline_plain(text: &str, inlines: &[Inline]) -> String {
     out
 }
 
+/// 扁平块内的一段：plain 文本区间 + 其来源。
+///
+/// 「宿主读到的段落文本」与「章正文」是两个坐标系：段落文本是行内序列的拼接
+/// （含行内图片标记）。检索命中落在段落文本上，要落到章正文偏移（锚点/内链/
+/// 进度同一坐标系）就必须有这张映射表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlainSpan {
+    /// 在所属扁平块 plain 文本中的字节区间。
+    pub plain: TextRange,
+    /// 在 `ChapterContent.text` 中的字节区间；行内图片标记为 `None`（无源文本）。
+    pub src: Option<TextRange>,
+}
+
+/// 扁平块 + 来源映射（`flatten_blocks_spans` 的产出）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlainTextBlock {
+    pub block: PlainBlock,
+    pub spans: Vec<PlainSpan>,
+}
+
+impl PlainTextBlock {
+    /// 块内 plain 文本。
+    pub fn text(&self) -> &str {
+        match &self.block {
+            PlainBlock::Paragraph { text, .. } => text,
+            PlainBlock::Heading { text, .. } => text,
+            PlainBlock::Image { .. } => "",
+        }
+    }
+
+    /// 块内 plain 偏移 → 章正文偏移。
+    ///
+    /// 落在行内图片标记上（无源文本）时返回 `None`：调用方应退到该块内最近的
+    /// 有源片段起点，或直接用块起点。
+    pub fn to_source(&self, plain_offset: u32) -> Option<u32> {
+        for s in &self.spans {
+            if plain_offset >= s.plain.start && plain_offset < s.plain.end {
+                return s.src.map(|src| src.start + (plain_offset - s.plain.start));
+            }
+        }
+        // 端点（= 块尾）归到最后一段的末尾
+        if plain_offset == self.text().len() as u32 {
+            return self.spans.last().and_then(|s| s.src.map(|src| src.end));
+        }
+        None
+    }
+
+    /// 命中位置的可用源偏移：优先精确映射；退化为块内第一个有源片段起点。
+    pub fn source_anchor(&self, plain_offset: u32) -> Option<u32> {
+        self.to_source(plain_offset).or_else(|| {
+            self.spans
+                .iter()
+                .filter(|s| s.plain.start <= plain_offset)
+                .filter_map(|s| s.src.map(|src| src.end))
+                .last()
+                .or_else(|| self.spans.iter().find_map(|s| s.src.map(|src| src.start)))
+        })
+    }
+}
+
+/// 块树 → 扁平块流（带来源映射）：**引用块递归摊平、分割线丢弃、块级图片单列**。
+///
+/// 这是 [`flatten_blocks`] 的**可追溯版本**：文本内容与分块结果完全一致，
+/// 额外给出「段落文本偏移 ↔ 章正文偏移」映射（检索命中回映用）。
+pub fn flatten_blocks_spans(text: &str, blocks: &[Block]) -> Vec<PlainTextBlock> {
+    flatten_impl(text, blocks, true)
+}
+
+/// `want_spans=false`：只产纯文本块，**不分配每块的 `Vec<PlainSpan>`**（FFI
+/// `blocks_json` 等不需要来源映射的出口用——旧实现先建 spans 再整体丢弃）。
+fn flatten_impl(text: &str, blocks: &[Block], want_spans: bool) -> Vec<PlainTextBlock> {
+    fn walk(text: &str, blocks: &[Block], want_spans: bool, out: &mut Vec<PlainTextBlock>) {
+        for b in blocks {
+            match b {
+                Block::Paragraph { inlines, indent } => {
+                    let mut plain = String::new();
+                    let spans = spans_of(text, inlines, &mut plain, want_spans);
+                    out.push(PlainTextBlock {
+                        block: PlainBlock::Paragraph { text: plain, indent: *indent },
+                        spans,
+                    });
+                }
+                Block::Heading { level, inlines } => {
+                    let mut plain = String::new();
+                    let spans = spans_of(text, inlines, &mut plain, want_spans);
+                    out.push(PlainTextBlock {
+                        block: PlainBlock::Heading { level: *level, text: plain },
+                        spans,
+                    });
+                }
+                Block::Image { key, alt, .. } => out.push(PlainTextBlock {
+                    block: PlainBlock::Image { key: key.clone(), alt: alt.clone() },
+                    spans: Vec::new(),
+                }),
+                Block::Quote { blocks } => walk(text, blocks, want_spans, out),
+                Block::Divider => {}
+            }
+        }
+    }
+
+    fn spans_of(text: &str, inlines: &[Inline], plain: &mut String, want_spans: bool) -> Vec<PlainSpan> {
+        if !want_spans {
+            // 纯文本路径：只拼 plain（含图片标记），不建 spans
+            for i in inlines {
+                match i {
+                    Inline::Text { range, .. } => plain.push_str(range.slice(text)),
+                    Inline::Image { key } => {
+                        plain.push(INLINE_IMAGE_MARKER);
+                        plain.push_str(&key.0);
+                        plain.push(INLINE_IMAGE_MARKER);
+                    }
+                }
+            }
+            return Vec::new();
+        }
+        let mut spans = Vec::with_capacity(inlines.len());
+        for i in inlines {
+            let start = plain.len() as u32;
+            match i {
+                Inline::Text { range, .. } => {
+                    plain.push_str(range.slice(text));
+                    spans.push(PlainSpan { plain: TextRange::new(start, plain.len() as u32), src: Some(*range) });
+                }
+                Inline::Image { key } => {
+                    plain.push(INLINE_IMAGE_MARKER);
+                    plain.push_str(&key.0);
+                    plain.push(INLINE_IMAGE_MARKER);
+                    spans.push(PlainSpan { plain: TextRange::new(start, plain.len() as u32), src: None });
+                }
+            }
+        }
+        spans
+    }
+
+    let mut out = Vec::with_capacity(blocks.len());
+    walk(text, blocks, want_spans, &mut out);
+    out
+}
+
 /// 块树 → 扁平块流：**引用块递归摊平、分割线丢弃、块级图片单列**。
 ///
 /// 这是「内容块如何降维成宿主段落」的唯一口径（方案 #4 轻方案）：
 /// FFI 出口与 FRB/其它绑定的宿主桥都应消费本函数，不再各写一份映射。
 pub fn flatten_blocks(text: &str, blocks: &[Block]) -> Vec<PlainBlock> {
-    fn walk(text: &str, blocks: &[Block], out: &mut Vec<PlainBlock>) {
-        for b in blocks {
-            match b {
-                Block::Paragraph { inlines, indent } => out.push(PlainBlock::Paragraph {
-                    text: inline_plain(text, inlines),
-                    indent: *indent,
-                }),
-                Block::Heading { level, inlines } => out.push(PlainBlock::Heading {
-                    level: *level,
-                    text: inline_plain(text, inlines),
-                }),
-                Block::Image { key, alt, .. } => out.push(PlainBlock::Image {
-                    key: key.clone(),
-                    alt: alt.clone(),
-                }),
-                Block::Quote { blocks } => walk(text, blocks, out),
-                Block::Divider => {}
-            }
-        }
-    }
-    let mut out = Vec::with_capacity(blocks.len());
-    walk(text, blocks, &mut out);
-    out
+    // 不建 spans（旧实现先分配每块 spans 再整体丢弃）
+    flatten_impl(text, blocks, false).into_iter().map(|b| b.block).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -476,9 +594,15 @@ pub type RrkResult<T> = Result<T, RrkError>;
 
 /// FNV-1a 64 位哈希，供 `content_hash` 与指纹使用。
 pub fn fnv1a64(bytes: &[u8]) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    fnv1a64_update(FNV_INIT, bytes)
+}
+
+/// FNV 初始值（增量哈希起点）。
+pub const FNV_INIT: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// FNV-1a 增量入口：多段输入免拼接缓冲（结果与 [`fnv1a64`] 对整段拼接同值）。
+pub fn fnv1a64_update(mut hash: u64, bytes: &[u8]) -> u64 {
     const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
     for &b in bytes {
         hash ^= b as u64;
         hash = hash.wrapping_mul(PRIME);
@@ -506,6 +630,39 @@ mod tests {
     fn fnv1a_known_values() {
         assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
         assert_ne!(fnv1a64(b"a"), fnv1a64(b"b"));
+    }
+
+    /// #9：扁平块的「段落文本偏移 ↔ 章正文偏移」映射——
+    /// 检索命中落在段落文本上，必须能回映到章正文坐标系（锚点/内链/进度同坐标）。
+    #[test]
+    fn plain_spans_map_back_to_source() {
+        let text: Arc<str> = Arc::from("标题正文尾巴"); // 标0 题3 正6 文9 尾12 巴15
+        let blocks = vec![Block::Paragraph {
+            inlines: vec![
+                Inline::Text { range: TextRange::new(0, 6), style: StyleFlags(0) },
+                Inline::Image { key: ResourceKey("img1.png".into()) },
+                Inline::Text { range: TextRange::new(6, 18), style: StyleFlags(0) },
+            ],
+            indent: true,
+        }];
+        let traced = flatten_blocks_spans(&text, &blocks);
+        assert_eq!(traced.len(), 1);
+        let b = &traced[0];
+        assert_eq!(b.text(), "标题\u{FFFC}img1.png\u{FFFC}正文尾巴");
+        assert_eq!(b.spans.len(), 3);
+        // 纯文本段：1:1 映射
+        assert_eq!(b.to_source(0), Some(0));
+        assert_eq!(b.to_source(3), Some(3));
+        // 行内图片标记：无源文本（U+FFFC 是 3 字节，故 span1 = 3+8+3 = 14）
+        assert_eq!(b.spans[1].plain, TextRange::new(6, 20));
+        assert_eq!(b.to_source(6), None);
+        // 图片之后的文本段：源偏移从 6 起
+        assert_eq!(b.to_source(20), Some(6));
+        assert_eq!(b.to_source(21), Some(7));
+        // 退化锚点：图片标记位置退到前一段末尾
+        assert_eq!(b.source_anchor(6), Some(6));
+        // 与 flatten_blocks 完全同源（唯一降维口径不被破坏）
+        assert_eq!(flatten_blocks(&text, &blocks), vec![b.block.clone()]);
     }
 
     /// #4：块树降维为唯一口径——引用摊平、分割线丢弃、行内图片加标记。

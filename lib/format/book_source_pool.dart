@@ -1,21 +1,19 @@
 // 开书**复用池**：把「已经解析好的书源」留在内存里，下一次打开同一本书直接复用。
 //
-// ## 为什么需要它（2026-10-20，负责人：「导入一本新书后能快速打开，之后更快」）
+// ## 为什么需要它（「导入一本新书后能快速打开，之后更快」）
 //
-// 开书链路里真正贵的是「文件字节 → 解析结构 → 章节表」这一段：整本读盘（15MB 书
-// 真机 30~80ms）+ zip 中央目录 + isolate 结构解析 + 章节表构建。**而这些产物对
-// 同一本书、同一份文件是完全确定的**——只要文件没变，就没必要每开一次重算一次。
-//
-// 旧实现每次都从零开始，于是「反复打开同一本书」的第二次、第三次和第一次一样慢。
-// 本池把 [BookSource]（它自己持有原始字节 + 解析结果 + 章节表缓存）驻留起来：
+// 开书链路里真正贵的是「文件字节 → 解析结构 → 章节表」这一段：整本读盘 + zip 中央
+// 目录 + isolate 结构解析 + 章节表构建。**而这些产物对同一本书、同一份文件是完全
+// 确定的**——只要文件没变，就没必要每开一次重算一次。本池把 [BookSource]
+// （它自己持有原始字节 + 解析结果 + 章节表缓存）驻留起来：
 //
 //   · **导入即入池**：导入管道解析出的那个 source 不销毁，直接留在池里 ⇒ 用户
 //     导入完点开，走的是「零读盘、零解析」；
-//   · **关书回池**：阅读页关闭时把 source 还回来 ⇒ 第二次、第三次打开同样零成本。
+//   · **关书回池**：阅读页关闭时把 source 还回来 ⇒ 之后每次打开同样零成本。
 //
 // ## 口径（三条硬约束）
 //
-// 1. **判据必须校验**：池条目带 [StructureCacheKey]（`bookId + mtime + size`）。
+// 1. **判据必须校验**：池条目带 [BookInstanceKey]（`bookId + mtime + size`）。
 //    文件被替换 / 副本被重写 → 判据不符 → 该条目**就地销毁**并当 miss
 //    （绝不让旧字节冒充新文件，与磁盘缓存同一条纪律）。
 // 2. **取出即独占**：同一本书不会同时被两个阅读页持有，故 [take] 命中时把条目
@@ -23,7 +21,7 @@
 //    「正被别处用着」的 source。
 // 3. **内存有上界**：条目数与单本条数上限双闸（[maxEntries] / [maxBytes]）。
 //    超出 → 淘汰最久未用者并**立即 dispose**。驻留体积取**副本文件字节数**
-//    （`StructureCacheKey.size`）——书源持有的正是这份整本字节，两者恒等，
+//    （`BookInstanceKey.size`）——书源持有的正是这份整本字节，两者恒等，
 //    因此不必为「内存占用」在 `BookSource` 合同里新开一个成员
 //    （`implements` 语义下默认实现对 fake 无效，只会逼 7 处测试跟着改）。
 //
@@ -33,7 +31,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'book_source.dart';
-import 'structure_cache.dart';
+import 'book_instance_key.dart';
 
 /// 默认驻留条目数：两本（「刚导入的那本」+「上次读的那本」）。
 const int kBookSourcePoolEntries = 2;
@@ -52,7 +50,7 @@ class _PooledSource {
     required this.source,
   });
 
-  final StructureCacheKey key;
+  final BookInstanceKey key;
   final int byteSize;
   final BookSource source;
 }
@@ -80,7 +78,7 @@ class BookSourcePool {
   Iterable<String> get bookIds => _entries.keys;
 
   /// [bookId] 是否已驻留**且判据一致**（不取走，供只读判断 / 测试）。
-  bool contains(String bookId, StructureCacheKey? key) {
+  bool contains(String bookId, BookInstanceKey? key) {
     final _PooledSource? entry = _entries[bookId];
     if (entry == null || key == null) return false;
     return entry.key == key;
@@ -89,7 +87,7 @@ class BookSourcePool {
   /// 命中则**取走**（独占）并返回书源；miss / 判据不符返回 `null`。
   ///
   /// 判据不符时该条目会被就地销毁（`dispose`）——旧字节不能冒充新文件。
-  BookSource? take(String bookId, StructureCacheKey? key) {
+  BookSource? take(String bookId, BookInstanceKey? key) {
     final _PooledSource? entry = _entries.remove(bookId);
     if (entry == null) return null;
     if (key == null || entry.key != key) {
@@ -102,7 +100,7 @@ class BookSourcePool {
   /// 归还一个书源；不满足驻留条件（无判据 / 超字节上限）则**当场销毁**。
   ///
   /// 同一 [bookId] 已有旧条目时先销毁旧条目（同一本书只留最新的一份）。
-  void put(String bookId, StructureCacheKey? key, BookSource source) {
+  void put(String bookId, BookInstanceKey? key, BookSource source) {
     if (key == null || key.size > maxBytes) {
       unawaited(source.dispose());
       return;
@@ -118,6 +116,13 @@ class BookSourcePool {
   Future<void> evict(String bookId) async {
     final _PooledSource? entry = _entries.remove(bookId);
     if (entry != null) await entry.source.dispose();
+  }
+
+  /// 取出驻留源但**不销毁**（调用方接手所有权）：删书路径要先读它的内容哈希
+  /// 去失效内核内容缓存，再自行 `dispose()`。无条目返回 `null`。
+  BookSource? remove(String bookId) {
+    final _PooledSource? entry = _entries.remove(bookId);
+    return entry?.source;
   }
 
   /// 清空（测试收尾 / 组合根退出时用）。

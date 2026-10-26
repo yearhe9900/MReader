@@ -1,11 +1,10 @@
 // `test/ui/home_shell_test.dart`：主壳层接线测试（底栏绿圆钮 → 书架导入）。
 //
-// 2026-10-16 功能迁移批：书架「添加图书」入口从顶部加号按钮迁到底栏**绿圆钮**
-// （`MiGlassNavFab`，经 `GlobalKey<ShelfPageState>` 转 `pickAndImport`）。
-// 本文件钉整条接线链：绿圆钮 onTap → pickAndImport → `FilePicker.platform
-// .pickFiles`（epub/txt 多选）。`FilePicker` 用假件替换（`FilePicker.platform`
-// 的 setter 允许注入，假件须 **extends** [FilePicker] 才能过
-// `PlatformInterface.verifyToken`），记录调用参数后返回 null（模拟取消）。
+// 书架「添加图书」入口在底栏**绿圆钮**（`MiGlassNavFab`，经 `GlobalKey<ShelfPageState>`
+// 转 `pickAndImport`）。本文件钉整条接线链：绿圆钮 onTap → pickAndImport →
+// `FilePicker.platform.pickFiles`（epub/txt 多选）。`FilePicker` 用假件替换（setter 允许
+// 注入，假件须 **extends** [FilePicker] 才能过 `PlatformInterface.verifyToken`），
+// 记录调用参数后返回 null（模拟取消）。
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -99,8 +98,6 @@ void main() {
       if (originalPicker != null) {
         FilePicker.platform = originalPicker!;
       }
-      // 导入预热收尾再删目录（防后台写盘 vs 删目录竞态，§2.81 同款口径）。
-      await repo.pendingWarmUps;
       if (tempDir.existsSync()) {
         tempDir.deleteSync(recursive: true);
       }
@@ -176,7 +173,7 @@ void main() {
   });
 
   // ────────────────────────────────────────────────────────────────────────────
-  // 2026-10-18 反馈批：底栏浮起口径 + 亮色侧栏列铺页底色（截图对照上游）
+  // 底栏浮起口径 + 亮色侧栏列铺页底色（对照上游 demo）
   // ────────────────────────────────────────────────────────────────────────────
   group('底栏浮起与页底色（对齐上游 demo_app.dart）', () {
     late Directory tempDir;
@@ -190,7 +187,6 @@ void main() {
     });
 
     tearDown(() async {
-      await repo.pendingWarmUps;
       if (tempDir.existsSync()) {
         tempDir.deleteSync(recursive: true);
       }
@@ -220,14 +216,11 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      // 2026-10-18/19 两轮真机反馈「手机模式底栏高度变了 / 还是没调整过来」
-      // 的根因契约：浮起口径 = `MiGlassNavMetrics` 实测「bar bottom sits
-      // 24.2 dp above **screen bottom**」——edge-to-edge 下 `Positioned.bottom`
-      // 量到物理屏底，**不再叠 safeBottom**（第一轮误叠手势条 inset，胶囊被
-      // 整抬 ~34dp）。
-      // **差分判别**：注入 bottom inset = 34 后，胶囊底边仍须距屏底 24.2——
-      // 「叠回 + safeBottom」的变异会让胶囊上移 34 判红（§2.97：钉住新行为
-      // 必须有能判别它的用例）。
+      // 根因契约：浮起口径 = 距**物理屏底** 24.2dp（`MiGlassNavMetrics` 实测）——
+      // edge-to-edge 下 `Positioned.bottom` 量到物理屏底，**不得再叠 safeBottom**
+      // （叠手势条 inset 会把胶囊整抬 ~34dp）。**差分判别**：注入 bottom inset = 34 后
+      // 胶囊底边仍须距屏底 24.2，「叠回 + safeBottom」的变异会让胶囊上移 34 判红
+      // （§2.97：钉住新行为必须有能判别它的用例）。
       tester.view.padding = const FakeViewPadding(bottom: 34);
       await tester.pumpWidget(buildShell());
       await settle(tester, rounds: 30);
@@ -258,8 +251,8 @@ void main() {
 
     testWidgets('宽屏模式：整块布局铺页底色（侧栏列与内容列同底，无色差竖缝）',
         (tester) async {
-      // 宽视口（800 > 600）走侧栏形态——此时内容只占右侧列，侧栏列必须同样
-      // 铺页底色，否则露出窗口底色，浅色下与页面之间出现一道色差（截图差异根因）。
+      // 宽视口（800 > 600）走侧栏形态——侧栏列必须同样铺页底色，否则露出窗口底色，
+      // 浅色下与页面之间出现一道色差竖缝。
       tester.view.physicalSize = const Size(800, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);

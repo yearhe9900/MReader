@@ -1,9 +1,7 @@
-// `META-08` 书籍详情页（`F9` 流程：书架**长按书卡 → 操作单「书籍详情」** → 进入本页）。
+// `META-08` 书籍详情页（`F9` 流程：书架**长按书卡 → 操作弹框「书籍详情」** → 进入本页）。
 //
-// ⚠️ 入口改道（2026-09-29 拍板）：书架**点书卡**改为**直接进阅读页**，
-// 故本页目前只有「长按操作单」一个入口（与 anx-reader 同构，其
-// `book_bottom_sheet.dart` 也是详情页的唯一入口）。PRD `META-08` 的
-// 「从书架点击进入」已同步改文。
+// ⚠️ 入口只有「长按弹框」这一个（书架**点书卡**是**直接进阅读页**）：
+// PRD `META-08` 的「从书架点击进入」已同步改文。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 玻璃态红线（PRD §11.2 + `UI-04`）—— 违反即返工
@@ -30,7 +28,6 @@ import 'package:flutter/material.dart';
 
 import '../format/book_registry.dart';
 import '../format/book_source.dart';
-import '../format/structure_cache.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
@@ -111,8 +108,8 @@ class _BookDetailPageState extends State<BookDetailPage> {
   /// ⚠️ **不能**在弹层返回时立刻 `dispose()`：玻璃弹窗的**关闭转场**仍在重建
   /// 内部 `TextField`（`_AnimatedState.didUpdateWidget` 会对 controller
   /// `addListener`）→ 抛「A TextEditingController was used after being disposed」
-  /// （2026-09-29 实测）。故与 State 同生命周期、由 [dispose] 统一释放；
-  /// 再次打开前先释放上一个（那时转场早已结束）。
+  /// （实测）。故与 State 同生命周期、由 [dispose] 统一释放；再次打开前先释放
+  /// 上一个（那时转场早已结束）。
   TextEditingController? _groupNameCtrl;
 
   @override
@@ -177,17 +174,10 @@ class _BookDetailPageState extends State<BookDetailPage> {
   Future<BookMeta?> _reparse() async {
     final Uint8List? bytes = await widget.repository.readBookBytes(_record);
     if (bytes == null || bytes.isEmpty) return null;
-    // M-PAGE `T06` + §2.81：与书架开书同一批缓存（判据命中零解析——详情页
-    // 「一次性回填」与「恢复自动值」是重开本书的高频路径；TXT 走大纲缓存）。
-    final StructureCacheKey? cacheKey =
-        await widget.repository.structureCacheKey(_record);
+    // M-PAGE `T06`：与书架开书同一条开书管道（内核唯一实现）。
     final BookSource source = await openBook(
       fileName: _record.fileName,
       bytes: bytes,
-      structureCache: widget.repository.structureCache,
-      cacheKey: cacheKey,
-      txtOutlineCache: widget.repository.txtOutlineCache,
-      chapterTextCache: widget.repository.chapterTextCache,
     );
     try {
       return await source.load();
@@ -434,7 +424,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 
   // -------------------------------------------------------------------------
-  // 分组（`P2-02`，2026-09-29 落地）
+  // 分组（`P2-02`）
   // -------------------------------------------------------------------------
 
   /// 分组入口（`P2-02`）：显示当前分组名 + 右箭头，点击弹选择层。
@@ -673,8 +663,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
       ),
       _buildInfoRow(
         theme,
-        // `P2-02` 书架分组（2026-09-29 落地）：此前是**禁用占位**（恒显「未分组」、
-        // 不提供入口）；现在点它即可选择 / 新建分组，书架顶部 chips 随之多出该分组。
+        // `P2-02` 书架分组：点它即可选择 / 新建分组，书架顶部 chips 随之多出该分组。
         '分组',
         _buildGroupEntry(theme),
       ),
@@ -754,11 +743,9 @@ class _BookDetailPageState extends State<BookDetailPage> {
     return _buildCoverPlaceholder();
   }
 
-  /// 无封面 / 合成封面 → **默认封面**（2026-09-29 拍板「采用 anx 无封面书籍的
-  /// 默认封面」，与书架书卡同源：[DefaultBookCover]，视觉照抄 anx）。
-  ///
+  /// 无封面 / 合成封面 → **默认封面**（与书架书卡同源：[DefaultBookCover]）。
   /// 圆角沿用本页自有的 6（`_buildCover` 的真封面分支也是 6）——书架那份是
-  /// `kBookCoverRadius` = 8，两处不一致是**既有状态**，本批未擅自统一。
+  /// `kBookCoverRadius` = 8，两处不一致是**既有状态**，刻意不擅自统一。
   Widget _buildCoverPlaceholder() {
     return DefaultBookCover(
       title: _record.title,

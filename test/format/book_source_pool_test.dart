@@ -10,7 +10,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/format/book_source.dart';
 import 'package:mreader/format/book_source_pool.dart';
-import 'package:mreader/format/structure_cache.dart';
+import 'package:mreader/format/book_instance_key.dart';
 
 /// 记账用的假书源：只关心「被 dispose 了几次」。
 class _FakeSource implements BookSource {
@@ -39,7 +39,7 @@ class _FakeSource implements BookSource {
   noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-const StructureCacheKey _key = StructureCacheKey(
+const BookInstanceKey _key = BookInstanceKey(
   bookId: 'book-a',
   mtimeMs: 1759300000000,
   size: 1024,
@@ -65,7 +65,7 @@ void main() {
     final _FakeSource source = _FakeSource();
     pool.put(_key.bookId, _key, source);
 
-    const StructureCacheKey replaced = StructureCacheKey(
+    const BookInstanceKey replaced = BookInstanceKey(
       bookId: 'book-a',
       mtimeMs: 1759400000000, // 副本被替换
       size: 1024,
@@ -86,7 +86,7 @@ void main() {
   test('单本字节超上限 → 不驻留、直接销毁', () {
     final BookSourcePool pool = BookSourcePool(maxBytes: 1024);
     final _FakeSource source = _FakeSource();
-    const StructureCacheKey big = StructureCacheKey(
+    const BookInstanceKey big = BookInstanceKey(
       bookId: 'book-big',
       mtimeMs: 1,
       size: 2048,
@@ -101,9 +101,9 @@ void main() {
     final _FakeSource a = _FakeSource();
     final _FakeSource b = _FakeSource();
     final _FakeSource c = _FakeSource();
-    pool.put('a', const StructureCacheKey(bookId: 'a', mtimeMs: 1, size: 10), a);
-    pool.put('b', const StructureCacheKey(bookId: 'b', mtimeMs: 1, size: 10), b);
-    pool.put('c', const StructureCacheKey(bookId: 'c', mtimeMs: 1, size: 10), c);
+    pool.put('a', const BookInstanceKey(bookId: 'a', mtimeMs: 1, size: 10), a);
+    pool.put('b', const BookInstanceKey(bookId: 'b', mtimeMs: 1, size: 10), b);
+    pool.put('c', const BookInstanceKey(bookId: 'c', mtimeMs: 1, size: 10), c);
 
     expect(pool.length, 2);
     expect(a.disposeCount, 1, reason: '最早的 a 被淘汰');
@@ -126,8 +126,8 @@ void main() {
     final BookSourcePool pool = BookSourcePool();
     final _FakeSource a = _FakeSource();
     final _FakeSource b = _FakeSource();
-    pool.put('a', const StructureCacheKey(bookId: 'a', mtimeMs: 1, size: 10), a);
-    pool.put('b', const StructureCacheKey(bookId: 'b', mtimeMs: 1, size: 10), b);
+    pool.put('a', const BookInstanceKey(bookId: 'a', mtimeMs: 1, size: 10), a);
+    pool.put('b', const BookInstanceKey(bookId: 'b', mtimeMs: 1, size: 10), b);
 
     await pool.evict('a');
     expect(a.disposeCount, 1);
@@ -150,7 +150,7 @@ void main() {
     final _FakeSource source = _FakeSource();
     pool.put(
       'exact',
-      const StructureCacheKey(bookId: 'exact', mtimeMs: 1, size: 1024),
+      const BookInstanceKey(bookId: 'exact', mtimeMs: 1, size: 1024),
       source,
     );
     expect(pool.length, 1, reason: '恰好等于上限仍可驻留（判据是 > maxBytes 才拒）');

@@ -1,22 +1,14 @@
-// `META-08` / `META-09`：书籍详情页与元数据手动编辑测试（M2a-T03）。
+// `META-08` / `META-09`：书籍详情页与元数据手动编辑测试。
 //
-// 覆盖：
-// · META-08 ① 字段与解析结果一致（EPUB fixture + TXT 各一本进详情页）
-// · META-08 ② 来源标记可见（TXT 书名/作者标「文件名推断」）
-// · META-08 ③ 封面区与简介区不透明、无玻璃嵌套（UI-04 红线）
-// · META-08 ④ 无简介显示占位「暂无简介」
-// · META-09 ① 改书名/作者 → 重载 index 一致（重启保留）+ 书架与详情页同步
-// · META-09 ② 换封面后旧封面文件被删（META-06 ①）
-// · META-09 ③ 恢复自动值 → 值回自动结果、来源回原值
-// · META-09 ④ 二次 importFile 同内容不覆写 user 值
+// 覆盖：`META-08` ①字段与解析结果一致（EPUB/TXT 各一）②来源标记可见
+// ③封面区与简介区不透明、无玻璃嵌套（`UI-04` 红线）④无简介显示占位；
+// `META-09` ①改书名/作者重启保留+书架同步 ②换封面删旧文件（`META-06`）
+// ③恢复自动值 ④二次 importFile 同内容不覆写 user 值。
 //
-// ⚠️ 入口（2026-09-29 改道）：书架点卡 = **直接进阅读页**，本页所有用例统一经
-// [_openDetailViaSheet]（长按 → 操作单「书籍详情」）进入——这是 `META-08` 目前
-// 唯一的入口（PRD 条文已同步由「从书架点击进入」改为「从书架长按操作单进入」）。
-//
-// ⚠️ FakeAsync 铁律：仓储 IO 用纯 `test()` + 临时目录；`testWidgets` 体内
-// **不 await 真异步 IO**——导入放 `tester.runAsync`，widget 内发起的 IO 用
-// [_settle]（runAsync 与 pump 交替）排空（同 `test/ui/shelf_page_test.dart`）。
+// ⚠️ 详情页入口只有「长按 → 弹框（`MiDialog`）」一径（书架点卡直接进阅读页），用例统一经
+// [_openDetailViaSheet] 进入。⚠️ FakeAsync 铁律：`testWidgets` 体内**不 await
+// 真异步 IO**——导入放 `tester.runAsync`，widget 内发起的 IO 用 [_settle]
+// （runAsync 与 pump 交替）排空。
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -85,10 +77,8 @@ Future<void> _settle(WidgetTester tester, {int rounds = 40}) async {
 
 /// 按书名找到书卡。
 ///
-/// ⚠️ 末尾的 `.first` 是为**去重**：2026-09-29 起无封面书卡的占位封面
-/// （`DefaultBookCover`）顶部也画一遍书名，于是同一张卡里 `find.text(title)` 命中
-/// 2 个 `Text`，`find.ancestor` 便把**同一张** `BookCard` 列出两次，
-/// `tap()` / `longPress()` 会报「歧义」。
+/// ⚠️ 末尾 `.first` 去重：无封面书卡的占位封面（`DefaultBookCover`）也画书名，
+/// `find.ancestor` 会把同一张 `BookCard` 列两次，不取首项则 `tap()` 报「歧义」。
 Finder _cardOf(String title) =>
     find.ancestor(of: find.text(title), matching: find.byType(BookCard)).first;
 
@@ -99,13 +89,10 @@ Finder _detailPages() => find.byType(BookDetailPage, skipOffstage: false);
 Finder _inDetail(Finder matching) =>
     find.descendant(of: _detailPages(), matching: matching);
 
-/// 经**长按操作单**进详情页。
-///
-/// 2026-09-29 改道：书架点卡 = **直接进阅读页**，详情页只剩「长按 → 书籍详情」
-/// 一个入口（`META-08` 同步改文；与 anx-reader 的 `book_bottom_sheet` 同构）。
+/// 经**长按弹框**进详情页（点卡直接进阅读页，详情页只剩这一口，`META-08`）。
 Future<void> _openDetailViaSheet(WidgetTester tester, Finder card) async {
   await tester.longPress(card);
-  await tester.pumpAndSettle(); // 玻璃底部操作单滑入
+  await tester.pumpAndSettle(); // mi_like_ui `MiDialog` 弹框入场
   await tester.tap(find.text('书籍详情'));
   await _settle(tester); // 弹层 pop + 详情页 push + 详情页自身 IO
 }
@@ -280,8 +267,6 @@ void main() {
     });
 
     tearDown(() async {
-      // 导入预热收尾再删目录（防后台写盘 vs 删目录竞态，§2.81）。
-      await repo.pendingWarmUps;
       if (await tempDir.exists()) {
         await tempDir.delete(recursive: true);
       }
@@ -465,8 +450,6 @@ void main() {
     });
 
     tearDown(() async {
-      // 导入预热收尾再删目录（防后台写盘 vs 删目录竞态，§2.81）。
-      await repo.pendingWarmUps;
       if (await tempDir.exists()) {
         await tempDir.delete(recursive: true);
       }
@@ -484,16 +467,8 @@ void main() {
 
     testWidgets('META-08 ①②④ TXT：字段齐全、来源标「文件名推断」、无简介占位',
         (WidgetTester tester) async {
-      // 详情页正文（封面区 + 身份区 + 元信息 + 简介 + 统计入口，`_buildSections`
-      // 的末项）加上固定占位的底部操作栏，在 flutter_test 默认 600px 高视口下
-      // 「刚好一屏」。2026-09-29 修 `GlassNavScaffold` 的 `extendBody: false`
-      // （顶栏避让）后正文整体下移 44px → 末项被挤出视口，`ListView` 懒构建
-      // 根本不建它 → `find.text('单书统计')` 0 个。
-      //
-      // 产品行为是**正确**的（详情页本就该在顶栏下方、超一屏滚动可见），
-      // 失效的是这条断言「首屏即可见」的隐含前提。故只把视口调到接近真机
-      // （显式钉 `devicePixelRatio = 1`，使逻辑高度就是 1000，不依赖
-      // flutter_test 的默认 dpr=3），断言本身一字不改。
+      // ⚠️ 显式钉视口 800×1000 + `devicePixelRatio = 1`：`ListView` 懒构建下默认
+      // 600px 高视口建不出末项，`find.text('单书统计')` 会 0 命中；断言一字不改。
       tester.view.physicalSize = const Size(800, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -512,8 +487,8 @@ void main() {
       expect(_detailPages(), findsOneWidget);
 
       // ① 字段齐全：书名 / 作者 / 格式 / 大小 / 进度 / 分组 / 统计入口。
-      // ⚠️ 书名与作者**各 2 次**：一次在封面（`DefaultBookCover`，2026-09-29 采用
-      // anx 默认封面后如此），一次在下面的字段区。其余字段不存在这个重名问题。
+      // ⚠️ 书名与作者**各 2 次**：封面（`DefaultBookCover`）一遍 + 字段区一遍，
+      // 其余字段无重名。
       expect(_inDetail(find.text('三体')), findsNWidgets(2));
       expect(_inDetail(find.text('刘慈欣')), findsNWidgets(2));
       expect(_inDetail(find.text('TXT')), findsOneWidget);
@@ -530,8 +505,7 @@ void main() {
       expect(_inDetail(find.text('暂无简介')), findsOneWidget);
 
       // ③ 玻璃红线：顶栏玻璃属导航层；内容整体不透明、树上无内容层玻璃。
-      // 范围限定到详情页——书架玻璃化（M2a-T04）后全树有 2 个 GlassTopBar /
-      // OpaqueContentSurface（书架在栈下 offstage 也会被 skipOffstage:false 数到）。
+      // 范围限定到详情页——书架在栈下也会被 `skipOffstage: false` 数到（全树各 2 个）。
       expect(_inDetail(find.byType(GlassTopBar, skipOffstage: false)),
           findsOneWidget);
       expect(_inDetail(find.byType(OpaqueContentSurface)), findsOneWidget);
@@ -578,7 +552,6 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 进详情页（长按操作单）→ 进编辑态。
       await _openDetailViaSheet(tester, _cardOf('三体'));
       await tester.tap(find.byIcon(Icons.edit_outlined));
       await _settle(tester);
@@ -604,8 +577,8 @@ void main() {
       expect(_inDetail(find.text('用户自定义')), findsWidgets);
       expect(_inDetail(find.text('文件名推断')), findsWidgets);
 
-      // 返回书架：卡片同步显示新书名（pop 后刷新）。
-      // 顶栏返回键的可点性在 glass 接入层（M2a-T04）另测，此处直 pop 验证同步链路。
+      // 返回书架：卡片同步显示新书名（pop 后刷新）。顶栏返回键的可点性另测，
+      // 此处直 pop 验证同步链路。
       final NavigatorState nav = Navigator.of(tester.element(_detailPages()));
       nav.pop();
       // 退场动画：只推假帧（_settle 的 runAsync 交替不驱动 transition）。

@@ -1,14 +1,14 @@
-// Rust 解析内核的 `BookSource` 适配层（图书解析核心移植，2026-10-22 二次同步）。
+// Rust 解析内核的 `BookSource` 适配层（图书解析核心移植）。
 //
 // ## 定位
 //
 // 解析全程走 vendored `rrk-*` 内核（`rust/vendor/`，上游 v0.1.1 / ABI v5，经 FRB 桥
 // `lib/src/rust/api/kernel.dart`）：EPUB / TXT / MOBI-AZW3 的打开、分章、正文抽取、
-// 资源读取都在 Rust 侧完成；CBZ（2026-10-23 接线）页表 / 图片页资源同样走内核，
-// 但**页过滤、自然序与文件名元数据口径在宿主侧补齐**（与 `CbzSource` 逐条对齐，
-// 见 [buildCbzPageList] / [_loadCbzMeta]），切换实现不改变用户可见行为。
-// 本类负责「内核数据面 → MReader 模型」的映射与
-// [BookSource] 契约适配，包括**宿主标记织入**：
+// 资源读取都在 Rust 侧完成；CBZ 页表 / 图片页资源同样走内核，但**页过滤、自然序与
+// 文件名元数据口径在宿主侧补齐**（与 `CbzSource` 逐条对齐，见 [buildCbzPageList] /
+// [_loadCbzMeta]），切换实现不改变用户可见行为。
+// 本类负责「内核数据面 → MReader 模型」的映射与 [BookSource] 契约适配，包括
+// **宿主标记织入**：
 //   · 内核行内图片标记 `\u{FFFC}<key>\u{FFFC}` → 宿主图片标记 `\x00IMG:<key>\x00`；
 //   · 内链区间（`RkLink`）→ 宿主可点链接标记 `\x00A:<href>\x00文字\x00A\x00`；
 //   · 目录树（层级 + 章内锚点）→ 宿主章节列表（`href` + `locate`）：同文件多目录项
@@ -91,12 +91,11 @@ List<String> stripDuplicateHeading(List<String> paragraphs, String title) {
 /// 章节列表构建（TOC 树摊平 + 未入目补齐）的**纯函数**：返回宿主 Chapter 列表
 /// 与解析引用（同序）。
 ///
-/// ## href 唯一性（2026-10-22 真机「章与页不匹配」定案）
+/// ## href 唯一性（`Chapter.href` = 唯一身份键）
 ///
 /// 阅读器把 `Chapter.href` 当**唯一身份键**（分页缓存、视图定位、进度匹配全按
-/// href 查表，见 `_applyPagedSample` 的首匹配）。同文件多目录项（EPUB 锚点书）
-/// 会天然共用内核章 href——第二条起必须**唯一化**（`href#locate`），否则读数行
-/// 的章归属会落到同 href 的第一条上（正文显示第五章、读数报第四章）。
+/// href 查表）。同文件多目录项（EPUB 锚点书）会天然共用内核章 href——第二条起
+/// **必须唯一化**（`href#locate`），否则读数行的章归属会落到同 href 的第一条上。
 /// 唯一化后的 href 供身份匹配用；[findChapterIndex] 的链接反查按 `#` 前的
 /// 路径段匹配（`link_navigator.dart`），链接跳转不受影响。
 (List<Chapter>, List<ChapterRef>) buildChapterList(
@@ -306,6 +305,9 @@ class RustKernelSource implements BookSource {
   final Uint8List bytes;
 
   final BigInt _handle;
+
+  /// 是否已 [dispose]（`BookSource` 契约：dispose 可重复调用、幂等）。
+  bool _disposed = false;
   final rk.RkMeta _meta;
 
   List<rk.RkChapter>? _kChapters;
@@ -330,6 +332,29 @@ class RustKernelSource implements BookSource {
   ///
   /// CBZ 在此**预建页表**：页表为空（垃圾包 / 无图片条目）抛
   /// [FormatErrorCode.noImagePages]——由注册表回落 `CbzSource` 给出同型中文错误。
+  /// 配置内容级缓存（内核 `rrk-cache`，上游 issue #12）：目录 + 内存上限字节。
+  ///
+  /// 幂等；`dir` 为空 = 关闭缓存。key = **内容哈希**（不随样式 / 视口变）：同一份
+  /// 文件重开命中（免 nav/NCX 解析、免 TXT 分章扫描、免 inflate + 清洗），内容变了
+  /// 整本失效；payload 自带 schema 号，内核升级 / 损坏自动丢弃重算。
+  /// 组合根（`main()`）在 `runApp` 前调用一次；测试传临时目录。
+  static void configureContentCache({
+    required String dir,
+    int memoryBytes = 32 << 20,
+  }) =>
+      rk.kernelCacheConfigure(dir: dir, memBytes: BigInt.from(memoryBytes));
+
+  /// 内容缓存命中 / 未命中统计快照（体检页 / 日志用；未配置缓存时全 0）。
+  static rk.RkCacheStats contentCacheStats() => rk.kernelCacheStats();
+
+  /// 按内容哈希**整本失效**（删书时调用）；返回删除条数（内存 + 磁盘）。
+  /// 幂等：哈希不存在或缓存未配置都返回 0。
+  static int invalidateContentCache(BigInt contentHash) =>
+      rk.kernelCacheInvalidate(contentHash: contentHash).toInt();
+
+  /// 本书的内容哈希（内核内容缓存的失效键）。
+  BigInt get contentHash => _meta.contentHash;
+
   static Future<RustKernelSource> open({
     required String fileName,
     required Uint8List bytes,
@@ -385,6 +410,34 @@ class RustKernelSource implements BookSource {
   @override
   Future<BookMeta> load() async {
     if (_isCbz) return _loadCbzMeta();
+    // TXT：书名 / 作者按**宿主**的 META-04 文件名规则链解析（内核只给文件名
+    // 主干，产品语义留在宿主 —— 与 CBZ 同一条原则）；规则链全空才退回内核标题。
+    // 不这么做的后果（2026-10-26 实测）：`三体 作者：刘慈欣.txt` 会被整段当书名、
+    // 作者丢失 —— 与被删的 `DartTxtSource` 口径不一致，META-04 ① 回归。
+    if (_meta.format == 'TXT') {
+      final BookMeta base = buildTxtMeta(fileName: fileName);
+      final String kernelTitle = fallbackTitle(_meta.title, fileStem(fileName));
+      final String title =
+          base.title.isNotEmpty ? base.title : kernelTitle;
+      final String author = base.author.isNotEmpty
+          ? base.author
+          : fallbackAuthor(_meta.authors.join('、'));
+      return BookMeta(
+        title: title,
+        // 规则链给出书名 = 文件名推断；规则链空、用了内核主干 = 同样来自文件名。
+        titleOrigin: base.title.isNotEmpty ? base.titleOrigin : MetaOrigin.filename,
+        author: author,
+        authorOrigin: base.author.isNotEmpty
+            ? base.authorOrigin
+            : (_meta.authors.isNotEmpty ? MetaOrigin.metadata : MetaOrigin.none),
+        intro: base.intro,
+        introOrigin: base.introOrigin,
+        cover: const NoCover(),
+        coverOrigin: MetaOrigin.none,
+        language: _meta.language ?? '',
+        auto: BookMetaAuto(title: title, author: author, intro: base.intro),
+      );
+    }
     final String title = fallbackTitle(_meta.title, fileStem(fileName));
     final String author = fallbackAuthor(_meta.authors.join('、'));
     final bool hasTitleMeta = _meta.title.trim().isNotEmpty;
@@ -460,10 +513,65 @@ class RustKernelSource implements BookSource {
     );
     _chapters = chapters;
     _refs = refs;
+    await _resolvePlaceholderTitles();
+  }
+
+  /// 无目录书的章标题回填（等价于被删的 `DartEpubSource` h1 预取 / `flatTitles`）。
+  ///
+  /// 内核对「没有 nav/NCX 的 EPUB」给的是占位标题 `第 N 章`；产品口径要求章标题
+  /// 取正文首个 `<h1>`（`META-01` / 搜索命中标题都吃它），且 `content()` 的
+  /// 「正文首段与标题重复则剥去」（`stripDuplicateHeading`）也依赖标题是真文本 ——
+  /// 标题是占位时，h1 会漏进正文首段、把命中 offset 整体平移一截（2026-10-26
+  /// 实测：搜索用例 offset 差 3 = 「第一章」三字）。
+  ///
+  /// 做法：章表建好后扫一遍**占位项**，逐章只解出首个标题块即丢正文（不缓存全章，
+  /// 守 `PERF-02` 内存纪律）；代价与被删的 Dart 预取同阶，且只在真的无目录时发生。
+  /// 有 TOC / nav 的书零开销（标题非占位 → pending 为空直接返回）。
+  Future<void> _resolvePlaceholderTitles() async {
+    final List<Chapter> chapters = _chapters!;
+    final List<ChapterRef> refs = _refs!;
+    final List<int> pending = <int>[
+      for (int i = 0; i < chapters.length; i++)
+        if (_isPlaceholderTitle(chapters[i].title) &&
+            refs[i].id >= 0 &&
+            refs[i].id < (await _kernelChapterList()).length)
+          i,
+    ];
+    if (pending.isEmpty) return;
+    final List<rk.RkChapter> entries = await _kernelChapterList();
+    final List<Chapter> patched = List<Chapter>.of(chapters);
+    for (final int i in pending) {
+      final rk.RkChapterText text = await rk.kernelLoadChapter(
+        handle: _handle,
+        chapterId: entries[refs[i].id].id,
+      );
+      final String heading = _firstHeadingText(text.blocks);
+      if (heading.isEmpty) continue;
+      patched[i] = Chapter(
+        href: chapters[i].href,
+        title: heading,
+        level: chapters[i].level,
+        locate: chapters[i].locate,
+      );
+    }
+    _chapters = patched;
+  }
+
+  /// 占位标题判定（内核对无目录书的默认形态：`第 N 章`）。
+  static bool _isPlaceholderTitle(String title) =>
+      RegExp(r'^第\s*\d+\s*章$').hasMatch(title.trim());
+
+  /// 取块序列里**第一个标题块**的文本（无标题块返回空串）。
+  static String _firstHeadingText(List<rk.RkBlock> blocks) {
+    for (final rk.RkBlock b in blocks) {
+      if (b.kind == 'h' && b.text.trim().isNotEmpty) return b.text.trim();
+    }
+    return '';
   }
 
   @override
   Future<List<Chapter>> chapters() async {
+    if (_disposed) return const <Chapter>[]; // dispose 竞态：按契约返回空
     if (_isCbz) {
       await _ensureCbzPages();
       return _cbzChapters!;
@@ -484,6 +592,7 @@ class RustKernelSource implements BookSource {
       }
       return ChapterContent.imagePages(<String>[pages[chapterIndex].href]);
     }
+    if (_disposed) return const ChapterContent.paragraphs(<String>[]); // dispose 竞态
     await _ensureChapterList();
     final List<ChapterRef> refs = _refs!;
     if (chapterIndex < 0 || chapterIndex >= refs.length) {
@@ -536,28 +645,37 @@ class RustKernelSource implements BookSource {
   @override
   Stream<SearchEvent> search(String query,
       {required CancelToken cancel}) async* {
+    if (_disposed) return; // dispose 竞态：流立即结束
     if (_isCbz) return; // 图片页无文本层（`searchable: false`），空流同 CbzSource
     if (query.isEmpty) return;
-    final String needle = query.toLowerCase();
     await _ensureChapterList();
     final List<Chapter> list = _chapters!;
-    for (int i = 0; i < list.length; i++) {
+    // 口径与被删的纯 Dart 源**逐条一致**（`CNT-06` ① / ③；2026-10-26 补齐）：
+    //   · 一段内**每个出现都是一条命中**（不是每段一条）；
+    //   · 大小写敏感、朴素子串扫描（不建索引、不 normalize）；
+    //   · 进度在**章处理完之后**报 `(i+1)/total`（含末章的 1.0）。
+    final int total = list.length;
+    for (int i = 0; i < total; i++) {
       if (cancel.isCancelled) return;
-      yield SearchEvent.progress(i / list.length);
       final List<String> paragraphs = (await content(i)).paragraphList;
       int offset = 0;
-      for (final String p in paragraphs) {
-        final int at = p.toLowerCase().indexOf(needle);
-        if (at >= 0) {
+      for (final String paragraph in paragraphs) {
+        int from = 0;
+        while (true) {
+          final int at = paragraph.indexOf(query, from);
+          if (at < 0) break;
           yield SearchEvent.hit(SearchHit(
             chapterIndex: i,
             chapterTitle: list[i].title,
             offset: offset + at,
-            context: p,
+            context: paragraph,
           ));
+          if (cancel.isCancelled) return;
+          from = at + query.length;
         }
-        offset += p.length;
+        offset += paragraph.length;
       }
+      yield SearchEvent.progress((i + 1) / total);
     }
   }
 
@@ -642,6 +760,10 @@ class RustKernelSource implements BookSource {
 
   @override
   Future<void> dispose() async {
+    // 幂等：`BookSource` 契约允许重复 dispose（句柄关一次就够，第二次直接返回；
+    // 2026-10-26 由契约用例「dispose() 幂等」抓出——内核对已关句柄报 InvalidParam）。
+    if (_disposed) return;
+    _disposed = true;
     _kChapters = null;
     _chapters = null;
     _refs = null;

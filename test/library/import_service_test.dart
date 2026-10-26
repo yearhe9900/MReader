@@ -1,4 +1,5 @@
 // `lib/library/import_service_test.dart`：ImportService 单测。
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -34,7 +35,7 @@ class _TestAppPaths implements AppPaths {
 
 /// 最简 TXT 内容（两行，足够通过 sniffFormat 的文本检测）。
 Uint8List _txtBytes([String content = '这是正文内容。\n第二行。']) =>
-    Uint8List.fromList(content.codeUnits);
+    Uint8List.fromList(utf8.encode(content));
 
 /// 导入并**立刻销毁**书源（本文件只验记录字段）。
 ///

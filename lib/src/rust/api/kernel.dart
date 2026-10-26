@@ -9,6 +9,7 @@ import 'error.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `map_err`, `plain_blocks`, `toc_nodes`, `with_kernel`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 
 /// 按路径打开一本书；返回书句柄（≥1）。
 Future<BigInt> kernelOpenPath({required String path}) =>
@@ -28,6 +29,28 @@ Future<void> kernelClose({required BigInt handle}) =>
 /// 书目元数据。
 Future<RkMeta> kernelMeta({required BigInt handle}) =>
     RustLib.instance.api.crateApiKernelKernelMeta(handle: handle);
+
+/// 配置内容级缓存（目录 + 内存上限字节；空目录 = 关闭）。幂等，可重复调用。
+///
+/// key = `content_hash`（内容级，不随样式/视口变）：同文件重开命中，内容变了整本
+/// 失效；payload 自带 schema 号，内核升级 / 损坏自动丢弃重算。
+void kernelCacheConfigure({required String dir, required BigInt memBytes}) =>
+    RustLib.instance.api.crateApiKernelKernelCacheConfigure(
+      dir: dir,
+      memBytes: memBytes,
+    );
+
+/// 内容级缓存命中统计快照（只读、无 IO，适合体检页 / 日志）。
+RkCacheStats kernelCacheStats() =>
+    RustLib.instance.api.crateApiKernelKernelCacheStats();
+
+/// 按内容哈希整本失效（删书时调用）；返回删除条数（内存 + 磁盘）。
+///
+/// 幂等：哈希不存在 = 返回 0；缓存未配置同样返回 0。
+BigInt kernelCacheInvalidate({required BigInt contentHash}) => RustLib
+    .instance
+    .api
+    .crateApiKernelKernelCacheInvalidate(contentHash: contentHash);
 
 /// 目录树。
 Future<List<RkTocNode>> kernelToc({required BigInt handle}) =>
@@ -112,6 +135,49 @@ class RkBlock {
           indent == other.indent &&
           key == other.key &&
           alt == other.alt;
+}
+
+/// 内容级缓存命中统计快照（体检 / 日志用；未配置缓存时全 0）。
+class RkCacheStats {
+  final BigInt tocHits;
+  final BigInt tocMisses;
+  final BigInt chapterHits;
+  final BigInt chapterMisses;
+  final BigInt outlineHits;
+  final BigInt outlineMisses;
+
+  const RkCacheStats({
+    required this.tocHits,
+    required this.tocMisses,
+    required this.chapterHits,
+    required this.chapterMisses,
+    required this.outlineHits,
+    required this.outlineMisses,
+  });
+
+  static Future<RkCacheStats> default_() =>
+      RustLib.instance.api.crateApiKernelRkCacheStatsDefault();
+
+  @override
+  int get hashCode =>
+      tocHits.hashCode ^
+      tocMisses.hashCode ^
+      chapterHits.hashCode ^
+      chapterMisses.hashCode ^
+      outlineHits.hashCode ^
+      outlineMisses.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RkCacheStats &&
+          runtimeType == other.runtimeType &&
+          tocHits == other.tocHits &&
+          tocMisses == other.tocMisses &&
+          chapterHits == other.chapterHits &&
+          chapterMisses == other.chapterMisses &&
+          outlineHits == other.outlineHits &&
+          outlineMisses == other.outlineMisses;
 }
 
 /// 章索引项。
@@ -226,6 +292,10 @@ class RkMeta {
   /// 封面资源 key（包内绝对路径）；无封面为 `None`（内核含三级回退）。
   final String? coverKey;
 
+  /// 内容哈希（内容级缓存的 key 前缀；`0` = 未提供）：删书时用它整本失效
+  /// 内容缓存（`rrk-cache`，上游 issue #12）。
+  final BigInt contentHash;
+
   const RkMeta({
     required this.title,
     required this.authors,
@@ -233,6 +303,7 @@ class RkMeta {
     this.description,
     required this.format,
     this.coverKey,
+    required this.contentHash,
   });
 
   @override
@@ -242,7 +313,8 @@ class RkMeta {
       language.hashCode ^
       description.hashCode ^
       format.hashCode ^
-      coverKey.hashCode;
+      coverKey.hashCode ^
+      contentHash.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -254,7 +326,8 @@ class RkMeta {
           language == other.language &&
           description == other.description &&
           format == other.format &&
-          coverKey == other.coverKey;
+          coverKey == other.coverKey &&
+          contentHash == other.contentHash;
 }
 
 /// 二进制资源。

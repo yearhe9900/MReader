@@ -81,6 +81,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RkBlock dco_decode_rk_block(dynamic raw);
 
   @protected
+  RkCacheStats dco_decode_rk_cache_stats(dynamic raw);
+
+  @protected
   RkChapter dco_decode_rk_chapter(dynamic raw);
 
   @protected
@@ -173,6 +176,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RkBlock sse_decode_rk_block(SseDeserializer deserializer);
+
+  @protected
+  RkCacheStats sse_decode_rk_cache_stats(SseDeserializer deserializer);
 
   @protected
   RkChapter sse_decode_rk_chapter(SseDeserializer deserializer);
@@ -281,6 +287,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_rk_block(RkBlock self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_cache_stats(RkCacheStats self, SseSerializer serializer);
 
   @protected
   void sse_encode_rk_chapter(RkChapter self, SseSerializer serializer);

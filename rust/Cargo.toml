@@ -12,8 +12,8 @@ members = ["vendor/*"]
 
 [workspace.package]
 # 与上游 rust_reader_kernel 的 workspace.package.version 同步（vendored crate 用
-# `version.workspace = true` 解析到此处；上游 0.1.1 = ABI v5）。
-version = "0.1.1"
+# `version.workspace = true` 解析到此处；上游 0.1.2 = ABI 8，含 issue #8/#9/#10/#11/#12）。
+version = "0.1.2"
 edition = "2021"
 # 与内核上游一致：MIT OR Apache-2.0（vendored 代码的许可）。
 license = "MIT OR Apache-2.0"
@@ -28,6 +28,9 @@ rrk-epub = { path = "vendor/rrk-epub" }
 rrk-mobi = { path = "vendor/rrk-mobi" }
 rrk-cbz = { path = "vendor/rrk-cbz" }
 rrk-pdf = { path = "vendor/rrk-pdf" }
+rrk-image = { path = "vendor/rrk-image" }
+rrk-search = { path = "vendor/rrk-search" }
+rrk-cache = { path = "vendor/rrk-cache" }
 rrk-kernel = { path = "vendor/rrk-kernel" }
 # 内核依赖白名单（上游 `rust_reader_kernel` Cargo.toml §3.2 同源）：
 # 纯 Rust、可审计、可 fork、许可宽松。

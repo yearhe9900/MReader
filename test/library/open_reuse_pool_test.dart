@@ -5,12 +5,13 @@
 //   2. 关书回池（`recycleBookSource`）⇒ 第二次、第三次打开同样命中；
 //   3. 副本文件被替换（判据变）⇒ 池条目作废、走冷路径（绝不给旧字节）；
 //   4. 删书 ⇒ 池里的驻留源一并丢弃。
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/format/book_source.dart';
-import 'package:mreader/format/structure_cache.dart';
+import 'package:mreader/format/book_instance_key.dart';
 import 'package:mreader/library/book_record.dart';
 import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/meta/cover_store.dart';
@@ -35,7 +36,7 @@ class _TestAppPaths implements AppPaths {
 }
 
 Uint8List _txtBytes([String content = '第一章 开始\n这是正文内容。']) =>
-    Uint8List.fromList(content.codeUnits);
+    Uint8List.fromList(utf8.encode(content));
 
 void main() {
   group('开书复用池接线', () {
@@ -52,8 +53,6 @@ void main() {
     });
 
     tearDown(() async {
-      // 预热是后台写盘任务：先等收尾再删目录（§2.81 的删目录竞态）。
-      await repo.pendingWarmUps;
       await repo.sourcePool.clear();
       if (await tempDir.exists()) {
         await tempDir.delete(recursive: true);
@@ -67,13 +66,14 @@ void main() {
       ))
           .record;
 
-      final StructureCacheKey? key = await repo.structureCacheKey(record);
+      final BookInstanceKey? key = await repo.bookInstanceKey(record);
       expect(key, isNotNull);
 
       // 导入管道解析好的那份 source 已在池里 → 开书直接命中（零读盘）。
       final BookSource? pooled = repo.takePooledSource(record, key);
       expect(pooled, isNotNull, reason: '导入即入池：首开不该再读盘/解析');
-      expect(pooled!.implId, 'dart-txt');
+      // 内核唯一实现（2026-10-26）：池里驻留的正是导入时那份内核源。
+      expect(pooled!.implId, 'rust-txt');
       // 取出即独占。
       expect(repo.takePooledSource(record, key), isNull);
       await pooled.dispose();
@@ -85,7 +85,7 @@ void main() {
         fileName: '回池.txt',
       ))
           .record;
-      final StructureCacheKey? key = await repo.structureCacheKey(record);
+      final BookInstanceKey? key = await repo.bookInstanceKey(record);
 
       // 第一次：取走导入时那份。
       final BookSource? first = repo.takePooledSource(record, key);
@@ -112,7 +112,7 @@ void main() {
         fileName: '替换.txt',
       ))
           .record;
-      final StructureCacheKey? key = await repo.structureCacheKey(record);
+      final BookInstanceKey? key = await repo.bookInstanceKey(record);
       final BookSource? pooled = repo.takePooledSource(record, key);
       expect(pooled, isNotNull);
       await repo.recycleBookSource(record, pooled!);
@@ -120,7 +120,7 @@ void main() {
       // 模拟副本被重写：mtime/size 变 → 判据不符。
       final File copy = await repo.bookFile(record);
       await copy.writeAsBytes(_txtBytes('第六章 被替换后的内容\n正文。'));
-      final StructureCacheKey? touched = await repo.structureCacheKey(record);
+      final BookInstanceKey? touched = await repo.bookInstanceKey(record);
       expect(touched, isNot(key));
 
       expect(repo.takePooledSource(record, touched), isNull,

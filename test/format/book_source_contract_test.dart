@@ -1,20 +1,21 @@
 // [BookSource] 契约测试：**所有已注册的格式实现都必须满足**。
 //
 // 为什么要有这个文件：`RD-01`/`CNT-06` 的契约是「实现互不感知、只消费抽象结果」。
-// 把公共契约集中在一处，新增格式（M1-T02B 的 TXT、M2b 的 CBZ/PDF、M3.5 的 Rust 实现）
-// 只需往 `registeredSources()` 追加一行，就会自动被同一组断言覆盖。
+// 把公共契约集中在一处，新增格式只需往 `registeredSources()` 追加一行，就会自动被
+// 同一组断言覆盖。
 //
-// **M1-T02B 接入信号**：在 `registeredSources()` 里追加一条 `dart-txt` 样本即可。
+// 接入信号：在 `registeredSources()` 里追加一条样本（标签 + 工厂）即可。
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/format/book_registry.dart';
 import 'package:mreader/format/book_source.dart';
-import 'package:mreader/format/cbz_source.dart';
-import 'package:mreader/format/dart_epub_source.dart';
-import 'package:mreader/format/dart_txt_source.dart';
 import 'package:mreader/format/pdf_source.dart';
+import 'package:mreader/format/rust_kernel_source.dart';
+import 'package:mreader/src/rust/api/guard.dart' show probe;
+import 'package:mreader/src/rust/api/kernel.dart' as rk;
+import 'package:mreader/src/rust/frb_generated.dart';
 
 import 'epub_builder.dart';
 import 'pdf_fakes.dart';
@@ -29,7 +30,9 @@ class BookSourceSample {
 
   final String label;
   final String fileName;
-  final BookSource Function() create;
+
+  /// 每次调用返回**全新实例**（内核源需 FFI 打开，故为异步工厂）。
+  final Future<BookSource> Function() create;
 }
 
 /// 一本结构完整的最小 EPUB（1 章，含正文）。
@@ -67,28 +70,29 @@ Uint8List _minimalCbz() => zipEntries(<EpubEntry>[
 
 /// 已注册的实现清单。
 ///
-/// **新增格式实现时在这里追加**（M1-T02B 已加 `dart-txt`；M2b-T02 已加 `dart-cbz`）。
+/// 2026-10-26 起解析实现唯一化：EPUB / TXT / CBZ 都是内核源（`rust-*`），本清单
+/// 只剩「内核三档 + 注入假引擎的 PDF」；内核不可用（无原生库）时相关用例自动 skip。
 List<BookSourceSample> registeredSources() => <BookSourceSample>[
       BookSourceSample(
-        label: 'dart-epub',
+        label: 'rust-epub',
         fileName: 'contract.epub',
-        create: () => DartEpubSource(
+        create: () => RustKernelSource.open(
           fileName: 'contract.epub',
           bytes: _minimalEpub(),
         ),
       ),
       BookSourceSample(
-        label: 'dart-txt',
+        label: 'rust-txt',
         fileName: 'contract.txt',
-        create: () => DartTxtSource(
+        create: () => RustKernelSource.open(
           fileName: 'contract.txt',
           bytes: _minimalTxt(),
         ),
       ),
       BookSourceSample(
-        label: 'dart-cbz',
+        label: 'rust-cbz',
         fileName: 'contract.cbz',
-        create: () => CbzSource(
+        create: () => RustKernelSource.open(
           fileName: 'contract.cbz',
           bytes: _minimalCbz(),
         ),
@@ -98,7 +102,7 @@ List<BookSourceSample> registeredSources() => <BookSourceSample>[
       BookSourceSample(
         label: 'pdfrx-pdf',
         fileName: 'contract.pdf',
-        create: () => PdfSource(
+        create: () async => PdfSource(
           fileName: 'contract.pdf',
           bytes: minimalPdfBytes(),
           // texts 注入「正文」页文本：`capabilities().searchable` 为真后，
@@ -110,6 +114,40 @@ List<BookSourceSample> registeredSources() => <BookSourceSample>[
         ),
       ),
     ];
+
+/// 原生库可用性（缓存）：`RustLib.init()` 成功才开内核样本。
+/// FRB 可用性判别（缓存）。
+///
+/// ⚠️ `test/flutter_test_config.dart` 已在**每个测试文件**跑之前 `RustLib.init()`
+/// 过一次（内核唯一实现后，真实开书用例都需要）。FRB 的二次 `init()` 会抛
+/// 「已初始化」——拿它当可用性判据会把整组用例误判成「无原生库」而跳过。故失败后
+/// 再用一次同步 `probe()`（纯字符串返回、零副作用）复核：能回值 = 内核真的可用。
+bool? _kernelReady;
+
+Future<bool> _ensureKernel() async {
+  final bool? cached = _kernelReady;
+  if (cached != null) return cached;
+  try {
+    await RustLib.init();
+    return _kernelReady = true;
+  } catch (_) {
+    try {
+      probe(); // 二次 init 被拒但内核在跑：probe 能回值即视为可用。
+      return _kernelReady = true;
+    } catch (_) {
+      return _kernelReady = false;
+    }
+  }
+}
+
+/// 开一个样本；内核不可用时 `markTestSkipped` 并返回 `null`（调用方直接 return）。
+Future<BookSource?> openSample(BookSourceSample sample) async {
+  if (sample.label.startsWith('rust-') && !await _ensureKernel()) {
+    markTestSkipped('原生库不可用，跳过内核源契约（RustLib.init 失败）');
+    return null;
+  }
+  return sample.create();
+}
 
 void main() {
   final List<BookSourceSample> samples = registeredSources();
@@ -125,15 +163,17 @@ void main() {
 
   for (final BookSourceSample sample in samples) {
     group('契约 · ${sample.label}', () {
-      test('implId 非空且为小写短标识', () {
-        final BookSource source = sample.create();
+      test('implId 非空且为小写短标识', () async {
+        final BookSource? source = await openSample(sample);
+        if (source == null) return;
         expect(source.implId, isNotEmpty);
         expect(source.implId, sample.label);
         expect(source.implId, matches(RegExp(r'^[a-z0-9-]+$')));
       });
 
       test('load() 返回元数据，字段不为 null', () async {
-        final BookSource source = sample.create();
+        final BookSource? source = await openSample(sample);
+        if (source == null) return;
         final BookMeta meta = await source.load();
         expect(meta.title, isNotEmpty, reason: 'META-01：书名缺失也要兜底为非空');
         expect(meta.author, isNotEmpty, reason: 'META-01：作者缺失也要兜底为非空');
@@ -149,7 +189,8 @@ void main() {
       });
 
       test('chapters() 非空，且 content(i) 对每个 i 都成功', () async {
-        final BookSource source = sample.create();
+        final BookSource? source = await openSample(sample);
+        if (source == null) return;
         final List<Chapter> chapters = await source.chapters();
         expect(chapters, isNotEmpty, reason: '可打开的样本必须给出至少一章');
 
@@ -169,7 +210,8 @@ void main() {
       });
 
       test('越界 content(i) 不抛异常（返回空内容）', () async {
-        final BookSource source = sample.create();
+        final BookSource? source = await openSample(sample);
+        if (source == null) return;
         final int count = (await source.chapters()).length;
         expect((await source.content(count)).isEmpty, isTrue);
         expect((await source.content(-1)).isEmpty, isTrue);
@@ -177,7 +219,8 @@ void main() {
       });
 
       test('capabilities() 与搜索契约一致', () async {
-        final BookSource source = sample.create();
+        final BookSource? source = await openSample(sample);
+        if (source == null) return;
         final SourceCapabilities caps = source.capabilities();
         if (caps.searchable) {
           final List<SearchEvent> events = await source
@@ -193,7 +236,8 @@ void main() {
       });
 
       test('dispose() 幂等（可重复调用）', () async {
-        final BookSource source = sample.create();
+        final BookSource? source = await openSample(sample);
+        if (source == null) return;
         await source.chapters();
         await source.dispose();
         await source.dispose();
@@ -206,7 +250,7 @@ void main() {
       fileName: 'contract.epub',
       bytes: _minimalEpub(),
     );
-    expect(source.implId, 'dart-epub');
+    expect(source.implId, startsWith('rust-'));
     final bool declared = samples.any(
       (BookSourceSample s) => s.label == source.implId,
     );
@@ -219,7 +263,7 @@ void main() {
       fileName: 'contract.txt',
       bytes: _minimalTxt(),
     );
-    expect(source.implId, 'dart-txt');
+    expect(source.implId, startsWith('rust-'));
     final bool declared = samples.any(
       (BookSourceSample s) => s.label == source.implId,
     );
@@ -228,7 +272,8 @@ void main() {
   });
 
   test('搜索可取消：已取消的令牌不产出任何事件', () async {
-    final BookSource source = registeredSources().first.create();
+    final BookSource? source = await openSample(registeredSources().first);
+    if (source == null) return;
     final CancelToken token = CancelToken()..cancel();
     expect(await source.search('正文', cancel: token).toList(), isEmpty);
     await source.dispose();

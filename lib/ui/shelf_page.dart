@@ -1,30 +1,29 @@
 // `LIB-01`：书架首页（替代 M0 验证台的 `HomePage`）。
 //
-// 空态：引导文案 + 导入按钮。
-// 有书：浮动头部（全宽玻璃搜索胶囊 + 分组 chips，2026-09-29 参考图批）+
-// 网格展示 [BookCard]（封面缩略图 + 书名 + 作者 + 格式标签）；
-// 内容 edge-to-edge（`extendBody: true`）从头部下穿过、透出磨砂模糊（`UI-02` ②）。
-// 导入：`FilePicker` 多选 → 逐个调 `importFile`，展示进度 + 失败清单。
-// 删除：长按书卡 → 操作单 → 确认对话框 → `deleteBook`（`LIB-06` 二次确认）
-// + 连带清理阅读进度。
-// 点击书卡 = **直接进阅读页**（2026-09-29 v2.9 改道，与 anx-reader 一致）；
-// 长按操作单「书籍详情」是详情页**唯一**入口（`META-08`）。详情页底部
-// 「继续阅读」经**注入的** `_openBook` 开书（详情页**不复制**开书管道），
-// 详情页 pop 后刷新列表（编辑 / 移出 / 分组 / 进度都靠这次刷新同步）。
-// 开书守卫 `_opening` **只覆盖 push 前的准备阶段**（修复「首点无响应」：守卫若覆盖
-// 整个阅读会话 + 关书刷新，关书后首点会被静默吞掉）；准备期被点卡片显示 loading。
+// 要点：
+//   · 空态 = 引导文案 + 导入按钮；有书 = 浮动头部（全宽玻璃搜索胶囊 + 分组 chips）
+//     + 网格 [BookCard]（封面缩略图 + 书名 + 作者 + 格式标签）；
+//   · 内容 edge-to-edge（`extendBody: true`）从头部下穿过、透出磨砂模糊（`UI-02` ②）；
+//     首行保护 = 网格 `padding.top` 留出头部高（[shelfGridPadding]）；
+//   · 导入 = `FilePicker` 多选 → 逐个 `importFile`（进度 + 失败清单）；删除 = 长按书卡
+//     → 长按弹框（mi_like_ui `MiDialog`）→ 确认框 → `deleteBook`（`LIB-06`
+//     二次确认）+ 连带清理进度；
+//   · 点击书卡 = **直接进阅读页**；长按「书籍详情」是详情页**唯一**入口（`META-08`）；
+//     详情页「继续阅读」经**注入的** `_openBook` 开书（**不复制**开书管道），pop 后
+//     刷新列表（编辑 / 移出 / 分组 / 进度靠这次刷新同步）；
+//   · 开书守卫 `_opening` **只覆盖 push 前的准备阶段**、路由入栈即释放——覆盖整个
+//     会话会让关书后首点被静默吞掉；准备期被点卡片显示 loading。
 //
 // ══════════════════════════════════════════════════════════════════════════════
-// 2026-09-29 拍板：筛选项由「阅读状态」改为「分组」、移除拖拽归类
+// 拍板：筛选项由「阅读状态」改为「分组」、移除拖拽归类
 // ══════════════════════════════════════════════════════════════════════════════
 // · 顶部 chips = **全部 + 各分组名**（分组来自 `ShelfLayoutStore`，顺序即创建序；
 //   只列「真有书」的分组——空分组由 `prune` 清掉）；
 // · 选中分组 → 网格只显示该分组的书；默认「全部」；再点已选中的 chip 回「全部」；
-// · 归类入口 = **书籍详情页的「分组」行**（需求 `P2-02`）。书架不再有拖拽
-//   （建文件夹 / 移入 / 重排全部移除）、不再有文件夹卡与文件夹内页
-//   （`shelf_folder_page.dart` 已删）；
+// · 归类入口 = **书籍详情页的「分组」行**（需求 `P2-02`）；书架不再有拖拽归类
+//   （建文件夹 / 移入 / 重排全移除）、不再有文件夹卡与文件夹内页；
 // · 一本书**只属一个分组**（`ShelfLayoutStore` 保证归属唯一），未分组的书在
-//   「全部」里正常展示，也在其他分组筛选下不可见（那是分组语义的必然）。
+//   「全部」里正常展示、其他分组筛选下不可见。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
 import 'dart:async';
@@ -43,7 +42,7 @@ import '../diagnostics/open_trace.dart';
 import '../diagnostics/perf_log.dart';
 import '../format/book_registry.dart';
 import '../format/book_source.dart';
-import '../format/structure_cache.dart';
+import '../format/book_instance_key.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
@@ -67,6 +66,9 @@ import 'home_shell.dart' show kShellBottomInset;
 import 'mi_like_ui/mi_like_ui.dart'
     show
         MiCardPageRoute,
+        MiDialog,
+        MiDialogItem,
+        MiDialogLayout,
         MiPillTabMetrics,
         MiSearchBar,
         MiThemeMode,
@@ -111,42 +113,31 @@ class ShelfPage extends StatefulWidget {
   /// 书架布局（手动顺序 + 分组归属），进程内共享实例。
   final ShelfLayoutStore shelfLayout;
 
-  /// 统计服务（`STAT-01` 采集落库；`M3-T10b`），透传给阅读页。
-  ///
-  /// `null` = 尚未接线：阅读页不采集（与其它可选注入同款降级口径）。
+  /// 统计服务（`STAT-01` 采集落库）透传阅读页；`null` = 未接线 → 阅读页不采集。
   final StatsService? statsService;
 
-  /// AI 配置 / 客户端 / 生词本（划词翻译释义，`AI-02`/`AI-03`），透传阅读页。
-  ///
-  /// 三者任一为 null → 阅读页划词整体禁用（与 [statsService] 同款降级口径）。
+  /// AI 配置 / 客户端 / 生词本（划词翻译释义，`AI-02`/`AI-03`）透传阅读页；
+  /// 任一为 null → 阅读页划词整体禁用（同款降级口径）。
   final ProviderStore? aiStore;
   final AiClient? aiClient;
   final VocabStore? vocabStore;
 
-  /// 摘要缓存（阅读页 `AI-04`/`AI-05`，`M3-T03`）；删书时连带清理。
-  ///
-  /// `null` = 未接线：阅读页摘要入口隐藏（同款降级口径）。
+  /// 摘要缓存（阅读页 `AI-04`/`AI-05`）；删书连带清理；`null` = 摘要入口隐藏。
   final SummaryCache? summaryCache;
 
-  /// 问答索引存储（阅读页 `AI-06`，`M3-T04`）；删书时连带清理。
-  ///
-  /// `null` = 未接线：阅读页问答入口隐藏（同款降级口径）。
+  /// 问答索引存储（阅读页 `AI-06`）；删书连带清理；`null` = 问答入口隐藏。
   final RagIndexStore? ragStore;
 
-  /// 朗读设置存储（阅读页 `TTS-04`/`TTS-05`；`M3-T08`），透传阅读页。
-  ///
-  /// `null` = 未接线：阅读页朗读设置入口隐藏（同款降级口径）。
+  /// 朗读设置存储（阅读页 `TTS-04`/`TTS-05`）；`null` = 朗读设置入口隐藏。
   final TtsSettingsStore? ttsSettings;
 
-  /// 在线 TTS 配置存储（透传阅读页，`TTS-07`；`M3-T09`）。
-  ///
-  /// `null` = 未接线：面板引擎选择区隐藏、只用系统引擎（同款降级口径）。
+  /// 在线 TTS 配置存储（阅读页 `TTS-07`）；`null` = 引擎选择区隐藏、只用系统引擎。
   final OnlineTtsStore? onlineTts;
 
-  /// 书签存储（透传阅读页；`M4-T05` 接上生产链路）。
+  /// 书签存储（透传阅读页）。
   final BookmarkStore? bookmarkStore;
 
-  /// 阅读偏好存储（透传阅读页；同 [bookmarkStore]）。
+  /// 阅读偏好存储（透传阅读页）。
   final ReadingPrefsStore? readingPrefsStore;
 
   /// 同步触发器（透传阅读页：退出阅读页上报进度，`SYNC-06`）。
@@ -157,16 +148,16 @@ class ShelfPage extends StatefulWidget {
 }
 
 /// [ShelfPage] 的状态类（公开：`HomeShell` 经 [GlobalKey] 把底栏绿圆钮的
-/// 「导入书籍」动作接到 [pickAndImport]，2026-10-16 功能迁移批）。
+/// 「导入书籍」动作接到 [pickAndImport]）。
 class ShelfPageState extends State<ShelfPage> {
   List<BookRecord> _books = <BookRecord>[];
   bool _loading = true;
   bool _importing = false;
   List<String> _importErrors = <String>[];
 
-  /// 防重复开书：**只覆盖 push 前的准备阶段**（readBookBytes + openBook）。
-  /// 路由一入栈立即释放——阅读会话期间绝不占用（否则关书后首点被静默吞掉，
-  /// 表现为「首点无响应、必须再点一次」）。
+  /// 防重复开书：**只覆盖 push 前的准备阶段**（readBookBytes + openBook），路由一
+  /// 入栈立即释放——阅读会话期间绝不占用（否则关书后首点被静默吞掉，表现为
+  /// 「首点无响应、必须再点一次」）。
   bool _opening = false;
 
   /// 正在准备打开的书（bookId）：对应卡片显示 loading 覆盖层；`null` = 无。
@@ -176,14 +167,12 @@ class ShelfPageState extends State<ShelfPage> {
   /// 防「双击卡片 → 叠两个详情页」。pop 后由 [_openDetail] 的 `finally` 释放。
   bool _detailPushing = false;
 
-  // ── 搜索入口（2026-10-22 上游「页面推入转场」批）────────────────────────
+  // ── 搜索入口 ──
   //
-  // 2026-10-20 那批曾改成**就地搜索态**（搜索栏原地变输入框 + 胶囊行淡出）。
-  // 上游随后推入改回「整页推入搜索页」并给了配套转场 [MiCardPageRoute]
-  // （新页从右缘滑入带 61.2 圆角、下层页左移 0.25 屏宽 + 压暗到 0.55）——
-  // 参考素材里搜索页是**整屏无 App 级导航**的，就地展开做不到（浮动底栏还在）。
-  // 故本页只留「点搜索栏 → 推入 [ShelfSearchPage]」这一条路径，搜索的过滤与
-  // 结果渲染都在搜索页内（查询与书架状态解耦，键盘遮挡也归那一页管）。
+  // 只留「点搜索栏 → 推入 [ShelfSearchPage]」一条路径（转场 [MiCardPageRoute]：
+  // 新页从右缘滑入、下层页左移压暗）：参考素材里搜索页是**整屏无 App 级导航**的，
+  // 就地展开做不到（浮动底栏还在）。过滤与结果渲染都在搜索页内（查询与书架
+  // 状态解耦，键盘遮挡也归那页管）。
 
   /// 点搜索栏 → 卡片式推入搜索页（转场规格见 [MiCardPageRouteMetrics]）。
   void _enterSearch() {
@@ -199,11 +188,10 @@ class ShelfPageState extends State<ShelfPage> {
           onOpenBook: (BookRecord record) {
             // 关搜索页再开书：阅读页压在书架之上，返回时不该回到搜索页。
             //
-            // ⚠️ 但**不能在开书瞬间立刻移除本页**（2026-10-23 真机录屏定案）：
-            // 立刻 removeRoute 会让书架在纸张就绪前闪现（「搜索页瞬灭 → 书架
-            // 闪现（键盘还在收）→ 纸张滑入」三段跳 = 丢帧感 + 闪动）。正确编排
-            // 与书架开书一致——**纸张滑入时背景就是点它的那一页**：本页一直留着
-            // 当背景，等纸张转场完成（全覆盖，此刻移除不可见）再摘掉。
+            // ⚠️ 但**不能在开书瞬间立刻移除本页**：立刻 removeRoute 会让书架在
+            // 纸张就绪前闪现（三段跳 = 丢帧感 + 闪动）。正确编排与书架开书一致
+            // ——**纸张滑入时背景就是点它的那一页**：本页留作背景，等纸张转场
+            // 完成（全覆盖、此刻移除不可见）再摘掉。
             final Route<void> searchRoute = ModalRoute.of(pageContext)!;
             final NavigatorState nav = Navigator.of(pageContext);
             unawaited(_openBook(record, onPushed: (PageRoute<void> readerRoute) {
@@ -216,11 +204,9 @@ class ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 等 [route]（阅读页纸张）转场**完成、完全覆盖屏幕**后移除下层 [under]——
-  /// 此刻移除对用户不可见（背景早被纸张盖住）。
-  ///
-  /// 双保险：状态监听（正常路径）+ 转场时长兜底 Timer（动画被跳过 / 提前返回
-  /// 时绝不把下层路由泄漏在栈上——返回会回到已关掉的搜索页）。
+  /// 等 [route]（阅读页纸张）转场**完成、完全覆盖屏幕**后移除下层 [under]
+  /// （此刻移除对用户不可见）。双保险：状态监听 + 转场时长兜底 Timer——动画
+  /// 被跳过 / 提前返回时也绝不把下层路由泄漏在栈上（返回会回到已关掉的搜索页）。
   void _removeUnderWhenCovered(
     PageRoute<void> route,
     Route<void> under,
@@ -293,8 +279,8 @@ class ShelfPageState extends State<ShelfPage> {
     // 分组筛选（`null` = 全部）。
     //
     // 选中的分组**已不存在**时按「全部」处理：删掉某分组最后一本书后，`prune`
-    // 会清掉这个空分组，而 `ShelfPrefs.groupId` 仍指着它——不做回落的话书架
-    // 会永久显示「没有符合当前筛选的书」，用户找不到恢复入口。
+    // 会清掉这个空分组，而 `ShelfPrefs.groupId` 仍指着它——不回落的话书架会永久
+    // 显示「没有符合当前筛选的书」，用户找不到恢复入口。
     final String? selected = prefs.groupId;
     final BookGroup? group =
         selected == null ? null : widget.shelfLayout.layout.groupById(selected);
@@ -306,8 +292,8 @@ class ShelfPageState extends State<ShelfPage> {
     final List<BookRecord> sorted = list.toList();
 
     // 手动顺序单独一条路径：顺序**就是** `order` 本身，不受升降序开关影响
-    // （否则「再点同项翻转方向」会把顺序打乱）。`order` 由过去的拖拽重排写入；
-    // 2026-09-29 拖拽重排已删（对齐 anx），此分支仅消费旧数据 + 排序菜单入口。
+    // （否则「再点同项翻转方向」会把顺序打乱）；`order` 由过去的拖拽重排写入
+    // （拖拽重排已删，此分支仅消费旧数据 + 排序菜单入口）。
     if (prefs.sortField == ShelfSortField.manual) {
       final List<String> order = widget.shelfLayout.layout.order;
       final Map<String, int> rank = <String, int>{
@@ -372,10 +358,9 @@ class ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 导入书籍入口（`FilePicker` 多选 → 逐个 `importFile`）。
-  ///
-  /// 2026-10-16 起由底栏**绿圆钮**触发（`HomeShell` 经 GlobalKey 调本方法，
-  /// 原顶部加号按钮已移除）；空态引导按钮仍调本方法（`LIB-01` ②）。
+  /// 导入书籍入口（`FilePicker` 多选 → 逐个 `importFile`）。由底栏**绿圆钮**
+  /// 触发（`HomeShell` 经 GlobalKey 调本方法，原顶部加号按钮已移除）；
+  /// 空态引导按钮仍调本方法（`LIB-01` ②）。
   Future<void> pickAndImport() async {
     setState(() {
       _importErrors = <String>[];
@@ -441,8 +426,8 @@ class ShelfPageState extends State<ShelfPage> {
   }
 
   Future<void> _deleteBook(BookRecord record) async {
-    // `UI-03` 浮层玻璃：玻璃确认框（`M2a-T04`）。barrier 可关（返回 null = 取消），
-    // 语义与原 `showDialog<bool>` 一致：非 `true` 一律不删。
+    // `UI-03` 浮层玻璃：玻璃确认框。barrier 可关（返回 null = 取消）：非 `true`
+    // 一律不删。
     final bool? confirmed = await GlassOverlays.showAlert<bool>(
       context: context,
       title: '删除确认',
@@ -464,33 +449,92 @@ class ShelfPageState extends State<ShelfPage> {
       await widget.repository.deleteBook(record);
       // `LIB-06` 连带清理：删除该书阅读进度文件（缺失时静默成功）。
       await widget.progressStore.remove(record.bookId);
-      // `M3-T03` 连带清理：该书的章级 / 合并级摘要缓存。
+      // 连带清理：该书的章级 / 合并级摘要缓存。
       await widget.summaryCache?.removeBook(record.bookId);
-      // `M3-T04` 连带清理：该书的问答索引（内存 + 磁盘分文件）。
+      // 连带清理：该书的问答索引（内存 + 磁盘分文件）。
       await widget.ragStore?.removeBook(record.bookId);
       await _loadBooks();
     }
   }
 
-  /// 长按书卡 → 底部操作单（照搬 anx-reader 的 `BookBottomSheet`）。
+  /// 长按书卡 → 操作弹框（mi_like_ui [MiDialog]，2026-10-23 换掉原玻璃底部
+  /// 操作单；同日上游 `f254f85`（issue #1）补出**纵向操作列表**形态，布局回到
+  /// 「图标 + 主文案 + 副标题」的列表语义）。长按**不再**直接弹删除确认：删除
+  /// 是破坏性动作，收进弹框并要求二次确认（`LIB-06`），缩短「误触即删」路径。
   ///
-  /// 长按**不再**直接弹删除确认：删除是破坏性动作，收进操作单并要求二次确认
-  /// （`LIB-06`），缩短「误触即删」的路径。
+  /// **承载**：[MiDialog] 是遮罩 + 卡片一体的**不透明**弹框，自带明暗两档遮罩
+  /// （亮 α0.20 / 暗 α0.60，`MiDialogPalette.scrim`），故走 [showDialog] 时把
+  /// **路由遮罩设为透明**（`barrierColor: Colors.transparent`）——否则两层遮罩
+  /// 叠加、比度量重一档；「点遮罩收起」由 `onScrimTap` 自己 `pop`。明暗不取
+  /// `Theme.of(context).brightness`，而取 [navThemeModeOf]（`GlassScope` 级联
+  /// 亮度）——与底栏 / 胶囊标签同一出处（`UI-01` ②）。
   ///
-  /// **返回值语义（2026-09-29）**：本 Future 在**操作单关闭时即完成**，不等
-  /// 选定的动作走完——书卡用它当长按抬起反馈的复位时机（`BookCard.onLongPress`
-  /// 是异步回调）。动作改由 [_runBookAction] 接管（`unawaited`），
-  /// 以免「点继续阅读 → 卡片一路悬着直到从阅读页返回」。
+  /// **档位**：弹框不是玻璃件，玻璃开 / 关两档同形，也不存在「玻璃嵌套」
+  /// （PRD §11.4）问题。
+  ///
+  /// **形态**：[MiDialogLayout.list]（推导形态，几何事实源 = `MiDialogListMetrics`）——
+  /// 标题左对齐最多两行（书名可折行），三项各自带前导图标与副标题，
+  /// 「移出书架」走 `destructive` 整行红字；项间分隔线、卡片超高时列表区
+  /// 内部滚动（上游 clamp，不顶出屏幕）。无按钮行：关弹框 = 点遮罩 / 系统返回。
+  ///
+  /// **返回值语义**：本 Future 在**弹框关闭时即完成**、不等选定的动作走完——
+  /// 书卡用它当长按抬起反馈的复位时机（`BookCard.onLongPress` 是异步回调）；
+  /// 动作由 [_runBookAction] 接管（`unawaited`），以免「点继续阅读 → 卡片一路
+  /// 悬着直到从阅读页返回」。
   Future<void> _showBookActions(BookRecord record) async {
-    final _BookAction? action = await GlassOverlays.showSheet<_BookAction>(
+    final double? progress = record.readProgress;
+    // 副标题沿用原操作单口径：作者 · 格式 · 已读%（缺失项各自跳过）。
+    final String subtitle = <String>[
+      if (record.author.isNotEmpty) record.author,
+      record.format.toUpperCase(),
+      if (progress != null) '已读 ${(progress * 100).round()}%',
+    ].join(' · ');
+
+    final _BookAction? action = await showDialog<_BookAction>(
       context: context,
-      builder: (BuildContext sheetContext) => _BookActionSheet(record: record),
+      // 路由遮罩透明：遮罩由 MiDialog 自绘（见类注释），两层不可叠加。
+      barrierColor: Colors.transparent,
+      builder: (BuildContext dialogContext) => MiDialog(
+        layout: MiDialogLayout.list,
+        title: record.title,
+        message: subtitle,
+        // 列表形态：正文左对齐（与左对齐标题 / 左对齐列表行同一条边）。
+        messageAlign: TextAlign.start,
+        themeMode: navThemeModeOf(context),
+        // 三项即原操作单的三行：图标 + 主文案 + 副标题；「移出书架」破坏性
+        // 红字，副标题「删除后封面文件一并清理」回归列表项（二次确认框
+        // `_deleteBook` 仍独立在场，两层不重复）。
+        items: <MiDialogItem>[
+          MiDialogItem(
+            label: '继续阅读',
+            icon: const Icon(Icons.play_arrow, size: 22),
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(_BookAction.continueReading),
+          ),
+          MiDialogItem(
+            label: '书籍详情',
+            icon: const Icon(Icons.info_outline, size: 22),
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(_BookAction.detail),
+          ),
+          MiDialogItem(
+            label: '移出书架',
+            subtitle: '删除后封面文件一并清理',
+            destructive: true,
+            icon: const Icon(Icons.delete_outline, size: 22),
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(_BookAction.delete),
+          ),
+        ],
+        // 点遮罩（= 系统返回同路）：只关弹框、不派发动作。
+        onScrimTap: () => Navigator.of(dialogContext).pop(),
+      ),
     );
     if (!mounted || action == null) return;
     unawaited(_runBookAction(record, action));
   }
 
-  /// 操作单选定后的动作派发（[BookCard.onLongPress] 已随操作单关闭而复位，
+  /// 弹框选定后的动作派发（[BookCard.onLongPress] 已随弹框关闭而复位，
   /// 故这里不再占用「抬起」窗口）。
   Future<void> _runBookAction(BookRecord record, _BookAction action) async {
     switch (action) {
@@ -503,14 +547,12 @@ class ShelfPageState extends State<ShelfPage> {
     }
   }
 
-  /// 书卡长按操作单 / 详情页的「书籍详情」→ 书籍详情页（`F9` / `META-08 ①`）。
+  /// 书卡长按弹框 / 详情页的「书籍详情」→ 书籍详情页（`F9` / `META-08` ①）。
   ///
-  /// **入口只有一个**（2026-09-29 改道）：书架点卡改成直接进阅读页后，
-  /// 详情页只能从长按操作单进（与 anx-reader 同构——其 `book_bottom_sheet.dart`
-  /// 也是详情页的唯一入口）。PRD `META-08` 的「从书架点击进入」已同步改文。
-  ///
-  /// pop 后刷新列表——编辑 / 移出书架 / 进度变化都靠这次刷新同步回书架。
-  /// 开书管道以 `onOpenBook: _openBook` 回调注入详情页（详情页禁止复制第二份）。
+  /// **入口只有一个**：书架点卡改成直接进阅读页后，详情页只能从长按弹框进
+  ///（PRD `META-08` 的「从书架点击进入」已同步改文）。pop 后刷新列表——编辑 /
+  /// 移出书架 / 进度变化都靠这次刷新同步回书架。开书管道以 `onOpenBook: _openBook`
+  /// 回调注入详情页（详情页**禁止**复制第二份）。
   Future<void> _openDetail(BookRecord record) async {
     if (_detailPushing) return; // 过渡期防双击叠详情页
     _detailPushing = true;
@@ -537,12 +579,10 @@ class ShelfPageState extends State<ShelfPage> {
 
   /// 打开一本书：准备（读字节 + 建源）→ push 阅读页。
   ///
-  /// 守卫 [_opening] **只覆盖 push 前的准备阶段**（防准备期连点重复 push）；
-  /// 路由一入栈立即释放——阅读会话期间绝不占用，否则关书后首点被静默吞掉。
+  /// 守卫 [_opening] **只覆盖 push 前的准备阶段**（防准备期连点重复 push），
+  /// 路由一入栈立即释放——阅读会话期间绝不占用，否则关书后首点被静默吞掉；
   /// 准备期被点的卡片显示 loading 覆盖层（[BookCard.loading]）。
-  ///
-  /// [onPushed]：阅读页路由一入栈即回调（供调用方安排「覆盖后移除下层路由」
-  /// 等收尾——见 [_enterSearch] 的开书回调）。
+  /// [onPushed]：阅读页路由一入栈即回调（供调用方安排「覆盖后移除下层路由」）。
   Future<void> _openBook(
     BookRecord record, {
     void Function(PageRoute<void> route)? onPushed,
@@ -556,23 +596,21 @@ class ShelfPageState extends State<ShelfPage> {
       title: record.title,
     );
     setState(() => _openingBookId = record.bookId); // 该卡显示 loading 覆盖层
-    // 已就绪待交接的书源。**所有权只有两个合法去向**：交给 `ReaderPage`，
-    // 或者在本方法内归还仓库（`recycleBookSource` 会按字节上限决定驻留/销毁）。
-    // 早退、异常、`!mounted` 都必须走后者，否则整本字节泄漏。
+    // 已就绪待交接的书源。**所有权只有两个合法去向**：交给 `ReaderPage`，或在
+    // 本方法内归还仓库（`recycleBookSource` 会按字节上限决定驻留/销毁）；早退、
+    // 异常、`!mounted` 都必须走后者，否则整本字节泄漏。
     BookSource? pending;
     try {
       final PerfWatch readWatch = PerfLog.watch('open.readBytes');
-      // ## 先查**复用池**（§2.108）：命中就完全跳过「读字节 + 建源」
+      // ## 先查**复用池**（§2.108）：命中就完全跳过「读字节 + 建源」。
       //
-      // 池里有两种来源：① 刚导入时解析好的那份（导入即入池）；② 上次读完关书
-      // 还回来的那份。两者都自带原始字节 + 已解析结构 + 章节表缓存 ⇒ 这一步的
-      // 成本只剩一次 `stat`（判据校验）。
-      //
-      // 判据与磁盘缓存同口径（`bookId + mtime + size`）：文件被替换过 → 池条目
-      // 自动作废并销毁，走下面的冷路径，绝不会让旧字节冒充新文件。
+      // 池里有 ① 导入即入池的那份、② 上次关书还回来的那份，都自带原始字节 +
+      // 已解析结构 + 章节表缓存 ⇒ 这一步成本只剩一次 `stat`（判据校验）。判据与
+      // 磁盘缓存同口径（`bookId + mtime + size`）：文件被替换过 → 池条目自动作废
+      // 并销毁、走下面的冷路径，绝不会让旧字节冒充新文件。
       final PerfWatch statsWatch = PerfLog.watch('open.stat');
-      final StructureCacheKey? cacheKey =
-          await widget.repository.structureCacheKey(record);
+      final BookInstanceKey? cacheKey =
+          await widget.repository.bookInstanceKey(record);
       statsWatch.done('hit=${cacheKey == null ? 0 : 1}');
 
       final BookSource? pooled =
@@ -602,10 +640,6 @@ class ShelfPageState extends State<ShelfPage> {
         pending = await openBook(
           fileName: record.fileName,
           bytes: bytes,
-          structureCache: widget.repository.structureCache,
-          cacheKey: cacheKey,
-          txtOutlineCache: widget.repository.txtOutlineCache,
-          chapterTextCache: widget.repository.chapterTextCache,
         );
         sniffWatch.done('impl=${pending.implId}');
         trace.step('sniff', sniffWatch.elapsedMs, 'impl=${pending.implId}');
@@ -617,15 +651,14 @@ class ShelfPageState extends State<ShelfPage> {
 
       if (!mounted) return;
       final BookSource source = pending;
-      // 开书转场（2026-10-09 重做）：用 [ReaderOpenRoute] 替掉裸 [MaterialPageRoute]——
-      // 阅读页作为**一整张纸从右侧滑入**铺满，书架静止在后被压暗
-      // （460ms / easeOutCubic / 70dp 圆角，参数来自负责人给的参考动效逐帧量化）。
+      // 开书转场：用 [ReaderOpenRoute] 替掉裸 [MaterialPageRoute]——阅读页作为
+      // **一整张纸从右侧滑入**铺满，书架静止在后被压暗（460ms / easeOutCubic /
+      // 70dp 圆角）。
       //
-      // 动因（真机 release 档实测，见 §2.69 附一~附七）：
-      // 点书卡到正文上屏 335~509ms，其中「首帧那一帧的框架任务插队」占 230~290ms
-      // （探针已证**不是**解析——`content()` 内部四段合计 0ms）。这段等待属引擎侧
-      // 首触（字体 / 图片解码器 / Skia 管线），**无法消除**，但可以被滑入动作盖住：
-      // 用户点下即见纸张推进，而非白屏。
+      // 动因（实测见 §2.69 附一~附七）：点书卡到正文上屏的等待里，首帧框架任务
+      // 插队占大头（探针已证**不是**解析）。这段等待属引擎侧首触（字体 / 图片
+      // 解码器 / Skia 管线），**无法消除**，但可以被滑入动作盖住——用户点下即见
+      // 纸张推进，而非白屏。
       final ReaderOpenRoute route = ReaderOpenRoute(
         builder: (_) => ReaderPage(
           source: source,
@@ -653,7 +686,7 @@ class ShelfPageState extends State<ShelfPage> {
       onPushed?.call(route);
       pending = null; // 所有权已交给阅读页（它关书时归还仓库）
       unawaited(route.popped.then((_) {
-        // 阅读页关闭后刷新（lastReadAt / readProgress 已在 M1-T04 更新）。
+        // 阅读页关闭后刷新（lastReadAt / readProgress）。
         if (mounted) unawaited(_loadBooks());
       }));
     } catch (_) {
@@ -676,35 +709,29 @@ class ShelfPageState extends State<ShelfPage> {
     }
   }
 
-  // 拖拽 / 文件夹相关的方法（`_mergeIntoFolder` / `_dropIntoFolder` /
-  // `_openFolder` / `_folderActions` / `_folderById` / `_toast`）已随
-  // 2026-09-29 拍板整体移除：归类改走详情页「分组」行，书架不再有拖拽与
-  // 文件夹卡（本页仅剩导入结果一处轻提示，直接调 `GlassOverlays.showToast`）。
+  // 拖拽 / 文件夹相关方法已随「归类改走详情页『分组』行」的拍板整体移除：
+  // 本页仅剩导入结果一处轻提示，直接调 `GlassOverlays.showToast`。
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final double topInset = MediaQuery.paddingOf(context).top;
 
-    // `UI-02` 导航层玻璃化：顶栏走 GlassTopBar、壳层走 GlassNavScaffold
-    // （照抄 book_detail_page 范本）；内容整体不透明（`UI-04`）。
+    // `UI-02` 导航层玻璃化：顶栏走 GlassTopBar、壳层走 GlassNavScaffold；
+    // 内容整体不透明（`UI-04`）。
     //
-    // 2026-09-29 浮动头部批（负责人「标题栏也参考图片，内容可以 edge to edge」，
-    // 拍板「全浮动头部」）：搜索胶囊 + 分组 chips 组成两行**浮动头部**（参考图 =
-    // HyperOS 主题商店首页的「搜索条 + 分类 chips 压在内容上」）；正文
-    // `extendBody: true` 铺满全屏、从头部下穿过，顶栏下方内容透出磨砂模糊
-    // （`UI-02` ②）。首行保护 = 网格 `padding.top` 留出头部高度（见
-    // [shelfGridPadding]）。**头部两行恒在场**（含 loading / 空态），避免
-    // 「加载中 → 有书」头部高度跳变。
+    // 浮动头部（参考图 = HyperOS 主题商店首页「搜索条 + 分类 chips 压在内容上」）：
+    // 搜索胶囊 + 分组 chips 两行；正文 `extendBody: true` 铺满全屏、从头部下穿过，
+    // 顶栏下方内容透出磨砂模糊（`UI-02` ②）。首行保护 = 网格 `padding.top` 留出
+    // 头部高度（见 [shelfGridPadding]）。**头部两行恒在场**（含 loading / 空态），
+    // 避免「加载中 → 有书」头部高度跳变。
     return GlassNavScaffold(
       extendBody: true,
       appBar: GlassTopBar(
         title: _buildHeader(),
         // **靠左不居中**：库的 `_ToolbarLayout` 在 `centerTitle: true`（默认）时
-        // 按整条宽度居中，并把可用宽压成 `size.width - 2 * max(leading, actions)`
-        // （等边距口径，`glass_app_bar.dart:559-578`）——本页标题是两行头部，
-        // 居中收缩会破坏「全宽搜索胶囊 + 铺满 chips 行」形态。传 `false` 走
-        // `:579-611`：可用宽 = 整宽减去两侧内边距（本页无 leading/actions 槽）。
+        // 按整条宽度居中、并把可用宽压成 `size.width - 2 * max(leading, actions)`——
+        // 本页标题是两行头部，居中收缩会破坏「全宽搜索胶囊 + 铺满 chips 行」形态。
         centerTitle: false,
         // 高度**恒取两行**：搜索态由头部自己把胶囊行收成 0 高（[AnimatedSize]），
         // 顶栏高度若跟着突变，转场第一帧整条栏会跳一下。
@@ -735,15 +762,12 @@ class ShelfPageState extends State<ShelfPage> {
   }
 
   /// 浮动头部（两行，参考图形态）：搜索行（胶囊 + 排序）+ 分组标签行。
-  ///
-  /// 2026-10-16：导入按钮迁到底栏**绿圆钮**（`HomeShell` 经 GlobalKey 调
-  /// [pickAndImport]），搜索行原「+」按钮移除；导入进行中在原槽位显示
-  /// 进度圈（非按钮，只是状态指示）。
-  ///
-  /// 整体包一层透明 [Material]：右侧动作按钮（排序）是 Material
-  /// [IconButton]（水波纹与文字样式要求最近处有 Material）；搜索胶囊是玻璃
-  /// 控件（[GlassButton]）、分组标签行是 [AdaptivePillTabBar] 纯色胶囊，都不
-  /// 需要 Material。`MaterialType.transparency` 不绘制底色，不破坏玻璃观感。
+  /// 导入按钮在底栏**绿圆钮**（`HomeShell` 经 GlobalKey 调 [pickAndImport]），
+  /// 搜索行原「+」按钮移除；导入进行中在原槽位显示进度圈（只是状态指示）。
+  /// 整体包一层透明 [Material]：右侧动作按钮（排序）是 Material [IconButton]
+  /// （水波纹与文字样式要求最近处有 Material）；搜索胶囊是玻璃控件（[GlassButton]）、
+  /// 分组标签行是 [AdaptivePillTabBar] 纯色胶囊，都不需要 Material
+  /// （`MaterialType.transparency` 不绘制底色，不破坏玻璃观感）。
   Widget _buildHeader() {
     final MiThemeMode mode = navThemeModeOf(context);
     return Material(
@@ -769,15 +793,14 @@ class ShelfPageState extends State<ShelfPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   ),
-                // 2026-10-20 上游搜索栏批：搜索行右侧的**排序按钮移除**（顶部只留
-                // 搜索栏 + 胶囊行）。排序逻辑与菜单 [_showSortMenu] 原样保留，
-                // 入口暂缺——挂账待定，确定落点后直接接回，不必重写。
+                // 搜索行右侧的**排序按钮移除**（顶部只留搜索栏 + 胶囊行）。
+                // 排序逻辑与菜单 [_showSortMenu] 原样保留，入口暂缺——挂账待定，
+                // 确定落点后直接接回，不必重写。
               ],
             ),
           ),
-          // 胶囊分类行（浮动头部第二行）：搜索已改为推入独立搜索页（2026-10-22
-          // 上游「页面推入转场」批），本页不再有「搜索态收高」这条分支——
-          // 头部两行恒在场，高度恒定（`kShelfHeaderHeight`）。
+          // 胶囊分类行（浮动头部第二行）：搜索已改为推入独立搜索页，本页不再有
+          // 「搜索态收高」这条分支——头部两行恒在场，高度恒定（`kShelfHeaderHeight`）。
           Padding(
             padding: const EdgeInsets.only(top: kShelfHeaderRowGap),
             child: SizedBox(
@@ -793,9 +816,8 @@ class ShelfPageState extends State<ShelfPage> {
   /// 分组筛选栏（**单选**：全部 / 各分组）—— 浮动头部第二行（参考图 chips 行）。
   ///
   /// ══════════════════════════════════════════════════════════════════════════════
-  /// 2026-10-16 参考项目批：GlassChip 行 → 胶囊分类标签（初版 [MiPillTabBar]
-  /// 定宽；同日按拍板换 [AdaptivePillTabBar] 自适应宽：min 87.6 / max 175.2 /
-  /// 超出省略号——视觉 token 全复用移植体，宽度规则在移植树外）
+  /// GlassChip 行 → [AdaptivePillTabBar] 自适应宽胶囊分类标签（min 87.6 /
+  /// max 175.2 / 超出省略号——视觉 token 全复用移植体，宽度规则在移植树外）
   /// ══════════════════════════════════════════════════════════════════════════════
   /// · 标签 = 「全部」+ 各分组名，横向可滚（组件内置滚动容器）；
   /// · 「全部」恒在首位；分组顺序 = `ShelfLayoutStore` 的创建序（`groups` 列表序）；
@@ -804,12 +826,11 @@ class ShelfPageState extends State<ShelfPage> {
   ///   标签行、无「再点取消」语义，由 [onTap] 映射承担）；
   /// · 明暗：[MiThemeMode] 按 `GlassScope` 级联亮度解析（同底栏 [navThemeModeOf]）。
   ///
-  /// 对齐：组件自带 [MiPillTabMetrics.edgeInset]（11.9，参考项目页边距口径），
-  /// 而本页头部由顶栏槽给 8dp 内边距、左缘须与搜索胶囊对齐（既有形态）——故把
-  /// 组件盒**放宽 2×11.9 并居中**（`OverflowBox` + `Alignment.topCenter`）：
-  /// 内置内嵌正好抵消到槽边，胶囊左缘 = 槽左缘 = 搜索胶囊左缘；外层 [ClipRect]
-  /// 保住「超出视口裁切滚动」的形态。行高仍由 [_buildHeader] 的
-  /// `SizedBox(kShelfChipsRowHeight)`（40）给定，胶囊高 39.9 落在行内。
+  /// 对齐：组件自带 [MiPillTabMetrics.edgeInset]（11.9），而本页头部由顶栏槽给
+  /// 8dp 内边距、左缘须与搜索胶囊对齐——故把组件盒**放宽 2×11.9 并居中**
+  /// （`OverflowBox` + `Alignment.topCenter`）：内置内嵌正好抵消到槽边，胶囊左缘
+  /// = 槽左缘 = 搜索胶囊左缘；外层 [ClipRect] 保住「超出视口裁切滚动」的形态。
+  /// 行高由 [_buildHeader] 的 `SizedBox(kShelfChipsRowHeight)`（40）给定。
   Widget _buildGroupFilterBar() {
     final String? selected = widget.shelfPrefs.prefs.groupId;
     // 选中分组已消失（书被删空）→ 视作「全部」，高亮随之回到「全部」。
@@ -838,7 +859,7 @@ class ShelfPageState extends State<ShelfPage> {
               selectedIndex: selectedIndex,
               themeMode: navThemeModeOf(context),
               // 书卡从头部下方穿过（压在内容上）：未选胶囊要垫那层玻璃膜，
-              // 否则在杂乱封面上只剩文字可辨、读不出胶囊形状（上游 2026-10-20）
+              // 否则在杂乱封面上只剩文字可辨、读不出胶囊形状。
               overContent: true,
               onTap: (int i) => unawaited(
                 widget.shelfPrefs.setGroup(
@@ -854,11 +875,10 @@ class ShelfPageState extends State<ShelfPage> {
 
   /// 排序菜单（右上角弹出；当前字段右侧显示方向箭头，再点同项即翻转方向）。
   ///
-  /// **当前无 UI 入口**（2026-10-20 上游搜索栏批：搜索行右侧的排序按钮移除，
-  /// 顶部只留「搜索栏 + 胶囊行」）。排序**功能与偏好照旧完整保留**——排序字段 /
-  /// 方向仍在 `ShelfPrefsStore` 里生效，`_visibleBooks` 照旧读它；只是入口
-  /// 暂缺、挂账待定落点（候选：胶囊行末尾的排序胶囊 / 设置页书架分组）。
-  /// 定案后直接给某个按钮接上 `onPressed: _showSortMenu` 即可，无需重写。
+  /// **当前无 UI 入口**（搜索行右侧的排序按钮移除，顶部只留「搜索栏 + 胶囊行」）。
+  /// 排序**功能与偏好照旧完整保留**——字段 / 方向仍在 `ShelfPrefsStore` 生效、
+  /// `_visibleBooks` 照旧读它；入口暂缺、挂账待定（候选：胶囊行末尾的排序胶囊 /
+  /// 设置页书架分组）。定案后直接给某个按钮接上 `onPressed: _showSortMenu` 即可。
   // ignore: unused_element
   Future<void> _showSortMenu() async {
     final ThemeData theme = Theme.of(context);
@@ -973,16 +993,12 @@ class ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 有书：网格展示（分组筛选 / 排序已在外层应用）。
-  ///
-  /// 网格**不再含任何交互**（拖拽 / 文件夹卡随 2026-09-29 拍板移除），
-  /// 本页只把「点击直接开书」「长按弹操作单」两个回调接上。
-  ///
-  /// [topInset] = 状态栏高（`MediaQuery.padding.top`）；网格 `padding.top`
-  /// 经 [shelfGridPadding] 合成后 = `状态栏 + 浮动头部高 + 12`——**首行不被
-  /// 浮动头部盖住**的唯一保证（内容 edge-to-edge 后正文从 y=0 起）。
-  ///
-  /// [books] 默认 [_visibleBooks]（搜索在独立页里做，本页恒为全量视图）。
+  /// 有书：网格展示（分组筛选 / 排序已在外层应用）。网格**不含任何交互**
+  /// （拖拽 / 文件夹卡随拍板移除），本页只把「点击直接开书」「长按弹操作弹框」
+  /// 两个回调接上。[topInset] = 状态栏高；网格 `padding.top` 经 [shelfGridPadding]
+  /// 合成后 = `状态栏 + 浮动头部高 + 12`——**首行不被浮动头部盖住**的唯一保证
+  /// （内容 edge-to-edge 后正文从 y=0 起）。[books] 默认 [_visibleBooks]
+  /// （搜索在独立页里做，本页恒为全量视图）。
   Widget _buildBookGrid(double topInset, {List<BookRecord>? books}) {
     const double headerHeight = kShelfHeaderHeight;
     return Stack(
@@ -992,9 +1008,7 @@ class ShelfPageState extends State<ShelfPage> {
           coverStore: widget.coverStore,
           openingBookId: _openingBookId,
           padding: shelfGridPadding(topInset, headerHeight: headerHeight),
-          // 点书卡 = **直接进阅读页**（2026-09-29 拍板：原「点卡 → 详情页」改道；
-          // 与 anx-reader 一致——其 `book_item.dart:51-53` 的 `onTap` 即
-          // `pushToReadingPage`）。详情页入口改走长按操作单「书籍详情」。
+          // 点书卡 = **直接进阅读页**；详情页入口走长按弹框「书籍详情」。
           onOpenBook: (BookRecord record) => unawaited(_openBook(record)),
           // 不 `unawaited`：这个 Future 的完成时机**就是**长按抬起反馈的复位时机
           // （见 `_showBookActions` 的返回值语义）。
@@ -1016,17 +1030,12 @@ class ShelfPageState extends State<ShelfPage> {
   /// 头部区磨砂：**一整段恒定 σ 铺满头部、到栏底硬切**。
   ///
   /// ══════════════════════════════════════════════════════════════════════════════
-  /// 2026-10-20 上游「首页悬浮头部」批：渐进曲线 → 恒定 σ
+  /// 上游「首页悬浮头部」批：渐进曲线 → 恒定 σ
   /// ══════════════════════════════════════════════════════════════════════════════
-  /// 原实现是 [MiGradientBlur]（σ 沿 y 递减、120dp 处归零）。上游拿完整截图
-  /// 逐点实测后推翻了这条曲线：搜索栏行、栏与胶囊之间的间隙、胶囊行后方的
-  /// 内容**糊得一样重**，胶囊底缘往下立刻锐利 —— 照曲线拉伸到头部底缘时，
-  /// 胶囊行所在位置只剩 σ≈2.5，与截图明显不符。
-  ///
-  /// 于是头部区形态改走 `MiTopBar.uniformBlurBands` 那条规律的一整段恒定
-  /// σ（本页是自拼头部、不是 `MiTopBar` 的头部插槽，故这里自己铺同一段）：
-  /// 高度 = 状态栏 + 头部高（[shelfGridPadding] 的同一口径），到栏底硬切。
-  ///
+  /// 原实现是 [MiGradientBlur]（σ 沿 y 递减、120dp 处归零），但截图逐点实测推翻了
+  /// 这条曲线：头部各行后方内容糊得一样重、胶囊底缘往下立刻锐利。故改走
+  /// `MiTopBar.uniformBlurBands` 同规律的一整段恒定 σ（本页自拼头部、自己铺
+  /// 同一段）：高度 = 状态栏 + 头部高（[shelfGridPadding] 同一口径），到栏底硬切。
   /// 只用一段也把全宽高斯从 8 段压到 1 段（滚动时每帧都走这里）。
   Widget _buildHeaderBlur() {
     return ClipRect(
@@ -1070,29 +1079,21 @@ class ShelfPageState extends State<ShelfPage> {
   }
 }
 
-/// 顶栏里的搜索栏——常规态是「假搜索框」（点击进搜索态），搜索态变真输入框。
+/// 顶栏里的搜索栏（上游 [MiSearchBar]，1:1 实测自小米主题商店分类页：stadium
+/// 高 44.1、图标 17.8 + 图文间距 12 起于左缘 15.4、占位文字 CJK 16.5dp）。
 ///
 /// **靠左铺满而非居中收缩**：调用方须传 `centerTitle: false`（见 `build`）。
 /// 居中档下库会把可用宽压成 `width - 2 * max(两侧)`，搜索态还要让位给取消钮，
-/// 搜索框就只剩半宽且浮在中间——「看起来是个居中的小胶囊」，不是搜索框该有的样子。
+/// 搜索框就只剩半宽且浮在中间——不是搜索框该有的样子。材质配方走组件自身的
+/// `search_bar_tokens`，不引 `GlassMaterial.settingsFor`（`UI-07`「材质单一出处」
+/// 精神）。几何契约不变：靠左贴顶栏内边距、铺满可用宽（`shelf-search-entry` 断言）。
 ///
 /// ══════════════════════════════════════════════════════════════════════════════
-/// 2026-10-19 上游搜索栏批：自绘玻璃胶囊 → 上游 [MiSearchBar]
-/// ══════════════════════════════════════════════════════════════════════════════
-/// 原实现是 [GlassButton.custom] 手拼「放大镜图标 + 占位文字」的自绘玻璃
-/// 胶囊（36 高）。现改为上游 [MiSearchBar]——1:1 实测自小米主题商店分类页
-/// 的搜索栏：stadium 高 44.1、图标 17.8 + 图文间距 12 起于左缘 15.4、占位
-/// 文字 CJK 16.5dp。材质配方走组件自身的 `search_bar_tokens`，不再由业务页引
-/// `GlassMaterial.settingsFor`（同 `UI-07`「材质单一出处」精神）。
-/// 几何契约不变：靠左贴顶栏内边距、铺满可用宽（`test/ui/shelf_page_test.dart`
-/// 的 `shelf-search-entry` 断言只换样式判据，几何判据原样）。
-///
-/// ══════════════════════════════════════════════════════════════════════════════
-/// 2026-10-20 上游搜索栏批：接**搜索态**与**玻璃膜**
+/// 接**搜索态**与**玻璃膜**
 /// ══════════════════════════════════════════════════════════════════════════════
 ///  * [searching] = true 时同一个组件换成真输入框（`editable`）：几何 / 配色
 ///    不变，光标 + hint 同现，聚焦即弹键盘。进入靠 `autofocus`，退出由父级
-///    `unfocus` + 换回非编辑态两个动作一起收键盘；
+///    `unfocus` + 换回非编辑态一起收键盘；
 ///  * [overContent] 恒开：书卡从头部下方穿过（压在高频封面上），只留平底页
 ///    那档半透明填充时整条栏会糊成一片、边缘读不出来。
 ///
@@ -1101,7 +1102,7 @@ class ShelfPageState extends State<ShelfPage> {
 class _BookSearchEntry extends StatelessWidget {
   const _BookSearchEntry({required this.onTap, required this.mode});
 
-  /// 点击回调（推入搜索页，2026-10-22 上游「页面推入转场」批）。
+  /// 点击回调（推入搜索页）。
   final VoidCallback onTap;
 
   /// 明暗配方（父级已解析，避免两次查 `GlassScope`）。
@@ -1137,87 +1138,3 @@ enum _BookAction {
   delete,
 }
 
-/// 长按书卡弹出的底部操作单。
-///
-/// 由 [GlassOverlays.showSheet] 承载（`UI-03` 浮层玻璃；「关」档自动退化为
-/// Material 底部弹窗）。本组件内**不得**再出现玻璃控件（玻璃不可嵌套），
-/// 故清一色由不透明内容构成。
-class _BookActionSheet extends StatelessWidget {
-  const _BookActionSheet({required this.record});
-
-  /// 目标书目。
-  final BookRecord record;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final double? progress = record.readProgress;
-    final String subtitle = <String>[
-      if (record.author.isNotEmpty) record.author,
-      record.format.toUpperCase(),
-      if (progress != null) '已读 ${(progress * 100).round()}%',
-    ].join(' · ');
-
-    return Material(
-      // 玻璃浮层（`GlassSheet`）**没有 Material 祖先**（PRD §11.4），而 `ListTile`
-      // 强制要求最近处存在 Material（涟漪与文字样式）——缺了就抛
-      // 「No Material widget found」。透明 Material 不绘制底色，不破坏玻璃观感。
-      type: MaterialType.transparency,
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    record.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.play_arrow),
-              title: const Text('继续阅读'),
-              onTap: () =>
-                  Navigator.of(context).pop(_BookAction.continueReading),
-            ),
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('书籍详情'),
-              onTap: () => Navigator.of(context).pop(_BookAction.detail),
-            ),
-            ListTile(
-              leading:
-                  Icon(Icons.delete_outline, color: theme.colorScheme.error),
-              title: Text(
-                '移出书架',
-                style: TextStyle(color: theme.colorScheme.error),
-              ),
-              subtitle: const Text('删除后封面文件一并清理'),
-              onTap: () => Navigator.of(context).pop(_BookAction.delete),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-}

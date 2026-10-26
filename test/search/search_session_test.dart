@@ -1,21 +1,19 @@
-// `SearchSession` 协议测试（纯 Dart `test()`，真后台 isolate；`CNT-06` / `RUST-05`）。
+// `SearchSession` 协议测试（`CNT-06` / `RUST-05`；纯 Dart `test()`，真后台 isolate）。
 //
-// 验收映射：
-//   · `CNT-06` ①「命中数与实际出现次数一致」——样本里 3 次「alpha」→ 恰 3 条命中，
-//     offset / context / chapterIndex 逐条人工推演钉死（防假绿）；
-//   · `CNT-06` ③「可取消且 UI 不卡死」——取消当帧收尾、无迟到事件、不留未完成态
-//     （UI 不卡死由 `test/search/search_sheet_test.dart` 与阈值 4 基线另行守）；
-//   · `RUST-05` ③「进度回报单调递增」——progress 序列断言；
-//   · spec（后台重建）与 localSource（句柄源本 isolate 流式）两条路径同测。
+// 覆盖：`CNT-06` ① 命中数与实际出现次数一致（offset / context / chapterIndex 逐条
+// 人工推演钉死，防假绿）、③ 取消当帧收尾、无迟到事件、不留未完成态（UI 不卡死由
+// `search_sheet_test` 与阈值 4 基线另行守）、`RUST-05` ③ 进度回报单调递增、
+// spec（后台重建）与 localSource（句柄源本 isolate 流式）两条路径同测。
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/format/book_registry.dart';
 import 'package:mreader/format/book_source.dart';
-import 'package:mreader/format/dart_txt_source.dart';
 import 'package:mreader/task/search_session.dart';
 
 import '../format/epub_builder.dart';
+
+import 'search_fakes.dart';
 
 /// 两章样本（段落显式给定，offset 可人工推演）：
 ///   章 0：`alpha beta alpha`（16 字符，「alpha」在 0、11）+ `无命中段`（4 字符）
@@ -191,10 +189,9 @@ void main() {
     });
 
     test('localSource 路径不 dispose 外部源（句柄源生命周期归持有方）', () async {
-      final DartTxtSource source = DartTxtSource(
-        fileName: 'x.txt',
-        bytes: Uint8List.fromList('第一章 甲\nalpha\n'.codeUnits),
-      );
+      // 生命周期语义与实现无关：假源同样证明「session 不 dispose 外部源」。
+      final StubSearchSource source =
+          StubSearchSource(paragraphCounts: const <int>[1]);
       final SearchSession session =
           SearchSession.start(query: 'alpha', localSource: source);
       await _collect(session);

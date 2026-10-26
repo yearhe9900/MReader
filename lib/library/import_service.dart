@@ -1,11 +1,8 @@
 // `LIB-02` / `LIB-05`：单个文件的导入管道（Flutter 侧：用 `dart:io` 写文件副本）。
 //
-// 职责：
-//   1. 格式检测 + 解析元数据（`BookSource`）；
-//   2. 内容摘要 SHA-256 hex 前 16 位（`LIB-05` 判重键）；
-//   3. 文件副本写入 App 私有目录（`AtomicFile`，`DATA-01`）；
-//   4. 封面物化（`PendingCover` → `StoredCover`，`META-06`）；
-//   5. 构造 [BookRecord]（不含索引写入——由 `LibraryRepository` 管理）。
+// 职责：格式检测 + 解析元数据（`BookSource`）→ 内容摘要 SHA-256 hex 前 16 位
+// （`LIB-05` 判重键）→ 文件副本写入 App 私有目录（`AtomicFile`，`DATA-01`）→
+// 封面物化（`PendingCover` → `StoredCover`，`META-06`）→ 构造 [BookRecord]。
 //
 // **判重**在 `LibraryRepository.importFile()` 层完成（查 index），
 // 本文件只管「一个文件 → 一条 BookRecord」的转换管道。
@@ -16,9 +13,7 @@ import 'package:crypto/crypto.dart';
 
 import '../format/book_registry.dart';
 import '../format/book_source.dart';
-import '../format/chapter_text_cache.dart';
-import '../format/structure_cache.dart';
-import '../format/txt_outline_cache.dart';
+import '../format/book_instance_key.dart';
 import '../meta/cover_store.dart';
 import '../platform/app_paths.dart';
 import '../storage/atomic_file.dart';
@@ -26,12 +21,10 @@ import 'book_record.dart';
 
 /// 一次导入的产物：记录 + **已经解析好的书源** + 副本判据。
 ///
-/// [source] 是「活着的」书源（结构已解析、章节表已就绪，未 dispose）：调用方要
-/// 么把它交给 `BookSourcePool` 驻留（导入后立刻点开 = 零读盘零解析），要么
-/// 自己 `dispose()`。**丢失引用 = 泄漏一份整本字节**，故这里刻意不用可空字段。
-///
-/// [cacheKey] 为 `null` = 副本 stat 失败（极端情况）：此时缓存不启用，
-/// 书源仍可用，只是不走缓存加速。
+/// [source] 是「活着的」书源（结构已解析、章节表已就绪，未 dispose）：调用方要么
+/// 交给 `BookSourcePool` 驻留（导入后立刻点开 = 零读盘零解析），要么自己 `dispose()`。
+/// **丢失引用 = 泄漏一份整本字节**，故刻意不用可空字段。[cacheKey] 为 `null` =
+/// 副本 stat 失败（极端情况）：不入复用池，书源仍可用、只是下次开书要重解析。
 class ImportOutcome {
   const ImportOutcome({
     required this.record,
@@ -41,7 +34,7 @@ class ImportOutcome {
 
   final BookRecord record;
   final BookSource source;
-  final StructureCacheKey? cacheKey;
+  final BookInstanceKey? cacheKey;
 }
 
 /// 单个文件的导入管道。
@@ -51,28 +44,19 @@ class ImportService {
   final AppPaths _paths;
   final CoverStore _coverStore;
 
-  /// SHA-256 hex 前 16 位（`LIB-05` 内容摘要判重键）。
-  ///
-  /// 确定性、跨平台稳定：相同字节 → 相同 bookId。
+  /// SHA-256 hex 前 16 位（`LIB-05` 内容摘要判重键）：确定性、跨平台稳定，
+  /// 相同字节 → 相同 bookId。
   static String computeBookId(Uint8List bytes) {
     final Digest digest = sha256.convert(bytes);
     return digest.toString().substring(0, 16);
   }
 
-  /// 导入单个文件：检测 → bookId → **复制副本** → 缓存判据 → 解析（带缓存）→
+  /// 导入单个文件：检测 → bookId → **复制副本** → 副本判据 → 内核解析 →
   /// 封面物化 → [BookRecord]。
   ///
-  /// ## 为什么「先复制、再解析」（2026-10-20 改，§2.108）
-  ///
-  /// 旧顺序是「先解析、再复制」：解析用的是**裸** `openBook`（不注入缓存），
-  /// 解析结果 `load()` 完就 `dispose()` 扔掉——于是导入后的预热要**再解析一遍**，
-  /// 用户点开时又是第三遍（读磁盘缓存）。
-  ///
-  /// 现在的顺序让**同一份解析只做一次**：
-  ///   ① 副本先落盘 → ② 用刚写好的副本 stat 出缓存判据 → ③ 带缓存解析
-  ///   （结构缓存写盘、后续预热/开书直接命中）。
-  ///
-  /// 代价：解析失败时副本已经落盘，需要显式清理（见 [_deleteQuietly]），否则留
+  /// 「先复制、再解析」（§2.108）让**同一份解析只做一次**（副本先落盘 → 用副本
+  /// stat 出副本判据 → 解析产物直接入复用池，导入完立刻点开 = 零读盘零解析）；
+  /// 代价：解析失败时副本已落盘，**必须**显式清理（[_deleteQuietly]），否则留
   /// 下一个无索引引用的孤儿文件。
   ///
   /// 不写索引（由 `LibraryRepository.importFile()` 负责）。
@@ -80,18 +64,14 @@ class ImportService {
   Future<ImportOutcome> import({
     required Uint8List bytes,
     required String fileName,
-    StructureCacheStore? structureCache,
-    TxtOutlineCacheStore? txtOutlineCache,
-    ChapterTextCacheStore? chapterTextCache,
   }) async {
     // 1. 格式检测
     final FormatKind kind = sniffFormat(fileName: fileName, bytes: bytes);
     if (kind == FormatKind.unsupported) {
       throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
     }
-    // MOBI/AZW3 已接入解析器（`MobiSource`，2026-10-20）：魔数识别后正常走
-    // openBook；压缩口径不支持的（HUFF/CDIC）在解析器内抛
-    // `mobiHuffCdicUnsupported`，不再在导入前一律拒绝。
+    // MOBI/AZW3 已接入解析器（`MobiSource`）：魔数识别后正常走 openBook；
+    // 压缩口径不支持的（HUFF/CDIC）在解析器内抛 `mobiHuffCdicUnsupported`。
     // 落盘扩展名 = 格式名。
     final String format = switch (kind) {
       FormatKind.epub => 'epub',
@@ -114,17 +94,13 @@ class ImportService {
         '${libDir.path}${Platform.pathSeparator}$destFileName';
     await AtomicFile(destPath).writeBytes(bytes);
 
-    // 4. 缓存判据：用**刚落盘副本**的 mtime/size（`T06` 口径）
-    final StructureCacheKey? cacheKey = await _keyFor(bookId, destPath);
+    // 4. 副本判据：用**刚落盘副本**的 mtime/size（复用池条目的 key）
+    final BookInstanceKey? cacheKey = await _keyFor(bookId, destPath);
 
-    // 5. 解析元数据（**带缓存**：结构缓存就此写盘，预热与开书都能零解析命中）
+    // 5. 解析元数据（内核为唯一实现；产物由调用方入复用池）
     final BookSource source = await openBook(
       fileName: fileName,
       bytes: bytes,
-      structureCache: structureCache,
-      cacheKey: cacheKey,
-      txtOutlineCache: txtOutlineCache,
-      chapterTextCache: chapterTextCache,
     );
     final BookMeta meta;
     try {
@@ -164,12 +140,12 @@ class ImportService {
     );
   }
 
-  /// 副本判据（`bookId + mtime + size`）；stat 失败 → `null`（不启用缓存）。
-  Future<StructureCacheKey?> _keyFor(String bookId, String path) async {
+  /// 副本判据（`bookId + mtime + size`）；stat 失败 → `null`（不入复用池）。
+  Future<BookInstanceKey?> _keyFor(String bookId, String path) async {
     try {
       final FileStat stat = await File(path).stat();
       if (stat.type == FileSystemEntityType.notFound) return null;
-      return StructureCacheKey(
+      return BookInstanceKey(
         bookId: bookId,
         mtimeMs: stat.modified.millisecondsSinceEpoch,
         size: stat.size,

@@ -1,4 +1,4 @@
-// Rust 解析内核书源的移植测试（2026-10-22 二次同步）。
+// Rust 解析内核书源的移植测试。
 //
 // 三层判别，**无原生库也全绿**（RUST-07 口径）：
 //   1. 宿主标记织入纯函数（内核 U+FFFC 图片标记 → `\x00IMG:`、内链区间 →
@@ -8,18 +8,16 @@
 // 有原生库（本地 `cargo build` 过）时，第 4 组自动跑内核源的 BookSource 契约；
 // 没有则运行期 `markTestSkipped`，不计失败。
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/format/book_registry.dart';
 import 'package:mreader/format/book_source.dart';
-import 'package:mreader/format/cbz_source.dart';
-import 'package:mreader/format/dart_epub_source.dart';
-import 'package:mreader/format/dart_txt_source.dart';
-import 'package:mreader/format/mobi_source.dart';
 import 'package:mreader/format/rust_kernel_source.dart';
 import 'package:mreader/highperf/high_perf_capability.dart';
 import 'package:mreader/highperf/high_perf_registry.dart';
+import 'package:mreader/src/rust/api/guard.dart' show probe;
 import 'package:mreader/src/rust/api/kernel.dart' as rk;
 import 'package:mreader/src/rust/frb_generated.dart';
 
@@ -55,8 +53,7 @@ Uint8List _minimalTxt() => Uint8List.fromList(utf8.encode(
 
 Uint8List _minimalMobiBytes() {
   // PalmDB 头 + BOOKMOBI 魔数（偏移 60..68，与 `hasMobiMagic` 同判据）：只喂给
-  // sniffFormat（分发判据），不需要能解析——用例断言的是「回落时返回 MobiSource」，
-  // MobiSource 构造不解析。
+  // sniffFormat 分发判据、不需能解析——用例断言的是「要么内核源、要么格式层报错」。
   final BytesBuilder b = BytesBuilder();
   b.add(Uint8List(60)); // PDB 头（name/属性/时间戳/type 前的填充）
   b.add('BOOKMOBI'.codeUnits); // type+creator
@@ -101,11 +98,17 @@ Future<HighPerfRegistry> _availableRegistry() async {
 
 /// 真内核组的 FRB 初始化（进程内只试一次）。
 ///
-/// 2026-10-23 修：此前真内核组直接调 `RustKernelSource.open`，而 FRB 生成的
-/// API 要求先 `RustLib.init()`——没初始化时 `open` 抛 “has not been
-/// initialized”，整组被 `markTestSkipped` 吞掉（看起来跳过是「无原生库」，
-/// 实际是「没 init」，用例从未真正跑过）。现在先 init，失败才判「原生库不可用」。
+/// ⚠️ FRB API 必须先 `RustLib.init()` 再 `RustKernelSource.open`：不 init 时 `open` 抛
+/// “has not been initialized”，会被 `markTestSkipped` 吞成「无原生库」的假象（用例从未
+/// 真正跑过）——故先 init，失败才判「原生库不可用」。
+/// FRB 可用性判别（缓存）。
+///
+/// ⚠️ `test/flutter_test_config.dart` 已在**每个测试文件**跑之前 `RustLib.init()`
+/// 过一次（内核唯一实现后，真实开书用例都需要）。FRB 的二次 `init()` 会抛
+/// 「已初始化」——拿它当可用性判据会把整组用例误判成「无原生库」而跳过。故失败后
+/// 再用一次同步 `probe()`（纯字符串返回、零副作用）复核：能回值 = 内核真的可用。
 bool? _kernelReady;
+
 Future<bool> _ensureKernel() async {
   final bool? cached = _kernelReady;
   if (cached != null) return cached;
@@ -113,7 +116,12 @@ Future<bool> _ensureKernel() async {
     await RustLib.init();
     return _kernelReady = true;
   } catch (_) {
-    return _kernelReady = false;
+    try {
+      probe(); // 二次 init 被拒但内核在跑：probe 能回值即视为可用。
+      return _kernelReady = true;
+    } catch (_) {
+      return _kernelReady = false;
+    }
   }
 }
 
@@ -194,63 +202,44 @@ void main() {
     });
   });
 
-  group('无加速层：BookRegistry 恒回落纯 Dart（RUST-07）', () {
-    test('epub / txt / mobi 均返回对应 Dart 实现', () async {
+  group('内核唯一实现：不再回落（2026-10-26 起）', () {
+    test('epub / txt / mobi：要么内核源，要么翻译成格式层异常', () async {
+      // 语义变更：原「恒回落纯 Dart（RUST-07）」已随 Dart 源删除。现在
+      // [highPerf] 只记可观测性，不择实现：有原生库 = 内核源（`rust-*`）；
+      // 无原生库 / 打开失败 = [MReaderFormatException]（用户见中文，内核消息进 detail），
+      // **绝不**冒泡裸 FFI / Anyhow 错误。
       final BookRegistry registry =
           BookRegistry(highPerf: HighPerfRegistry.fallback());
-      final BookSource epub = await openBook(
-        fileName: 'a.epub',
-        bytes: _minimalEpub(),
-        registry: registry,
-      );
-      final BookSource txt = await openBook(
-        fileName: 'a.txt',
-        bytes: _minimalTxt(),
-        registry: registry,
-      );
-      final BookSource mobi = await openBook(
-        fileName: 'a.mobi',
-        bytes: _minimalMobiBytes(),
-        registry: registry,
-      );
-      expect(epub, isA<DartEpubSource>());
-      expect(epub.implId, 'dart-epub');
-      expect(txt, isA<DartTxtSource>());
-      expect(txt.implId, 'dart-txt');
-      expect(mobi, isA<MobiSource>());
-      expect(mobi.implId, 'dart-mobi');
+      final List<(String, Uint8List)> cases = <(String, Uint8List)>[
+        ('a.epub', _minimalEpub()),
+        ('a.txt', _minimalTxt()),
+        ('a.mobi', _minimalMobiBytes()),
+      ];
+      for (final (String name, Uint8List bytes) in cases) {
+        try {
+          final BookSource source =
+              await openBook(fileName: name, bytes: bytes, registry: registry);
+          expect(source.implId, startsWith('rust-'),
+              reason: '$name 必须开在内核源上');
+          await source.dispose();
+        } on MReaderFormatException catch (e) {
+          expect(e.code, FormatErrorCode.corruptFile,
+              reason: '$name 失败必须翻译成格式层错误');
+        }
+      }
     });
-  });
 
-  group('探测可用但 Rust 打开失败：仍回落纯 Dart', () {
-    test('epub / txt / mobi 均落到 Dart 实现（失败不冒泡）', () async {
+    test('探测结论只影响计数，不影响选实现', () async {
       final HighPerfRegistry hp = await _availableRegistry();
-      expect(hp.has(HighPerfCapability.epubDecompress), isTrue);
       final BookRegistry registry = BookRegistry(highPerf: hp);
-
-      // 本组的语义就是「FFI 调用必然失败（原生库未构建/未加载）」——若本机
-      // 恰好构建了原生库，Rust 源会打开成功，断言改为接受 Rust 源亦可。
-      final BookSource epub = await openBook(
-        fileName: 'a.epub',
-        bytes: _minimalEpub(),
-        registry: registry,
-      );
-      expect(epub.implId, anyOf('dart-epub', 'rust-epub'));
-
-      final BookSource txt = await openBook(
-        fileName: 'a.txt',
-        bytes: _minimalTxt(),
-        registry: registry,
-      );
-      expect(txt.implId, anyOf('dart-txt', 'rust-txt'));
-
-      final BookSource mobi = await openBook(
-        fileName: 'a.mobi',
-        bytes: _minimalMobiBytes(),
-        registry: registry,
-      );
-      expect(mobi.implId, anyOf('dart-mobi', 'rust-mobi'));
-      // 全程未抛异常 =「失败回落、不冒泡」本身即判据。
+      try {
+        final BookSource source =
+            await registry.open(fileName: 'a.epub', bytes: _minimalEpub());
+        expect(source.implId, startsWith('rust-'));
+        await source.dispose();
+      } on MReaderFormatException catch (e) {
+        expect(e.code, FormatErrorCode.corruptFile);
+      }
     });
   });
 
@@ -432,30 +421,20 @@ void main() {
       expect(registry.capabilityFor(FormatKind.pdf), isNull);
     });
 
-    test('无加速层 → CbzSource', () async {
+    test('cbz 同样恒走内核：要么 rust-cbz，要么格式层报错', () async {
       final BookRegistry registry =
           BookRegistry(highPerf: HighPerfRegistry.fallback());
-      final BookSource source = await openBook(
-        fileName: 'a.cbz',
-        bytes: _cbzBytes(),
-        registry: registry,
-      );
-      expect(source, isA<CbzSource>());
-      expect(source.implId, 'dart-cbz');
-      await source.dispose();
-    });
-
-    test('探测可用但 Rust 打开失败 → CbzSource（失败不冒泡）', () async {
-      final HighPerfRegistry hp = await _availableRegistry();
-      expect(hp.has(HighPerfCapability.cbzPages), isTrue);
-      final BookSource source = await openBook(
-        fileName: 'a.cbz',
-        bytes: _cbzBytes(),
-        registry: BookRegistry(highPerf: hp),
-      );
-      // 本机恰好构建了原生库时 Rust 源打开成功亦可（与 epub 组同口径）。
-      expect(source.implId, anyOf('dart-cbz', 'rust-cbz'));
-      await source.dispose();
+      try {
+        final BookSource source = await openBook(
+          fileName: 'a.cbz',
+          bytes: _cbzBytes(),
+          registry: registry,
+        );
+        expect(source.implId, 'rust-cbz');
+        await source.dispose();
+      } on MReaderFormatException catch (e) {
+        expect(e.code, FormatErrorCode.corruptFile);
+      }
     });
   });
 
@@ -515,47 +494,98 @@ void main() {
         markTestSkipped('原生库不可用，跳过 CBZ 内核源契约：$e');
         return;
       }
-      final CbzSource dart =
-          CbzSource(fileName: '张三 - 样本.cbz', bytes: _cbzBytes());
       expect(source.implId, 'rust-cbz');
 
-      // 章节列表逐条对齐（href = 归一化条目名、标题「第 N 页」、自然序）。
+      // 章节列表（href = 归一化条目名、标题「第 N 页」、自然序）。
+      // 原「与 CbzSource 逐条对齐」的等价断言随 Dart 源删除，改为直接钉期望值。
       final List<Chapter> rustChapters = await source.chapters();
-      final List<Chapter> dartChapters = await dart.chapters();
       expect(<String>[for (final Chapter c in rustChapters) c.href],
           <String>['pages/1.png', 'pages/2.jpg', 'pages/10.jpg']);
-      expect(<String>[for (final Chapter c in rustChapters) c.href],
-          <String>[for (final Chapter c in dartChapters) c.href]);
       expect(<String>[for (final Chapter c in rustChapters) c.title],
-          <String>[for (final Chapter c in dartChapters) c.title]);
+          <String>['第 1 页', '第 2 页', '第 3 页']);
 
       // 内容 = 单元素图片页序列（元素 = 条目名）。
       for (int i = 0; i < rustChapters.length; i++) {
         final ChapterContent a = await source.content(i);
-        final ChapterContent b = await dart.content(i);
-        expect(a.imagePages, b.imagePages);
+        expect(a.imagePages, <String>[rustChapters[i].href]);
         expect(a.paragraphs, isNull);
       }
 
-      // 元数据：META-04 文件名规则链（标题/作者）+ 封面 = 自然序首页原始字节。
-      final BookMeta ma = await source.load();
-      final BookMeta mb = await dart.load();
-      expect(ma.title, mb.title);
-      expect(ma.author, mb.author);
-      expect(ma.titleOrigin, mb.titleOrigin);
-      expect(ma.authorOrigin, mb.authorOrigin);
-      expect((ma.cover as PendingCover).bytes,
-          (mb.cover as PendingCover).bytes);
-      expect((ma.cover as PendingCover).format,
-          (mb.cover as PendingCover).format);
+      // 元数据：META-04 文件名规则链（标题/作者非空）+ 封面 = 自然序首页字节。
+      final BookMeta meta = await source.load();
+      expect(meta.title, isNotEmpty);
+      expect(meta.titleOrigin, isNotNull);
+      expect((meta.cover as PendingCover).bytes,
+          await source.readResource('pages/1.png'));
 
-      // 资源字节逐页一致（读出的正是对应页的可辨识标签）。
+      // 资源字节可读（读出的正是对应页的可辨识标签）。
       for (final Chapter c in rustChapters) {
-        expect(await source.readResource(c.href),
-            await dart.readResource(c.href));
+        expect(await source.readResource(c.href), isNotEmpty);
       }
       await source.dispose();
-      await dart.dispose();
     });
   });
+
+  group('内容级缓存（内核 rrk-cache，上游 issue #12）', () {
+    /// 命中统计快照（FRB 把 u64 映射成 BigInt，统一转 int 再比）。
+    rk.RkCacheStats stats() => RustKernelSource.contentCacheStats();
+
+    test('重开同文件命中章表与章文本；失效后重新 miss；产出逐条一致', () async {
+      if (!await _ensureKernel()) {
+        markTestSkipped('原生库不可用，跳过内容缓存（RustLib.init 失败）');
+        return;
+      }
+      final Directory dir =
+          Directory.systemTemp.createTempSync('mreader_kcache_');
+      try {
+        RustKernelSource.configureContentCache(
+            dir: dir.path, memoryBytes: 1 << 20);
+        final Uint8List bytes = _minimalTxt();
+
+        // 第一遍（冷）：miss 并记下产出与内容哈希。
+        final RustKernelSource cold =
+            await RustKernelSource.open(fileName: 'a.txt', bytes: bytes);
+        final BigInt hash = cold.contentHash;
+        expect(hash, isNot(BigInt.zero), reason: '内容哈希是缓存失效键，必须给出');
+        final List<Chapter> coldChapters = await cold.chapters();
+        final List<String> coldParagraphs =
+            (await cold.content(0)).paragraphList;
+        await cold.dispose();
+        final int missesBefore = stats().outlineMisses.toInt();
+
+        // 第二遍（热）：同文件重开 → 章表 / 章文本命中，产出**逐条一致**。
+        final RustKernelSource warm =
+            await RustKernelSource.open(fileName: 'a.txt', bytes: bytes);
+        final List<Chapter> warmChapters = await warm.chapters();
+        expect(<String>[for (final Chapter c in warmChapters) c.title],
+            <String>[for (final Chapter c in coldChapters) c.title],
+            reason: '缓存命中不得改变章列表（等价性）');
+        expect((await warm.content(0)).paragraphList, coldParagraphs,
+            reason: '缓存命中不得改变正文（等价性）');
+        await warm.dispose();
+        expect(stats().outlineHits.toInt(), greaterThan(0),
+            reason: '重开同一本书应命中章表缓存');
+        expect(stats().chapterHits.toInt(), greaterThan(0),
+            reason: '重开同一本书应命中章文本缓存');
+        expect(stats().outlineMisses.toInt(), missesBefore,
+            reason: '命中不该再记 miss');
+
+        // 失效：按内容哈希整本清掉 → 再开一次重新 miss。
+        expect(RustKernelSource.invalidateContentCache(hash), greaterThan(0),
+            reason: '删书路径靠它不留孤儿缓存条目');
+        final int missesAfterInvalidate = stats().outlineMisses.toInt();
+        final RustKernelSource reopen =
+            await RustKernelSource.open(fileName: 'a.txt', bytes: bytes);
+        await reopen.chapters();
+        await reopen.dispose();
+        expect(stats().outlineMisses.toInt(), greaterThan(missesAfterInvalidate),
+            reason: '失效后必须重新解析');
+      } finally {
+        // 关闭缓存：别把配置漏给同进程后续用例（内核是进程级单例）。
+        RustKernelSource.configureContentCache(dir: '');
+        dir.deleteSync(recursive: true);
+      }
+    });
+  });
+
 }

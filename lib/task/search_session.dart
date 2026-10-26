@@ -1,45 +1,32 @@
-// 全书搜索执行会话（`CNT-06` / `RUST-05`，M2b-T04）——
-// 「后台 isolate 流式搜索 + 协议级取消」的**唯一收口点**。
+// 全书搜索执行会话（`CNT-06` / `RUST-05`）——「后台 isolate 流式搜索 + 协议级取消」的
+// **唯一收口点**。
 //
-// ## 两条执行路径（[SearchSession.start] 按入参分流，上层无感）
-//
-//   · **后台重建**（给 [SearchBookSpec]）：EPUB / TXT 这类「可序列化重现」的源——
-//     把 spec（fileName + bytes）发进长驻搜索 isolate，在那边 `openBook()` 重建源
-//     并跑 `search()`，事件逐条回传。解压 / HTML 解析 / 扫描全部离开主 isolate，
-//     是 `CNT-06`「后台 isolate 执行、UI 不卡死」与阈值 4「单帧 ≤ 16ms」的正面落点。
-//     重建一律 `prefetchFlatTitles: false`（挂账 #6）：搜索不吃无目录书的全书标题
-//     预取（该预取是搜索首屏的已知大户），命中章标题由 `search()` 扫描循环自取。
-//   · **本 isolate 流式**（给 [BookSource] 实例）：`PdfSource` 这类**持有不可序列化
-//     句柄**的源（`PdfEngineDocument` 绑着原生引擎）——直接在本 isolate 流式执行。
-//     PDF 的 `pageText` 是原生侧异步抽取、Dart 侧只做逐页 `indexOf`，逐页 `await`
-//     之间必然让出事件循环，不构成连续占用主 isolate。
-//
-// 两条路径对外**同一句柄、同一事件流语义**；`usedIsolate` 仅供观测 / 测试取证。
-//
-// ## 协议级取消（`RUST-05` ①③）
-//
-// 取消是消息协议的一等公民，**不杀线程**：[SearchSession.cancel] ① 当即关本地事件
-// 流（UI 当帧恢复可用）② 经反向 [SendPort] 发取消令，后台把 [CancelToken] 置位后
-// 逐章短路、释放自建源、`Isolate.exit()` 自然退出——**不留后台线程**。
-// 进度回报（`SearchEvent.progress`）由各源实现产出，协议层保证其**单调递增**
-// （`RUST-05` ③；`test/search/search_session_test.dart` 有断言）。
-//
-// ## 回落（`RUST-01` 式诚实降级，同 `PERF-01` 信封口径）
-//
-// 后台派发失败 / 远端中途崩溃（端口以「未 done」状态关闭）时，把同一 spec 在**本
-// isolate** 重建重跑——结果与从未走过 isolate 一致。业务空结果（零命中）与业务错误
-// （[MReaderFormatException] 经信封回传）**不是**失败，不触发回落。
+// 要点：
+//   · **两条执行路径**（[SearchSession.start] 按入参分流，上层无感）：给 [SearchBookSpec]
+//     → **后台重建**（spec 进长驻搜索 isolate 重建源并 `search()`，事件逐条回传；解压 /
+//     HTML 解析 / 扫描全离开主 isolate，是 `CNT-06`「UI 不卡死」与阈值 4「单帧 ≤ 16ms」
+//     的正面落点。重建一律 `prefetchFlatTitles: false`：搜索不吃全书标题预取——该预取是
+//     搜索首屏的已知大户，命中章标题由扫描循环自取）；给 [BookSource] 实例 → **本 isolate
+//     流式**（`PdfSource` 这类**持有不可序列化句柄**的源；PDF 逐页 `await` 之间必然让出
+//     事件循环，不构成连续占用主 isolate）。两路径对外**同一句柄、同一事件流语义**；
+//   · **协议级取消（`RUST-05` ①③）**：取消是消息协议的一等公民，**不杀线程**——
+//     [SearchSession.cancel] ① 当即关本地事件流（UI 当帧恢复可用）② 经反向 [SendPort]
+//     发取消令，后台把 [CancelToken] 置位后逐章短路、释放自建源、`Isolate.exit()` 自然
+//     退出——**不留后台线程**。进度回报由各源产出，协议层保证**单调递增**（`RUST-05` ③）；
+//   · **回落（`RUST-01` 式诚实降级，同 `PERF-01` 信封口径）**：后台派发失败 / 远端中途
+//     崩溃（端口以「未 done」状态关闭）时，同一 spec 在**本 isolate** 重建重跑，结果与
+//     从未走过 isolate 一致。业务空结果（零命中）与业务错误（[MReaderFormatException] 经
+//     信封回传）**不是**失败，不触发回落。
 import 'dart:async';
 import 'dart:developer' show log;
 import 'dart:isolate';
 
 import '../format/book_registry.dart';
+import '../src/rust/frb_generated.dart' show RustLib;
 import '../format/book_source.dart';
 
-/// 发起一次全书搜索。
-///
-/// [spec] 与 [localSource] 至少给一个：[spec] 优先（后台重建路径）；只给
-/// [localSource] 时走本 isolate 流式（句柄源）。**都不给**返回空流会话（调用方
+/// 发起一次全书搜索。[spec] 与 [localSource] 至少给一个：[spec] 优先（后台重建路径），
+/// 只给 [localSource] 走本 isolate 流式（句柄源）。**都不给**返回空流会话（调用方
 /// 守卫，此处兜底不抛——对齐各 Source 的 dispose 竞态「优雅空结果」口径）。
 class SearchSession {
   SearchSession._(this._run, this._stopwatch);
@@ -93,11 +80,11 @@ class SearchSession {
   Duration? firstHitElapsed;
 
   /// 协议级取消：当帧关流（UI 立即恢复），并通知执行侧短路退出、释放资源。
+  /// 取消不走 error：正常关闭（调用方 `onDone` 即「用户中止」）。
   void cancel() {
     if (_cancelled || _done.isCompleted) return;
     _cancelled = true;
     _run.cancel();
-    // 取消不走 error：正常关闭（调用方 `onDone` 即「用户中止」）。
     _finish(null);
   }
 
@@ -191,6 +178,14 @@ class _SearchCrashedMsg {
 /// 搜索 isolate 入口（**顶层函数** + entry-point：AOT 下防 tree-shake 剪除）。
 @pragma('vm:entry-point')
 void _searchIsolateMain(_SearchBootstrap boot) async {
+  // FRB 每个 isolate 各自 init（内核书句柄绑定当前 isolate）：本函数跑在后台
+  // isolate 里，不 init 则 `openBook` 抛「flutter_rust_bridge has not been
+  // initialized」。失败不吞也不拦：下面的 open 会走格式层报错并经信封回传。
+  try {
+    await RustLib.init();
+  } catch (_) {
+    // 无原生库：交给 open 的格式层报错（文案单一来源）。
+  }
   final CancelToken token = CancelToken();
   final ReceivePort control = ReceivePort();
   // 握手：先把反向控制通道给主侧（协议级取消的下发口）。
@@ -201,11 +196,9 @@ void _searchIsolateMain(_SearchBootstrap boot) async {
 
   BookSource? source;
   try {
-    // 挂账 #6：搜索不吃全书标题预取（命中章标题由 search() 扫描循环自取）。
     source = await openBook(
       fileName: boot.spec.fileName,
       bytes: boot.spec.bytes,
-      prefetchFlatTitles: false,
     );
     await for (final SearchEvent event
         in source.search(boot.query, cancel: token)) {
@@ -370,11 +363,9 @@ class _LocalRun implements _SearchRun {
       if (held != null) {
         effective = held;
       } else if (spec != null) {
-        // 与后台路径同口径：跳过全书标题预取（挂账 #6）。
         opened = await openBook(
           fileName: spec.fileName,
           bytes: spec.bytes,
-          prefetchFlatTitles: false,
         );
         effective = opened;
       } else {

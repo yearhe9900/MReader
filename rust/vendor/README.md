@@ -13,18 +13,25 @@
 | `rrk-txt` | TXT：编码检测 + 分章 + 逻辑块切分 |
 | `rrk-epub` | EPUB：OPF/NCX + 目录层级/锚点 + 清洗 + 资源管线 + 封面回退 |
 | `rrk-mobi` | MOBI/AZW3：自研 PalmDOC LZ77 + HUFF/CDIC 解压 + 封面回退 |
-| `rrk-cbz` | CBZ：数字自然序页索引（页级图库） |
+| `rrk-cbz` | CBZ：数字自然序页索引（页级图库；页表口径与宿主基线对齐 = 上游 issue #10） |
+| `rrk-image` | 图像工具（尺寸探测 / PNG 编码；上游 issue #8，供 CBZ 封面 / 页图） |
+| `rrk-search` | 全书检索（拉模式分块 + 可取消）与 BM25 索引（上游 issue #9） |
+| `rrk-cache` | 内容级解析结果缓存（内存 LRU + 磁盘落盘，三要素 key；上游 issue #12） |
 | `rrk-pdf` | PDF：L1 文本抽取/重排 + L2 光栅 |
 | `rrk-kernel` | 会话编排（句柄表 + 格式注册 + 生命周期；`BookKind` 分流重排/页级） |
 
-**同步点**：上游 `rust_reader_kernel@ec392cc`（v0.1.1，ABI v5，issue #1–#7 修复批次）。
+**同步点**：上游 `rust_reader_kernel@f88d589`（v0.1.2，内核 ABI 8，含 issue
+#8 图像 / #9 检索 / #10 CBZ 页表 / #11 稳定错误码 / #12 内容级缓存）。
+随同步一并带入 `rust/fixtures/`（上游 crate 内测试用的 `sample.{txt,epub,cbz,pdf}`，
+路径按 `vendor/rrk-*/../../fixtures/` 解析）。
 
 ## 纪律
 
 1. **不在此目录做本地改造**。功能缺口回上游 `rust_reader_kernel` 提交，
    再同步进来——保持 vendored 副本可 diff、可回溯。
 2. **同步方式**：整体覆盖对应 crate 目录（`src/` + `Cargo.toml`），
-   同步后跑 `cargo test --workspace` 再提交。
+   同步后跑 `cargo test --workspace` 再提交；上游 crate 测试引用的顶层
+   `fixtures/` 一并同步。
 3. 依赖白名单同上游：纯 Rust、可审计、可 fork、许可宽松
    （`encoding_rs` / `chardetng` / `flate2`）。
 4. 许可：MIT OR Apache-2.0（上游双许可），版权归上游作者。
@@ -33,4 +40,9 @@
 
 内核经 `rust_lib_mreader` 的 FRB API（`rust/src/api/kernel.rs`）暴露给 Dart；
 Dart 侧适配层在 `lib/format/rust_kernel_source.dart`（实现 `BookSource` 契约），
-由 `BookRegistry` 分发，失败自动回落纯 Dart 实现。
+由 `BookRegistry` 分发（内核为**唯一实现**，失败翻译成 `error_messages.dart` 的中文）。
+
+**内容级缓存已接线**（`rrk-cache`，上游 issue #12）：
+
+- 桥：`kernel_toc` / `kernel_chapters` / `kernel_load_chapter` 内部改走 `*_cached`（未配置时行为不变）；另出 `kernel_cache_configure` / `kernel_cache_stats` / `kernel_cache_invalidate`，FRB 绑定已重新生成。
+- 宿主：`main()` 启动时把目录配到 App 私有 `kernel_cache/`（内存上限 32MB）；`LibraryRepository.deleteBook` 用驻留源的内容哈希整本失效（不留删后孤儿条目）；契约用例见 `test/format/rust_kernel_source_test.dart` 的「内容级缓存」组。

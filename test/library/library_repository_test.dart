@@ -1,4 +1,5 @@
 // `lib/library/library_repository_test.dart`：LibraryRepository 集成测试。
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -28,7 +29,7 @@ class _TestAppPaths implements AppPaths {
 
 /// 最简 TXT 内容。
 Uint8List _txtBytes([String content = '这是正文内容。']) =>
-    Uint8List.fromList(content.codeUnits);
+    Uint8List.fromList(utf8.encode(content));
 
 void main() {
   group('LibraryRepository', () {
@@ -44,9 +45,8 @@ void main() {
     });
 
     tearDown(() async {
-      // 导入预热是后台写盘任务：先等收尾再删目录，杜绝
-      // 「FileSystemException: 目录不是空的」删目录竞态（§2.81）。
-      await repo.pendingWarmUps;
+      // 三层解析缓存与导入预热已下线（2026-10-26，内核唯一实现）：
+      // 导入本身同步落盘，删目录前不再有后台写盘任务要等。
       if (await tempDir.exists()) {
         await tempDir.delete(recursive: true);
       }
@@ -153,28 +153,25 @@ void main() {
       expect(remaining[0].bookId, b.record.bookId);
     });
 
-    test('LIB-06：删书不残留缓存孤儿（预热在途立即删）', () async {
+    test('LIB-06：删书后副本不残留（三层解析缓存已下线，目录不得再生）', () async {
       final ImportResult result = await repo.importFile(
         bytes: _txtBytes('刚导入就删的书。'),
         fileName: '秒删.txt',
       );
-      // 不等预热收尾立即删（预热几乎必然在途）：deleteBook ②a 立停止旗、
-      // await 本书收尾后再清缓存——绝不允许「删完又被预热写回来」。
       await repo.deleteBook(result.record);
-      await repo.pendingWarmUps;
 
+      // library/ 副本必须消失（LIB-06 ①）。
+      final File bookFile = await repo.bookFile(result.record);
+      expect(await bookFile.exists(), isFalse);
+
+      // 三层缓存（outline / chapters / structure）已随纯 Dart 源下线：这些
+      // 目录**不该再出现**；出现即说明有人把已删的基建接了回来。
       for (final String sub in <String>['outline', 'chapters', 'structure']) {
         final Directory dir = Directory(
           '${tempDir.path}${Platform.pathSeparator}$sub',
         );
-        if (await dir.exists()) {
-          final List<FileSystemEntity> left = await dir.list().toList();
-          expect(
-            left,
-            isEmpty,
-            reason: '$sub/ 不得残留删后缓存文件（孤儿）：$left',
-          );
-        }
+        expect(await dir.exists(), isFalse,
+            reason: '$sub/ 属已下线的解析缓存目录，不应再生');
       }
     });
 

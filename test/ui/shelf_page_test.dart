@@ -1,11 +1,8 @@
 // `test/ui/shelf_page_test.dart`：书架首页 widget 测试（LIB-01/05/06）。
+// 导入走 `LibraryRepository.importFile()` 直调——`FilePicker.platform.pickFiles()` 在 widget 测试不可用。
 //
-// 注意：`FilePicker.platform.pickFiles()` 在 widget 测试中不可用，
-// 故导入操作通过 `LibraryRepository.importFile()` 直接调用（测试后端逻辑）。
-//
-// ⚠️ FakeAsync 铁律：`testWidgets` 测试体跑在 FakeAsync 区，**widget 内部**
-// （`initState` / 回调）发起的真异步 IO 不会自行推进；直接 `pumpAndSettle()` 会超时。
-// 必须用 [_settle]（`runAsync` 让出到真实事件循环 + `pumpAndSettle` 排空+重建）。
+// ⚠️ FakeAsync 铁律：widget 内部发起的真异步 IO 不会自行推进，直接 `pumpAndSettle()` 会超时；
+// 必须用 [_settle]（`runAsync` 让出真实事件循环 + `pump` 排空 fake 队列）。
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -51,21 +48,16 @@ class _TestAppPaths implements AppPaths {
 
 /// 最简 TXT 内容。
 Uint8List _txtBytes([String content = '这是正文内容。']) =>
-    Uint8List.fromList(content.codeUnits);
+    Uint8List.fromList(utf8.encode(content));
 
 /// 合法 UTF-8 的 TXT 字节——**真正要打开**的书必须可解码（回归①②④走完整开书链路）。
 Uint8List _utf8TxtBytes(String content) =>
     Uint8List.fromList(utf8.encode(content));
 
-/// 让 widget 内发起的**真异步 IO** 完成，并推进若干帧。
+/// 让 widget 内发起的**真异步 IO** 完成并推进若干帧。
 ///
-/// `testWidgets` 的测试体在 FakeAsync 区：`pumpWidget` 触发 `initState` 起的真 IO
-/// （`File.exists` / `readAsString` …）其完成回调排进 **fake 微任务队列**，不会自行推进。
-/// 关键在于 **交替**：`runAsync` 让出到真实事件循环让 IO 完成，`pump` 排空 fake 队列
-/// 使下一段 IO 得以启动——**串行的多次 await IO 需要多轮交替**。
-///
-/// 不能用 `pumpAndSettle`：`ShelfPage` 载入期的 `CircularProgressIndicator` 是无限动画，
-/// 只要 `_loading` 仍为 true 就永不 settle（会超时）。
+/// ⚠️ FakeAsync 区里 IO 完成回调排在 fake 队列不会自行推进，**必须 `runAsync`+`pump` 多轮交替**
+/// （串行多次 await IO 各要一轮）；**禁 `pumpAndSettle`**（载入期无限动画永不 settle，会超时）。
 Future<void> _settle(WidgetTester tester, {int rounds = 40}) async {
   for (int i = 0; i < rounds; i++) {
     await tester.runAsync(
@@ -77,10 +69,8 @@ Future<void> _settle(WidgetTester tester, {int rounds = 40}) async {
 
 /// 按书名找到书卡（书名文本的最近 [BookCard] 祖先）。
 ///
-/// ⚠️ 末尾的 `.first` 是为**去重**，不是「随便挑一个」：2026-09-29 起无封面书卡的
-/// 占位封面（`DefaultBookCover`）顶部也画一遍书名，于是同一张卡里 `find.text(title)`
-/// 会命中 2 个 `Text`（封面一个、信息区一个），`find.ancestor` 便把**同一张**
-/// `BookCard`（同一个 Element、同一个 State）列出两次，`tap()` 会报「歧义」。
+/// ⚠️ 末尾 `.first` 是**去重**不是随便挑：无封面书卡的占位封面顶部也画书名，
+/// `find.text` 会命中 2 个 `Text`、把同一张 [BookCard] 列两次，不取 `.first` 则 `tap()` 报歧义。
 Finder _cardOf(String title) =>
     find.ancestor(of: find.text(title), matching: find.byType(BookCard)).first;
 
@@ -91,13 +81,11 @@ Finder _readerPages() => find.byType(ReaderPage, skipOffstage: false);
 /// 全树范围找 [BookDetailPage]（同上：覆盖栈里的详情页也要揪出来）。
 Finder _detailPages() => find.byType(BookDetailPage, skipOffstage: false);
 
-/// 经**长按操作单**进详情页。
-///
-/// 2026-09-29 改道后：点卡 = **直接进阅读页**，详情页只剩「长按 → 书籍详情」一个入口
-/// （`META-08` 同步改文；与 anx-reader 的 `book_bottom_sheet` 同构）。
+/// 经**长按弹框**进详情页（点卡 = 直接进阅读页，详情页只剩「长按 → 书籍详情」一个入口，
+/// `META-08`）。
 Future<void> _openDetailViaSheet(WidgetTester tester, Finder card) async {
   await tester.longPress(card);
-  await tester.pumpAndSettle(); // 玻璃底部操作单滑入
+  await tester.pumpAndSettle(); // mi_like_ui `MiDialog` 弹框入场
   await tester.tap(find.text('书籍详情'));
   await _settle(tester); // 弹层 pop + 详情页 push + 详情页自身 IO
 }
@@ -109,10 +97,7 @@ List<String> _titles(WidgetTester tester) => tester
     .toList();
 
 /// 分组筛选栏的标签文案（顺序即渲染顺序，「全部」恒在首位）。
-///
-/// 2026-10-16 参考项目批：控件换成胶囊标签行；同日功能迁移批再换
-/// [AdaptivePillTabBar]（宽度自适应变体），文案改读 `AdaptivePillTabBar.labels`
-/// （组件渲染 `Text(labels[i])`）。
+/// 文案读 [AdaptivePillTabBar.labels]（组件渲染 `Text(labels[i])`）。
 List<String> _chipLabels(WidgetTester tester) =>
     tester.widget<AdaptivePillTabBar>(find.byType(AdaptivePillTabBar)).labels;
 
@@ -137,9 +122,7 @@ void main() {
     });
 
     tearDown(() async {
-      // 导入预热收尾再删目录（防后台写盘 vs 删目录竞态，§2.81）。
       // tearDown 在 FakeAsync 之外跑，真 await 照常（与 setUp 同款口径）。
-      await repo.pendingWarmUps;
       if (await tempDir.exists()) {
         await tempDir.delete(recursive: true);
       }
@@ -164,14 +147,12 @@ void main() {
       expect(find.text('书架空空如也'), findsOneWidget);
       expect(find.text('导入 EPUB / TXT 文件开始阅读'), findsOneWidget);
       expect(find.text('导入书籍'), findsOneWidget);
-      // 2026-10-16 功能迁移批：原顶部 AppBar 加号按钮**已移除**，导入入口
-      // 迁到底栏绿圆钮（`HomeShell` 侧，本测试不挂壳层故不在树上）。
-      // 空态引导按钮（上方「导入书籍」文案）仍保留（`LIB-01` ②）。
+      // 顶栏加号按钮**已移除**，导入入口迁到底栏绿圆钮（`HomeShell` 侧，本测试不挂壳层
+      // 故不在树上）；空态引导按钮仍保留（`LIB-01` ②）。
       expect(find.byIcon(Icons.add), findsNothing);
     });
 
     testWidgets('LIB-01 导入后：书卡显示在网格中', (WidgetTester tester) async {
-      // `setUp` / `tearDown` 在 FakeAsync 之外，可照常 await。
       await tester.runAsync(
         () => repo.importFile(bytes: _txtBytes('三体的内容'), fileName: '三体.txt'),
       );
@@ -183,12 +164,8 @@ void main() {
       expect(find.text('书架空空如也'), findsNothing);
       // 书卡出现
       expect(find.byType(BookCard), findsOneWidget);
-      // 书名和作者可见。
-      //
-      // ⚠️ 书名与作者**各出现两次**是预期：一次在封面（`DefaultBookCover` 顶部大字
-      // / 底部小字，2026-09-29 采用 anx 默认封面后如此），一次在下方信息区。作者不是
-      // 空串——`META-01` 保证缺失时兜底成「未知作者」（`lib/meta/meta_source.dart:14`），
-      // 故封面画的也是「未知作者」。
+      // ⚠️ 书名与作者**各出现两次**是预期（封面 + 信息区各一）；`META-01` 缺失时
+      // 兜底「未知作者」（`lib/meta/meta_source.dart:14`），故封面画的也是兜底值。
       expect(find.text('三体'), findsNWidgets(2));
       expect(find.text('未知作者'), findsNWidgets(2));
     });
@@ -206,7 +183,7 @@ void main() {
       expect(find.byType(BookCard), findsNWidgets(3));
     });
 
-    testWidgets('LIB-06 长按弹操作单，选「移出书架」后再弹删除确认',
+    testWidgets('LIB-06 长按弹 MiDialog 操作弹框，选「移出书架」后再弹删除确认',
         (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _txtBytes('要删的书'), fileName: '删我.txt'),
@@ -215,10 +192,17 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 长按书卡 → **底部操作单**（2026-09-28 改版，照搬 anx-reader）：
-      // 长按不再直接弹删除确认，破坏性动作收进操作单，缩短误触路径。
+      // 长按书卡 → **操作弹框（mi_like_ui `MiDialog`，2026-10-23 换掉玻璃底部
+      // 操作单）**：长按不再直接弹删除确认，破坏性动作收进弹框（缩短误触路径）。
       await tester.longPress(find.byType(BookCard));
       await tester.pumpAndSettle();
+
+      // 弹框形态钉住：不透明卡片 + 自带遮罩（`MiDialog`），`GlassSheet` 不在树上。
+      expect(find.byType(MiDialog, skipOffstage: false), findsOneWidget);
+      expect(find.byType(GlassSheet, skipOffstage: false), findsNothing);
+      // 列表形态（上游 `f254f85` / issue #1）：三项带图标 + 副标题，破坏性项的
+      // 说明文案回到列表里（旧操作单那一行）；与删除确认框的正文不重名。
+      expect(find.text('删除后封面文件一并清理'), findsOneWidget);
 
       expect(find.text('继续阅读'), findsOneWidget);
       expect(find.text('书籍详情'), findsOneWidget);
@@ -234,11 +218,11 @@ void main() {
       expect(find.text('取消'), findsOneWidget);
       expect(find.text('删除'), findsOneWidget);
 
-      // `UI-03`（M2a-T04）：确认框是玻璃对话框，不是 Material AlertDialog。
+      // `UI-03`：确认框是玻璃对话框，不是 Material AlertDialog。
       expect(find.byType(GlassDialog, skipOffstage: false), findsOneWidget);
       expect(find.byType(AlertDialog, skipOffstage: false), findsNothing);
 
-      // 点「取消」→ 返回 false → 不删（返回值语义与原 showDialog 一致）。
+      // 点「取消」→ 返回 false → 不删。
       await tester.tap(find.text('取消'));
       // 玻璃弹窗关闭转场 >400ms，_settle 推不完 → pumpAndSettle 走到路由移除。
       await tester.pumpAndSettle();
@@ -273,9 +257,8 @@ void main() {
 
     testWidgets('顶栏搜索胶囊：靠左铺满（全宽）+ 上游 MiSearchBar 材质',
         (WidgetTester tester) async {
-      // 800 宽视口才分得清「靠左铺满」与「居中收缩」。须同时钉
-      // `devicePixelRatio = 1`（默认 3 会把逻辑宽算成 266，动作按钮一挤
-      // 可用宽就变、结论随之改变）。
+      // 800 宽视口才分得清「靠左铺满」与「居中收缩」；**须钉 `devicePixelRatio = 1`**
+      // （默认 3 会把逻辑宽算成 266，可用宽一变结论就变）。
       tester.view.physicalSize = const Size(800, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -295,11 +278,9 @@ void main() {
         isFalse,
       );
 
-      // 几何契约：靠左贴顶栏内边距（`GlassAppBar` 默认 horizontal padding = 8），
-      // 并**铺满可用宽**——2026-09-29 参考图批撤掉原先的 `maxWidth: 400`
-      // 桌面上限（拍板「全宽搜索胶囊」）。2026-10-20 上游搜索栏批又移除了
-      // 搜索行右侧的排序按钮，可用宽进一步变宽（800 - 16 内边距 ≈ 784），
-      // 故断言 > 600 仍成立；若退回 400 上限或居中档立刻红。
+      // 几何契约：靠左贴顶栏内边距（`GlassAppBar` 默认 horizontal padding = 8）并**铺满可用宽**。
+      // 断言 > 600 留了余量（排序按钮移除后可用宽 ≈ 784）；若退回 `maxWidth: 400` 桌面上限
+      // 或居中档立刻红。
       final Finder box = find.byKey(const Key('shelf-search-entry'));
       expect(box, findsOneWidget);
       expect(tester.getTopLeft(box).dx, lessThanOrEqualTo(16));
@@ -307,10 +288,9 @@ void main() {
       // 常规态右侧已无动作按钮（排序入口移除），胶囊右缘可贴到内边距上。
       expect(tester.getTopRight(box).dx, lessThanOrEqualTo(800 - 8));
 
-      // 材质契约（2026-10-19 上游搜索栏批）：胶囊从自绘 [GlassButton.custom]
-      // 换成上游 [MiSearchBar]——组件自带 stadium 高 44.1、半透明填充。
-      // 断言按组件事实源逐项钉：改材质只许改移植树（`mi_like_ui`，与上游
-      // `diff -r` 零差异），业务页不写字面量。
+      // 材质契约：胶囊用上游 [MiSearchBar]（组件自带 stadium 高 44.1、半透明填充）。
+      // 断言按组件事实源逐项钉：**改材质只许改移植树**（`mi_like_ui`，与上游 `diff -r`
+      // 零差异），业务页不写字面量。
       final MiSearchBar bar = tester.widget<MiSearchBar>(box);
       // 占位文案（同 key 定位下钉 hint，避免「空栏」也过几何断言）。
       expect(bar.hint, '搜索书名、作者');
@@ -318,14 +298,11 @@ void main() {
       expect(bar.onTap, isNotNull);
       // 常规态不是输入框（不占焦点、不弹键盘）。
       expect(bar.editable, isFalse);
-      // 2026-10-20 上游搜索栏批：磨砂移交头部（[_buildHeaderBlur] 铺一整段
-      // 恒定 σ），零件不再自绘 backdrop——整条栏只糊一次。
+      // 磨砂移交头部（[_buildHeaderBlur] 铺整段恒定 σ），零件不自绘 backdrop——整条栏只糊一次。
       expect(bar.frosted, isFalse);
-      // 压在书卡上：垫玻璃膜（平底/静止态观感不变，只在内容滚到头部后方
-      // 时显出形状）。
+      // 压在书卡上：垫玻璃膜（内容滚到头部后方才显出形状）。
       expect(bar.overContent, isTrue);
-      // 明暗由 `GlassScope` 级联亮度解析（同底栏 `navThemeModeOf`）；
-      // 测试环境默认亮色主题 → light 配方。
+      // 明暗由 `GlassScope` 级联亮度解析；测试环境默认亮色 → light 配方。
       expect(bar.themeMode, MiThemeMode.light);
     });
 
@@ -347,18 +324,15 @@ void main() {
           tester.widget<AdaptivePillTabBar>(find.byType(AdaptivePillTabBar));
       expect(bar.labels, <String>['全部']);
       expect(bar.selectedIndex, 0);
-      // 明暗由 `GlassScope` 级联亮度解析（同底栏 `navThemeModeOf`）；测试
-      // 环境默认亮色主题 → light 配方。
+      // 明暗由 `GlassScope` 级联亮度解析；测试环境默认亮色 → light 配方。
       expect(bar.themeMode, MiThemeMode.light);
-      // `UI-04` 红线延续：横向滚动区里**不得有玻璃控件**（旧行为是 GlassChip
-      // 显式 standard 档位防 premium 提升；换纯色胶囊组件后由结构满足）。
+      // `UI-04` 红线：横向滚动区里**不得有玻璃控件**（换纯色胶囊组件后由结构满足）。
       expect(find.byType(GlassChip), findsNothing);
     });
 
     testWidgets('浮动头部 + 内容 edge-to-edge：两行头部恒在顶栏内、首行不被盖住',
         (WidgetTester tester) async {
-      // 钉 dpr = 1：断言的是**逻辑像素**几何（96 / 108），默认 dpr 3 会把
-      // 物理尺寸与逻辑尺寸搅在一起。
+      // 钉 dpr = 1：断言的是**逻辑像素**几何（96 / 108），默认 dpr 3 会把物理/逻辑尺寸搅在一起。
       tester.view.physicalSize = const Size(800, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -369,8 +343,8 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // ① 内容 edge-to-edge：壳层显式开 `extendBody`（正文从 y=0 起、
-      // 滚动时从浮动头部下穿过，顶栏下透出磨砂模糊 = `UI-02` ②）。
+      // ① 内容 edge-to-edge：壳层显式开 `extendBody`，正文从 y=0 起、滚动时从浮动头部下
+      // 穿过，顶栏下透出磨砂模糊（`UI-02` ②）。
       expect(
         tester
             .widget<GlassNavScaffold>(find.byType(GlassNavScaffold))
@@ -379,8 +353,8 @@ void main() {
         reason: '书架是「全浮动头部」形态：正文必须穿顶栏（拍板 2026-09-29）',
       );
 
-      // ② 头部两行**恒在顶栏内**：搜索胶囊与分组 chips 都是 `GlassTopBar` 的
-      // 子树（原实现里 chips 在正文 Column 里，移动回正文即红）。
+      // ② 头部两行**恒在顶栏内**（搜索胶囊与分组 chips 都在 `GlassTopBar` 子树）：
+      // chips 移回正文 Column 即红。
       expect(
         find.descendant(
           of: find.byType(GlassTopBar),
@@ -396,24 +370,23 @@ void main() {
         findsOneWidget,
       );
 
-      // ③ 头部总高 96.1 = 搜索行 44.1（MiSearchBar 栏高）+ 间距 12 + chips 行 40
-      // （`kShelfHeaderHeight`；这里按**字面量**锁——引用常量等于同义反复）。
+      // ③ 头部总高 96.1 = 搜索行 44.1（MiSearchBar 栏高）+ 间距 12 + chips 行 40；
+      // 按**字面量**锁——引用 `kShelfHeaderHeight` 等于同义反复。
       expect(
         tester.widget<GlassTopBar>(find.byType(GlassTopBar)).toolbarHeight,
         96.1,
       );
 
-      // ④ 首行不被盖住：第一张书卡顶边 = 状态栏 0 + 头部 96.1 + 网格上间距 12
-      // = 108.1。去掉网格 `padding.top` 的头部留白 → 变 0，立即红。
+      // ④ 首行不被盖住：首卡顶边 = 状态栏 0 + 头部 96.1 + 网格上间距 12 = 108.1；
+      // 去掉网格 `padding.top` 的头部留白 → 变 0，立即红。
       expect(
         tester.getTopLeft(find.byType(BookCard).first).dy,
         108.1,
         reason: '首行必须落在浮动头部之下（拍板验收条目），否则被磨砂头部盖住',
       );
 
-      // ⑤ 胶囊行左缘与搜索胶囊对齐：组件内置 11.9 内嵌被拓盒抵消
-      // （`_buildGroupFilterBar` 注释）；去掉 OverflowBox 拓宽 → 立即红。
-      // OverflowBox 居中带来 ~1e-14 浮点噪声，用 closeTo 收。
+      // ⑤ 胶囊行左缘与搜索胶囊对齐：组件内置 11.9 内嵌被拓盒抵消（`_buildGroupFilterBar`
+      // 注释）；去掉 OverflowBox 拓宽 → 立即红。OverflowBox 居中带来浮点噪声，用 closeTo 收。
       final Finder firstPill = find.ancestor(
         of: find.text('全部'),
         matching: find.byType(AnimatedContainer),
@@ -436,15 +409,14 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 长按 → 操作单 → 「移出书架」→ 删除确认
+      // 长按 → 操作弹框 → 「移出书架」→ 删除确认
       await tester.longPress(find.byType(BookCard));
       await tester.pumpAndSettle();
       await tester.tap(find.text('移出书架'));
       await tester.pumpAndSettle();
 
-      // 点击「删除」（`_deleteBook` 内含真 IO，需 _settle）。
-      // 删书链的真 IO 步数多（副本/封面/三份缓存清理/索引+进度收尾），
-      // 40 轮预算不够走到 `_loadBooks` 刷 UI → 加深到 100 轮（§2.81 实测）。
+      // 点「删除」（`_deleteBook` 内含真 IO，需 _settle）；删书链真 IO 步数多
+      // （副本/封面/缓存清理/索引+进度收尾），40 轮不够走到 `_loadBooks` 刷 UI → 加深到 100 轮（§2.81）。
       await tester.tap(find.text('删除'));
       await _settle(tester, rounds: 100);
 
@@ -523,9 +495,7 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 一次点击 → 恰好一个阅读页，且**零**详情页。
-      // （2026-09-29 拍板：原「点卡 → 详情页 → 继续阅读」两层链路压缩为一层，
-      // 对齐 anx-reader `book_item.dart:51-53` 的 `pushToReadingPage`。）
+      // 一次点击 → 恰好一个阅读页，且**零**详情页（点卡直接进阅读页，两层链路压成一层）。
       await tester.tap(find.byType(BookCard));
       await _settle(tester);
       expect(_readerPages(), findsOneWidget);
@@ -536,7 +506,7 @@ void main() {
       );
     });
 
-    testWidgets('回归①补：详情页仍可达——长按操作单「书籍详情」（`META-08` 唯一入口）',
+    testWidgets('回归①补：详情页仍可达——长按弹框「书籍详情」（`META-08` 唯一入口）',
         (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
@@ -551,10 +521,8 @@ void main() {
       expect(_detailPages(), findsOneWidget);
       expect(_readerPages(), findsNothing);
 
-      // 详情页字段可见：书名 + 来源标记（TXT 书名来自文件名，`META-08 ②`）。
-      // 注意：被覆盖的书架卡片同名文本也在树上，故范围限定在详情页内断言。
-      // 书名在详情页内也是**两处**（`DefaultBookCover` 封面 + 标题栏大标题），
-      // 故是 `findsNWidgets(2)` 而非 1。
+      // 详情页字段可见：书名 + 来源标记（TXT 书名来自文件名，`META-08 ②`）。被覆盖的
+      // 书架卡同名文本也在树上，故限定在详情页内断言；书名在详情页内**两处**（封面 + 标题栏）。
       expect(
         find.descendant(of: _detailPages(), matching: find.text('甲书')),
         findsNWidgets(2),
@@ -602,7 +570,7 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 打开甲书：一次点击**直接**进阅读页（改道后少一层详情页）。
+      // 打开甲书：一次点击**直接**进阅读页。
       await tester.tap(_cardOf('甲书'));
       await _settle(tester);
       expect(_readerPages(), findsOneWidget);
@@ -611,10 +579,9 @@ void main() {
         a.record.bookId,
       );
 
-      // 关书（pop）——**只推假帧、不给 runAsync**：此刻正处主因窗口（旧代码
-      // `_opening` 仍为 true），紧接着点另一本必须一次即进。
-      // 注意：pop 过渡动画 ticker **首拍才起算**，单次大帧推不完；用多帧小步
-      // 推完过渡 + 路由移除（全程无 runAsync，主因窗口不被破坏）。
+      // 关书（pop）——**只推假帧、不给 runAsync**：此刻正处主因窗口，紧接着点另一本
+      // 必须一次即进。pop 过渡 ticker **首拍才起算**、单次大帧推不完 → 多帧小步推完
+      // 过渡 + 路由移除（全程无 runAsync，主因窗口不被破坏）。
       Navigator.of(tester.element(_readerPages())).pop();
       for (int i = 0; i < 12; i++) {
         await tester.pump(const Duration(milliseconds: 50));
@@ -631,7 +598,7 @@ void main() {
       );
     });
 
-    testWidgets('回归③：长按弹操作单，不误触发 onTap', (WidgetTester tester) async {
+    testWidgets('回归③：长按弹操作弹框，不误触发 onTap', (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _utf8TxtBytes('要删的书'), fileName: '删我2.txt'),
       );
@@ -642,7 +609,7 @@ void main() {
       await tester.longPress(find.byType(BookCard));
       await tester.pumpAndSettle();
 
-      // 长按弹的是操作单（2026-09-28 改版），确认框要再点「移出书架」才出。
+      // 长按弹的是操作弹框（`MiDialog`），确认框要再点「移出书架」才出。
       expect(find.text('移出书架'), findsOneWidget);
       expect(find.text('删除确认'), findsNothing);
       // onTap 未被误触发：没有导航发生（既不进详情页也不进阅读页）。
@@ -670,7 +637,7 @@ void main() {
       await tester.tap(find.byType(BookCard));
       await tester.pump();
 
-      // 被点卡片的 loading 覆盖层出现（书架侧 `_opening` 状态生效，用户可见）。
+      // 被点卡片出现 loading 覆盖层（`_opening` 准备期反馈，用户可见）。
       expect(
         find.descendant(
           of: find.byType(BookCard),
@@ -685,7 +652,7 @@ void main() {
       expect(_readerPages(), findsOneWidget);
     });
 
-    // ── 分组（`P2-02`；2026-09-29 取代「阅读状态筛选」，拖拽归类已移除） ──
+    // ── 分组（`P2-02`） ──
 
     testWidgets('分组 chips：默认「全部」，点分组只剩该分组的书，再点回「全部」',
         (WidgetTester tester) async {
@@ -780,8 +747,8 @@ void main() {
 
     testWidgets('详情页「分组」行 → 新建分组后，返回书架 chips 出现该分组',
         (WidgetTester tester) async {
-      // 详情页正文较长：调到接近真机的视口并钉 `devicePixelRatio = 1`
-      // （默认 dpr=3 会把逻辑高度算成 333，分组行被挤出 `ListView` 懒构建范围）。
+      // 详情页正文较长：调大视口并钉 `devicePixelRatio = 1`（默认 dpr=3 会把分组行
+      // 挤出 `ListView` 懒构建范围）。
       tester.view.physicalSize = const Size(800, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -793,7 +760,7 @@ void main() {
       await _settle(tester);
       expect(find.text('玄幻'), findsNothing); // 还没有任何分组
 
-      // 进详情页（改道后走长按操作单）→ 点「分组」入口（当前显示「未分组」）。
+      // 进详情页（长按弹框）→ 点「分组」入口（当前显示「未分组」）。
       await _openDetailViaSheet(tester, find.byType(BookCard));
       expect(find.byType(BookDetailPage), findsOneWidget);
       await tester.tap(find.text('未分组'));
@@ -804,9 +771,8 @@ void main() {
       await tester.tap(find.text('新建分组…'));
       await _settle(tester);
 
-      // ⚠️ 写分组走 `AtomicFile` **真文件 IO**，`pumpAndSettle` 在 FakeAsync 区
-      // 推不动它 → 必须用 `_settle`（`runAsync` 让出真事件循环），否则
-      // `assignByName` 之后的那次 `setState` 永远不会执行。
+      // ⚠️ 写分组走 `AtomicFile` **真文件 IO**，FakeAsync 区 `pumpAndSettle` 推不动它
+      // → **必须用 `_settle`**（runAsync 让出真事件循环），否则此后 `setState` 永不执行。
       await tester.enterText(find.byType(TextField), '玄幻');
       await tester.tap(find.text('确定'));
       await _settle(tester);
@@ -831,12 +797,11 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 2026-10-20 上游搜索栏批：搜索行右侧的排序按钮**移除**——顶部只留
-      // 「搜索栏 + 胶囊行」。反向钉住：谁把按钮加回搜索行就判红。
+      // 排序按钮已**移除**（顶部只留「搜索栏 + 胶囊行」）；反向钉住：谁把按钮加回搜索行就判红。
       expect(find.byIcon(Icons.sort), findsNothing);
 
-      // 移除的只是**入口**，排序能力仍完整：偏好一改，书架顺序随之变。
-      // 两步都显式给方向，不依赖 store 的默认升降序（否则用例会跟着默认值漂）。
+      // 移除的只是**入口**，排序能力仍完整：偏好一改顺序随之变。两步都显式给方向，
+      // 不依赖 store 的默认升降序（否则用例会跟着默认值漂）。
       await tester.runAsync(() async {
         await shelfPrefs.setSortField(ShelfSortField.title);
         await shelfPrefs.setSortAscending(true);
@@ -861,8 +826,8 @@ void main() {
       expect(find.byType(BookCard), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('shelf-search-entry')));
-      // 搜索页输入框的光标闪烁是不停的定时器：不用 pumpAndSettle，
-      // 按转场时长（`MiCardPageRouteMetrics.durationMs` = 400ms）固定推进。
+      // 搜索页输入框光标闪烁是永不停的定时器：**禁 pumpAndSettle**，按转场时长
+      // （`MiCardPageRouteMetrics.durationMs` = 400ms）固定推进。
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 420));
 
