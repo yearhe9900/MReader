@@ -322,6 +322,23 @@ class MiTransparencyTokens {
   static Color dialogPressedFill(Color fill, MiThemeMode mode) =>
       Color.alphaBlend(dialogPressFor(mode), fill);
 
+  // ══ 七·二、弹出面板（`MiPullUpPanel`）════════════════════════════════════
+
+  /// 弹出面板**无压暗遮罩**（**度量**：唤起录屏逐帧实测 —— 面板外页底像素
+  /// 保持原值，内容列表亮度不变）。仍保留一层全屏透明命中层，让面板外
+  /// 点按能交给宿主收起（语义同弹框 `onScrimTap`，只是不压暗）。
+  static const Color panelScrim = Color(0x00000000);
+
+  /// 弹出面板投影 alpha（**度量拟合**，0.25× 慢速浅色素材：面板下缘外 +2dp
+  /// 处压暗 14 级、+6dp 压 10 级、+14dp 归零，上缘仅 ~3 级 → 黑 @0.12、
+  /// blur σ≈7、下偏 4dp 的边缘剖面可同时对上两侧读数）。暗色素材黑底上
+  /// **不可分辨**（同配方压在 #000 上无视觉差异 —— 推导同值）。
+  static const double panelShadowAlpha = 0.12;
+
+  /// 弹面投影色（黑 @ 上述 alpha，明暗同值）。
+  static const Color panelShadow =
+      Color.fromRGBO(0, 0, 0, panelShadowAlpha);
+
   // ── 页面推入（`MiCardPageRoute`）────────────────────────────────────────
   //
   // 下层页压暗：度量取「同一像素在转场前后的亮度比」。参考素材里下层页

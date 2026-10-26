@@ -14,7 +14,6 @@ import 'package:mreader/format/book_source.dart';
 import 'package:mreader/format/pdf_source.dart';
 import 'package:mreader/format/rust_kernel_source.dart';
 import 'package:mreader/src/rust/api/guard.dart' show probe;
-import 'package:mreader/src/rust/api/kernel.dart' as rk;
 import 'package:mreader/src/rust/frb_generated.dart';
 
 import 'epub_builder.dart';
