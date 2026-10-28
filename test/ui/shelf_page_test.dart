@@ -18,7 +18,6 @@ import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_progress.dart';
 import 'package:mreader/settings/shelf_layout_store.dart';
 import 'package:mreader/settings/shelf_prefs_store.dart';
-import 'package:mreader/ui/adaptive_pill_tab_bar.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
@@ -97,9 +96,9 @@ List<String> _titles(WidgetTester tester) => tester
     .toList();
 
 /// 分组筛选栏的标签文案（顺序即渲染顺序，「全部」恒在首位）。
-/// 文案读 [AdaptivePillTabBar.labels]（组件渲染 `Text(labels[i])`）。
+/// 文案读 [MiPillTabBar.labels]（组件渲染 `Text(labels[i])`）。
 List<String> _chipLabels(WidgetTester tester) =>
-    tester.widget<AdaptivePillTabBar>(find.byType(AdaptivePillTabBar)).labels;
+    tester.widget<MiPillTabBar>(find.byType(MiPillTabBar)).labels;
 
 void main() {
   capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
@@ -298,15 +297,99 @@ void main() {
       expect(bar.onTap, isNotNull);
       // 常规态不是输入框（不占焦点、不弹键盘）。
       expect(bar.editable, isFalse);
-      // 磨砂移交头部（[_buildHeaderBlur] 铺整段恒定 σ），零件不自绘 backdrop——整条栏只糊一次。
-      expect(bar.frosted, isFalse);
+      // 磨砂分两层（上游 `81d2f86` 实机反馈口径）：头部铺渐进羽化阶梯
+      //（`_buildHeaderBlur`），零件**始终自绘自己的玻璃**——旧口径（整条只糊
+      // 一次）会让胶囊像不透明色块。
+      expect(bar.frosted, isTrue);
       // 压在书卡上：垫玻璃膜（内容滚到头部后方才显出形状）。
       expect(bar.overContent, isTrue);
       // 明暗由 `GlassScope` 级联亮度解析；测试环境默认亮色 → light 配方。
       expect(bar.themeMode, MiThemeMode.light);
     });
 
-    testWidgets('分组标签行：AdaptivePillTabBar 接线（自适应宽胶囊，滚动区无玻璃控件）',
+    testWidgets('头部磨砂：头部区渐进羽化阶梯（恒定 σ 回潮即红）', (
+      WidgetTester tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('一本'), fileName: 'a.txt'),
+      );
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      // 事实源同口径：头部磨砂 = `MiTopBar.headerBlurBands`（平台 8.5dp 线性
+      // 衰减、胶囊行底后羽化收尾），extent = 状态栏 0 + 头部 96.1。
+      final List<MiTopBarBlurBand> bands = MiTopBar.headerBlurBands(
+        MiTopBarPalette.light,
+        extent: 96.1,
+        underSurface: false,
+      );
+      // 渐进阶梯（多段）；旧实现的「恒定 σ 一整段」回潮即红。
+      expect(bands.length, greaterThan(1));
+
+      // 页面真实的分段高斯层数与事实源同口径，且首段贴顶、末段落盒底。
+      final Finder blurLayer = find.byKey(
+        const ValueKey<String>('shelf-header-blur'),
+      );
+      expect(blurLayer, findsOneWidget);
+      final Finder blurLayers = find.descendant(
+        of: blurLayer,
+        matching: find.byType(BackdropFilter),
+      );
+      expect(blurLayers, findsNWidgets(bands.length));
+      expect(tester.getRect(blurLayers.first).top, 0);
+      expect(
+        tester.getRect(blurLayers.last).bottom,
+        moreOrLessEquals(96.1, epsilon: 0.01),
+        reason: '羽化收尾落在盒底（旧口径是栏底硬切）',
+      );
+    });
+
+    testWidgets('头部亮边：静止不亮，网格滚动后搜索胶囊与胶囊行随位移渐亮', (
+      WidgetTester tester,
+    ) async {
+      // 紧凑窗（3 列）：12 本书才有滚动余量（800 宽 6 列时 12 本两行就完，
+      // 拖不动 → 断言全是假绿）。
+      tester.view.physicalSize = const Size(390, 700);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      // 多本书才有滚动余量。
+      for (int i = 0; i < 12; i++) {
+        await tester.runAsync(
+          () => repo.importFile(bytes: _txtBytes('书$i'), fileName: 'b$i.txt'),
+        );
+      }
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      MiSearchBar bar() => tester.widget<MiSearchBar>(
+            find.byKey(const Key('shelf-search-entry')),
+          );
+      MiPillTabBar pills() =>
+          tester.widget<MiPillTabBar>(find.byType(MiPillTabBar));
+
+      // 静止（offset 0）：亮边不亮（实机反馈：不能常驻描边）。
+      expect(bar().rimProgress, 0.0);
+      expect(pills().rimProgress, 0.0);
+
+      // 滚过 ≥20dp（映射同 `MiTopBarMetrics.rimFadeDistance`）→ 满亮保持。
+      await tester.drag(find.byType(GridView), const Offset(0, -80));
+      await tester.pumpAndSettle();
+      expect(bar().rimProgress, greaterThan(0.99), reason: '滚过 20dp 后满亮');
+      expect(pills().rimProgress, greaterThan(0.99));
+
+      // 滚回顶部 → 渐隐回不亮。
+      await tester.drag(find.byType(GridView), const Offset(0, 80));
+      await tester.pumpAndSettle();
+      expect(bar().rimProgress, 0.0);
+      expect(pills().rimProgress, 0.0);
+    });
+
+    testWidgets('分组标签行：MiPillTabBar 自适应宽档接线（滚动区无玻璃控件）',
         (WidgetTester tester) async {
       tester.view.physicalSize = const Size(800, 1000);
       tester.view.devicePixelRatio = 1.0;
@@ -318,12 +401,13 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 「全部」默认选中；胶囊宽度自适应（min 87.6 / max 175.2，规则用例见
-      // `adaptive_pill_tab_bar_test.dart`）。
-      final AdaptivePillTabBar bar =
-          tester.widget<AdaptivePillTabBar>(find.byType(AdaptivePillTabBar));
+      // 「全部」默认选中；胶囊宽度走**自适应档**（min 87.6 / max 175.2 的
+      // clamp 规则契约见框架 `pill_tab_bar_test`（上游 issue #3），本用例只钉接线）。
+      final MiPillTabBar bar =
+          tester.widget<MiPillTabBar>(find.byType(MiPillTabBar));
       expect(bar.labels, <String>['全部']);
       expect(bar.selectedIndex, 0);
+      expect(bar.itemWidthMode, MiPillItemWidth.adaptive);
       // 明暗由 `GlassScope` 级联亮度解析；测试环境默认亮色 → light 配方。
       expect(bar.themeMode, MiThemeMode.light);
       // `UI-04` 红线：横向滚动区里**不得有玻璃控件**（换纯色胶囊组件后由结构满足）。
@@ -365,7 +449,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byType(GlassTopBar),
-          matching: find.byType(AdaptivePillTabBar),
+          matching: find.byType(MiPillTabBar),
         ),
         findsOneWidget,
       );
@@ -737,7 +821,7 @@ void main() {
       expect(_titles(tester), <String>['a']);
       expect(
         tester
-            .widget<AdaptivePillTabBar>(find.byType(AdaptivePillTabBar))
+            .widget<MiPillTabBar>(find.byType(MiPillTabBar))
             .selectedIndex,
         0,
       );
@@ -822,7 +906,7 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      expect(find.byType(AdaptivePillTabBar), findsOneWidget);
+      expect(find.byType(MiPillTabBar), findsOneWidget);
       expect(find.byType(BookCard), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('shelf-search-entry')));
@@ -833,7 +917,7 @@ void main() {
 
       // ① 推入独立搜索页：整屏、无 App 级导航（书架被不透明路由盖住 → offstage）
       expect(find.byType(ShelfSearchPage), findsOneWidget);
-      expect(find.byType(AdaptivePillTabBar), findsNothing);
+      expect(find.byType(MiPillTabBar), findsNothing);
       expect(find.text('输入关键字开始搜索'), findsOneWidget);
       expect(find.byType(BookCard), findsNothing);
 
@@ -853,7 +937,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 420));
       expect(find.byType(ShelfSearchPage), findsNothing);
       expect(find.byType(MiSearchBar), findsOneWidget);
-      expect(find.byType(AdaptivePillTabBar), findsOneWidget);
+      expect(find.byType(MiPillTabBar), findsOneWidget);
     });
 
     testWidgets('搜索页输入即过滤（元数据命中）；无命中给提示；返回不残留',

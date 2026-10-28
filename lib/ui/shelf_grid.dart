@@ -65,6 +65,7 @@ class ShelfGrid extends StatelessWidget {
     required this.onOpenBook,
     required this.onBookActions,
     this.padding = kShelfGridPadding,
+    this.controller,
   });
 
   /// 要展示的书（**已在外层完成分组筛选 / 排序**，本组件不再过滤）。
@@ -88,6 +89,10 @@ class ShelfGrid extends StatelessWidget {
 
   /// 网格内边距（默认给壳层浮动胶囊留出底部空白，见 [kShelfGridPadding]）。
   final EdgeInsetsGeometry padding;
+
+  /// 网格滚动控制器（可选）：宿主用它把滚动位移换算成头部零件的
+  /// **内缘亮边进度**（`MiTopBarMetrics.rimFadeDistance` 同一映射）。
+  final ScrollController? controller;
 
   @override
   Widget build(BuildContext context) {
@@ -120,6 +125,7 @@ class ShelfGrid extends StatelessWidget {
                   columns
             : kShelfCoverTargetWidth;
         return GridView.builder(
+          controller: controller,
           // 浮动胶囊不占布局高度，底部留白由 kShellBottomInset 提供
           // （已随 `kShelfGridPadding` 进入本文件的 padding 默认值）。
           padding: padding,

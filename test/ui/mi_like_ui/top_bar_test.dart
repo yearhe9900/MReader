@@ -866,9 +866,7 @@ void main() {
         reason: '头部区形态的叠色铺满整条顶栏（否则搜索栏 / 胶囊四周会断层）',
       );
 
-      // ③ 只开磨砂：有模糊、无压色；**一整段恒定 σ** 铺满整条栏 156dp
-      //（上游 2026-10-20 判据：头部区搜索栏行 / 间隙 / 胶囊行后方糊得一样重，
-      // 胶囊底缘往下立刻锐利 → 不是渐进曲线）
+      // ③ 只开磨砂：有模糊、无压色；按头部区实测曲线铺满整条栏 156dp
       await tester.pumpWidget(harness(
         title: null,
         showBack: false,
@@ -876,16 +874,22 @@ void main() {
         searchBar: const SizedBox.expand(),
         tabBar: const SizedBox.expand(),
       ));
-      final headerBands = MiTopBar.uniformBlurBands(
+      final headerBands = MiTopBar.headerBlurBands(
         MiTopBarPalette.dark,
         extent: 156.0,
         underSurface: false,
       );
-      expect(headerBands, hasLength(1), reason: '头部区是一段恒定 σ，不是阶梯');
+      expect(
+        headerBands,
+        hasLength(MiHeaderBlurProfile.bands.length),
+        reason: '头部区是渐进阶梯（平台 8.5dp → 羽化收尾），不是恒定一段',
+      );
       expect(blurLayers(), findsNWidgets(headerBands.length));
-      final headerRect = tester.getRect(blurLayers());
-      expect(headerRect.top, 0);
-      expect(headerRect.height, closeTo(156.0, 0.01));
+      expect(tester.getRect(blurLayers().first).top, 0);
+      expect(
+        tester.getRect(blurLayers().last).bottom,
+        closeTo(156.0, 0.01),
+      );
       expect(_scrimDark, findsNothing);
       expect(
         tester.getSize(find.byType(MiTopBar)).height,
@@ -906,8 +910,8 @@ void main() {
 
       // 磨砂曲线**只服务「无头部区」形态**（纯标题 / 纯材质）：那档是内容区
       // 自己的顶部渐进模糊（无顶栏的「每日精选」页顶部照样糊、到 ~120dp
-      // 自然收尾），形状固定、范围按材质盒拉伸。头部区形态是另一套实测规律，
-      // 见下面的 [MiTopBar.uniformBlurBands]。
+      // 自然收尾），形状固定、范围按材质盒拉伸。头部区形态是另一条实测曲线，
+      // 见下面的 [MiTopBar.headerBlurBands]。
       //
       // 关掉叠色时上半段裸露，必须**从 0 开始糊**（实机踩过：跳过它栏顶一片清晰）
       final bare = MiTopBar.visibleBlurBands(
@@ -934,30 +938,57 @@ void main() {
       expect(covered.length, lessThan(bare.length));
       expect(covered.last.bottom, closeTo(109.0 * k, 0.01));
 
-      // 头部区形态**不走这条曲线**：一整段恒定 σ 铺满 0…156，到栏底硬切
-      //（首页亮/暗截图实测：搜索栏行、栏与胶囊之间的间隙、胶囊行后方糊得一样
-      // 重；胶囊底缘往下内容立刻锐利 —— 照曲线拉到 156dp 时胶囊处只剩 σ≈2.5）
-      final tall = MiTopBar.uniformBlurBands(
+      // 头部区形态**不走这条曲线**：另一条实测曲线（平台段 8.5dp、线性
+      // 衰减、胶囊行底后羽化收尾；1220×2656 明暗双素材，见 [MiHeaderBlurProfile]）
+      final tall = MiTopBar.headerBlurBands(
         MiTopBarPalette.dark,
         extent: 156.0,
         underSurface: false,
       );
-      expect(tall, hasLength(1), reason: '恒定 σ 只要一段，不是 8 段阶梯');
-      expect(tall.single.top, 0);
-      expect(tall.single.bottom, closeTo(156.0, 0.01));
-      expect(tall.single.sigma, MiTopBarPalette.blurSigma);
+      expect(tall, hasLength(MiHeaderBlurProfile.bands.length));
+      expect(tall.first.top, 0);
+      expect(tall.last.bottom, closeTo(156.0, 0.01));
+      expect(tall.first.sigma, MiHeaderBlurProfile.sigma);
+      // σ 沿 y 单调不增、相邻比 < 2.4（段边界不显台阶）
+      for (var i = 1; i < tall.length; i++) {
+        expect(tall[i].sigma <= tall[i - 1].sigma, isTrue);
+        expect(tall[i - 1].sigma / tall[i].sigma, lessThan(2.4));
+      }
+      // 与实测锚点对齐：阶梯 σ 取段中点值，与线性模型
+      // σ(y) = 8.5·(158−y)/123 的偏差 ≤ 0.6dp（尾部圆整档）
+      double sigmaAt(double y) {
+        final k = 156.0 / MiHeaderBlurProfile.nominalExtent;
+        for (final band in tall) {
+          if (y <= band.bottom / k) return band.sigma;
+        }
+        return 0;
+      }
+
+      double linear(double y) =>
+          y <= 35 ? MiHeaderBlurProfile.sigma : 8.5 * (158 - y) / 123;
+      for (final y in [20.0, 57.0, 85.0, 116.0, 140.0]) {
+        expect(
+          sigmaAt(y),
+          moreOrLessEquals(linear(y), epsilon: 0.6),
+          reason: '$y dp 处阶梯 σ 应贴合实测线性曲线',
+        );
+      }
 
       // 深色叠色在头部区形态同样铺满整条栏：α=1 的实心段按盒高比例拉长，
-      // 之下那段模糊 100% 不可见 → 跳过（零视觉差异的省帧）
-      final tallCovered = MiTopBar.uniformBlurBands(
+      // 落在里面的模糊段 100% 不可见 → 跳过（零视觉差异的省帧）
+      final tallCovered = MiTopBar.headerBlurBands(
         MiTopBarPalette.dark,
         extent: 156.0,
       );
+      final opaqueBottom =
+          MiTopBarPalette.dark.scrimOpaqueBottom * 156.0 / 128.9;
+      expect(tallCovered.first.top, closeTo(opaqueBottom, 0.01));
+      expect(tallCovered.last.bottom, closeTo(156.0, 0.01));
       expect(
-        tallCovered.single.top,
-        closeTo(MiTopBarPalette.dark.scrimOpaqueBottom * 156.0 / 128.9, 0.01),
+        tallCovered.length,
+        lessThan(tall.length),
+        reason: '实心段之内的几段被省掉',
       );
-      expect(tallCovered.single.bottom, closeTo(156.0, 0.01));
 
       // 纯标题形态的叠色仍到实测材质盒 128.9
       await tester.pumpWidget(harness(offset: 40));
@@ -1207,7 +1238,7 @@ void main() {
       );
     });
 
-    testWidgets('顶栏自己画材质时内置组件不再自绘 backdrop（整条栏只糊一次）',
+    testWidgets('内置组件始终自绘玻璃（own backdrop），与栏磨砂叠加',
         (tester) async {
       _size(tester);
       Finder barBlurs() => find.descendant(
@@ -1215,7 +1246,8 @@ void main() {
             matching: find.byType(BackdropFilter),
           );
 
-      // 开材质（默认）：零件交出磨砂，全栏只剩材质那段
+      // 开材质（默认）：背景渐进磨砂 + 零件各自的玻璃磨砂 —— 实机反馈：
+      // 搜索栏 / 胶囊要有自己的「透明模糊属性」，否则像不透明色块
       await tester.pumpWidget(harness(
         title: null,
         showBack: false,
@@ -1224,38 +1256,37 @@ void main() {
       ));
       expect(
         tester.widget<MiSearchBar>(find.byType(MiSearchBar)).frosted,
-        isFalse,
-        reason: '搜索栏在顶栏材质里，再自带一层会糊两次',
+        isTrue,
       );
       expect(
         tester.widget<MiPillTabBar>(find.byType(MiPillTabBar)).frosted,
-        isFalse,
+        isTrue,
       );
       expect(
         barBlurs(),
         findsNWidgets(
-          // 头部区形态：材质盒 = 整条栏 156，叠色在（默认 showSurface: true）；
-          // 恒定 σ 一整段（上游 2026-10-20 判据，不是 8 段渐进阶梯）
-          MiTopBar.uniformBlurBands(MiTopBarPalette.dark, extent: 156.0).length,
+          // 头部区渐进段（叠色在 → 实心段内已剔除）+ 搜索栏 1 层 +
+          // 胶囊条 1 层（合并裁切）
+          MiTopBar.headerBlurBands(MiTopBarPalette.dark, extent: 156.0).length +
+              2,
         ),
-        reason: '全栏只有顶栏那几条 σ(y) 段，没有零件私货',
       );
       expect(
         find.descendant(
           of: find.byType(MiSearchBar),
           matching: find.byType(BackdropFilter),
         ),
-        findsNothing,
+        findsOneWidget,
       );
       expect(
         find.descendant(
           of: find.byType(MiPillTabBar),
           matching: find.byType(BackdropFilter),
         ),
-        findsNothing,
+        findsOneWidget,
       );
 
-      // 关掉磨砂：零件各自带 backdrop（旧形态，仅作对照）
+      // 关掉顶栏磨砂：零件自己的玻璃不受影响（背景层与零件层相互独立）
       await tester.pumpWidget(harness(
         title: null,
         showBack: false,
@@ -1322,6 +1353,75 @@ void main() {
 
     const withBack = MiTopBar(title: kTitle, showBack: true);
     expect(withBack.showBack, isTrue);
+  });
+
+  group('透明顶栏配方档（issue #4②）', () {
+    test('palette.transparent = 零叠色 + 无实心段；transparentFor 随明暗取墨', () {
+      final transparent = MiTopBarPalette.transparent;
+      expect(transparent.scrimOpaqueBottom, 0);
+      final gradient = transparent.scrimGradient as LinearGradient;
+      expect(gradient.colors.map((c) => c.a), everyElement(0.0));
+      expect(transparent.ink, MiColors.foreground);
+
+      final light = MiTopBarPalette.transparentFor(MiThemeMode.light);
+      expect(light.ink, MiColors.foregroundLight);
+      expect(light.pressHighlight, MiTransparencyTokens.pressHighlightLight);
+      expect(light.scrimOpaqueBottom, 0);
+      // 透明档（随明暗取墨色 / 按压高光；叠色两档同为零叠色）
+      expect(
+        identical(
+          MiTopBarPalette.transparentFor(MiThemeMode.dark),
+          MiTopBarPalette.transparent,
+        ),
+        isTrue,
+      );
+    });
+
+    testWidgets('showBlur/showSurface 全关 + transparent：无磨砂、无叠色层',
+        (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            backgroundColor: const Color(0xFF222222),
+            body: MiTopBar(
+              title: '章节名',
+              themeMode: MiThemeMode.dark,
+              showBlur: false,
+              showSurface: false,
+              palette: MiTopBarPalette.transparent,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(MiTopBar), findsOneWidget);
+      // σ=0：整条材质层（磨砂 + 叠色）都不渲染
+      expect(find.byType(BackdropFilter), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(MiTopBar),
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is DecoratedBox &&
+                (w.decoration as BoxDecoration).gradient != null,
+          ),
+        ),
+        findsNothing,
+      );
+    });
+
+    test('headerBlurBands 已公开：宿主自拼头部可直接消费同一曲线', () {
+      // `@visibleForTesting` 已移除 —— 编译期即验证公开性（生产代码合法）
+      // 用浅色配方（全段半透明 → 平台段不被实心段裁剪）验证平台段 σ=8.5
+      final bands = MiTopBar.headerBlurBands(
+        MiTopBarPalette.light,
+        extent: 200,
+      );
+      expect(bands, isNotEmpty);
+      // σ 量化 0.05 档 / 平台段 σ=8.5（MiHeaderBlurProfile）不因公开化改变
+      expect(bands.first.sigma, closeTo(8.5, 0.001));
+    });
   });
 }
 

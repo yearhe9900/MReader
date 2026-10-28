@@ -57,7 +57,6 @@ import '../stats/stats_service.dart';
 import '../sync/sync_trigger.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
-import 'adaptive_pill_tab_bar.dart';
 import 'book_card.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
@@ -69,9 +68,14 @@ import 'mi_like_ui/mi_like_ui.dart'
         MiDialog,
         MiDialogItem,
         MiDialogLayout,
+        MiPillItemWidth,
+        MiPillTabBar,
         MiPillTabMetrics,
         MiSearchBar,
         MiThemeMode,
+        MiTopBar,
+        MiTopBarBlurBand,
+        MiTopBarMetrics,
         MiTopBarPalette;
 import 'shelf_grid.dart';
 import 'shelf_search_page.dart';
@@ -163,6 +167,15 @@ class ShelfPageState extends State<ShelfPage> {
   /// 正在准备打开的书（bookId）：对应卡片显示 loading 覆盖层；`null` = 无。
   String? _openingBookId;
 
+  /// 网格滚动控制器：位移换算成头部零件的内缘亮边进度（见 [_headerRim]）。
+  final ScrollController _gridScrollController = ScrollController();
+
+  /// 头部零件（搜索胶囊 / 胶囊行）的内缘亮边进度 0…1 —— 映射同上游
+  /// `MiTopBarMetrics.rimFadeDistance`（内容距栏底 ≈20dp 内渐亮；静止不亮、
+  /// 滚 20dp 后满亮保持）。用 [ValueNotifier] 而非整页 `setState`：滚动时
+  /// 只重建头部两层零件。
+  final ValueNotifier<double> _headerRim = ValueNotifier<double>(0);
+
   /// 详情页路由在栈上（push 已发起、尚未 pop）：吞掉过渡期 / 会话期的重复点卡，
   /// 防「双击卡片 → 叠两个详情页」。pop 后由 [_openDetail] 的 `finally` 释放。
   bool _detailPushing = false;
@@ -251,6 +264,7 @@ class ShelfPageState extends State<ShelfPage> {
     // （两者都是进程内共享实例，见 [ShelfPrefsStore] / [ShelfLayoutStore]）。
     widget.shelfPrefs.addListener(_onStoreChanged);
     widget.shelfLayout.addListener(_onStoreChanged);
+    _gridScrollController.addListener(_syncHeaderRim);
     _loadBooks();
   }
 
@@ -258,7 +272,20 @@ class ShelfPageState extends State<ShelfPage> {
   void dispose() {
     widget.shelfPrefs.removeListener(_onStoreChanged);
     widget.shelfLayout.removeListener(_onStoreChanged);
+    _gridScrollController.removeListener(_syncHeaderRim);
+    _gridScrollController.dispose();
+    _headerRim.dispose();
     super.dispose();
+  }
+
+  /// 网格滚动 → 头部亮边进度（映射同 `MiTopBarMetrics.rimFadeDistance`：
+  /// 素材实测是「内容距栏底 ≈20dp」的接近度阈值，顶栏不知道内容布局，
+  /// 按标准布局换算成滚动位移）。
+  void _syncHeaderRim() {
+    _headerRim.value =
+        (_gridScrollController.offset / MiTopBarMetrics.rimFadeDistance)
+            .clamp(0.0, 1.0)
+            .toDouble();
   }
 
   /// 共享存储变更 → 重绘。
@@ -780,9 +807,17 @@ class ShelfPageState extends State<ShelfPage> {
             height: kShelfSearchRowHeight,
             child: Row(
               children: <Widget>[
-                // 搜索胶囊铺满剩余宽（「全宽」形态）。
+                // 搜索胶囊铺满剩余宽（「全宽」形态）；亮边进度随滚动下发。
                 Expanded(
-                  child: _BookSearchEntry(onTap: _enterSearch, mode: mode),
+                  child: ValueListenableBuilder<double>(
+                    valueListenable: _headerRim,
+                    builder: (BuildContext context, double rim, _) =>
+                        _BookSearchEntry(
+                      onTap: _enterSearch,
+                      mode: mode,
+                      rimProgress: rim,
+                    ),
+                  ),
                 ),
                 if (_importing)
                   const Padding(
@@ -805,7 +840,11 @@ class ShelfPageState extends State<ShelfPage> {
             padding: const EdgeInsets.only(top: kShelfHeaderRowGap),
             child: SizedBox(
               height: kShelfChipsRowHeight,
-              child: _buildGroupFilterBar(),
+              child: ValueListenableBuilder<double>(
+                valueListenable: _headerRim,
+                builder: (BuildContext context, double rim, _) =>
+                    _buildGroupFilterBar(rimProgress: rim),
+              ),
             ),
           ),
         ],
@@ -816,8 +855,9 @@ class ShelfPageState extends State<ShelfPage> {
   /// 分组筛选栏（**单选**：全部 / 各分组）—— 浮动头部第二行（参考图 chips 行）。
   ///
   /// ══════════════════════════════════════════════════════════════════════════════
-  /// GlassChip 行 → [AdaptivePillTabBar] 自适应宽胶囊分类标签（min 87.6 /
-  /// max 175.2 / 超出省略号——视觉 token 全复用移植体，宽度规则在移植树外）
+  /// GlassChip 行 → [MiPillTabBar] **自适应宽档**（`MiPillItemWidth.adaptive`，
+  /// min 87.6 / max 175.2 / 超出省略号；上游 issue #3 原生支持后本页克隆组件
+  /// `AdaptivePillTabBar` 退场，直接用移植体）
   /// ══════════════════════════════════════════════════════════════════════════════
   /// · 标签 = 「全部」+ 各分组名，横向可滚（组件内置滚动容器）；
   /// · 「全部」恒在首位；分组顺序 = `ShelfLayoutStore` 的创建序（`groups` 列表序）；
@@ -831,7 +871,7 @@ class ShelfPageState extends State<ShelfPage> {
   /// （`OverflowBox` + `Alignment.topCenter`）：内置内嵌正好抵消到槽边，胶囊左缘
   /// = 槽左缘 = 搜索胶囊左缘；外层 [ClipRect] 保住「超出视口裁切滚动」的形态。
   /// 行高由 [_buildHeader] 的 `SizedBox(kShelfChipsRowHeight)`（40）给定。
-  Widget _buildGroupFilterBar() {
+  Widget _buildGroupFilterBar({double rimProgress = 1.0}) {
     final String? selected = widget.shelfPrefs.prefs.groupId;
     // 选中分组已消失（书被删空）→ 视作「全部」，高亮随之回到「全部」。
     final List<BookGroup> groups = widget.shelfLayout.layout.groups;
@@ -851,13 +891,17 @@ class ShelfPageState extends State<ShelfPage> {
             maxWidth: wide,
             minHeight: kShelfChipsRowHeight,
             maxHeight: kShelfChipsRowHeight,
-            child: AdaptivePillTabBar(
+            child: MiPillTabBar(
+              // 自适应宽档（上游 issue #3）：分组名长短不一，定宽档读不全。
+              itemWidthMode: MiPillItemWidth.adaptive,
               labels: <String>[
                 '全部',
                 for (final BookGroup group in groups) group.name,
               ],
               selectedIndex: selectedIndex,
               themeMode: navThemeModeOf(context),
+              // 内缘亮边随滚动渐亮（映射同 `MiTopBarMetrics.rimFadeDistance`）。
+              rimProgress: rimProgress,
               // 书卡从头部下方穿过（压在内容上）：未选胶囊要垫那层玻璃膜，
               // 否则在杂乱封面上只剩文字可辨、读不出胶囊形状。
               overContent: true,
@@ -1008,6 +1052,8 @@ class ShelfPageState extends State<ShelfPage> {
           coverStore: widget.coverStore,
           openingBookId: _openingBookId,
           padding: shelfGridPadding(topInset, headerHeight: headerHeight),
+          // 滚动位移 → 头部亮边进度（`_syncHeaderRim` → `_headerRim`）。
+          controller: _gridScrollController,
           // 点书卡 = **直接进阅读页**；详情页入口走长按弹框「书籍详情」。
           onOpenBook: (BookRecord record) => unawaited(_openBook(record)),
           // 不 `unawaited`：这个 Future 的完成时机**就是**长按抬起反馈的复位时机
@@ -1021,30 +1067,55 @@ class ShelfPageState extends State<ShelfPage> {
           left: 0,
           right: 0,
           height: topInset + headerHeight,
-          child: _buildHeaderBlur(),
+          child: _buildHeaderBlur(topInset, headerHeight, navThemeModeOf(context)),
         ),
       ],
     );
   }
 
-  /// 头部区磨砂：**一整段恒定 σ 铺满头部、到栏底硬切**。
+  /// 头部区磨砂：**头部区实测渐进曲线**（与上游 `81d2f86` 同源，
+  /// `MiHeaderBlurProfile`）—— 平台段 8.5dp 线性衰减、胶囊行底后羽化收尾，
+  /// 铺满「状态栏 + 头部」、盒底归零（不再是旧的「恒定 σ + 栏底硬切」——
+  /// 那出自 884×1920 低清素材，压缩软化下不可分辨渐变；1220×2656 原生素材
+  /// 逐深度 erf 拟合给出 7.6…9.0 / 3.2…4.4 / ≈0.4dp）。
   ///
-  /// ══════════════════════════════════════════════════════════════════════════════
-  /// 上游「首页悬浮头部」批：渐进曲线 → 恒定 σ
-  /// ══════════════════════════════════════════════════════════════════════════════
-  /// 原实现是 [MiGradientBlur]（σ 沿 y 递减、120dp 处归零），但截图逐点实测推翻了
-  /// 这条曲线：头部各行后方内容糊得一样重、胶囊底缘往下立刻锐利。故改走
-  /// `MiTopBar.uniformBlurBands` 同规律的一整段恒定 σ（本页自拼头部、自己铺
-  /// 同一段）：高度 = 状态栏 + 头部高（[shelfGridPadding] 同一口径），到栏底硬切。
-  /// 只用一段也把全宽高斯从 8 段压到 1 段（滚动时每帧都走这里）。
-  Widget _buildHeaderBlur() {
+  /// 分段定 σ 阶梯由 `MiTopBar.headerBlurBands` 给出（σ 已量化 0.05 档护
+  /// `MiFilterCache`；本页头部静止呈现，直接按满档铺）。
+  Widget _buildHeaderBlur(
+    double topInset,
+    double headerHeight,
+    MiThemeMode mode,
+  ) {
+    final double extent = topInset + headerHeight;
+    final List<MiTopBarBlurBand> bands = MiTopBar.headerBlurBands(
+      MiTopBarPalette.of(mode),
+      extent: extent,
+      // 头部压在滚动内容上、无叠色实心段可省 → 全段铺出，盒底羽化归零。
+      underSurface: false,
+    );
     return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(
-          sigmaX: MiTopBarPalette.blurSigma,
-          sigmaY: MiTopBarPalette.blurSigma,
-        ),
-        child: const SizedBox.expand(),
+      // 定位键：契约测试按它数分段高斯层数（`shelf_page_test`）。
+      key: const ValueKey<String>('shelf-header-blur'),
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          for (final MiTopBarBlurBand band in bands)
+            Positioned(
+              left: 0,
+              right: 0,
+              top: band.top,
+              height: band.height,
+              child: ClipRect(
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(
+                    sigmaX: band.sigma,
+                    sigmaY: band.sigma,
+                  ),
+                  child: const SizedBox.expand(),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1100,13 +1171,21 @@ class ShelfPageState extends State<ShelfPage> {
 /// 明暗经 [navThemeModeOf] 显式传入（与底栏 / 胶囊标签同一 `GlassScope` 出处，
 /// `UI-01` ② 跟应用主题三态），而非留给组件回落环境 `Theme.of`。
 class _BookSearchEntry extends StatelessWidget {
-  const _BookSearchEntry({required this.onTap, required this.mode});
+  const _BookSearchEntry({
+    required this.onTap,
+    required this.mode,
+    this.rimProgress = 1.0,
+  });
 
   /// 点击回调（推入搜索页）。
   final VoidCallback onTap;
 
   /// 明暗配方（父级已解析，避免两次查 `GlassScope`）。
   final MiThemeMode mode;
+
+  /// 内缘亮边进度（0…1，父级按网格滚动位移下发；语义见
+  /// `MiTopBarMetrics.rimFadeDistance`）。
+  final double rimProgress;
 
   @override
   Widget build(BuildContext context) {
@@ -1117,11 +1196,14 @@ class _BookSearchEntry extends StatelessWidget {
       hint: '搜索书名、作者',
       onTap: onTap,
       themeMode: mode,
-      // 头部已有自己的磨砂层（`_buildHeaderBlur`），零件不再自绘 backdrop：
-      // 整条栏只糊一次，否则栏内比周围更糊、且多一份每帧全 QUAD 高斯。
-      frosted: false,
+      // 零件**始终自绘玻璃**（上游 `81d2f86` 实机反馈口径）：头部那层是随 y
+      // 衰减的背景磨砂（`_buildHeaderBlur` 的渐进曲线），零件自己那层才是
+      // 它的「透明模糊属性」——旧口径（顶栏画磨砂时关零件 backdrop）会让
+      // 胶囊像不透明色块。
+      frosted: true,
       // 压在书卡上：垫玻璃膜（膜取页底色 ⇒ 静止态观感不变）
       overContent: true,
+      rimProgress: rimProgress,
     );
   }
 }

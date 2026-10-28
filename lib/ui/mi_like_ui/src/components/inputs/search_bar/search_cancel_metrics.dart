@@ -1,3 +1,5 @@
+import '../../../theme/motion_tokens.dart';
+
 /// [MiSearchCancelButton] 的几何参数：1:1 实测自参考录屏的**搜索态**。
 ///
 /// Source: 「短信」搜索录屏（592×1280 @24fps，见 README「搜索态」段）。
@@ -41,8 +43,12 @@ class MiSearchCancelMetrics {
   static const double glyphStroke = 1.9;
 
   /// 按压反馈淡入时长（推导：沿用返回圆钮实测 420ms，同一套按压语言）。
-  static const int pressFadeInMs = 420;
+  ///
+  /// 同源转发自 [MiMotionTokens]（统一动效配置），新代码请直接取 token。
+  static const int pressFadeInMs = MiMotionTokens.pressFadeInMs;
 
   /// 按压反馈淡出时长（推导：同上，实测 300ms）。
-  static const int pressFadeOutMs = 300;
+  ///
+  /// 同源转发自 [MiMotionTokens]（统一动效配置），新代码请直接取 token。
+  static const int pressFadeOutMs = MiMotionTokens.pressFadeOutMs;
 }

@@ -25,6 +25,7 @@ export 'src/theme/search_bar_tokens.dart';
 export 'src/theme/top_bar_tokens.dart';
 export 'src/theme/gradient_blur_tokens.dart';
 export 'src/theme/pull_up_panel_tokens.dart';
+export 'src/theme/motion_tokens.dart';
 export 'src/theme/dialog_tokens.dart';
 
 // ── 组件层 ────────────────────────────────────────────────────────────────
@@ -60,4 +61,5 @@ export 'src/icons/nav_icons.dart';
 
 // ── 工具函数层 ────────────────────────────────────────────────────────────
 export 'src/utils/cell_grid.dart';
+export 'src/utils/glass_rim.dart';
 export 'src/utils/responsive.dart';

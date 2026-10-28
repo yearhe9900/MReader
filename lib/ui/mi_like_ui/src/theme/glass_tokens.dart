@@ -3,19 +3,17 @@ import 'package:flutter/painting.dart';
 import 'theme_mode.dart';
 import 'transparency_tokens.dart';
 
-/// 磨砂玻璃材质配方 token（视频/截图实测，所有玻璃类组件共用）。
+/// 磨砂玻璃材质配方 token（度量，所有玻璃类组件共用）。
 ///
-/// 实测透射模型（深色）：遮罩 `scrim` 在干净列上满足 out = 0.37·in + 12.6；
-/// 高亮胶囊是"透镜"（在遮罩上开洞 + 暗化 + 白茶色），不是纯色块。
+/// 深色透射模型：遮罩 `scrim` 满足 out ≈ 15 + 0.24·in；选中胶囊为**高磨砂
+/// 块**（暗化 + 白茶色调，**不开洞**，实测 (c,t)≈(84,0.05)）。
 ///
-/// 浅色同样是半透明真实玻璃（亮色录屏 1220×2656 实测）：遮罩带垂直
-/// 渐变（上更透、下更实），背后内容色彩透上来；选中胶囊是独立的暖灰
-/// 玻璃体。旧"白玻璃"参考图（近白底 #F7F7F7）实为同一配方在白底上的
-/// 表现（代入透射模型体部≈#FBFBFB、胶囊≈#EAEAEA，与旧采样吻合）。
-/// 明暗两套配方见 [MiGlassPalette]。
+/// 浅色同为半透明真实玻璃：遮罩带垂直渐变（上透下实），背后内容色彩
+/// 透出；选中胶囊为独立暖灰玻璃体（亮色实测为**开洞**玻璃体，见
+/// [MiGlassPalette.lensCutsScrim]）。明暗两套配方见 [MiGlassPalette]。
 ///
-/// **所有 alpha / σ 都是引用**（[MiTransparencyTokens]，统一透明配置），
-/// 这里只决定「哪一层用哪档」和色相。
+/// **alpha / σ 均为引用**（[MiTransparencyTokens]），本层只决定
+/// 「哪一层用哪档」与色相。
 class MiGlassTokens {
   MiGlassTokens._();
 
@@ -25,19 +23,19 @@ class MiGlassTokens {
   /// 保持旧引用兼容；新代码请直接取 [MiTransparencyTokens.blurSigma]。
   static const double blurSigma = MiTransparencyTokens.blurSigma;
 
-  /// 玻璃体深色遮罩（20,20,20 @0.63）。
+  /// 玻璃体深色遮罩（20,20,20，α 见 [MiTransparencyTokens.glassScrimAlpha]）。
   static const Color scrim = Color.fromRGBO(
       20, 20, 20, MiTransparencyTokens.glassScrimAlpha);
 
-  /// 透镜暗化层（~60% 内容透射）。
+  /// 选中块暗化层（压在未开洞的栏体玻璃上；暗色实测 t≈0.05 的高磨砂块）。
   static const Color lensShade = Color.fromRGBO(
       0, 0, 0, MiTransparencyTokens.glassLensShadeAlpha);
 
-  /// 透镜白茶色调。
+  /// 选中块白茶色调。
   static const Color lensTint = Color.fromRGBO(
       255, 255, 255, MiTransparencyTokens.glassLensTintAlpha);
 
-  /// 透镜内描边。
+  /// 选中块内描边。
   static const Color lensStroke = Color.fromRGBO(
       255, 255, 255, MiTransparencyTokens.glassLensStrokeAlpha);
 
@@ -58,26 +56,35 @@ class MiGlassPalette {
     required this.rim,
     this.scrimGradient,
     this.lensTintGradient,
-    this.elevationShadow = const [],
+    this.lensCutsScrim = false,
+    this.elevationShadow = const <BoxShadow>[],
   });
 
-  /// 玻璃体遮罩（在透镜处开洞）；[scrimGradient] 非空时改按渐变绘制。
+  /// 选中块是否在栏体遮罩上**开洞**（「透镜」形态）。
+  ///
+  /// 亮色实测：选中胶囊是开洞的独立暖灰玻璃体（透射 t≈0.20，比栏体略实）
+  /// → `true`；暗色实测：选中块是**高磨砂块**（(c,t)≈(84,0.05)，内容几乎
+  /// 不透出）→ `false`（暗化 + 白茶色调压在未开洞的栏体玻璃之上）。
+  final bool lensCutsScrim;
+
+  /// 玻璃体遮罩（[lensCutsScrim] 为真时在选中块处开洞）；
+  /// [scrimGradient] 非空时改按渐变绘制。
   final Color scrim;
 
   /// 玻璃体遮罩垂直渐变（可空 = 纯色 [scrim]；亮色实测上透下实）。
   final Gradient? scrimGradient;
 
-  /// 透镜暗化层（贴在开洞处的最底层）。
+  /// 选中块暗化层（[lensCutsScrim] 为假时贴在栏体玻璃上；为真时贴在开洞处）。
   final Color lensShade;
 
-  /// 透镜色调（叠在暗化层上，构成透镜玻璃体）；
+  /// 选中块色调（叠在暗化层上）；
   /// [lensTintGradient] 非空时改按渐变绘制。
   final Color lensTint;
 
-  /// 透镜色调垂直渐变（可空 = 纯色 [lensTint]）。
+  /// 选中块色调垂直渐变（可空 = 纯色 [lensTint]）。
   final Gradient? lensTintGradient;
 
-  /// 透镜内描边（深色 0.08 实测；浅色真值为无描边=透明，见 [MiGlassPalette.light]）。
+  /// 选中块内描边（深色 0.08 实测；浅色真值为无描边=透明，见 [MiGlassPalette.light]）。
   final Color lensStroke;
 
   /// 玻璃体外缘高光。
@@ -109,6 +116,7 @@ class MiGlassPalette {
   ///  * 外缘纯白 #FFFFFF 高光（实测峰值 255）；
   ///  * 投影：下缘近处约 -8 级、~50px 内衰减完。
   static const MiGlassPalette light = MiGlassPalette(
+    lensCutsScrim: true,
     scrim: Color.fromRGBO(
         251, 251, 251, MiTransparencyTokens.glassScrimLightAlphaMid),
     scrimGradient: LinearGradient(

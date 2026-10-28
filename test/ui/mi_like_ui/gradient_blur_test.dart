@@ -64,6 +64,109 @@ void main() {
     test('作用区为 0 时不产生任何段', () {
       expect(MiGradientBlur.bandsFor(extent: 0), isEmpty);
     });
+
+    group('sigmaScale（滚动降 σ）', () {
+      test('默认 1.0 逐段等于度量 σ（不缩放）', () {
+        final base = MiGradientBlur.bandsFor();
+        final scaled = MiGradientBlur.bandsFor(sigmaScale: 1.0);
+        expect(scaled.map((b) => b.sigma), base.map((b) => b.sigma));
+        expect(scaled.map((b) => b.top), base.map((b) => b.top));
+        expect(scaled.map((b) => b.height), base.map((b) => b.height));
+      });
+
+      test('0.6：各段 σ 等比压低，保留段的形状（段位 / 段高）不变', () {
+        final base = MiGradientBlur.bandsFor();
+        final scaled = MiGradientBlur.bandsFor(sigmaScale: 0.6);
+        // 尾段（σ 0.30 × 0.6 = 0.18 < 0.5）被剔除 → scaled 是 base 的前缀
+        expect(scaled.length, lessThan(base.length));
+        // 保留段的段位 / 段高逐段一致 —— 只改强度，不改曲线形状
+        for (var i = 0; i < scaled.length; i++) {
+          expect(scaled[i].top, base[i].top, reason: '第 $i 段段位应一致');
+          expect(scaled[i].height, base[i].height, reason: '第 $i 段段高应一致');
+          expect(
+            scaled[i].sigma,
+            moreOrLessEquals(base[i].sigma * 0.6, epsilon: 1e-9),
+            reason: '第 $i 段应等比缩放',
+          );
+        }
+        // 仍是单调递减（形状不变的直接推论）
+        for (var i = 1; i < scaled.length; i++) {
+          expect(scaled[i].sigma, lessThan(scaled[i - 1].sigma));
+        }
+      });
+
+      test('缩放后低于 minVisibleSigma 的段被剔除（省帧）', () {
+        // 度量尾段 σ = 0.30，× 0.6 = 0.18 < 0.5 → 剔除
+        final base = MiGradientBlur.bandsFor();
+        final scaled = MiGradientBlur.bandsFor(sigmaScale: 0.6);
+        expect(scaled.length, lessThan(base.length));
+        for (final b in scaled) {
+          expect(b.sigma, greaterThanOrEqualTo(MiGradientBlurProfile.minVisibleSigma));
+        }
+      });
+
+      test('σScale 必须为正（构造期断言）', () {
+        expect(
+          () => MiGradientBlur(sigmaScale: 0),
+          throwsA(isA<AssertionError>()),
+        );
+        expect(
+          () => MiGradientBlur(sigmaScale: -1),
+          throwsA(isA<AssertionError>()),
+        );
+      });
+
+      test('MiTopBar.headerBlurBands：σ 量化 0.05 档 + 快速运动合并 3 段', () {
+        final base = MiTopBar.headerBlurBands(
+          MiTopBarPalette.dark,
+          extent: 156,
+          underSurface: false,
+        );
+        expect(base, hasLength(MiHeaderBlurProfile.bands.length));
+
+        // 快速运动（scale ≤ 0.8）：9 段合并成 3 段（省帧），σ 等比缩放后
+        // 单调递减、无缝铺满
+        final fast = MiTopBar.headerBlurBands(
+          MiTopBarPalette.dark,
+          extent: 156,
+          underSurface: false,
+          sigmaScale: 0.6,
+        );
+        expect(fast, hasLength(3), reason: '运动中合并 3 段，全宽高斯 9 趟 → 3 趟');
+        expect(fast.first.top, 0);
+        expect(fast.last.bottom, closeTo(156.0, 0.01));
+        for (var i = 1; i < fast.length; i++) {
+          expect(fast[i].top, closeTo(fast[i - 1].bottom, 1e-9));
+          expect(fast[i].sigma < fast[i - 1].sigma, isTrue);
+        }
+        // 合并 σ = 段高加权均值 × scale（首组 = 平台两段 8.5/7.98，h 35/15）
+        expect(
+          fast.first.sigma,
+          moreOrLessEquals((8.5 * 35 + 7.98 * 15) / 50 * 0.6, epsilon: 1e-9),
+        );
+
+        // 量化：0.62 → 0.6 档（同档拿到同一组 σ → MiFilterCache 命中）
+        final quantized = MiTopBar.headerBlurBands(
+          MiTopBarPalette.dark,
+          extent: 156,
+          underSurface: false,
+          sigmaScale: 0.62,
+        );
+        expect(quantized.first.sigma, fast.first.sigma);
+      });
+
+      test('σScale 太小时渐进段整段剔除（返回空）', () {
+        // 8.5 × 0.01 → 量化后 ≈0 → 全部剔除
+        expect(
+          MiTopBar.headerBlurBands(
+            MiTopBarPalette.dark,
+            extent: 156,
+            sigmaScale: 0.01,
+          ),
+          isEmpty,
+        );
+      });
+    });
   });
 
   group('渲染', () {

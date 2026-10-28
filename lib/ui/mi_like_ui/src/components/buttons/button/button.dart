@@ -62,7 +62,9 @@ class MiButton extends StatelessWidget {
         behavior: HitTestBehavior.opaque,
         onTap: onPressed,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
+          duration: const Duration(
+            milliseconds: MiButtonMetrics.pressDurationMs,
+          ),
           curve: Curves.easeOut,
           height: MiButtonMetrics.height,
           padding: const EdgeInsets.symmetric(

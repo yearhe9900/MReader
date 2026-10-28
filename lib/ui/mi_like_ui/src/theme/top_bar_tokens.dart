@@ -65,7 +65,8 @@ import 'transparency_tokens.dart';
 ///
 /// 定义已搬到 [MiTopBarBlurBand] 的**权威位置** `gradient_blur_tokens.dart`
 /// （这层渐进模糊属于内容区、不属于顶栏）；此处 export 保持旧引用可用。
-export 'gradient_blur_tokens.dart' show MiTopBarBlurBand, MiGradientBlurProfile;
+export 'gradient_blur_tokens.dart'
+    show MiTopBarBlurBand, MiGradientBlurProfile, MiHeaderBlurProfile;
 
 /// 墨色沿用框架前景色 [MiColors.foreground]（实测标题笔画内部 246）；
 /// 返回圆钮按压反馈为**白 @9.4%**（叠纯黑底实测 24 级，圆盘内均匀），
@@ -166,4 +167,49 @@ class MiTopBarPalette {  const MiTopBarPalette({
   /// 按明暗模式取配方。
   static MiTopBarPalette of(MiThemeMode mode) =>
       mode == MiThemeMode.dark ? dark : light;
+
+  /// **透明顶栏配方档**（推导档，非度量：素材没有透明顶栏样张；面向阅读页
+  /// 这类「顶栏叠在任意内容上、靠零件亮边读分隔」的形态，如下游 MReader
+  /// 阅读页）。
+  ///
+  /// 一档命名配方 = 零叠色（[scrimGradient] 全透明、[scrimOpaqueBottom] = 0）；
+  /// 完整形态再关磨砂、亮边常驻，一行切换（墨色/按压高光随明暗取
+  /// [transparentFor]）：
+  ///
+  /// ```dart
+  /// MiTopBar(
+  ///   title: '章节名',
+  ///   showBlur: false,               // σ=0：栏内无磨砂
+  ///   showSurface: false,            // 零叠色（本档双保险）
+  ///   palette: MiTopBarPalette.transparentFor(themeMode),
+  ///   rimProgress: 1.0,              // 内缘亮边常驻（默认即 1.0）
+  /// )
+  /// ```
+  ///
+  /// 栏内不压任何材质，标题 / 零件与内容的分隔只靠内缘亮边（
+  /// `MiGlassRimPainter`）与墨色对比。
+  static const MiTopBarPalette transparent = MiTopBarPalette(
+    scrimGradient: _clearScrim,
+    ink: MiColors.foreground,
+    pressHighlight: MiTransparencyTokens.pressHighlightDark,
+    scrimOpaqueBottom: 0,
+  );
+
+  /// 透明档（随明暗取墨色 / 按压高光；叠色两档同为零叠色）。
+  static MiTopBarPalette transparentFor(MiThemeMode mode) =>
+      mode == MiThemeMode.dark
+          ? transparent
+          : const MiTopBarPalette(
+              scrimGradient: _clearScrim,
+              ink: MiColors.foregroundLight,
+              pressHighlight: MiTransparencyTokens.pressHighlightLight,
+              scrimOpaqueBottom: 0,
+            );
+
+  /// 零叠色渐变（透明档专用：两端全透明，开 [showSurface] 也不压任何色）。
+  static const LinearGradient _clearScrim = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [MiTransparencyTokens.clear, MiTransparencyTokens.clear],
+  );
 }

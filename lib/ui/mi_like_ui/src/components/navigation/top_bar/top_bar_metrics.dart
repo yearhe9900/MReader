@@ -1,6 +1,7 @@
 import 'package:flutter/animation.dart';
 
 import '../../../theme/gradient_blur_tokens.dart';
+import '../../../theme/motion_tokens.dart';
 
 /// [MiTopBar] 的几何 / 折叠动效参数：1:1 逐帧实测自参考录屏。
 ///
@@ -95,8 +96,10 @@ class MiTopBarMetrics {
 
   /// 返回圆钮按压反馈：实测 0.4s 内 0 → 25% → 83% → 100%（easeOut 形），
   /// 松开后在 0.3s 内消失（8.4s 帧 13 级 → 8.7s 帧 0 级）。
-  static const int pressFadeInMs = 420;
-  static const int pressFadeOutMs = 300;
+  ///
+  /// 同源转发自 [MiMotionTokens]（统一动效配置），新代码请直接取 token。
+  static const int pressFadeInMs = MiMotionTokens.pressFadeInMs;
+  static const int pressFadeOutMs = MiMotionTokens.pressFadeOutMs;
 
   // ── 大标题 ────────────────────────────────────────────────────────────
   /// 墨心相对**基线**的比例（本机 simhei 0.360 / msyh 0.350 / simsun 0.355
@@ -208,6 +211,15 @@ class MiTopBarMetrics {
   /// 胶囊标签行插槽默认高度 = `MiPillTabMetrics.pillHeight`（39.9）；同上，
   /// 跨层同值由测试钉住。
   static const double tabBarSlotHeight = 39.9;
+
+  /// 内缘亮边激活的滚动距离（dp，**推导映射**）。
+  ///
+  /// 素材实测是**内容接近度**阈值：内容距栏底 ≤≈20dp 时玻璃进入激活态
+  /// （亮边亮起，翻转在 1 帧内完成；同一段录屏里内容距 20.6dp 时亮边 = 0、
+  /// 20.0dp 时已满）。顶栏不知道内容布局，按标准布局换算成滚动位移：
+  /// `rimProgress = clamp(scrollOffset / 20, 0, 1)` —— 静止时亮边不亮
+  /// （实机反馈：不能常亮），内容向栏靠近的过程中渐亮，进入栏区后保持。
+  static const double rimFadeDistance = 20.0;
 
   // ── 折叠动效（逐帧实测查找表） ─────────────────────────────────────────
   /// 大标题不透明度：`(滚动位移 dp, 墨迹峰值比)`。
