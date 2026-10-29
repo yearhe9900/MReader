@@ -1,7 +1,7 @@
 name: mreader
 description: "阅读M（MReader）：纯 Flutter 自绘 + 纯 Dart 解析 EPUB，纵向滚动阅读。"
 publish_to: 'none'
-version: 0.1.0
+version: 0.0.1+1
 
 # 用户已拍板（2026-09-24 升级）：Flutter 3.47.5-stable 内置 Dart 3.13.4
 # （为解锁 pdfrx 2.6.5（需 Dart ≥3.13）由 3.44.9 / 3.12.2 升上）。
