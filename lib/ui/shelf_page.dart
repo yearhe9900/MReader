@@ -679,7 +679,7 @@ class ShelfPageState extends State<ShelfPage> {
       if (!mounted) return;
       final BookSource source = pending;
       // 开书转场：用 [ReaderOpenRoute] 替掉裸 [MaterialPageRoute]——阅读页作为
-      // **一整张纸从右侧滑入**铺满，书架静止在后被压暗（460ms / easeOutCubic /
+      // **一整张纸从右侧滑入**铺满，书架静止在后被压暗（320ms / easeOutCubic /
       // 70dp 圆角）。
       //
       // 动因（实测见 §2.69 附一~附七）：点书卡到正文上屏的等待里，首帧框架任务

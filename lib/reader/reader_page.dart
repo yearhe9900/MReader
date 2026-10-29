@@ -117,6 +117,13 @@ const double _kProgressIndicatorReserve = 28;
 /// （见 [_idleGap]）。约 20~30 批 ≈ 2s 量级的让位。
 const int kAutoFillPauseFrames = 20;
 
+/// 开书滑入窗的**兜底落定**时限（见 [_enterOpenSlideWindow]）。
+///
+/// 窗口由路由动画的 completed / dismissed 落定；万一落定信号漏到（后续代码
+/// 引入新的挂起路径），超时强制收口——代价只是少冻结一秒预热，远小于
+/// 「排版永久停摆」。滑入本身 320ms，2s ≈ 6× 余量。
+const Duration kReaderOpenSlideSettleTimeout = Duration(seconds: 2);
+
 /// 换参 reprime 的首屏突发预算（字号 / 行距 / 页边距 / 视口变更后的重分页）。
 ///
 /// 比开书 / 跳章的 `kFirstPaintBudget`（16ms）宽 3 倍：换参会**整体作废页表**，
@@ -248,6 +255,29 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// [_autoFillPaused] 的**兜底到期**帧计数（见 [_pauseAutoFill] 头注）。
   int _autoFillPauseFrames = 0;
+
+  /// 开书滑入进行中（就绪已放行、转场动画未落定）：**动画期零排版**（保证③）。
+  ///
+  /// 滑入的每一帧都贵（整页纸合成），空闲分页切片（[kIdleFrameBudget]）与后台
+  /// 补齐批挤进动画帧就是丢帧（用户实测「打开图书过程丢帧」，§2.109）。此窗内：
+  /// 分页帧链就地停摆（[_stepPagedIdle]）、补齐循环退出让位、落定重启
+  /// （[_autoFillLoop]）、章权重到手压到落定再生效（[_pendingChapterWeights]）。推迟的全是**视口外**的
+  /// 预热——放行门闸已保证可见区是真身（[_viewportReal] + 落位收敛）。
+  /// 窗 = 宿主路由动画（completed / dismissed 落定，[_exitOpenSlideWindow] 收口）。
+  bool _openSliding = false;
+
+  /// [_openSliding] 的宿主路由动画与状态监听（落定解绑；dispose 兜底摘除）。
+  Animation<double>? _openSlideAnimation;
+  AnimationStatusListener? _openSlideListener;
+
+  /// 滑入窗的兜底落定闹钟（[kReaderOpenSlideSettleTimeout]；落定 / dispose 撤）。
+  Timer? _openSlideTimeout;
+
+  /// 滑入窗内到手的章权重（[_loadChapterWeights]）：压到落定再生效。
+  List<int>? _pendingChapterWeights;
+
+  /// 滑入窗内压下的占位高估刷新（[_refreshEstimatedHeight]）：落定后补跑。
+  bool _estimateRefreshPending = false;
 
   /// 是否显示「前情回顾」入口（`AI-05` ②：开书时按上次进度时间判定，
   /// 会话内保留；本次阅读会刷新 `progress.updatedAt`，下次开书自然消失）。
@@ -546,6 +576,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // `_saveProgress` 会回退 [_lastLocalHint]、不用 null 覆盖已存快照。
     WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
+    // 开书滑入窗收尾：摘监听 + 解冻排版（`_open` 采纳调度器时的 `unfreeze()`
+    // 仍是跨开书兜底）；窗内压下的权重 / 估高随页丢弃，不再生效。
+    _openSliding = false;
+    _detachOpenSlideListener();
+    _scheduler?.unfreeze();
     _sleepTimer?.cancel(); // `TTS-05`：关页撤定时（回调防呆双保险）
     _sleepTimer = null;
     // 停朗读（回调经 _disposed 闸不 setState；引擎 stop 为 unawaited 清场）。
@@ -796,16 +831,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// `Future.delayed`（`testWidgets` FakeAsync 会留未清定时器）。
   ///
   /// [requireLanded]：分页模式的「就绪」= 精确落位收敛 + **视口真身**（路线 A
-  /// 纪律②）；未满足挂 [_openGatePending] 等 [_checkOpenGate] 复查；3s 兜底
+  /// 纪律②）+ **锚点布局定稿**（[_anchorLayoutFinal]，防落位后闪屏）；未满足挂
+  /// [_openGatePending] 等 [_checkOpenGate] 复查；3s 兜底
   /// （`kReaderOpenHoldTimeout`）保证「漏报就绪不卡死」。
   void _signalOpenReady({bool requireLanded = false}) {
-    if (requireLanded && !_positionConverged) {
+    if (requireLanded && (!_positionConverged || !_anchorLayoutFinal())) {
       _openGatePending = true;
       return;
     }
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
       if (!mounted || _disposed) return;
-      ReaderOpenTransition.signalReady();
+      _releaseOpenGate();
     });
     // 帧回调要等**下一帧**才跑；收敛点可能在帧外（postFrame 阶段 / 微任务）
     // 触发，不补调度帧回调会饿死到 3s 兜底（[_startPagedFrames] 同款处理）。
@@ -825,11 +861,81 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
       _openGateCheckScheduled = false;
       if (!mounted || _disposed || !_openGatePending) return;
-      if (!_positionConverged || !_viewportReal()) return;
+      if (!_positionConverged || !_viewportReal() || !_anchorLayoutFinal()) {
+        return;
+      }
       _openGatePending = false;
-      ReaderOpenTransition.signalReady();
+      _releaseOpenGate();
     });
     WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// 报「就绪」放行纸张滑入，并同帧进入**开书滑入窗**（动画期零排版，见 [_openSliding]）。
+  ///
+  /// 放行与冻结必须同拍：`signalReady` 同步起跑滑入动画，晚一帧冻结就晚一帧零排版。
+  void _releaseOpenGate() {
+    ReaderOpenTransition.signalReady();
+    _enterOpenSlideWindow();
+  }
+
+  /// 进入开书滑入窗；宿主路由没有在途转场动画时是 no-op。
+  ///
+  /// 窗取**路由动画本身**（不取定时器）：开书滑入就是 [ReaderOpenRoute] 的路由
+  /// 动画（[ReaderOpenRoute.hold] 按在起点、就绪才放行），completed / dismissed
+  /// 都算落定（按住期返回 = dismissed 同样收口）。测试直灌 `MaterialApp(home: ...)`
+  /// 的首页路由动画恒 completed ⇒ 不进窗，既有用例零行为变化。
+  void _enterOpenSlideWindow() {
+    if (_openSliding) return;
+    final Animation<double>? animation = ModalRoute.of(context)?.animation;
+    if (animation == null || animation.isCompleted || animation.isDismissed) {
+      return;
+    }
+    _openSliding = true;
+    _scheduler?.freeze();
+    void onStatus(AnimationStatus status) {
+      if (status == AnimationStatus.completed ||
+          status == AnimationStatus.dismissed) {
+        _exitOpenSlideWindow();
+      }
+    }
+
+    _openSlideAnimation = animation;
+    _openSlideListener = onStatus;
+    animation.addStatusListener(onStatus);
+    // 兜底闹钟：落定信号漏到时强制收口（见 [kReaderOpenSlideSettleTimeout]）。
+    _openSlideTimeout = Timer(kReaderOpenSlideSettleTimeout, _exitOpenSlideWindow);
+  }
+
+  /// 落定收口：摘监听、解冻排版、补跑压下的权重 / 估高、重启预热管线（幂等）。
+  void _exitOpenSlideWindow() {
+    if (!_openSliding) return;
+    _openSliding = false;
+    _detachOpenSlideListener();
+    _scheduler?.unfreeze();
+    if (!mounted || _disposed) return;
+    final List<int>? weights = _pendingChapterWeights;
+    _pendingChapterWeights = null;
+    if (weights != null) setState(() => _chapterWeights = weights);
+    if (_estimateRefreshPending) {
+      _estimateRefreshPending = false;
+      _scheduleEstimateRefresh();
+    }
+    // 帧链 / 补齐循环在窗内只是「让帧不干活」；这里兜底重启，防窗内恰好跑完退出。
+    _ensureAutoFill();
+    _startPagedFrames();
+  }
+
+  /// 摘除滑入窗状态监听 + 撤兜底闹钟（落定 / dispose 共用；幂等）。
+  void _detachOpenSlideListener() {
+    _openSlideTimeout?.cancel();
+    _openSlideTimeout = null;
+    final Animation<double>? animation = _openSlideAnimation;
+    final AnimationStatusListener? listener = _openSlideListener;
+    _openSlideAnimation = null;
+    _openSlideListener = null;
+    if (animation != null && listener != null) {
+      animation.removeStatusListener(listener);
+    }
   }
 
   /// 「视口真身」判据（路线 A 纪律②）：可见区间内没有「载入中…」占位带
@@ -851,6 +957,38 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       final double bandTop = layout.chapterTops[i];
       final double bandBottom = bandTop + views[i].headingHeight;
       if (bandTop < bottom && bandBottom > top) return false;
+    }
+    return true;
+  }
+
+  /// 锚点布局定稿判据：视口顶**之前**的窗口章页表都已定稿（高度不会再涨）。
+  ///
+  /// 放行后上方高度再涨 = 语义重锚大位移（真机实测 d≈8518px：前序章从部分
+  /// 页表补到定稿），而 `_jumpPaged` 对超域目标是「帧末补跳、接受 1 帧滑移」
+  /// ——那一帧视口顶显示的是**完全另一段正文**，随后猛跳回来 = 落位后闪屏
+  /// （§2.110 定案）。故门闸补第三条：前序章（视口顶所在章之前）必须①内容
+  /// 已载（未载 = 只有标题占高，载入必涨）、②页表已定稿（[PaginationScheduler]
+  /// 只把定稿表写入 [PaginationCache]）。
+  ///
+  /// 锚点 = 当前章（恢复落位把语义坐标对齐到视口顶）；窗口截断使章内偏移
+  /// 只依赖前序章高（页切分是前向贪心、已覆盖页不再改切，见 `_reslice`），
+  /// 故这两条即「落位后不再大跳」的充要条件。锚点在书首（无前序）恒定稿。
+  bool _anchorLayoutFinal() {
+    final PaginationScheduler? scheduler = _scheduler;
+    final List<PagedChapterView> views = _pageViews;
+    final List<Chapter>? chapters = _chapters;
+    final PaginationConfig? cfg = _pageConfig;
+    final int anchor = _currentIndex;
+    if (scheduler == null || cfg == null || chapters == null) return true;
+    if (anchor <= 0 || anchor >= chapters.length) return true;
+    final String anchorHref = chapters[anchor].href;
+    for (final PagedChapterView view in views) {
+      if (view.href == anchorHref) break; // 到锚点章为止
+      final int idx = chapters.indexWhere((Chapter c) => c.href == view.href);
+      if (idx < 0) continue;
+      // ① 内容已载；② 页表已定稿。
+      if (_cache.peek(idx) == null) return false;
+      if (scheduler.cache.peek(view.href, cfg) == null) return false;
     }
     return true;
   }
@@ -1398,6 +1536,16 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       while (mounted && !_disposed) {
         final ChapterAutoLoader? loader = _loader;
         if (loader == null) return;
+        // 动画期零排版（保证③，见 [_openSliding]）：开书滑入中**退出**让位，
+        // 落定后由 [_exitOpenSlideWindow] 的 [_ensureAutoFill] 重启（配对安全：
+        // 本 `return` 前无 await，与重启不会交错，两序都不断链）。
+        //
+        // ⚠️ 绝不能写成「`await _idleGap(); continue;` 挂等」：`_idleGap` 经
+        // `scheduleMicrotask` 自续，微任务链**永不让出事件循环**——帧、定时器、
+        // IO 回调全部饿死（真机 ANR 实测：滑入起跑帧后彻底无日志、5s 后系统判
+        // 无响应杀进程），滑入动画也永远播不完、解冻信号永不至 = 自锁死。
+        // 「等待」只能挂在真事件级原语上；这里选退出，简单且无自锁面。
+        if (_openSliding) return;
         // R1②：交互中不补（滚动/拖动/翻页优先级高于预热）。
         // 「挂起」不是 `return`（循环退出、计数永不递减、兜底形同虚设）也不是
         // 裸 `continue`（无 await ⇒ **忙等死循环**）——**让出一帧再进下一轮**，
@@ -1515,6 +1663,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 故这里用「已加载章实测高度的中位数」作为其高度代理，而非「字符数 × 系数」。
   void _refreshEstimatedHeight() {
     if (!mounted) return;
+    // 动画期零排版（保证③，见 [_openSliding]）：估高刷新会整页 setState + 语义
+    // 重锚（[_applyLayoutChange]，还带 [_beginScrollTo] 滚动），压到落定后补跑。
+    if (_openSliding) {
+      _estimateRefreshPending = true;
+      return;
+    }
     // 章高模型保鲜（与占位高估计同源：都建立在「已构建真实章」之上）。
     _captureBuiltHeights();
     final List<double> heights = <double>[];
@@ -2456,6 +2610,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   void _stepPagedIdle(Duration _) {
     _pagedFramesRunning = false;
     if (!mounted || _disposed || !_pagedMode) return;
+    // 动画期零排版（保证③，见 [_openSliding]）：开书滑入中帧链就地停摆（不续链），
+    // 落定由 [_exitOpenSlideWindow] 重启；[PaginationScheduler.freeze] 另挡别处调用。
+    if (_openSliding) return;
     final PaginationScheduler? scheduler = _scheduler;
     if (scheduler == null) return;
     final bool more = scheduler.stepIdle();
@@ -3361,6 +3518,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       if (!mounted || _disposed || weights == null) return;
       final List<Chapter>? chapters = _chapters;
       if (chapters == null || weights.length != chapters.length) return;
+      // 动画期零排版（保证③，见 [_openSliding]）：权重到位是一次整页 setState，
+      // 压到开书滑入落定再生效（[_exitOpenSlideWindow]）。
+      if (_openSliding) {
+        _pendingChapterWeights = weights;
+        return;
+      }
       setState(() => _chapterWeights = weights);
     } catch (_) {
       // 权重取不到不影响阅读：继续等权。

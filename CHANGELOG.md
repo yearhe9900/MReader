@@ -9,6 +9,7 @@
 ### 变更
 
 - 开书转场提速与防掉帧：纸张滑入 460 → 320ms（返回 320 → 240ms），滑入动画期暂停后台排版与章节预热（打开图书过程不再掉帧）
+- 修复开书落位后偶发「闪一下别的正文」：上方章节页表补完引起的高度突变不再发生在落位之后
 
 - 发布 v0.0.1 安卓 Release（GitHub Release 首个 APK：arm64-v8a / armeabi-v7a / x86_64，debug 签名）`69cace8`
 - 图书解析内核同步上游 `rust_reader_kernel@d0684b2`：章级/页级缓存持久化——open 索引（EPUB entries/toc_raw、MOBI spans/章表、CBZ 页表/尺寸表、PDF 页面表/章表、TXT 章表）按内容 key 落盘，重开命中免重建（ABI 10 不变）

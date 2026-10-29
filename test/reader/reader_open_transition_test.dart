@@ -1,14 +1,15 @@
 // 开书转场「先按住、就绪后再滑」（`ReaderOpenRoute`）的 widget 测试。
 //
-// 形态来源：负责人 2026-10-09 给的参考动效，逐帧量化结果见 §2.77；
-// 「打开书闪一下」的诊断与修法（**点书后按住、等阅读页就绪再放行**）见 §2.78。
-// 放行门闸的升级（路线 A 纪律②「排到目标页才上屏」，见
-// 路线 A §7）：分页模式的「就绪」= **目标语义坐标精确
-// 落位收敛**，不是「首帧上屏」——估算落位只是过渡帧，`_pendingLand` 二次精确
-// 落位完成前转场必须继续按住（否则滑入中视口大跳，就是「开书闪动」主链）。
-// §7②「占位换血出视口」再加一条：放行时刻视口必须是**真身**——可见区间内
-// 不许残留「载入中…」占位带（`pages.isEmpty` 的 96dp 带），否则随后邻章
-// 「占位→真」换血的高度突变发生在纸张滑入中（开书闪动链②）。
+// 形态来源：参考动效的逐帧量化见 §2.77；「打开书闪一下」的诊断与修法
+// （**点书后按住、等阅读页就绪再放行**）见 §2.78。放行门闸（路线 A §7③
+// 「排到目标页才上屏」，见 路线 A §7）：分页模式的「就绪」= **目标语义坐标
+// 精确落位收敛**，不是「首帧上屏」——估算落位只是过渡帧，`_pendingLand` 二次
+// 精确落位完成前转场必须继续按住（否则滑入中视口大跳 =「开书闪动」主链）。
+// §7②「占位换血出视口」：放行时刻视口必须是**真身**——可见区间内**不许**残留
+// 「载入中…」占位带（`pages.isEmpty` 的 96dp 带），否则邻章「占位→真」换血的
+// 高度突变发生在纸张滑入中（开书闪动链②）。
+// §2.110 补第三条「锚点布局定稿」：视口顶之前的前序章页表未定稿不放行——
+// 上方高度再涨会触发超域补跳的「1 帧滑移」（落位后闪一下别的正文 = 闪屏）。
 // 本文件钉住六件事：
 //   ① **等待期绝对静止**：就绪信号到达之前，纸张恒停在屏幕右侧之外、暗化恒为 0、
 //      书架锚点一个像素都不动（这就是「闪一下」的修法本身）；
@@ -26,6 +27,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/reader/pagination/paged_scroller.dart';
+import 'package:mreader/reader/pagination/page_paginator.dart';
+import 'package:mreader/reader/pagination/pagination_scheduler.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_open_transition.dart';
 import 'package:mreader/reader/reader_page.dart';
@@ -106,10 +109,9 @@ class _PaperState extends State<_Paper> {
   @override
   void initState() {
     super.initState();
-    // 与生产**同形**：`ReaderPage` 也是在**帧后回调**里报就绪的
-    // （`_signalOpenReady`），不是在自己建立的那一刻——那正是「闪一下」的成因。
-    // 生产侧门闸条件更严（分页模式要**精确落位收敛**才放行，见「真阅读页接线」
-    // 组的两条用例），替身只钉「帧后才报、不早于自己那一帧」的形状。
+    // 与生产**同形**：`ReaderPage` 也是在**帧后回调**里报就绪（`_signalOpenReady`），
+    // 不是建立的那一刻——那正是「闪一下」的成因。生产门闸更严（分页模式要**精确
+    // 落位收敛**才放行，见「真阅读页接线」组）；替身只钉「帧后才报、不早于自己那一帧」。
     if (!widget.busy) _armNextFrame();
   }
 
@@ -190,11 +192,9 @@ Future<void> pumpFrames(WidgetTester tester, int frames) async {
 
 /// 点开书，并推进到**滑入开始的那一帧**。
 ///
-/// 帧序（`readyFrames = r`）——两个容易踩的坑：
-/// · **点书后第 1 帧纸张还没进树**：`Navigator.push` 只是让 `Overlay` 重排，
-///   转场层与纸张要到**下一帧**才建起来（`initState` 里的 `hold()` 也在那一帧）；
-/// · 之后第 r+2 帧的**帧后回调**才报就绪 ⇒ 放行。
-/// 所以共推 `r + 2` 帧；此刻再 `pump(时长)` 才能量到位移。
+/// 帧序（`readyFrames = r`）两个坑：**点书后第 1 帧纸张还没进树**（`Navigator.push`
+/// 只是让 `Overlay` 重排，转场层与纸张要到下一帧才建）；第 r+2 帧的**帧后回调**
+/// 才报就绪 ⇒ 放行。故共推 `r + 2` 帧；此刻再 `pump(时长)` 才能量到位移。
 Future<void> openAndStart(WidgetTester tester, {int readyFrames = 0}) async {
   await tester.tap(find.byKey(_kOpenKey));
   await pumpFrames(tester, readyFrames + 2);
@@ -272,7 +272,7 @@ void main() {
 
       await tester.tap(find.byKey(_kOpenKey));
       await tester.pump(); // 帧 1：纸张建立 ⇒ 被按住
-      // 再推 40 帧（≈ 640ms，**刻意超过 460ms 的滑入时长**）：按住期间一帧都不能动。
+      // 再推 40 帧（≈ 640ms，**刻意超过 320ms 的滑入时长**）：按住期间一帧都不能动。
       // 超过时长是有意的——若 `hold()` 没真的冻住进度，控制器会在这一窗口里跑完。
       for (int i = 1; i <= 40; i++) {
         await tester.pump(const Duration(milliseconds: 16));
@@ -341,7 +341,9 @@ void main() {
       await openAndStart(tester);
 
       int elapsed = 0;
-      for (final int target in <int>[80, 160, 240, 340, 440]) {
+      // 采样点全部落在 320ms 滑入**之内**：落位后书架随路由 `opaque` 转 offstage，
+      // 锚点就量不到了（`find` 默认跳过 offstage）。
+      for (final int target in <int>[60, 120, 180, 240, 300]) {
         await tester.pump(Duration(milliseconds: target - elapsed));
         elapsed = target;
         expect(shelfAt(tester), base, reason: '$target ms 时书架锚点动了');
@@ -352,7 +354,7 @@ void main() {
         (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       await openAndStart(tester);
-      await tester.pump(const Duration(milliseconds: 230)); // 460ms 的一半
+      await tester.pump(const Duration(milliseconds: 160)); // 320ms 的一半
 
       final double width = screenWidth(tester);
       final double moved = width - paperLeft(tester);
@@ -420,13 +422,15 @@ void main() {
 
       tester.state<NavigatorState>(find.byType(Navigator)).pop();
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 160)); // 反向 320ms 的一半
+      await tester.pump(const Duration(milliseconds: 120)); // 反向 240ms 的一半
 
       expect(paperLeft(tester), greaterThan(0), reason: '返回时纸张应向右滑出');
     });
 
-    testWidgets('时长口径 = 参考动效的 460ms', (WidgetTester tester) async {
-      expect(kReaderOpenDuration.inMilliseconds, 460);
+    testWidgets('时长口径 = 320ms（§2.109：参考动效 460ms 实测观感偏慢，提速）',
+        (WidgetTester tester) async {
+      expect(kReaderOpenDuration.inMilliseconds, 320);
+      expect(kReaderOpenReverseDuration.inMilliseconds, 240);
       expect(kReaderPaperRadius, 70);
       expect(kReaderOpenScrimAlpha, 0.54);
       final ReaderOpenRoute route =
@@ -512,7 +516,7 @@ void main() {
         (WidgetTester tester) async {
       // 3000 段长章 + 恢复到 90%：prime 突发（kFirstPaintBudget 16ms）够不到
       // 目标 ⇒ `_primeOpenSync` 走**估算分支**挂 `_pendingLand`（两段式落位），
-      // 二次精确落位要等空闲帧把 ~2700 段排完。这正是「开书闪动」机制链①的现场。
+      // 二次精确落位要等空闲帧排完长尾段落。这正是「开书闪动」机制链①的现场。
       final ProgressStore progressStore = ProgressStore(paths);
       await tester.runAsync(
         () => progressStore.save(
@@ -534,8 +538,8 @@ void main() {
       await tester.tap(find.byKey(_kOpenKey));
 
       // ① 正文段落首次上屏时，二次精确落位必然还没完成（长章要排到 90% 处）——
-      // 转场必须**仍被按住**。「首帧上屏即放行」的旧门闸会在这一轮之前就放，
-      // 于是估算位置 → 精确位置的大跳发生在纸张滑入中（闪动主链）。
+      // 转场必须**仍被按住**。「首帧上屏即放行」会在这之前就放，估算位置 → 精确
+      // 位置的大跳发生在纸张滑入中（闪动主链）。
       final bool seen = await pumpUntil(
           tester, () => find.textContaining('第1章正文').evaluate().isNotEmpty);
       expect(seen, isTrue, reason: '正文段落应已上屏（估算落位过渡帧）');
@@ -575,10 +579,9 @@ void main() {
 
     testWidgets('放行门闸=视口真身：放行帧不许残留「载入中」占位带',
         (WidgetTester tester) async {
-      // 开书闪动机制链②：放行帧视口内残留 96dp「载入中…」占位带时，随后
-      // 邻章「占位→真」换血的高度突变就发生在纸张滑入中（诊断视频 f095-096
-      // 「占位空态」帧）。夹具刻意把**首章压到 2 段**（≈134px，远小于 572px
-      // 视口）⇒ 第 2/3 章占位带必然落进首屏；「收敛即放行」的旧门闸在它们
+      // 开书闪动机制链②：放行帧视口内残留「载入中…」占位带时，随后邻章
+      // 「占位→真」换血的高度突变就发生在纸张滑入中。夹具刻意把**首章压到 2 段**
+      // （远小于视口）⇒ 第 2/3 章占位带必然落进首屏；「收敛即放行」会在它们
       // 排完页表之前就放行（换血 pop-in 发生在滑入中）。
       final ProgressStore progressStore = ProgressStore(paths);
       await tester.pumpWidget(_realHost(() => ReaderPage(
@@ -639,7 +642,7 @@ void main() {
           )));
       await tester.tap(find.byKey(_kOpenKey));
       // 先推 2 轮让转场 arm 起来——`tap` 后不 pump 的话 `isActive` 恒 false，
-      // 「等放行」循环一次都不跑、用例空转绿（2026-10-12 实证：0 条 perf 留痕）。
+      // 「等放行」循环一次都不跑、用例空转绿。
       await settle(tester, rounds: 2);
       expect(ReaderOpenTransition.isActive, isTrue,
           reason: '转场应已 arm 并按住（本用例的前提，防断言空转）');
@@ -649,6 +652,112 @@ void main() {
       }
       expect(ReaderOpenTransition.isActive, isFalse,
           reason: '空段章无可落位内容（语义坐标即达），门闸必须及时放行');
+
+      await closeBook(tester);
+    });
+
+    testWidgets('开书滑入期零排版：放行即冻结排版，落定解冻且预热自动续跑',
+        (WidgetTester tester) async {
+      // 保证③「动画期零排版」覆盖开书滑入（§2.109）：滑入的每一帧都贵（整页纸
+      // 合成），空闲分页切片 / 补齐批挤进动画帧就是丢帧（用户实测「打开图书
+      // 过程丢帧」）。钉住冻结配对（与 `page_turn_wiring_test` 保证③同款口径）
+      // + 落定后的续跑：帧链在窗内就地停摆，漏了重启会把排版永久挂死。
+      final ProgressStore progressStore = ProgressStore(paths);
+      await tester.pumpWidget(_realHost(() => ReaderPage(
+            source: FakeBookSource(paragraphCounts: const <int>[2, 200, 20]),
+            record: fakeRecord(),
+            progressStore: progressStore,
+            repository: fakeRepository(paths),
+          )));
+      await tester.tap(find.byKey(_kOpenKey));
+      // 先推 2 轮让转场 arm 起来（同上：不 pump 的话 `isActive` 恒 false，
+      // 「等放行」循环一次都不跑、用例空转绿）。
+      await settle(tester, rounds: 2);
+      expect(ReaderOpenTransition.isActive, isTrue,
+          reason: '转场应已 arm 并按住（本用例的前提，防断言空转）');
+      final PaginationScheduler scheduler =
+          sharedPaginationSchedulers.forBook(fakeRecord().bookId);
+
+      // 等放行（逐轮 8ms；上限 200 轮 ≈ 1.6s 假时钟 < 3s 兜底）。
+      final bool released =
+          await pumpUntil(tester, () => !ReaderOpenTransition.isActive,
+              maxRounds: 200);
+      expect(released, isTrue, reason: '门闸应放行（且不是 3s 兜底）');
+      expect(scheduler.frozen, isTrue,
+          reason: '放行即冻结排版（动画期零排版，保证③）');
+
+      // 滑入中段（320ms 动画的前 ~56ms）推进几帧仍须冻着。
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(scheduler.frozen, isTrue, reason: '滑入未落定不许解冻');
+
+      // 落定（路由动画 completed）解冻（同翻页动画的「收尾解冻」）。
+      final bool settled =
+          await pumpUntil(tester, () => !scheduler.frozen, maxRounds: 100);
+      expect(settled, isTrue, reason: '转场落定必须解冻');
+
+      // 落定后预热管线自动续跑直至排干（重启漏了 = hasWork 永挂，这里判红）。
+      final bool drained = await pumpUntil(
+          tester,
+          () => !scheduler.hasWork && loadingBandsInViewport(tester).isEmpty,
+          maxRounds: 400);
+      expect(drained, isTrue, reason: '落定后分页 / 补齐须自动续跑排干');
+
+      await closeBook(tester);
+    });
+
+    testWidgets('门闸第三条=锚点布局定稿：前序章页表未定稿不放行（防落位后闪屏）',
+        (WidgetTester tester) async {
+      // 落位后闪屏定案（§2.110）：前序章页表还在补时上方高度会继续涨，同一
+      // 语义坐标的像素偏移跟着涨（真机 d≈8518px），`_jumpPaged` 超域补跳
+      // 「接受 1 帧滑移」——那一帧视口顶是**完全另一段正文**，随后猛跳回来。
+      // 故门闸补第三条：放行时前序章页表必须已定稿。夹具：恢复到第 2 章
+      // （书首之后），第 1 章 2000 段压在视口顶之上、要补很多帧——它定稿前
+      // 门闸必须按住，定稿后才放行。
+      final ProgressStore progressStore = ProgressStore(paths);
+      await tester.runAsync(
+        () => progressStore.save(
+          ReadingProgress(
+            bookId: 'testbook01',
+            chapterHref: 'h2',
+            chapterIndex: 1,
+            chapterPos: 0.0,
+            updatedAt: 1,
+          ),
+        ),
+      );
+      await tester.pumpWidget(_realHost(() => ReaderPage(
+            source: FakeBookSource(paragraphCounts: const <int>[2000, 2, 2]),
+            record: fakeRecord(),
+            progressStore: progressStore,
+            repository: fakeRepository(paths),
+          )));
+      await tester.tap(find.byKey(_kOpenKey));
+      await settle(tester, rounds: 2);
+      expect(ReaderOpenTransition.isActive, isTrue,
+          reason: '转场应已 arm 并按住（本用例的前提）');
+      final PaginationScheduler scheduler =
+          sharedPaginationSchedulers.forBook(fakeRecord().bookId);
+
+      // 逐轮推进：正文（第 2 章）已上屏 = 落位已成；只要前序章（h1）页表
+      // 未定稿就仍须按住——这个现场必须真实出现过，防夹具几何不对的空转绿。
+      bool sawHolding = false;
+      final bool released = await pumpUntil(tester, () {
+        final PaginationConfig? cfg = scheduler.config;
+        if (cfg != null &&
+            scheduler.cache.peek('h1', cfg) == null &&
+            find.textContaining('第2章正文').evaluate().isNotEmpty) {
+          sawHolding = true;
+        }
+        return !ReaderOpenTransition.isActive;
+      }, maxRounds: 300);
+      expect(sawHolding, isTrue,
+          reason: '前提：正文已上屏而前序章页表未定稿的现场应出现过（防空转绿）');
+      expect(released, isTrue, reason: '前序章定稿后门闸应放行（且不是 3s 兜底）');
+      expect(scheduler.config, isNotNull);
+      expect(scheduler.cache.peek('h1', scheduler.config!), isNotNull,
+          reason: '放行时刻前序章页表必须已定稿——否则落位后上方高度再涨 = 闪屏');
 
       await closeBook(tester);
     });
