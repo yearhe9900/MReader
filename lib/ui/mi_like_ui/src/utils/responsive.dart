@@ -4,15 +4,15 @@ import 'package:flutter/material.dart';
 
 import '../theme/dimens.dart';
 
-/// 窗口尺寸等级（按**可用逻辑宽**分档）。
+/// 窗口尺寸等级（按可用逻辑宽分档）。
 ///
 /// 断点取值（见 [MiBreakpoints]）：
 ///  * `compact`  < 600dp  —— 手机竖屏、桌面小窗、分屏小半；
 ///  * `medium`   600…1023dp —— 平板竖屏、手机横屏、桌面窄窗；
 ///  * `expanded` ≥ 1024dp —— 平板横屏、桌面。
 ///
-/// 与 Material 3 的 window size class 同语义，但只留三档：本框架的组件
-/// 几何都是 1:1 实测的「手机设计宽 393dp」值，再细分档位也无额外决策。
+/// 与 Material 3 window size class 同语义、精简为三档：本库组件几何以
+/// 393dp 手机设计宽为基准，更细的分档无额外布局决策。
 enum MiWindowSize {
   compact,
   medium,
@@ -70,8 +70,38 @@ class MiBreakpoints {
   /// 它只是「expanded 档下界」，**不是**导航形态的判定口（那看 [navRail]）。
   static const double desktop = 1024;
 
+  /// **展开侧栏断点**：画面容器宽 ≥ 该值时，侧边导航栏换**带文字标签的
+  /// 展开态**（176dp），否则用窄栏（95.4dp，只有图标 + 小字）。
+  ///
+  /// 取 [desktop] 同值（**推导值**）：平板竖屏（768）让出展开栏 + 留白
+  /// （201.5）会吃掉 26% 画布宽，不划算；桌面（≥1024）让出之后仍剩 ≥822dp，
+  /// 而常驻侧栏带文字是桌面应用的通行形态（Material / Windows Settings /
+  /// MReader 桌面档同款）。
+  static const double expandedRail = desktop;
+
+  /// 侧边导航栏是否用**展开态**（带文字标签）：容器宽 ≥ [expandedRail]。
+  ///
+  /// 与 [usesSideNav] 一样吃**外壳容器宽**而不是窗口宽（限宽画布里
+  /// 永远不展开）。
+  static bool usesExpandedRail(double width) => width >= expandedRail;
+
   /// medium 上界（不含）：`600 ≤ width < 1024` 即 medium。
   static const double medium = desktop;
+
+  /// 宽屏**内容列**的最大宽度（dp，**推导值**）。
+  ///
+  /// 参考素材只有 393dp 手机宽，宽屏没有样张可量，因此这是布局常量而非
+  /// 度量值。取 1120 的依据：
+  ///  * 常见桌面阅读列上限 1000…1200（Material 3 建议 1200）—— 再宽单行
+  ///    卡片会被拉到 500dp 以上，一张「手机竖版海报」就变成横条；
+  ///  * 1120 正好放得下主题卡 5 列 × 约 200dp（[columnsForMaxCell]），
+  ///    与手机 3 列的卡面密度同量级；
+  ///  * 小于 1280（常见 13" 笔记本逻辑宽），铺满窗口与「限宽居中」在
+  ///    1280 以下差别很小，不会一进桌面就出现突兀的两侧留白。
+  ///
+  /// 只作用于**内容列**：页面底色仍然铺满窗口（顶栏磨砂也仍按内容列宽
+  /// 计算，宽屏下模糊面积随之收敛）。
+  static const double contentMaxWidth = 1120;
 
   /// 按宽度判档。
   static MiWindowSize ofWidth(double width) {
@@ -113,6 +143,35 @@ class MiBreakpoints {
         ? medium
         : expanded;
     return n.clamp(1, math.max(1, maxColumns));
+  }
+
+  /// 按**最大单元宽**取列数（纯函数）—— 与 [columnsFor] 互补：
+  ///
+  /// [columnsFor] 回答「这个断点该排几列」（固定台阶）；本函数回答
+  /// 「在这个可用宽里，单元**最多允许多宽**」，列数随宽度连续增长：
+  /// `n = ceil((width + gap) / (maxCellWidth + gap))`，使单元宽
+  /// `(width − (n−1)·gap) / n ≤ maxCellWidth` 恒成立。
+  ///
+  /// 用途：卡片网格在超宽屏上不该把卡片拉成 500dp 的横条，也不该只排
+  /// 固定 6 列留着大片空白 —— 让「单元宽上限」说话，列数自己长。
+  ///
+  /// [minColumns] 是断点算出来的台阶下限（列数不会比它更少）；
+  /// [maxColumns] 防止超大屏无限扩列。宽度非有限时退回 [minColumns]。
+  static int columnsForMaxCell(
+    double width, {
+    required double maxCellWidth,
+    double itemSpacing = 0,
+    int minColumns = 1,
+    int maxColumns = 12,
+  }) {
+    assert(maxCellWidth > 0);
+    assert(itemSpacing >= 0);
+    assert(minColumns >= 1);
+    assert(maxColumns >= minColumns);
+    if (!width.isFinite || width <= 0) return minColumns;
+    final pitch = maxCellWidth + itemSpacing;
+    final n = ((width + itemSpacing) / pitch).ceil();
+    return n.clamp(minColumns, maxColumns);
   }
 }
 
@@ -159,21 +218,19 @@ class MiViewport {
   String toString() => 'MiViewport($size, ${windowSize.name})';
 }
 
-/// 固定设计尺寸的画布，按可用空间**等比**缩放到放得下（contain）。
+/// 固定设计尺寸的画布，按可用空间等比缩放到放得下（contain）。
 ///
-/// 用于「1:1 实测」的像素级界面：设计尺寸内的几何一个不改，整体只做
-/// 单一比例的仿射缩放，因此
-///  * **不溢出**：缩放比取两个方向的较小者，画布永远完整落在可用空间内；
-///  * **不变形**：宽高共用同一个比例（不是宽高各自拉伸）；
-///  * **不模糊**：走 `FittedBox`（Skia 变换 + 矢量重绘），不是位图取样。
+/// 用于按设计尺寸（如 393×856）度量的像素级界面：设计尺寸内几何不变，
+/// 整体仅做单一比例的仿射缩放，因此
+///  * **不溢出**：缩放比取两方向较小者，画布完整落在可用空间内；
+///  * **不变形**：宽高共用同一比例；
+///  * **不模糊**：走 `FittedBox`（Skia 变换 + 矢量重绘），非位图取样。
 ///
-/// 缩放区间 `[minScale, maxScale]` 默认 `[0, 1]`：只缩小不放⼤（放大会
-/// 破坏「1dp = 1 物理 dp」的实测语义）。刻意放开 `maxScale` 时请自行确认
-/// 目标场景允许放大。
+/// 缩放区间 `[minScale, maxScale]` 默认 `[0, 1]`（只缩不放；放大不再保持
+/// 「1dp = 1 设计 dp」的度量语义）。放开 `maxScale` 前请确认场景允许放大。
 ///
-/// 子级按 `designSize` 拿到 **tight** 约束，可用 `LayoutBuilder` 感知的
-/// 是设计尺寸而非缩放后的尺寸 —— 这正是「逻辑尺寸不变、只改渲染尺寸」
-/// 的语义。
+/// 子级按 `designSize` 拿到 **tight** 约束，`LayoutBuilder` 感知到的是设计
+/// 尺寸而非缩放后尺寸 —— 逻辑尺寸不变、只改渲染尺寸。
 class MiScaledCanvas extends StatelessWidget {
   const MiScaledCanvas({
     super.key,
@@ -241,7 +298,7 @@ class MiScaledCanvas extends StatelessWidget {
           size: designSize,
           child: child,
         );
-        // 1x 时走原样路径：不引入任何变换层（黄金图逐像素稳定）。
+        // 1x 时走原样路径：不引入任何变换层（视觉回归逐像素稳定）。
         final scaled = scale == 1.0
             ? canvas
             : FittedBox(fit: BoxFit.fill, child: canvas);
@@ -254,14 +311,60 @@ class MiScaledCanvas extends StatelessWidget {
   }
 }
 
-/// 响应式网格：按**自身可用宽**切换列数，行内等分、行间留白。
+/// 宽屏**内容列**：把子级限制在 [maxWidth] 内并水平居中，纵向撑满。
 ///
-/// 与 `Wrap` 的区别：本项目要求「行内等宽、最后一行不足的格子留空」，
-/// `Wrap` 会让末项宽度不定；这里用 `Row + Expanded`，每列宽恒为
-/// `(可用宽 - (n-1) × itemSpacing) / n`，浮点误差也不会导致意外换行。
+/// 手机档没有「太宽」问题，宽屏才有：13" 笔记本铺满后单张卡片会被拉到
+/// 500dp 以上，一张手机竖版海报直接变横条。限制成 ~1120（见
+/// [MiBreakpoints.contentMaxWidth]）并居中，是桌面阅读列的标准做法。
 ///
-/// 需要**有界宽**的父级（普通 Column / ListView / Padding 即可）；
-/// 放在横向滚动容器里会抛「无界宽」约束错误。
+/// 两个约束刻意保留：
+///  * **纵向撑满**（`SizedBox.expand`）：`Center` 给的是松约束，若不撑满，
+///    整页会收缩到内容高、在铺满的窗口里垂直居中；
+///  * **不做任何视觉处理**：底色仍由页面自己铺（外壳与页面同色），所以
+///    窗口两侧留白不是「灰色边框」，而是页面背景继续延伸。
+///
+/// ```dart
+/// Positioned.fill(
+///   child: MiContentColumn(child: page),
+/// )
+/// ```
+class MiContentColumn extends StatelessWidget {
+  const MiContentColumn({
+    super.key,
+    required this.child,
+    this.maxWidth = MiBreakpoints.contentMaxWidth,
+    this.alignment = Alignment.topCenter,
+  }) : assert(maxWidth > 0);
+
+  /// 内容列，纵向撑满可用高。
+  final Widget child;
+
+  /// 列宽上限（dp）。
+  final double maxWidth;
+
+  /// 列在可用宽内的水平对位；纵向恒为撑满，不受它影响。
+  final Alignment alignment;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: alignment,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: SizedBox.expand(child: child),
+      ),
+    );
+  }
+}
+
+/// 响应式网格：按自身可用宽切换列数，行内等分、行间留白。
+///
+/// 与 `Wrap` 的区别：行内等宽、末行不足的格子留空不拉伸（`Wrap` 末项
+/// 宽度不定）；内部以 `Row + Expanded` 实现，每列宽恒为
+/// `(可用宽 - (n-1) × itemSpacing) / n`，无浮点误差导致的意外换行。
+///
+/// 需要有界宽的父级（普通 Column / ListView / Padding 即可）；置于横向
+/// 滚动容器会抛无界宽约束错误。
 ///
 /// ```dart
 /// MiResponsiveGrid(
@@ -282,12 +385,16 @@ class MiResponsiveGrid extends StatelessWidget {
     this.itemSpacing = MiDimens.spaceMd,
     this.runSpacing = MiDimens.spaceMd,
     this.rowAlignment = CrossAxisAlignment.start,
+    this.maxCellWidth,
+    this.maxColumns = 12,
   }) : assert(compactColumns >= 1),
        assert(mediumColumns >= 1),
        assert(expandedColumns >= 1),
        assert(itemSpacing >= 0),
        assert(runSpacing >= 0),
-       assert(compactMax > 0 && mediumMax > compactMax);
+       assert(compactMax > 0 && mediumMax > compactMax),
+       assert(maxCellWidth == null || maxCellWidth > 0),
+       assert(maxColumns >= 1);
 
   /// 网格项（按行优先顺序排列）。
   final List<Widget> children;
@@ -319,6 +426,15 @@ class MiResponsiveGrid extends StatelessWidget {
   /// 行内纵向对齐（默认顶端对齐，卡片高度不同时不拉伸）。
   final CrossAxisAlignment rowAlignment;
 
+  /// 单元**最大宽度**（dp）；null = 只按三档断点的固定列数排。
+  ///
+  /// 给了它以后列数取「断点台阶」与 [MiBreakpoints.columnsForMaxCell] 的
+  /// **较大者**：宽屏上卡片不会被拉宽，列数自己长；窄屏仍守断点下限。
+  final double? maxCellWidth;
+
+  /// 列数上限（默认 12），只在给了 [maxCellWidth] 时起作用。
+  final int maxColumns;
+
   @override
   Widget build(BuildContext context) {
     if (children.isEmpty) return const SizedBox.shrink();
@@ -327,7 +443,8 @@ class MiResponsiveGrid extends StatelessWidget {
         final width = constraints.maxWidth.isFinite
             ? constraints.maxWidth
             : MiBreakpoints.compact;
-        final columns = MiBreakpoints.columnsFor(
+        // 断点台阶（固定列数）是**下限**：宽屏只允许加列、不允许少于台阶。
+        final stepColumns = MiBreakpoints.columnsFor(
           width,
           compact: compactColumns,
           medium: mediumColumns,
@@ -335,6 +452,15 @@ class MiResponsiveGrid extends StatelessWidget {
           compactMax: compactMax,
           mediumMax: mediumMax,
         );
+        final columns = maxCellWidth == null
+            ? stepColumns
+            : MiBreakpoints.columnsForMaxCell(
+                width,
+                maxCellWidth: maxCellWidth!,
+                itemSpacing: itemSpacing,
+                minColumns: stepColumns,
+                maxColumns: math.max(maxColumns, stepColumns),
+              );
         final rows = <Widget>[];
         for (var start = 0; start < children.length; start += columns) {
           if (start > 0) rows.add(SizedBox(height: runSpacing));

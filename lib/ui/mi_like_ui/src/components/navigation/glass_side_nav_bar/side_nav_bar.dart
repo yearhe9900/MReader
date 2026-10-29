@@ -7,55 +7,50 @@ import '../../../theme/colors.dart';
 import '../../../theme/glass_tokens.dart';
 import '../../../theme/theme_mode.dart';
 import '../../../theme/transparency_tokens.dart';
+import '../../../utils/squircle.dart';
 import '../../../theme/typography.dart';
 import '../../../utils/cell_grid.dart';
 import '../../../utils/filter_cache.dart';
-import '../../../utils/squircle.dart';
+import '../../../utils/hover_feedback.dart';
 import '../glass_nav_bar/glass_nav_bar.dart' show MiGlassNavFab, MiGlassNavItem;
 import '../glass_nav_bar/glass_nav_bar_metrics.dart';
 import 'side_nav_bar_metrics.dart';
 import 'side_nav_bar_painter.dart';
 
-/// 小米主题商店风格的玻璃悬浮**侧边**导航栏（桌面模式的底部栏替身）。
+/// 玻璃悬浮侧边导航栏（宽屏 / 桌面形态，明暗双模式）。
 ///
-/// 与 [MiGlassNavBar] 是**同一套导航语义的另一种布局**：
-///  * 条目类型同为 [MiGlassNavItem]（标签 + 任意图标 painter）——调用方传
-///    同一份 items，图标与标签一字不改；
-///  * 选中态同为零位移之外的**胶囊透镜**（不另改图标/标签颜色）；
-///  * `onTap(index)` 回调与底部栏完全相同，路由跳转行为不变；
-///  * 选中胶囊的飞行 / 弹性沉降 / 按压缩圈 / 拖拽跟手全部复用
-///    [MiGlassNavMetrics]（曲线与时长逐帧同源），只把**轴换成纵向**：
-///    飞行方向由 x 变 y，果冻形变由「宽拉伸 + 高压缩」变「高拉伸 + 宽压缩」。
+/// 与 [MiGlassNavBar] 同属一套导航语义、换纵向布局：
+///  * 条目类型同为 [MiGlassNavItem]（标签 + 图标 painter），同一份 items
+///    可直接复用；
+///  * 选中态同为胶囊透镜，`onTap(index)` 回调语义与底部栏一致；
+///  * 飞行 / 弹性沉降 / 按压 / 拖拽动效复用 [MiGlassNavMetrics]
+///    （曲线与时长同源），仅运动轴换向（形变由横向拉伸换为纵向拉伸）。
 ///
-/// ## 什么时候用它
+/// ## 使用场景
 ///
-/// 画面容器宽达到导航断点（`MiBreakpoints.usesSideNav`，**> 600**）时取代
-/// 底部栏；手机 / 窄窗仍用 [MiGlassNavBar]。两者**不要同时显示**。
-/// 切换是整棵子树替换（不做淡入淡出）：`Opacity` / `FadeTransition` 会给
-/// 含 `BackdropFilter` 的子树引入 saveLayer，磨砂会在切换期间直接消失
-/// （本项目已实测的坑）。
+/// 画面容器宽达到导航断点（`MiBreakpoints.usesSideNav`，严格 > 600dp）时
+/// 建议替代底部栏；手机 / 窄窗沿用 [MiGlassNavBar]，两者不同时显示。
+/// 切换形态请直接替换子树、不做淡入淡出（`Opacity` 会对含
+/// `BackdropFilter` 的子树引入 saveLayer，切换期间磨砂消失）。
 ///
-/// ## 与底部栏的两处刻意差异
+/// ## 与底部栏的差异
 ///
-///  1. **圆钮（[fab]）挂在栏尾下方、栏体不让位**：底部栏的「栏体平移让位」
-///     是为横向一排 tab 的居中腾挪设计的；侧栏锚定左上、栏体不动，圆钮
-///     纵向排在栏体下方（间距 [MiGlassSideNavMetrics.fabGap]、直径
-///     [MiGlassSideNavMetrics.fabDiameter]，均沿用底部栏实测）。显隐契约
-///     与底部栏完全一致：选中 [MiGlassNavFab.tabIndex] 对应条目时缩放+
-///     淡入弹出（同一 [MiGlassNavMetrics.fabPopMs] / easeOutCubic 曲线），
-///     切走收起。槽位**恒定预留**（收起不改组件高度，无布局跳动）。
+///  1. **FAB（[fab]）挂于栏尾下方、栏体不为其让位**（底部栏为横向排列
+///     居中而平移让位；侧栏锚定左上、栏体不动）。间距
+///     [MiGlassSideNavMetrics.fabGap]、直径
+///     [MiGlassSideNavMetrics.fabDiameter] 与底部栏同规格；显隐契约与
+///     弹出曲线同源（[MiGlassNavMetrics.fabPopMs]），槽位恒定预留、
+///     显隐无布局跳动；
 ///  2. **栏体竖向收缩到内容高**（[MiGlassSideNavMetrics.railHeightFor]），
-///     摆放位置由宿主决定（示例贴顶 + 距左缘 [MiGlassSideNavMetrics.railMargin]
-///     一档留白）—— 对应底部栏「栏宽 = 内容宽、位置由宿主给」的同构做法。
+///     摆放位置由宿主决定（建议贴顶 + 距左缘
+///     [MiGlassSideNavMetrics.railMargin]）。
 ///
 /// 玻璃材质配方与底部栏同源（[MiGlassPalette] + [MiTransparencyTokens]），
-/// 整条栏只挂**一个** `BackdropFilter`（每帧全 QUAD 高斯，层数预算见
-/// `test/perf_budget_test.dart`）。图标颜色由调用方传入 painter，需与
-/// [MiColors.foregroundFor] 保持一致。
+/// 整条栏单个 `BackdropFilter`；图标颜色由调用方随 painter 传入，建议取
+/// [MiColors.foregroundFor]。
 ///
-/// **高度随条目数线性增长**（`2×内边距 + n×条目高 + (n−1)×间隙`，见
-/// [MiGlassSideNavMetrics.railHeightFor]）：条目多到放不下时应由宿主给滚动
-/// 容器，本组件不做内部滚动（底部栏同样按内容宽直接铺开）。
+/// 高度随条目数线性增长（`2×内边距 + n×条目高 + (n−1)×间隙`），条目超出
+/// 可用空间时由宿主提供滚动容器（本组件不提供内部滚动）。
 class MiGlassSideNavBar extends StatefulWidget {
   const MiGlassSideNavBar({
     super.key,
@@ -64,6 +59,7 @@ class MiGlassSideNavBar extends StatefulWidget {
     required this.onTap,
     this.fab,
     this.themeMode = MiThemeMode.dark,
+    this.expanded = false,
   });
   // items 数量、fab 适配与 fab.tabIndex 范围校验均在 initState：const 构造
   // 断言不支持 `.length` / 参数字段求值（放构造器会封死 const 构造，
@@ -86,6 +82,19 @@ class MiGlassSideNavBar extends StatefulWidget {
 
   /// 明暗模式：决定玻璃材质配方与标签墨色（默认深色）。
   final MiThemeMode themeMode;
+
+  /// 是否**展开**（带文字标签的常驻侧栏，桌面档）。
+  ///
+  ///  * `false`（默认）：窄栏 95.4dp —— 图标在上、小字标签在下（与底部栏
+  ///    同一套度量纵向换轴），平板 / 窄窗用；
+  ///  * `true`：展开栏 [MiGlassSideNavMetrics.expandedRailWidth] ——
+  ///    图标在左、标签在右、整条目是一个胶囊，桌面用。全部几何取
+  ///    [MiGlassSideNavMetrics] 的展开态推导值；纵向节奏（条目高 / 间隙 /
+  ///    内边距 / 飞行-沉降-按压动效）与窄栏逐帧同源。
+  ///
+  /// 切换形态请直接替换子树（同 [MiGlassNavBar] ⇄ 本组件的契约）：两者
+  /// 结构不同，不做淡入淡出。
+  final bool expanded;
 
   @override
   State<MiGlassSideNavBar> createState() => _MiGlassSideNavBarState();
@@ -304,7 +313,9 @@ class _MiGlassSideNavBarState extends State<MiGlassSideNavBar>
     final labelStyle = MiTypography.navLabelFor(widget.themeMode);
     final n = widget.items.length;
     final h = _railHeight;
-    const railW = MiGlassSideNavMetrics.railWidth;
+    final expanded = widget.expanded;
+    final railW = MiGlassSideNavMetrics.railWidthFor(expanded: expanded);
+    final pillW = MiGlassSideNavMetrics.itemWidthFor(expanded: expanded);
 
     // 整条栏只糊一次：胶囊透镜与遮罩都画在这一层之上（同底部栏）。
     Widget glass = ClipPath(
@@ -354,7 +365,7 @@ class _MiGlassSideNavBarState extends State<MiGlassSideNavBar>
                 squash += MiGlassNavMetrics.pressSquashH * press;
 
                 var ph = MiGlassSideNavMetrics.itemHeight * (1 + stretch);
-                final pw = MiGlassSideNavMetrics.itemWidth * (1 - squash);
+                final pw = pillW * (1 - squash);
                 // 条目 i 的胶囊中心 = 内边距 + 半个条目高 + i × 步进：
                 // 半条目高是「首条目中心」的偏移，步进里含间隙，故不能直接用
                 // pitch × (pos + 0.5)（那样会整体下移半个间隙 = 4dp）。
@@ -397,26 +408,70 @@ class _MiGlassSideNavBarState extends State<MiGlassSideNavBar>
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
                         onTap: () => widget.onTap(i),
-                        child: Opacity(
-                          // 按下条目内容变暗（实测 ~55%）
-                          opacity: _pressedIndex == i
-                              ? MiGlassNavMetrics.pressDimOpacity
-                              : 1.0,
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              CustomPaint(
-                                painter: widget.items[i].painter,
-                                size: const Size(
-                                  MiGlassSideNavMetrics.iconSize,
-                                  MiGlassSideNavMetrics.iconHeight,
-                                ),
-                              ),
-                              const SizedBox(
-                                height: MiGlassSideNavMetrics.iconLabelGap,
-                              ),
-                              Text(widget.items[i].label, style: labelStyle),
-                            ],
+                        // 悬停：与底栏同款小块圆角高亮（实色叠色，不用
+                        // Opacity —— 磨砂子树上不许出现 saveLayer）。
+                        child: MiHoverFeedback(
+                          mode: widget.themeMode,
+                          borderRadius: BorderRadius.circular(
+                            MiGlassNavMetrics.itemHoverRadius,
+                          ),
+                          child: Opacity(
+                            // 按下条目内容变暗（度量 ~55%）
+                            opacity: _pressedIndex == i
+                                ? MiGlassNavMetrics.pressDimOpacity
+                                : 1.0,
+                            // 两种形态只差内容排布：窄栏 = 图标在上小字在下
+                            // （底部栏纵向换轴）；展开栏 = 图标在左、标签在右，
+                            // 整条目一个胶囊（桌面常驻侧栏形态）。
+                            child: expanded
+                                ? SizedBox(
+                                    // 钉到胶囊宽：外层 Column 是居中对齐，不给
+                                    // 定宽的话 Row 会按「图标+标签」自然宽居中，
+                                    // 内缩就不是从胶囊左缘量起了。
+                                    width: MiGlassSideNavMetrics
+                                        .expandedItemWidth,
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(
+                                          width: MiGlassSideNavMetrics
+                                              .expandedItemInset,
+                                        ),
+                                        CustomPaint(
+                                          painter: widget.items[i].painter,
+                                          size: const Size(
+                                            MiGlassSideNavMetrics.iconSize,
+                                            MiGlassSideNavMetrics.iconHeight,
+                                          ),
+                                        ),
+                                        const SizedBox(
+                                          width: MiGlassSideNavMetrics
+                                              .expandedIconLabelGap,
+                                        ),
+                                        Text(widget.items[i].label,
+                                            style: labelStyle),
+                                      ],
+                                    ),
+                                  )
+                                : Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      CustomPaint(
+                                        painter: widget.items[i].painter,
+                                        size: const Size(
+                                          MiGlassSideNavMetrics.iconSize,
+                                          MiGlassSideNavMetrics.iconHeight,
+                                        ),
+                                      ),
+                                      const SizedBox(
+                                        height:
+                                            MiGlassSideNavMetrics.iconLabelGap,
+                                      ),
+                                      Text(widget.items[i].label,
+                                          style: labelStyle),
+                                    ],
+                                  ),
                           ),
                         ),
                       ),
@@ -498,7 +553,7 @@ class _MiGlassSideNavBarState extends State<MiGlassSideNavBar>
                 // 时间镜像 —— 与底部栏圆钮逐帧同源。
                 // IgnorePointer 必须**包在 GestureDetector 外面**：
                 // GestureDetector 自身 opaque，若它留在命中测试里，
-                // 收起后这块不可见区域仍会吞掉点击（2026-10-18 测试暴露）。
+                // 收起后这块不可见区域仍会吞掉点击。
                 final t = Curves.easeOutCubic.transform(_fabCtrl.value);
                 return IgnorePointer(
                   ignoring: t == 0,

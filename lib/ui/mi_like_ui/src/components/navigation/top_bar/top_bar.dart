@@ -5,6 +5,7 @@ import '../../../theme/top_bar_tokens.dart';
 import '../../../theme/theme_mode.dart';
 import '../../../theme/typography.dart';
 import '../../../utils/filter_cache.dart';
+import '../../../utils/pressable.dart';
 import '../../effects/gradient_blur/gradient_blur.dart';
 import '../../inputs/search_bar/search_bar.dart';
 import '../../inputs/search_bar/search_cancel_button.dart';
@@ -12,100 +13,75 @@ import '../../inputs/search_bar/search_cancel_metrics.dart';
 import '../pill_tab_bar/pill_tab_bar.dart';
 import 'top_bar_metrics.dart';
 
-/// 小米「大标题折叠」顶部导航栏（深/浅色双模式）。
+/// 大标题折叠顶部导航栏（明暗双模式）。
 ///
-/// **材质**（磨砂 + 叠色）实测自亮色「我的」页录屏，**折叠几何**（大标题 /
-/// 紧凑标题 / 返回圆钮）实测自 HyperOS 设置「显示与亮度」页录屏 ——
-/// 几何见 [MiTopBarMetrics]，材质 / 配色见 `theme/top_bar_tokens.dart`。
+/// 顶栏由「标题区」（材质 + 大 / 紧凑标题 + 返回圆钮）与可选「头部区」
+/// （搜索栏 / 胶囊标签行）组成，支持滚动联动折叠、可内嵌头部组件与搜索态。
+/// 几何规格见 [MiTopBarMetrics]，材质与配色见 `theme/top_bar_tokens.dart`。
 ///
-/// ## 材质：顶部磨砂（两种规律）+ 顶栏叠色
+/// ## 材质
 ///
-/// 顶栏那层"糊"**其实不属于顶栏**：参考 App 有一页**完全没有顶栏**
-/// （主题商店「每日精选」），它的内容顶部照样是糊的，而且模糊程度随 y 递减
-/// （逐行水平梯度 44dp 0.05 → 75dp 0.97 → 116dp 4.32 → **120dp 后不再上升**，
-/// 即已经完全清晰、没有硬边）。所以磨砂是**内容滚动区自己的顶部渐进模糊**，
-/// 已抽成独立组件 [MiGradientBlur]（不依赖顶栏，任何滚动内容都能自己挂）；
-/// 顶栏只是因为位置正好重合，按自己的材质盒高**复用它**。
+/// 材质为「磨砂 + 压色」两层，由 [showBlur] 与 [showSurface] 独立控制，
+/// 绘制为顶栏区域的背景（不占布局高度，高度见 [materialExtent]）：
 ///
-/// 于是材质拆成两个**独立开关**：
-///
-///  * **磨砂** [showBlur] —— backdrop 高斯模糊。**两种形态两套规律（各自实测）**：
-///    * **无头部区**（纯标题 / 纯材质）走**渐进曲线**：σ 从
-///      [MiTopBarPalette.blurSigma] 5.37dp 的平台段起沿 y 递减到材质盒底归零
-///      （[MiGradientBlurProfile.bands]，盒高变化时曲线**形状固定、范围拉伸**）。
-///      依据：没有顶栏的「每日精选」页顶部照样糊、~120dp 自然收尾、无硬边。
-///    * **有头部区**（搜索栏 / 胶囊行）走**渐进磨砂（头部区度量）**：σ 自
+///  * **磨砂**（[showBlur]）：backdrop 高斯模糊，按是否有头部区取两种曲线 ——
+///    * 无头部区（纯标题 / 纯材质）：**渐进磨砂**，σ 自
+///      [MiTopBarPalette.blurSigma]（5.37dp）沿 y 衰减至材质盒底归零
+///      （[MiGradientBlurProfile.bands]；盒高变化时曲线形状固定、范围等比
+///      伸缩）；
+///    * 有头部区（搜索栏 / 标签行）：**渐进磨砂（头部区度量）**，σ 自
 ///      [MiHeaderBlurProfile.sigma]（8.5dp 平台段）沿 y 线性衰减，胶囊行底
 ///      后羽化收尾（[headerBlurBands]；本轮 1220×2656 明暗双素材实测，
 ///      曲线见 [MiHeaderBlurProfile]）。
-///      侧面收益：整条栏从 8 段降到 1 段全宽高斯。
-///  * **叠色** [showSurface] —— 顶部最深、向下渐隐的一层压色
-///    （[MiTopBarPalette.scrimGradient]），用来压住下方内容保证标题可读。
-///    这是**顶栏自己**的东西：大标题形态需要它，头部区形态（分类页 / 首页）
-///    实测参考页没有这层压色，传 `false`。
+///  * **压色**（[showSurface]）：顶部最深、向下渐隐的压色层
+///    （[MiTopBarPalette.scrimGradient]），保证标题可读。大标题形态默认开启；
+///    头部区形态（页面内容本身不压色）建议传 `false`。
 ///
-/// 材质是**盖在顶栏上的底**（不占布局高度）：高度 = 顶栏盖住的那块区域
-/// （[materialExtent]）—— 无头部区是实测材质盒
-/// [MiTopBarMetrics.scrimHeight]（128.9dp），头部区形态是整个 [occupiedHeight]。
+/// 渐进曲线以分段定 σ 阶梯实现（每段 `ClipRect` + `BackdropFilter`，
+/// σ 取曲线段中点值；段高 ≤ 17dp、相邻 σ 比 ≤ 1.5，视觉无台阶）：Flutter
+/// 不提供位置相关模糊，且对模糊层施加半透明遮罩会破坏其 backdrop，
+/// 分段并列是等效近似。
 ///
-/// 实现是 **8 段定 σ 阶梯**（[MiTopBarPalette.blurBands]）：每段
-/// `ClipRect → BackdropFilter(σ_i)`，σ_i 取实测 σ(y) 曲线在该段中点的值。
-/// Flutter 没有"位置相关模糊"，而唯一的替代（渐变 `ShaderMask` / `Opacity`
-/// 削弱模糊层）会引入新的 saveLayer 并把 backdrop 变空 —— 实测遮罩 alpha
-/// 恒 1 时模糊正常，一旦出现 <1 的 alpha 模糊**整段消失**。因此只能分段
-/// 近似：段高 ≤ 17dp、相邻 σ 比 ≤ 1.5，台阶肉眼不可见。
+/// ## 折叠行为
 ///
-/// ⚠️ 上一版曾判定"顶栏是纯色遮罩、无 backdrop 模糊"，该结论**已废弃**：
-/// 当时的证据（沿蓝卡做纵向取样得亮度斜坡、卡片下缘 3px 硬跳变）都取自
-/// 模糊带**之下**的平坦色块 —— 平坦区在模糊下亮度不变、且本来就在带外，
-/// 无法区分"有模糊"与"无模糊"。本轮改用**高频内容**（头像照片 / 圆角方块
-/// 的竖直边缘）才测出模糊。
+///  * **大标题随内容滚动**：位移与列表滚动 1:1 联动（非缩小锚定）；
+///  * 大标题叠加独立淡出曲线（位移 ≈20dp 内归零），紧凑标题在约 20dp 处
+///    开始淡入衔接，两段不重叠；
+///  * 两段标题的基线均以 `Baseline` 锚定（[MiTopBarMetrics.titleBaselineY]），
+///    垂直落点不随字体族的 ascent/descent 漂移；
+///  * 返回圆钮按压反馈：⌀44.1 圆盘高光（@9.4%），420ms 淡入 / 300ms 淡出。
 ///
-/// ## 折叠行为（实测，非套用 iOS/Material 惯例）
-///
-///  * **大标题属于滚动内容**：其质心位移与列表滚动位移逐帧相等，即随内容
-///    1:1 上移（不是钉在栏上缩小）；
-///  * 大标题在此之上还有一条**独立淡出曲线**（位移 ≈20dp 内归零），
-///    紧凑标题在大标题归零后才开始淡入（≈20→27.4dp），两段不重叠；
-///  * 返回圆钮按压反馈 = ⌀44.1 圆盘、白 @9.4%，0.42s easeOut 淡入 /
-///    0.3s 淡出。
-///
-/// ## 形态与插槽
-///
-/// 顶栏由「**标题区**」（材质 + 大/紧凑标题 + 返回圆钮，定高）与
-/// 「**头部区**」（按需）上下拼成，两区可自由组合：
+/// ## 形态
 ///
 /// | 形态 | `title` | `showBlur` | `showSurface` | 头部区 | 典型用法 |
 /// |------|---------|-----------|---------------|--------|----------|
 /// | 大标题折叠 | 有 | `true` | `true` | — | 首页 / 「我的」/ 设置页 |
-/// | 纯材质 | `null` | `true` | `true` | — | 参考录屏「我的」页（顶栏不内嵌组件） |
-/// | 吸顶头部 | `null` | `true` | `false` | `searchHint` + `tabs` | 分类页 / 首页（搜索栏 + 胶囊行吸顶，头部区渐进磨砂、不压色） |
+/// | 纯材质 | `null` | `true` | `true` | — | 顶栏不内嵌组件的页面 |
+/// | 吸顶头部 | `null` | `true` | `false` | `searchHint` + `tabs` | 搜索栏 + 标签行吸顶（渐进磨砂、不压色） |
 /// | 材质 + 头部 | `null` | `true` | `true` | 任意 | 需要压色底的自定义头部 |
-/// | 零件自带玻璃 | `null` | `false` | `false` | 任意 | 逃生形态：材质交给插槽里的组件自己画 |
+/// | 零件自带玻璃 | `null` | `false` | `false` | 任意 | 材质交给插槽组件自行绘制 |
 ///
-/// 头部区**默认由顶栏自己产出**两个框架组件，调用方只给数据、不 new 组件：
+/// ## 头部区
 ///
-/// | 头部内容 | 声明式入参 | 顶栏内部产出的组件 | 高度 |
-/// |----------|------------|--------------------|------|
+/// 头部内容默认由顶栏内部产出，调用方只提供数据：
+///
+/// | 头部内容 | 声明式入参 | 内部产出 | 高度 |
+/// |----------|------------|----------|------|
 /// | 搜索栏 | [searchHint] / [onSearchTap] | `MiSearchBar` | [searchBarHeight]（44.1） |
 /// | 胶囊标签行 | [tabs] / [selectedTab] / [onTabChanged] | `MiPillTabBar` | [tabBarHeight]（39.9） |
 ///
-/// 需要换皮或塞别的组件时，用同名**插槽**覆盖（与声明式入参二选一）：
+/// 需要自定义组件时改用同名插槽（与声明式入参互斥，构造期校验）：
 ///
 /// | 插槽 | 类型 | 高度来源 | 布局 |
 /// |------|------|----------|------|
-/// | [searchBar] | `Widget` | [searchBarHeight] | 左右 [headerInset]、顶部状态栏让位 |
-/// | [tabBar] | `Widget` | [tabBarHeight] | **满宽**（自带 11.9 边距，需横向出血滚动），与搜索栏隔 16 |
-/// | [header] | `PreferredSizeWidget` | `preferredSize.height` | 左右 [headerInset]，整块自定义头部的逃生口 |
+/// | [searchBar] | `Widget` | [searchBarHeight] | 左右 [headerInset]，顶部让开状态栏 |
+/// | [tabBar] | `Widget` | [tabBarHeight] | 满宽（自带 11.9 边距，支持横向出血滚动），与搜索栏间隔 16 |
+/// | [header] | `PreferredSizeWidget` | `preferredSize.height` | 左右 [headerInset]，整块自定义头部 |
 ///
-/// [header] 与搜索栏 / 胶囊行**互斥**，`searchBar`↔`searchHint`、
-/// `tabBar`↔`tabs` 各自互斥（构造期断言保证）。
+/// [header] 与搜索栏 / 标签行互斥。插槽高度为声明值：顶栏据此排版，宿主据
+/// [occupiedHeight] 给滚动内容让位，两侧同源不错位；自定义组件请同步传高度。
 ///
-/// 插槽高度是**声明值**：组件按它分配高度，宿主也按它（经 [occupiedHeight]）
-/// 给滚动内容让位 —— 两侧同源，不会出现「头部下移而列表没让位」的错位。
-/// 换成自定义高度的组件时记得同步传高度（用声明式入参则恒等于组件自身高度）。
-///
-/// ## 用法 —— 吸顶头部（分类页形态）
+/// ## 用法 —— 吸顶头部
 ///
 /// ```dart
 /// final bar = MiTopBar(
@@ -124,13 +100,9 @@ import 'top_bar_metrics.dart';
 /// ])
 /// ```
 ///
-/// 需要自定义搜索栏 / 胶囊行时改传 [searchBar] / [tabBar] 插槽，排版与让位
-/// 完全一致，只是组件本体由调用方提供。
-///
 /// ## 用法 —— 大标题折叠
 ///
-/// 本组件**不自带滚动**，由宿主提供当前滚动位移（受控组件，与
-/// [MiPillTabBar] 的 `selectedIndex` 同风格），叠在滚动内容之上：
+/// 本组件不自带滚动，由宿主提供滚动位移（受控组件），叠在滚动内容之上：
 ///
 /// ```dart
 /// Stack(children: [
@@ -141,57 +113,45 @@ import 'top_bar_metrics.dart';
 /// ])
 /// ```
 ///
-/// **纯材质形态**：参考录屏（亮色「我的」页）的顶栏**不内嵌任何组件** ——
-/// 传 `title: null` 即只有磨砂 + 叠色，不绘制标题，组件高度收到
-/// [MiTopBarMetrics.scrimHeight]：
+/// 纯材质形态（不绘制标题，高度收到 [MiTopBarMetrics.scrimHeight]）：
 ///
 /// ```dart
 /// Positioned(top: 0, left: 0, right: 0, child: MiTopBar())
 /// ```
 ///
-/// ⚠️ **必须用 `Positioned` 钉在顶部**（或保证外层给出的是紧约束）。若把它
-/// 留作外层 `Stack` 的**非定位子级**，该 `Stack` 就会按它收缩成 393×152.8
-/// 而不是撑满，一旦再处于 loose 约束的上级里（如 `Center`、
-/// `AnimatedSwitcher` 内部那个 `alignment: center` 的 `Stack`），整页会被
-/// 居中到屏幕正中：顶栏跑到屏幕中间、页底与滚动内容只剩 152.8dp 高。
-/// 2026-10-16 实机截图实测该偏移 = (856 − 152.8) / 2 = 351.6dp。
+/// ## 布局契约
 ///
-/// 材质层只覆盖顶部 [MiTopBarMetrics.scrimHeight]，其下内容照常透出。
-/// 除返回圆钮与插槽本身外整体不参与手势，滚动内容可从顶栏下方正常拖动。
-///
-/// **坐标原点 = 屏幕顶端**：实测几何已包含 [MiTopBarMetrics.statusBarHeight]
-/// 的状态栏让位，宿主把它铺在屏幕顶部即可，顶部不要再叠加 `SafeArea` 内边距
-/// （否则整体会下移、大标题与圆钮的实测垂心失效）。头部插槽区自带状态栏
-/// 让位（[MiTopBarMetrics.headerTopInsetFor]，安全区更高时取安全区）。
+///  * **必须以 `Positioned` 钉在顶部**（或由外层提供紧约束）：作为 `Stack`
+///    的非定位子级会使其收缩到顶栏自身尺寸，进而在 loose 约束的上级中被
+///    居中，导致整页错位；
+///  * **坐标原点为屏幕顶端**：规格已含状态栏让位
+///    （[MiTopBarMetrics.statusBarHeight]），顶部不要再叠加 `SafeArea`；
+///    头部插槽区自带让位（[MiTopBarMetrics.headerTopInsetFor]，安全区更高时
+///    取安全区）；
+///  * 材质层只覆盖顶部区域，其下内容照常透出；除返回圆钮与插槽本身外
+///    整体不参与手势。
 ///
 /// [themeMode] 为空时跟随环境 `Theme.of(context).brightness`。
-///
-/// **返回圆钮默认不显示**（顶层页无返回，如参考截图「设置」首页）：需要时
-/// 传 `showBack: true`，其可点性再由 [onBack] 决定（null = 只显示、不可点）。
-///
-/// 两条标题都用 `Baseline`（alphabetic）把**基线钉到实测反推的目标值**
-/// （见 [MiTopBarMetrics.titleBaselineY]），使墨心落点不随字体族的
-/// ascent/descent 漂移（详见 metrics 类文档）。
+/// 返回圆钮默认不显示（顶层页无返回）：传 `showBack: true` 显示，
+/// 可点性由 [onBack] 决定（`null` = 不可点）。
 ///
 /// ## 搜索态（[searchActive]）
 ///
-/// 点按内置搜索栏 → 宿主把 [searchActive] 置 true，顶栏进入搜索态：
+/// 宿主置 [searchActive] 为 `true` 进入搜索态：
 ///
-///  * 搜索栏**变真输入框**（`MiSearchBar(editable: true)`：光标 + hint 同现、
-///    放大镜与占位文字都不动），聚焦即弹键盘；
-///  * 右侧让出**取消钮**（`MiSearchCancelButton`，⌀44.1 = 栏高），转场中段
-///    淡入；点它经 [onSearchCancel] 通知宿主退出；
-///  * 胶囊标签行淡出（搜索态不参与排版，也不再进 [occupiedHeight]）；
-///  * 材质盒高度跟着收到「只有搜索栏」那一档。
+///  * 内置搜索栏切换为输入态（`MiSearchBar(editable: true)`，聚焦弹键盘）；
+///  * 右侧让出取消钮（`MiSearchCancelButton`，⌀44.1，转场中段淡入），
+///    点按经 [onSearchCancel] 通知宿主退出；
+///  * 胶囊标签行淡出并退出排版（不计入 [occupiedHeight]）；
+///  * 材质盒高度收到「仅搜索栏」档。
 ///
-/// 转场 220ms（起手静止 22ms + 位移 198ms 的 easeOutQuint）—— 曲线形状来自
-/// 参考录屏逐帧实测，时长按手感压缩（同一比例，见
-/// [MiTopBarMetrics.searchTransitionMs] / [MiTopBarMetrics.searchMotion]）。
+/// 转场 220ms（起手静止 22ms + 位移 `easeOutQuint` 198ms），参数见
+/// [MiTopBarMetrics.searchTransitionMs] / [MiTopBarMetrics.searchMotion]。
 ///
 /// ## 转场期的绘制成本
 ///
-/// 这一段是全库最贵的逐帧路径（顶栏磨砂段 + 搜索栏 / 胶囊行 / 取消钮各自
-/// 的 backdrop 一起动），因此有两条硬约束：
+/// 这一段是全库最贵的逐帧路径（顶栏磨砂段 + 搜索栏 / 胶囊行 / 取消钮各自的
+/// backdrop 一起动），因此有两条硬约束：
 ///
 ///  * **淡出一律走颜色 alpha**（胶囊行 `fade`、取消钮 `fade`）。`Opacity` 会
 ///    引入 saveLayer —— 子树里 `BackdropFilter` 的输入被清空（磨砂在整段转场
@@ -199,12 +159,6 @@ import 'top_bar_metrics.dart';
 ///  * **材质盒高在转场期间不插值**（见 `_buildBar` 里 `materialHeight`）：
 ///    盒高每帧变一点，磨砂段的 `ClipRect` 全部要重定位，整条头部区的全宽
 ///    高斯（9 段定 σ 阶梯，尾部按 σ 下限剔除）每帧重跑一遍。
-///
-/// **关于「搜索栏上移」**：参考录屏那页正常态搜索栏在大标题下方
-/// （168.4dp），搜索态升到状态栏下方（52.1dp），Δ = 116.3dp。本库的头部区
-/// 一直是「钉在 [MiTopBarMetrics.headerTopInset] 上」的 —— 页面没有
-/// 「标题 + 头部区」同页形态，所以示例页的搜索栏本就在状态栏下方，这一段
-/// 位移在本 demo 里为 **0**；真正变化的是宽度让位、取消钮、输入态与内容清空。
 class MiTopBar extends StatefulWidget {
   const MiTopBar({
     super.key,
@@ -236,6 +190,10 @@ class MiTopBar extends StatefulWidget {
     this.onSearchChanged,
     this.onSearchSubmitted,
     this.searchCancelInset = MiSearchCancelMetrics.trailingInset,
+    this.headerTopInset = MiTopBarMetrics.headerTopInset,
+    this.searchBarMaxWidth,
+    this.actions,
+    this.sigmaScale = 1.0,
   })  : assert(scrollOffset >= 0, 'scrollOffset 不能为负（未滚动时传 0）'),
         assert(
             header == null ||
@@ -252,6 +210,11 @@ class MiTopBar extends StatefulWidget {
         assert(tabBarHeight > 0, 'tabBarHeight 必须为正'),
         assert(headerInset >= 0, 'headerInset 不能为负'),
         assert(searchCancelInset >= 0, 'searchCancelInset 不能为负'),
+        assert(headerTopInset >= 0, 'headerTopInset 不能为负'),
+        assert(
+            searchBarMaxWidth == null || searchBarMaxWidth > 0,
+            'searchBarMaxWidth 必须为正（或不传 = 不限宽）'),
+        assert(sigmaScale > 0, 'sigmaScale 必须为正'),
         assert(selectedTab >= 0, 'selectedTab 不能为负'),
         assert(!searchActive || (searchBar != null || searchHint != null),
             'searchActive 只在有搜索栏时有意义：先给 searchHint（或 searchBar 插槽）'),
@@ -360,7 +323,7 @@ class MiTopBar extends StatefulWidget {
   /// 是否绘制**叠色**遮罩（默认 true）。
   ///
   /// 只控叠色（顶部最深、向下渐隐的那层压色），与磨砂是**两个开关**：
-  /// 大标题形态靠它压住下方内容、保证标题可读；头部件形态（分类页）实测
+  /// 大标题形态靠它压住下方内容、保证标题可读；头部件形态（分类页）度量
   /// 参考页没有这层压色 —— 那页整条栏都能看见被模糊的背景，所以传 `false`。
   ///
   /// 磨砂见 [showBlur]。
@@ -368,7 +331,7 @@ class MiTopBar extends StatefulWidget {
 
   /// 是否绘制**顶部磨砂**（默认 true）。
   ///
-  /// 磨砂本体是内容区自己的（实测：有一页完全没有顶栏 —— 主题商店
+  /// 磨砂本体是内容区自己的（度量：有一页完全没有顶栏 —— 主题商店
   /// 「每日精选」—— 内容顶部照样糊），顶栏只是位置正好重合、按自己的材质盒
   /// 高复用。**两种形态两条实测曲线**：
   ///  * 无头部区：渐进曲线（独立组件 [MiGradientBlur]），σ 沿 y 递减到材质盒
@@ -389,7 +352,7 @@ class MiTopBar extends StatefulWidget {
   ///  * 胶囊行 = **行区限定的渐变膜带**（issue #4①：膜只覆盖胶囊行那一段、
   ///    上下缘羽化，行外与胶囊间隙不垫；不再逐胶囊预合成）；
   ///  * 搜索栏 = 自身栏体形状下垫膜（单个控件，`veiledFill` 预合成）。
-  /// 首页截图实测：压在横幅上的胶囊内侧比同 y 间隙亮 33 级（亮）/暗 100 级
+  /// 首页素材度量：压在横幅上的胶囊内侧比同 y 间隙亮 33 级（亮）/暗 100 级
   /// （暗），那层落差只能来自膜 —— 模糊只改局部对比、不改局部均值。
   ///
   /// **膜取页底色，垫在同色页底上等于没垫**：静止态（背后是页底）观感与不开
@@ -420,7 +383,7 @@ class MiTopBar extends StatefulWidget {
   /// 内置搜索栏的焦点节点（同上）。
   final FocusNode? searchFocusNode;
 
-  /// 进入搜索态是否自动聚焦（默认 true —— 参考录屏点按即弹键盘）。
+  /// 进入搜索态是否自动聚焦（默认 true —— 参考素材点按即弹键盘）。
   final bool searchAutofocus;
 
   /// 输入变化回调（同上）。
@@ -431,10 +394,52 @@ class MiTopBar extends StatefulWidget {
 
   /// 取消钮右缘距屏幕右缘（默认 [MiSearchCancelMetrics.trailingInset] = 0）。
   ///
-  /// 默认 0 是**实测**：参考录屏里横向四项闭合（左 21 + 栏 491 + 间隙 15 +
+  /// 默认 0 是**度量**：参考素材里横向四项闭合（左 21 + 栏 491 + 间隙 15 +
   /// 直径 66 = 593 ≈ 屏宽 592），且圆在纵向同样 66px 高，说明没有被帧边界
   /// 裁掉 —— 参考实现就是贴着屏幕右缘。想改成留白就覆盖这个值。
   final double searchCancelInset;
+
+  // ── 宽屏收敛（桌面档专属，推导值） ────────────────────────────────────────
+  //
+  // 参考素材只有手机档，以下三项都是**推导值**：手机传默认值时逐像素不变。
+
+  /// 头部区顶部让位（默认 [MiTopBarMetrics.headerTopInset] 56 —— 手机档
+  /// **度量**：搜索栏顶缘 y = 56）。
+  ///
+  /// 桌面窗口没有状态栏，传 [MiTopBarMetrics.desktopHeaderTopInset]（24）：
+  /// 继续留 56 会在窗口顶部悬出一条空带。
+  final double headerTopInset;
+
+  /// 内置搜索栏的最大宽度（dp）；null = 不限宽（铺满 headerInset 之间的区域）。
+  ///
+  /// 手机档不需要它（393dp 宽本来就窄）；桌面 1120dp 的内容列上一条 1000dp+
+  /// 的搜索框既难用也不像桌面应用 —— 传 480…560 一档（示例取 520），搜索栏
+  /// 靠左停在 [headerInset] 处，右侧留给 [actions] 与空白。
+  ///
+  /// 只作用于**内置/插槽搜索栏的排版宽度**：搜索态转场的「右缘让位」几何
+  /// 照旧（限宽后让位量不变，取消钮仍落在同一相对位置）。
+  final double? searchBarMaxWidth;
+
+  /// 头部区搜索栏**右侧**的动作区（桌面档）：一排按钮 / 图标，右对齐到
+  /// [headerInset]。
+  ///
+  /// 与搜索栏同一行（搜索栏限宽后右侧的空白就归它）；搜索态转场时随整行
+  /// 一起淡出（与胶囊行同一段转场，`Opacity` 只包**无磨砂**的动作件，
+  /// 磨砂子树不许进这一层 —— 见类文档的 saveLayer 约束）。
+  ///
+  /// null = 不渲染（手机档默认）。纵向占位 = [searchBarHeight]。
+  final List<Widget>? actions;
+
+  /// 磨砂 σ 缩放系数（默认 1.0 = 度量材质，逐像素不变）。
+  ///
+  /// **滚动降 σ**：滚动中 backdrop 每帧重算，是本库最贵的一块。宿主在滚动
+  /// 期间把它压到 < 1（如 0.6），停下后传回 1.0 —— σ 与高斯成本近似线性，
+  /// 视觉上运动中的模糊弱一点几乎不可察觉（运动掩蔽），GPU 却省下近半。
+  ///
+  /// 作用于**两套磨砂规律**：无头部区的渐进曲线（[MiGradientBlur]）与有
+  /// 头部区的渐进曲线（[headerBlurBands]）。σ 是 [MiFilterCache] 的缓存键，
+  /// 各档分别缓存、跨帧复用，来回切不会每帧新建 native filter。
+  final double sigmaScale;
 
   /// 头部区是否有搜索栏（声明式入参或插槽任一生效）。
   bool get hasSearchBar => searchBar != null || searchHint != null;
@@ -470,6 +475,7 @@ class MiTopBar extends StatefulWidget {
     if (!hasHeaderSlot) return 0;
     var extent = MiTopBarMetrics.headerTopInsetFor(
       MediaQuery.paddingOf(context).top,
+      topInset: headerTopInset,
     );
     if (header != null) return extent + header!.preferredSize.height;
     if (hasSearchBar) extent += searchBarHeight;
@@ -492,7 +498,7 @@ class MiTopBar extends StatefulWidget {
 
   /// 材质（磨砂 + 叠色）层的高度，两样都不画则 0。
   ///
-  /// 就是「顶栏盖住的这块区域」：无头部区 → 实测材质盒
+  /// 就是「顶栏盖住的这块区域」：无头部区 → 度量材质盒
   /// [MiTopBarMetrics.scrimHeight]（128.9dp）；有头部区 → 整条顶栏
   /// （[occupiedHeight]）。磨砂在这里收尾：无头部区的渐进曲线拉伸到盒底
   /// 归零（无硬边），有头部区的曲线同样拉伸到盒底归零（[headerBlurBands]）
@@ -549,9 +555,10 @@ class MiTopBar extends StatefulWidget {
   ///
   /// **公开 API**：这是「有头部区」形态的**权威磨砂曲线**，顶栏自己与宿主
   /// 自拼浮动头部（如下游书架首页：搜索胶囊 + 分组胶囊行压在滚动内容上，
-  /// 形态等价顶栏吸顶头部）应当消费同一条曲线，避免第二份事实源。
-  /// 与之相对，[visibleBlurBands] 只是「无头部区」形态的测试口径
-  /// （`@visibleForTesting`），不要在生产代码消费。
+  /// 形态等价顶栏吸顶头部）应当消费同一条曲线，避免第二份事实源。宿主侧：
+  /// `MiGradientBlur(bands: MiTopBar.headerBlurBands(palette, extent: …))`。
+  /// 与之相对，[visibleBlurBands] 只是「无头部区」形态的测试口径（
+  /// `@visibleForTesting`），不要在生产代码消费。
   static List<MiTopBarBlurBand> headerBlurBands(
     MiTopBarPalette palette, {
     required double extent,
@@ -645,7 +652,7 @@ class MiTopBar extends StatefulWidget {
   /// 是**叠加**上来的一层状态，不是另一套布局，非搜索页逐像素不变。
   ///
   /// 两个进度分开用：几何走 [MiTopBarMetrics.searchMotion]（前 10% 静止 +
-  /// easeOutQuint），透明度类走线性 [progress] —— 实测里它们本来就不是一条
+  /// easeOutQuint），透明度类走线性 [progress] —— 度量里它们本来就不是一条
   /// 曲线（取消钮的淡入落在中段，与位移进度并不同步）。
   Widget _buildBar(BuildContext context, double progress) {
     final t = MiTopBarMetrics.searchMotion.transform(progress).clamp(0.0, 1.0);
@@ -655,7 +662,7 @@ class MiTopBar extends StatefulWidget {
             : MiThemeMode.dark);
     final palette = this.palette ?? MiTopBarPalette.of(mode);
     final title = this.title;
-    // 搜索态下标题整体淡出（参考录屏那页的大标题在转场中消失）。
+    // 搜索态下标题整体淡出（参考素材那页的大标题在转场中消失）。
     final titleFade = 1 - progress;
     // 位移兜底：NaN / 负数按未滚动处理，+∞ 饱和为折叠完成态（避免布局出现
     // 无限坐标，同时语义上「滚过头」就是折叠态）。
@@ -672,7 +679,7 @@ class MiTopBar extends StatefulWidget {
     final largeSize = MiTypography.topBarLargeTitle.fontSize!;
     final compactSize = MiTypography.topBarCompactTitle.fontSize!;
     // 基线落点：`Baseline` 会在布局期把标题基线放到「距组件顶端 N 处」，
-    // 与字体 ascent/descent 无关 —— 这是本组件对齐录屏的关键（用 `height`
+    // 与字体 ascent/descent 无关 —— 这是本组件对齐素材的关键（用 `height`
     // 或 strut 都做不到：前者按比例缩放、后者本 SDK 没有 ascent/descent）。
     final largeTitleBaseline = MiTopBarMetrics.titleBaselineY(
       MiTopBarMetrics.largeTitleInkCenterY,
@@ -774,6 +781,7 @@ class MiTopBar extends StatefulWidget {
                             palette,
                             extent: materialHeight,
                             underSurface: showSurface,
+                            sigmaScale: sigmaScale,
                           ),
                         )
                       else
@@ -782,9 +790,10 @@ class MiTopBar extends StatefulWidget {
                           opaqueScrimBottom: palette.scrimOpaqueBottom *
                               (materialHeight / MiTopBarMetrics.scrimHeight),
                           underSurface: showSurface,
+                          sigmaScale: sigmaScale,
                         ),
                     // 2) 叠色：顶部最深 → 渐隐（亮色 = 页底色 @0.65→0，深色 = 黑
-                    //    @1→0，两页各自实测，见 MiTopBarPalette 文档）。
+                    //    @1→0，两页各自度量，见 MiTopBarPalette 文档）。
                     //    梯度 stop 是比例值，盒子拉高即等比拉伸。
                     if (showSurface)
                       Positioned.fill(
@@ -809,7 +818,7 @@ class MiTopBar extends StatefulWidget {
                     : titleExtent(largeSize),
                 child: Stack(
                   children: [
-                    // 3) 大标题：随滚动 1:1 上移 + 按实测表淡出（钉基线 → top 恒为 0）
+                    // 3) 大标题：随滚动 1:1 上移 + 按度量表淡出（钉基线 → top 恒为 0）
                     if (title != null)
                       Positioned(
                         left: MiTopBarMetrics.largeTitleLeadingInset,
@@ -831,7 +840,7 @@ class MiTopBar extends StatefulWidget {
                           ),
                         ),
                       ),
-                    // 4) 紧凑标题：与返回圆钮同一行、屏内水平居中（实测 609.5px ≈ 屏心）
+                    // 4) 紧凑标题：与返回圆钮同一行、屏内水平居中（度量 609.5px ≈ 屏心）
                     if (title != null)
                       Positioned(
                         left: 0,
@@ -876,6 +885,7 @@ class MiTopBar extends StatefulWidget {
                             MiTopBarMetrics.backDiameter / 2,
                         child: _MiTopBarBackButton(
                           palette: palette,
+                          mode: mode,
                           onTap: onBack,
                         ),
                       ),
@@ -888,6 +898,7 @@ class MiTopBar extends StatefulWidget {
                   padding: EdgeInsets.only(
                     top: MiTopBarMetrics.headerTopInsetFor(
                       MediaQuery.paddingOf(context).top,
+                      topInset: headerTopInset,
                     ),
                   ),
                   child: Column(
@@ -910,14 +921,14 @@ class MiTopBar extends StatefulWidget {
                           t: t,
                           progress: progress,
                         ),
-                      // 搜索栏 ↔ 胶囊行间距 16dp（实测）；搜索态两行都不在，随 t
+                      // 搜索栏 ↔ 胶囊行间距 16dp（度量）；搜索态两行都不在，随 t
                       // 一起让位。
                       if (resolvedSearchBar != null &&
                           resolvedTabBar != null &&
                           t < 1)
                         SizedBox(
                             height: MiTopBarMetrics.searchBarGap * (1 - t)),
-                      // 胶囊行：搜索态淡出（参考录屏那页没有标签行，这一段的
+                      // 胶囊行：搜索态淡出（参考素材那页没有标签行，这一段的
                       // 呈现属推导 —— 与取消钮同一段转场里退场，不硬切）。
                       // 内置胶囊行自带 `fade`（见上面的构造函数）；自定义
                       // `tabBar` 插槽没有这个契约，退回 `Opacity` —— ⚠️ 它会给
@@ -947,10 +958,16 @@ class MiTopBar extends StatefulWidget {
   ///
   /// 常规态（`t = 0`）退化成「左右各留 [headerInset] 的整宽搜索栏」，与加
   /// 这个状态之前逐像素一致；转场中搜索栏右缘左移让出取消钮的位置
-  /// （实测：让位目标 = 间隙 10.0 + 直径 44.1，右缘贴屏 `searchCancelInset` = 0）。
+  /// （度量：让位目标 = 间隙 10.0 + 直径 44.1，右缘贴屏 `searchCancelInset` = 0）。
   ///
   /// [t] 是**缓动之后**的位移进度（0…1），[progress] 是线性时间进度；
-  /// 取消钮的淡入区间落在后者上（实测它与位移不同步）。
+  /// 取消钮的淡入区间落在后者上（度量它与位移不同步）。
+  ///
+  /// ## 宽屏路径（给了 [searchBarMaxWidth] 或 [actions] 时）
+  ///
+  /// 换成 `Row`：搜索栏限宽后**靠左**停在 [headerInset]，右侧依次是
+  /// [actions]（随转场淡出、`t = 1` 退出排版 —— 与胶囊行同一契约）与取消钮。
+  /// 手机路径（两者都没给）保持原 Stack 几何，逐像素不变。
   Widget _searchRow({
     required Widget bar,
     required MiThemeMode mode,
@@ -959,48 +976,102 @@ class MiTopBar extends StatefulWidget {
   }) {
     const double gap = MiSearchCancelMetrics.barGap;
     const double diameter = MiSearchCancelMetrics.diameter;
-    // 让位量：0 → (间隙 + 直径)，再叠加右缘留白从 headerInset 收到目标值。
-    final barRight =
-        headerInset + (searchCancelInset + gap + diameter - headerInset) * t;
-    final cancelRight =
-        searchCancelInset + (headerInset - searchCancelInset) * (1 - t);
+    final hasActions = actions != null && actions!.isNotEmpty;
+    final wide = hasActions || searchBarMaxWidth != null;
+
     final cancelFade = const Interval(
       MiTopBarMetrics.searchCancelFadeBegin,
       MiTopBarMetrics.searchCancelFadeEnd,
     ).transform(progress).clamp(0.0, 1.0);
-    return SizedBox(
-      height: searchBarHeight,
-      child: Stack(
-        children: [
-          Positioned(
-            left: headerInset,
-            right: barRight,
-            top: 0,
-            bottom: 0,
-            child: bar,
-          ),
-          // t = 0 时干脆不建：闲置态不白挂一份 backdrop / 手势层。
-          if (t > 0)
+
+    // 搜索态取消钮（两种路径共用）：点按经 onSearchCancel 通知宿主退出。
+    // 淡入由圆钮自己的 `fade`（alpha 乘进填充 / 叉号墨色）完成，**不套**
+    // `Opacity`：圆钮里有一层 backdrop 磨砂，saveLayer 会把它清空、还多一次
+    // 离屏合成（转场每帧都付）。`IgnorePointer` 必须包在**外层**：淡出到 0
+    // 时若还留在命中测试里，这块不可见区域会吞掉下方内容的点击。
+    Widget cancelButton = IgnorePointer(
+      ignoring: cancelFade <= 0,
+      child: MiSearchCancelButton(
+        onTap: onSearchCancel,
+        themeMode: mode,
+        frosted: true,
+        overContent: overContent,
+        fade: cancelFade,
+      ),
+    );
+
+    if (!wide) {
+      // ── 手机路径（逐像素保持度量几何） ──────────────────────────────────
+      // 让位量：0 → (间隙 + 直径)，再叠加右缘留白从 headerInset 收到目标值。
+      final barRight =
+          headerInset + (searchCancelInset + gap + diameter - headerInset) * t;
+      final cancelRight =
+          searchCancelInset + (headerInset - searchCancelInset) * (1 - t);
+      return SizedBox(
+        height: searchBarHeight,
+        child: Stack(
+          children: [
             Positioned(
-              right: cancelRight,
-              top: (searchBarHeight - diameter) / 2,
-              child: IgnorePointer(
-                ignoring: cancelFade <= 0,
-                // 淡入由圆钮自己的 `fade`（alpha 乘进填充 / 叉号墨色）完成，
-                // **不套 `Opacity`**：圆钮里有一层 backdrop 磨砂，saveLayer 会
-                // 把它清空、还多一次离屏合成（转场每帧都付）。`IgnorePointer`
-                // 必须包在**外层**：淡出到 0 时若还留在命中测试里，这块不可见
-                // 区域会吞掉下方内容的点击。
-                child: MiSearchCancelButton(
-                  onTap: onSearchCancel,
-                  themeMode: mode,
-                  frosted: true,
-                  overContent: overContent,
-                  fade: cancelFade,
-                ),
+              left: headerInset,
+              right: barRight,
+              top: 0,
+              bottom: 0,
+              child: bar,
+            ),
+            // t = 0 时干脆不建：闲置态不白挂一份 backdrop / 手势层。
+            if (t > 0)
+              Positioned(
+                right: cancelRight,
+                top: (searchBarHeight - diameter) / 2,
+                child: cancelButton,
+              ),
+          ],
+        ),
+      );
+    }
+
+    // ── 宽屏路径 ──────────────────────────────────────────────────────────
+    // 限宽搜索栏靠左 + 动作区 / 取消钮靠右。取消钮右缘停在 [headerInset]
+    // （手机档的 `searchCancelInset = 0` 是「贴屏幕右缘」的**度量**，宽屏
+    // 的内容列有页边距，照搬会顶到窗口边上）。
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: headerInset),
+      child: SizedBox(
+        height: searchBarHeight,
+        child: Row(
+          children: [
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: searchBarMaxWidth == null
+                    ? bar
+                    : ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: searchBarMaxWidth!),
+                        child: bar,
+                      ),
               ),
             ),
-        ],
+            // 动作区：随搜索转场淡出，t = 1 退出排版（同胶囊行契约）。
+            // ⚠️ Opacity 只包**无磨砂**的动作件 —— 磨砂子树进这层会 saveLayer
+            // 把 backdrop 清空（见类文档）。
+            if (hasActions && t < 1)
+              IgnorePointer(
+                ignoring: progress > 0,
+                child: Opacity(
+                  opacity: 1 - progress,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: actions!,
+                  ),
+                ),
+              ),
+            if (t > 0)
+              Padding(
+                padding: EdgeInsets.only(left: gap),
+                child: cancelButton,
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1009,7 +1080,7 @@ class MiTopBar extends StatefulWidget {
 /// 顶栏状态：只为一件事存在 —— 搜索态转场的 [AnimationController]。
 ///
 /// 转场**不进 `build` 的其余部分**：`_buildBar` 的每一处插值在 `t = 0` 时都
-/// 退化成原值，所以非搜索页的黄金图逐像素不变，也不会多出任何 render object。
+/// 退化成原值，所以非搜索页的视觉回归逐像素不变，也不会多出任何 render object。
 class _MiTopBarState extends State<MiTopBar>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
@@ -1032,7 +1103,7 @@ class _MiTopBarState extends State<MiTopBar>
   void didUpdateWidget(covariant MiTopBar oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.isSearchMode != oldWidget.isSearchMode) {
-      // 时长对正反两向相同（实测只覆盖了进入方向；退出方向按同一时长反向
+      // 时长对正反两向相同（度量只覆盖了进入方向；退出方向按同一时长反向
       // 播放，参考实现未单独录到）。
       if (widget.isSearchMode) {
         _controller.forward();
@@ -1062,78 +1133,87 @@ class _MiTopBarState extends State<MiTopBar>
 /// 但点按不改变选中态（`MiPillTabBar` 的 `onTap` 是必填）。
 void _ignoreTabTap(int _) {}
 
-/// 返回圆钮：⌀44.1 命中区 + 箭头，按下时浮现白 @9.4% 圆盘（实测）。
+/// 返回圆钮：⌀44.1 命中区 + 箭头，按下时浮现白 @9.4% 圆盘（度量）。
 ///
-/// 箭头墨心相对圆钮中心左偏 [MiTopBarMetrics.chevronCenterDx]（实测光学
+/// 箭头墨心相对圆钮中心左偏 [MiTopBarMetrics.chevronCenterDx]（度量光学
 /// 偏置，非居中）。
-class _MiTopBarBackButton extends StatefulWidget {
-  const _MiTopBarBackButton({required this.palette, required this.onTap});
+class _MiTopBarBackButton extends StatelessWidget {
+  const _MiTopBarBackButton({
+    required this.palette,
+    required this.mode,
+    required this.onTap,
+  });
 
   final MiTopBarPalette palette;
+
+  /// 明暗模式（驱动悬停叠色与焦点环，与 palette 同源）。
+  final MiThemeMode mode;
+
   final VoidCallback? onTap;
 
-  @override
-  State<_MiTopBarBackButton> createState() => _MiTopBarBackButtonState();
-}
-
-class _MiTopBarBackButtonState extends State<_MiTopBarBackButton> {
-  bool _pressed = false;
-
-  void _setPressed(bool value) {
-    if (_pressed != value) setState(() => _pressed = value);
-  }
+  /// 圆钮盒：按压反馈圆盘（度量平坦填充、无描边）+ 箭头。
+  ///
+  /// [pressed] 驱动圆盘淡入 / 淡出（420 / 300ms easeOut，时长见
+  /// [MiTopBarMetrics.pressFadeInMs] / [pressFadeOutMs]，转发
+  /// [MiMotionTokens]）；层级与迁移前逐层等价（手势层在盒外，由
+  /// MiPressable 提供）。
+  Widget _button({required bool pressed, required Widget child}) => SizedBox(
+        width: MiTopBarMetrics.backDiameter,
+        height: MiTopBarMetrics.backDiameter,
+        child: Stack(
+          children: [
+            // 按压反馈圆盘（度量平坦填充、无描边）
+            Positioned.fill(
+              child: AnimatedOpacity(
+                opacity: pressed ? 1 : 0,
+                duration: Duration(
+                  milliseconds: pressed
+                      ? MiTopBarMetrics.pressFadeInMs
+                      : MiTopBarMetrics.pressFadeOutMs,
+                ),
+                curve: Curves.easeOut,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: palette.pressHighlight,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+            child,
+          ],
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
-    final content = SizedBox(
-      width: MiTopBarMetrics.backDiameter,
-      height: MiTopBarMetrics.backDiameter,
-      child: Stack(
-        children: [
-          // 按压反馈圆盘（实测平坦填充、无描边）
-          Positioned.fill(
-            child: AnimatedOpacity(
-              opacity: _pressed ? 1 : 0,
-              duration: Duration(
-                milliseconds: _pressed
-                    ? MiTopBarMetrics.pressFadeInMs
-                    : MiTopBarMetrics.pressFadeOutMs,
-              ),
-              curve: Curves.easeOut,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: widget.palette.pressHighlight,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
+    // 箭头：墨盒铺满，中心再按度量偏置平移。
+    final chevron = Center(
+      child: Transform.translate(
+        offset: const Offset(MiTopBarMetrics.chevronCenterDx, 0),
+        child: CustomPaint(
+          painter: BackChevronIconPainter(palette.ink),
+          size: const Size(
+            MiTopBarMetrics.chevronWidth,
+            MiTopBarMetrics.chevronHeight,
           ),
-          // 箭头：墨盒铺满，中心再按实测偏置平移
-          Center(
-            child: Transform.translate(
-              offset: const Offset(MiTopBarMetrics.chevronCenterDx, 0),
-              child: CustomPaint(
-                painter: BackChevronIconPainter(widget.palette.ink),
-                size: const Size(
-                  MiTopBarMetrics.chevronWidth,
-                  MiTopBarMetrics.chevronHeight,
-                ),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
 
-    final onTap = widget.onTap;
-    if (onTap == null) return IgnorePointer(child: content);
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: (_) => _setPressed(true),
-      onTapUp: (_) => _setPressed(false),
-      onTapCancel: () => _setPressed(false),
-      onTap: onTap,
-      child: content,
+    // 禁用（onTap == null）：只展示、穿透命中（站点保留的早退契约）。
+    if (onTap == null) {
+      return IgnorePointer(child: _button(pressed: false, child: chevron));
+    }
+    // 按压状态机收编自 MiPressable；视觉（圆盘淡入）留在此处。
+    // 悬停 / 焦点为**推导**的桌面语义（触屏素材无此样张），圆钮为正圆。
+    return MiPressable(
+      onPressed: onTap,
+      mode: mode,
+      borderRadius: BorderRadius.circular(MiTopBarMetrics.backDiameter / 2),
+      pressBuilder: (context, pressed, child) =>
+          _button(pressed: pressed, child: child),
+      child: chevron,
     );
   }
 }

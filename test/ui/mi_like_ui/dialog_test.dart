@@ -3,7 +3,9 @@
 // 上游 `a849e0e feat(dialog): MiDialog 弹框` + `dd3c7c8 按钮按压动效` +
 // 宽屏批 `f001396` 一比一移植（移植树 `lib/ui/mi_like_ui/src/components/feedback/dialog/`），
 // 用例同步移植；宿主接线（书架长按操作弹框）见 `test/ui/shelf_page_test.dart`。
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 // 框架 API 走公共 barrel。
@@ -332,6 +334,54 @@ void main() {
       MiThemeMode.dark,
     );
     expect(ch(pressedDark.r), inInclusiveRange(85, 94));
+  });
+
+  testWidgets('桌面语义（推导）：按钮可悬停出叠色、聚焦出环、Enter 激活', (tester) async {
+    _useReferenceCanvas(tester);
+    var tapped = 0;
+    await tester.pumpWidget(
+      _harness(
+        mode: MiThemeMode.dark,
+        actions: [MiDialogAction(label: '确定', onPressed: () => tapped++)],
+      ),
+    );
+    await tester.pump();
+
+    // 悬停（鼠标进入按钮）→ 叠色 = 按压高光的 60%（桌面推导语义）
+    final hover = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await hover.addPointer(location: tester.getCenter(find.text('确定')));
+    await tester.pump();
+    final overlay = tester.widget<AnimatedContainer>(
+      find.byKey(MiHoverFeedback.overlayKey).first,
+    );
+    expect(
+      (overlay.decoration! as BoxDecoration).color,
+      MiTransparencyTokens.hoverOverlayFor(MiThemeMode.dark),
+    );
+    await hover.removePointer();
+    await tester.pumpAndSettle();
+
+    // 聚焦（等价 Tab 走到）→ 环；Enter 激活 → onPressed
+    tester
+        .widget<Focus>(
+          find.descendant(
+            of: find.byType(MiFocusRing),
+            matching: find.byType(Focus),
+          ),
+        )
+        .focusNode!
+        .requestFocus();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+    final ring = tester.widget<AnimatedContainer>(
+      find.byKey(MiFocusRing.ringKey).first,
+    );
+    expect(
+      (ring.decoration! as BoxDecoration).border!.top.color,
+      isNot(Colors.transparent),
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    expect(tapped, 1);
   });
 
   group('宽屏档（桌面 ≥1024：居中窄卡，推导值）', () {

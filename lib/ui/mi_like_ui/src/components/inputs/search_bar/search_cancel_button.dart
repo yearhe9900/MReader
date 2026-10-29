@@ -6,28 +6,27 @@ import '../../../theme/search_bar_tokens.dart';
 import '../../../theme/theme_mode.dart';
 import '../../../theme/transparency_tokens.dart';
 import '../../../utils/filter_cache.dart';
+import '../../../utils/pressable.dart';
 import 'search_cancel_metrics.dart';
 
-/// 搜索态的取消钮：⌀44.1 圆盘 + 叉号，点按退出搜索态。
+/// 搜索态取消钮：⌀44.1 圆盘 + 叉号，点按退出搜索态。
 ///
-/// 几何 1:1 实测自参考录屏的搜索态（见 [MiSearchCancelMetrics]）：
-/// 直径 = **搜索栏高**（同一帧里两者都是 66px），与搜索栏隔 10.0dp，
-/// 右缘贴屏幕右缘（实测 0，闭合算式见 metrics 文档）。
+/// 规格见 [MiSearchCancelMetrics]：直径等于搜索栏高（44.1dp，同一行
+/// 自动垂直居中），与搜索栏间隔 10.0dp，右缘贴屏幕右缘。
 ///
-/// ## 配色（有两处容易踩错，都有实测依据）
+/// ## 配色
 ///
-///  * **圆盘填充 = 搜索栏填充**（同一帧实测两者同为 244）：直接复用
-///    [MiSearchBarPalette.fill]，不另立一档，也就天然继承「半透明表面 +
-///    可选玻璃膜」的整条透明语言；
-///  * **叉号墨色 = 前景墨色**，不是放大镜那档灰。同一页里实测放大镜
-///    167、叉号 0 —— 差一整档，叉号是「可点控件」的实心前景色。
+///  * **圆盘填充 = 搜索栏填充**（[MiSearchBarPalette.fill]，同一行同色），
+///    天然继承「半透明表面 + 可选玻璃膜」的透明语言；
+///  * **叉号墨色 = 前景墨色**（可点控件的实心前景，与放大镜的图标灰
+///    不同档）。
 ///
 /// ## 磨砂 / 玻璃膜
 ///
-/// 与搜索栏同规则：[frosted] 放进自带材质的顶栏时传 `false`（整条栏只糊
-/// 一次）；[overContent] 在填充之下再垫一层玻璃膜
-/// （[MiTransparencyTokens.veiledFill]），平底页观感不变。
-class MiSearchCancelButton extends StatefulWidget {
+/// 与搜索栏同规则：[frosted] 置于自带材质的顶栏内时传 `false`（整条栏
+/// 只糊一次）；[overContent] 在填充之下加垫玻璃膜
+/// （[MiTransparencyTokens.veiledFill]），平坦页面上观感不变。
+class MiSearchCancelButton extends StatelessWidget {
   const MiSearchCancelButton({
     super.key,
     required this.onTap,
@@ -64,28 +63,17 @@ class MiSearchCancelButton extends StatefulWidget {
   final double fade;
 
   @override
-  State<MiSearchCancelButton> createState() => _MiSearchCancelButtonState();
-}
-
-class _MiSearchCancelButtonState extends State<MiSearchCancelButton> {
-  bool _pressed = false;
-
-  void _setPressed(bool value) {
-    if (_pressed != value) setState(() => _pressed = value);
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final mode = widget.themeMode ??
+    final mode = themeMode ??
         (Theme.of(context).brightness == Brightness.light
             ? MiThemeMode.light
             : MiThemeMode.dark);
     final palette = MiSearchBarPalette.of(mode);
     // 淡入 / 淡出：alpha 乘进各层颜色（不做离屏合成，见 [fade]）。
-    final f = widget.fade;
+    final f = fade;
     Color faded(Color c) => f >= 1 ? c : c.withValues(alpha: c.a * f);
-    // 圆盘填充 = 搜索栏填充（实测同色）；压在内容上时同款玻璃膜。
-    final fill = faded(widget.overContent
+    // 圆盘填充 = 搜索栏填充（度量同色）；压在内容上时同款玻璃膜。
+    final fill = faded(overContent
         ? MiTransparencyTokens.veiledFill(palette.fill, mode)
         : palette.fill);
     final pressHighlight = faded(mode == MiThemeMode.dark
@@ -93,71 +81,78 @@ class _MiSearchCancelButtonState extends State<MiSearchCancelButton> {
         : MiTransparencyTokens.pressHighlightLight);
     final ink = faded(palette.cancelInk);
 
-    Widget content = SizedBox(
-      width: widget.diameter,
-      height: widget.diameter,
-      child: ClipOval(
-        child: widget.frosted && f > 0
-            ? BackdropFilter(
-                filter: MiFilterCache.blur(MiTransparencyTokens.blurSigma),
-                child: _disc(fill, pressHighlight, ink),
-              )
-            : _disc(fill, pressHighlight, ink),
+    // 叉号：圆盘内容的最内层。
+    final glyph = Center(
+      child: CustomPaint(
+        painter: SearchCancelGlyphPainter(ink),
+        size: const Size.square(MiSearchCancelMetrics.glyphSize),
       ),
     );
 
-    final onTap = widget.onTap;
-    if (onTap == null) return IgnorePointer(child: content);
-    content = GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: (_) => _setPressed(true),
-      onTapUp: (_) => _setPressed(false),
-      onTapCancel: () => _setPressed(false),
-      onTap: onTap,
-      child: content,
-    );
-    return content;
-  }
-
-  /// 圆盘本体：填充 → 按压反馈圆盘 → 叉号。
-  Widget _disc(Color fill, Color pressHighlight, Color ink) {
-    return ColoredBox(
-      color: fill,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: AnimatedOpacity(
-              opacity: _pressed ? 1 : 0,
-              duration: Duration(
-                milliseconds: _pressed
-                    ? MiSearchCancelMetrics.pressFadeInMs
-                    : MiSearchCancelMetrics.pressFadeOutMs,
+    // 填充层：填充 → 按压反馈圆盘 → 内容（叉号）。
+    Widget fillLayer({required bool pressed, required Widget child}) =>
+        ColoredBox(
+          color: fill,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: AnimatedOpacity(
+                  opacity: pressed ? 1 : 0,
+                  duration: Duration(
+                    milliseconds: pressed
+                        ? MiSearchCancelMetrics.pressFadeInMs
+                        : MiSearchCancelMetrics.pressFadeOutMs,
+                  ),
+                  curve: Curves.easeOut,
+                  child: ColoredBox(color: pressHighlight),
+                ),
               ),
-              curve: Curves.easeOut,
-              child: ColoredBox(color: pressHighlight),
-            ),
+              child,
+            ],
           ),
-          Center(
-            child: CustomPaint(
-              painter: SearchCancelGlyphPainter(ink),
-              size: const Size.square(MiSearchCancelMetrics.glyphSize),
-            ),
+        );
+
+    // 圆盘盒：裁形（+ 可选自绘磨砂）→ 填充层。层级与迁移前逐层等价
+    //（手势层在盒外，由 MiPressable 提供）。
+    Widget disc({required bool pressed, required Widget child}) => SizedBox(
+          width: diameter,
+          height: diameter,
+          child: ClipOval(
+            child: frosted && f > 0
+                ? BackdropFilter(
+                    filter: MiFilterCache.blur(MiTransparencyTokens.blurSigma),
+                    child: fillLayer(pressed: pressed, child: child),
+                  )
+                : fillLayer(pressed: pressed, child: child),
           ),
-        ],
-      ),
+        );
+
+    // 禁用（onTap == null）：只展示、穿透命中（站点保留的早退契约）。
+    if (onTap == null) {
+      return IgnorePointer(child: disc(pressed: false, child: glyph));
+    }
+    // 按压状态机收编自 MiPressable；hover / focus 为**推导**的桌面语义
+    //（触屏素材无此样张），圆钮为正圆，静止 / 未悬停时零像素。
+    return MiPressable(
+      onPressed: onTap,
+      mode: mode,
+      borderRadius: BorderRadius.circular(diameter / 2),
+      pressBuilder: (context, pressed, child) =>
+          disc(pressed: pressed, child: child),
+      child: glyph,
     );
   }
 }
 
 /// 取消钮叉号：两条 45° 直线，round cap，墨盒铺满到盒角内缩半个笔画。
 ///
-/// 笔画 1.9dp（45° 水平弦实测 4px → 正交 2.83px），round cap 让端点在
+/// 笔画 1.9dp（45° 水平弦度量 4px → 正交 2.83px），round cap 让端点在
 /// 墨盒角内收 `stroke/2·√2` 才恰好触边 —— 与 [SearchIconPainter] 的手柄
 /// 同一套收角算法。
 class SearchCancelGlyphPainter extends CustomPainter {
   const SearchCancelGlyphPainter(this.color);
 
-  /// 墨色（palette 的 `cancelInk`，实测前景墨色）。
+  /// 墨色（palette 的 `cancelInk`，度量前景墨色）。
   final Color color;
 
   @override

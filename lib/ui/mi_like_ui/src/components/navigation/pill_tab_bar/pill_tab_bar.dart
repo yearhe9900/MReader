@@ -7,6 +7,7 @@ import '../../../theme/transparency_tokens.dart';
 import '../../../theme/typography.dart';
 import '../../../utils/filter_cache.dart';
 import '../../../utils/glass_rim.dart';
+import '../../../utils/pressable.dart';
 import '../../../utils/squircle.dart';
 import 'pill_tab_bar_metrics.dart';
 
@@ -171,16 +172,16 @@ class MiPillTabBar extends StatelessWidget {
       // 半透明填充 + 文案 + 手势。填充沿用 Decoration 自身圆角 AA（与截图
       // 度量的单层边缘 AA 一致，勿再外包 ClipRRect，两层 AA 叠乘会把边缘
       // 覆盖率压成 c²）。
-      // （上游此处包了一层 `MiHoverFeedback` 桌面悬停叠色；本移植树未引入
-      // 桌面悬停件，故省略——其余与上游逐字节同源。）
       fills.add(
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => onTap(i),
-          // 悬停只给**未选中**胶囊：选中项已是近不透明实心，再叠一层读不出
-          // 变化，反而糊住选中态（叠色是 5.6% 的实色，不是 Opacity —— 不给
-          // 磨砂子树引入 saveLayer）。
-                      child: AnimatedContainer(
+        // 三态反馈统一入口：点按 / Enter / Space 选中；悬停只给**未选中**
+        // 胶囊（选中项已是近不透明实心，再叠一层读不出变化，反而糊住
+        // 选中态）；焦点环全项统一（Tab 每项一停，推导桌面语义）。
+        MiPressable(
+          onPressed: () => onTap(i),
+          mode: themeMode,
+          hover: !selected,
+          borderRadius: BorderRadius.circular(MiDimens.radiusPill),
+          child: AnimatedContainer(
               duration: fillDuration,
               curve: Curves.easeOut,
               width: widths[i],

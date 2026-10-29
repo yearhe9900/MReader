@@ -4,27 +4,27 @@ import '../../../theme/button_tokens.dart';
 import '../../../theme/dimens.dart';
 import '../../../theme/theme_mode.dart';
 import '../../../theme/typography.dart';
+import '../../../utils/pressable.dart';
 import '../../../utils/squircle.dart';
 import 'button_metrics.dart';
 
 /// 按钮形态。
 enum MiButtonVariant {
-  /// 主按钮：实测关注按钮（蓝填充 + 白字），参考图唯一样式。
+  /// 主按钮：强调填充 + 白字。
   filled,
 
-  /// 次级按钮：低对比表面灰（「已关注」态，推导样式，非实测）。
+  /// 次级按钮：低对比表面填充（推导值）。
   tonal,
 }
 
-/// 小米「我的关注」页风格的胶囊按钮（明暗双模式）。
+/// 胶囊按钮（明暗双模式，主 / 次级 / 禁用三态）。
 ///
-/// 几何 / 配色 1:1 实测（几何见 [MiButtonMetrics]、配方见
-/// `theme/button_tokens.dart`）：高 28.3dp stadium、填充 #4980F7 明暗
-/// 同色、13dp Medium 白字、左右 17dp 内边距（宽度随内容自适应）。
+/// 规格（几何见 [MiButtonMetrics]、配色见 `theme/button_tokens.dart`）：
+/// 高 28.3dp stadium、左右内边距 17dp、标签 13dp Medium，宽度随内容
+/// 自适应；主按钮填充 [MiColors.accent]（明暗同色）。
 ///
-/// [onPressed] 为 null 时进入禁用态（推导样式）。形态 / 状态切换时填充与
-/// 标签色以 200ms 过渡 —— 与 `MiPillTabBar` 同款标准过渡（参考图为静态
-/// 截图、无动效实测，故不引入按压缩放等未实测动效）。
+/// [onPressed] 为 `null` 时进入禁用态（推导值）。形态 / 状态切换时填充与
+/// 标签色以 200ms 过渡（`easeOut`）。
 class MiButton extends StatelessWidget {
   const MiButton({
     super.key,
@@ -59,9 +59,15 @@ class MiButton extends StatelessWidget {
     return Semantics(
       button: true,
       enabled: enabled,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onPressed,
+      // 三态反馈（悬停叠色 + 手型光标、Tab 焦点环 + Enter / Space 激活、
+      // 按压状态机）收编自 MiPressable（描边与叠色实色、不引 saveLayer，
+      // 见各基础件文档）。按钮素材无按压帧 —— 不发明按压视觉
+      //（pressBuilder 缺省）；悬停 / 焦点只给可点态（禁用态不该有
+      //「可点」暗示），由 MiPressable 按 enabled 门控。
+      child: MiPressable(
+        onPressed: onPressed,
+        mode: themeMode,
+        borderRadius: BorderRadius.circular(MiDimens.radiusPill),
         child: AnimatedContainer(
           duration: const Duration(
             milliseconds: MiButtonMetrics.pressDurationMs,
@@ -76,7 +82,7 @@ class MiButton extends StatelessWidget {
             shape: const MiSquircleBorder(MiDimens.radiusPill),
           ),
           // 宽度随内容收缩：Center 带 widthFactor 才不会在有界父级
-          //（Center/Column）里被拉满宽 —— 实测按钮是内容自适应的胶囊。
+          //（Center/Column）里被拉满宽 —— 度量按钮是内容自适应的胶囊。
           child: Center(
             widthFactor: 1.0,
             child: Text(
