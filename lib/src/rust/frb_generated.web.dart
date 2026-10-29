@@ -8,6 +8,7 @@
 
 import 'api/error.dart';
 import 'api/guard.dart';
+import 'api/image.dart';
 import 'api/kernel.dart';
 
 import 'dart:async';
@@ -38,6 +39,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int dco_decode_box_autoadd_u_32(dynamic raw);
 
   @protected
+  double dco_decode_f_32(dynamic raw);
+
+  @protected
   HighPerfError dco_decode_high_perf_error(dynamic raw);
 
   @protected
@@ -48,6 +52,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<int> dco_decode_list_prim_u_32_loose(dynamic raw);
+
+  @protected
+  Uint32List dco_decode_list_prim_u_32_strict(dynamic raw);
 
   @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
@@ -62,7 +72,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RkChapter> dco_decode_list_rk_chapter(dynamic raw);
 
   @protected
+  List<RkHeading> dco_decode_list_rk_heading(dynamic raw);
+
+  @protected
   List<RkLink> dco_decode_list_rk_link(dynamic raw);
+
+  @protected
+  List<RkSearchHit> dco_decode_list_rk_search_hit(dynamic raw);
 
   @protected
   List<RkTocNode> dco_decode_list_rk_toc_node(dynamic raw);
@@ -92,13 +108,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RkChapterText dco_decode_rk_chapter_text(dynamic raw);
 
   @protected
+  RkHeading dco_decode_rk_heading(dynamic raw);
+
+  @protected
   RkLink dco_decode_rk_link(dynamic raw);
+
+  @protected
+  RkLocation dco_decode_rk_location(dynamic raw);
 
   @protected
   RkMeta dco_decode_rk_meta(dynamic raw);
 
   @protected
   RkResource dco_decode_rk_resource(dynamic raw);
+
+  @protected
+  RkSearchHit dco_decode_rk_search_hit(dynamic raw);
+
+  @protected
+  RkSearchPage dco_decode_rk_search_page(dynamic raw);
+
+  @protected
+  RkThumbnail dco_decode_rk_thumbnail(dynamic raw);
 
   @protected
   RkTocNode dco_decode_rk_toc_node(dynamic raw);
@@ -131,6 +162,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
+  double sse_decode_f_32(SseDeserializer deserializer);
+
+  @protected
   HighPerfError sse_decode_high_perf_error(SseDeserializer deserializer);
 
   @protected
@@ -145,6 +179,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
+  List<int> sse_decode_list_prim_u_32_loose(SseDeserializer deserializer);
+
+  @protected
+  Uint32List sse_decode_list_prim_u_32_strict(SseDeserializer deserializer);
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
@@ -157,7 +197,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RkChapter> sse_decode_list_rk_chapter(SseDeserializer deserializer);
 
   @protected
+  List<RkHeading> sse_decode_list_rk_heading(SseDeserializer deserializer);
+
+  @protected
   List<RkLink> sse_decode_list_rk_link(SseDeserializer deserializer);
+
+  @protected
+  List<RkSearchHit> sse_decode_list_rk_search_hit(SseDeserializer deserializer);
 
   @protected
   List<RkTocNode> sse_decode_list_rk_toc_node(SseDeserializer deserializer);
@@ -189,13 +235,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RkChapterText sse_decode_rk_chapter_text(SseDeserializer deserializer);
 
   @protected
+  RkHeading sse_decode_rk_heading(SseDeserializer deserializer);
+
+  @protected
   RkLink sse_decode_rk_link(SseDeserializer deserializer);
+
+  @protected
+  RkLocation sse_decode_rk_location(SseDeserializer deserializer);
 
   @protected
   RkMeta sse_decode_rk_meta(SseDeserializer deserializer);
 
   @protected
   RkResource sse_decode_rk_resource(SseDeserializer deserializer);
+
+  @protected
+  RkSearchHit sse_decode_rk_search_hit(SseDeserializer deserializer);
+
+  @protected
+  RkSearchPage sse_decode_rk_search_page(SseDeserializer deserializer);
+
+  @protected
+  RkThumbnail sse_decode_rk_thumbnail(SseDeserializer deserializer);
 
   @protected
   RkTocNode sse_decode_rk_toc_node(SseDeserializer deserializer);
@@ -231,6 +292,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
 
   @protected
+  void sse_encode_f_32(double self, SseSerializer serializer);
+
+  @protected
   void sse_encode_high_perf_error(HighPerfError self, SseSerializer serializer);
 
   @protected
@@ -244,6 +308,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_prim_u_32_loose(
+    List<int> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_prim_u_32_strict(
+    Uint32List self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
@@ -264,7 +340,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_rk_heading(
+    List<RkHeading> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_rk_link(List<RkLink> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_rk_search_hit(
+    List<RkSearchHit> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_rk_toc_node(
@@ -300,13 +388,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_rk_chapter_text(RkChapterText self, SseSerializer serializer);
 
   @protected
+  void sse_encode_rk_heading(RkHeading self, SseSerializer serializer);
+
+  @protected
   void sse_encode_rk_link(RkLink self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_location(RkLocation self, SseSerializer serializer);
 
   @protected
   void sse_encode_rk_meta(RkMeta self, SseSerializer serializer);
 
   @protected
   void sse_encode_rk_resource(RkResource self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_search_hit(RkSearchHit self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_search_page(RkSearchPage self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rk_thumbnail(RkThumbnail self, SseSerializer serializer);
 
   @protected
   void sse_encode_rk_toc_node(RkTocNode self, SseSerializer serializer);

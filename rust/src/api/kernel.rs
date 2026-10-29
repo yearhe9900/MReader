@@ -33,7 +33,7 @@ fn with_kernel<T>(f: impl FnOnce(&mut Kernel) -> RrkResult<T>) -> Result<T, High
 }
 
 /// 内核错误 → 加速层错误（类别是契约、文案是表达）。
-fn map_err(e: RrkError) -> HighPerfError {
+pub(crate) fn map_err(e: RrkError) -> HighPerfError {
     let kind = match e.kind {
         RrkErrorKind::Io => HighPerfErrorKind::Io,
         // DRM / 明确拒绝的格式都走 Encrypted（RD-05「不破解、给中文原因」）。
@@ -143,6 +143,45 @@ pub struct RkResource {
 pub struct RkWeight {
     pub id: u32,
     pub char_len: u32,
+}
+
+/// 章标题块（issue #13 轻量出口）。
+pub struct RkHeading {
+    /// 标题级别（1–6）。
+    pub level: u8,
+    pub text: String,
+}
+
+/// 语义定位坐标（进度 ↔ 位置互转的公共形态）。
+pub struct RkLocation {
+    pub chapter: u32,
+    /// 章内字节偏移（章文本 UTF-8 坐标系）。
+    pub byte_offset: u32,
+}
+
+/// 单章搜索命中（与全书搜索同源坐标：章文本字节偏移）。
+pub struct RkSearchHit {
+    pub chapter: u32,
+    /// 章正文 UTF-8 字节偏移（与锚点/内链同坐标系）。
+    pub offset: u32,
+    /// 命中长度（字节）。
+    pub len: u32,
+    /// 上下文片段（超长时两端带 `…`）。
+    pub snippet: String,
+    /// 片段在所属段落文本中的起点（字节），供宿主局部高亮。
+    pub snippet_offset: u32,
+}
+
+/// 单章搜索结果页（同步扫完即全量；字段与全书会话批次同形）。
+pub struct RkSearchPage {
+    pub hits: Vec<RkSearchHit>,
+    /// 已扫完的章数（单章搜索恒 ≤ 1）。
+    pub scanned: u32,
+    /// 全书章数。
+    pub total: u32,
+    /// 是否已扫完（拉模式批次结构同形字段）。单章搜索是一次性同步调用，
+    /// 结果即本批全量（`max_hits` 截断归上限语义），此字段不作判据。
+    pub done: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +295,9 @@ pub struct RkCacheStats {
     pub chapter_misses: u64,
     pub outline_hits: u64,
     pub outline_misses: u64,
+    /// open 索引命中/未命中（章级/页级缓存持久化：open 期免重建）。
+    pub open_hits: u64,
+    pub open_misses: u64,
 }
 
 /// 配置内容级缓存（目录 + 内存上限字节；空目录 = 关闭）。幂等，可重复调用。
@@ -285,6 +327,8 @@ pub fn kernel_cache_stats() -> RkCacheStats {
                 chapter_misses: s.chapter_misses,
                 outline_hits: s.outline_hits,
                 outline_misses: s.outline_misses,
+                open_hits: s.open_hits,
+                open_misses: s.open_misses,
             })
         })
     })
@@ -400,6 +444,109 @@ pub fn kernel_weights(handle: u64) -> Result<Vec<RkWeight>, HighPerfError> {
                 .collect())
         })
     })
+}
+
+// ---------------------------------------------------------------------------
+// ABI 8/9/10 新出口（进度 / 坐标映射 / 选区 / 章标题块 / 单章搜索）。
+// 语义归 vendored `rrk-*`，本段只做镜像透传（与上方同口径）。
+// ---------------------------------------------------------------------------
+
+/// 章标题块列表（issue #13 轻量出口）：走章内容级缓存（命中免解析），
+/// 且免整章文本跨边界搬运；无标题/图片章返回空表。
+pub fn kernel_chapter_headings(
+    handle: u64,
+    chapter_id: u32,
+) -> Result<Vec<RkHeading>, HighPerfError> {
+    ffi_guard(|| {
+        with_kernel(|k| {
+            Ok(k
+                .chapter_headings(handle, chapter_id)?
+                .into_iter()
+                .map(|(level, text)| RkHeading { level, text })
+                .collect())
+        })
+    })
+}
+
+/// 轻量**单章**搜索：不注册会话、同步扫完即弃，扫描/坐标/snippet 与全书
+/// 检索同源。`context_chars = 0` 取默认 30；`max_hits = 0` 取默认上限 1000。
+pub fn kernel_search_chapter(
+    handle: u64,
+    chapter_id: u32,
+    query: String,
+    case_sensitive: bool,
+    context_chars: u32,
+    max_hits: u32,
+) -> Result<RkSearchPage, HighPerfError> {
+    ffi_guard(|| {
+        with_kernel(|k| {
+            let opts = rrk_search::SearchOptions {
+                case_sensitive,
+                context_chars: if context_chars == 0 { 30 } else { context_chars },
+            };
+            let page = k.search_chapter(handle, chapter_id, &query, opts, max_hits)?;
+            Ok(RkSearchPage {
+                hits: page
+                    .hits
+                    .iter()
+                    .map(|h| RkSearchHit {
+                        chapter: h.chapter,
+                        offset: h.offset,
+                        len: h.len,
+                        snippet: h.snippet.clone(),
+                        snippet_offset: h.snippet_offset,
+                    })
+                    .collect(),
+                scanned: page.scanned,
+                total: page.total,
+                done: page.done,
+            })
+        })
+    })
+}
+
+/// 语义坐标 → 全书进度百分比 [0, 1]（估算口径：按章权重线性插值，越界夹取；
+/// 精确定位走 `page_at` 链路）。进度条与跨设备同步用。
+pub fn kernel_progress_of(
+    handle: u64,
+    chapter: u32,
+    byte_offset: u32,
+) -> Result<f32, HighPerfError> {
+    ffi_guard(|| with_kernel(|k| k.progress_of(handle, chapter, byte_offset)))
+}
+
+/// 进度百分比 [0, 1] → 语义坐标（[`kernel_progress_of`] 的逆；同为估算口径）。
+pub fn kernel_locate(handle: u64, percent: f32) -> Result<RkLocation, HighPerfError> {
+    ffi_guard(|| {
+        with_kernel(|k| {
+            let (chapter, byte_offset) = k.locate(handle, percent)?;
+            Ok(RkLocation { chapter, byte_offset })
+        })
+    })
+}
+
+/// 批量偏移映射：章文本 UTF-8 字节偏移 ↔ UTF-16 code unit 偏移。
+///
+/// `to_utf16 = true`：字节 → UTF-16（越界夹取、非字符边界向下取整）；
+/// `false`：UTF-16 → 字节（代理对中间取对首）。Dart `String` 是 UTF-16，
+/// 标注 / 选区必经。
+pub fn kernel_map_offsets(
+    handle: u64,
+    chapter: u32,
+    to_utf16: bool,
+    offsets: Vec<u32>,
+) -> Result<Vec<u32>, HighPerfError> {
+    ffi_guard(|| with_kernel(|k| k.map_offsets(handle, chapter, to_utf16, &offsets)))
+}
+
+/// 选区取文：`[start, end)` 夹到字符边界后返回章文本切片（免整章拉回）。
+pub fn kernel_slice_text(
+    handle: u64,
+    chapter: u32,
+    start: u32,
+    end: u32,
+) -> Result<String, HighPerfError> {
+    ffi_guard(|| with_kernel(|k| k.slice_text(handle, chapter, start, end)))
 }
 
 #[cfg(test)]

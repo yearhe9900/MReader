@@ -1,6 +1,8 @@
 [package]
 name = "rust_lib_mreader"
-version = "0.1.0"
+# 与 guard::probe 回值、`kRustAbiVersion` 三方一致（快失败哨兵）；
+# 0.2.0 = ABI 8/9/10 新出口接线批（镜像结构面变更）。
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 
@@ -55,6 +57,9 @@ mobi = "0.8"
 rrk-kernel.workspace = true
 rrk-model.workspace = true
 rrk-format.workspace = true
+# ABI 8/9/10 新出口：单章搜索（SearchOptions/SearchPage）与缩略图。
+rrk-search.workspace = true
+rrk-image.workspace = true
 
 # `RUST-04` / 架构 §D.2：panic 必须显式 unwind——`catch_unwind` 在 abort 下失效，
 # panic 会直接终止进程。两处显式写死，让「改成 abort」变成一次显眼的 diff

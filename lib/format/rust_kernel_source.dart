@@ -31,6 +31,7 @@ import 'dart:typed_data';
 import '../epub/zip_paths.dart';
 import '../meta/meta_source.dart';
 import '../meta/txt_meta.dart';
+import '../src/rust/api/image.dart' as rki;
 import '../src/rust/api/kernel.dart' as rk;
 import 'book_source.dart';
 import 'image_pages.dart';
@@ -524,8 +525,9 @@ class RustKernelSource implements BookSource {
   /// 标题是占位时，h1 会漏进正文首段、把命中 offset 整体平移一截（2026-10-26
   /// 实测：搜索用例 offset 差 3 = 「第一章」三字）。
   ///
-  /// 做法：章表建好后扫一遍**占位项**，逐章只解出首个标题块即丢正文（不缓存全章，
-  /// 守 `PERF-02` 内存纪律）；代价与被删的 Dart 预取同阶，且只在真的无目录时发生。
+  /// 做法：章表建好后扫一遍**占位项**，逐章走章标题块轻量出口（issue #13
+  /// `kernel_chapter_headings`，走章内容缓存、免整章文本跨边界搬运）取首个
+  /// 标题；只在真的无目录时发生。
   /// 有 TOC / nav 的书零开销（标题非占位 → pending 为空直接返回）。
   Future<void> _resolvePlaceholderTitles() async {
     final List<Chapter> chapters = _chapters!;
@@ -541,12 +543,12 @@ class RustKernelSource implements BookSource {
     final List<rk.RkChapter> entries = await _kernelChapterList();
     final List<Chapter> patched = List<Chapter>.of(chapters);
     for (final int i in pending) {
-      final rk.RkChapterText text = await rk.kernelLoadChapter(
+      final List<rk.RkHeading> headings = await rk.kernelChapterHeadings(
         handle: _handle,
         chapterId: entries[refs[i].id].id,
       );
-      final String heading = _firstHeadingText(text.blocks);
-      if (heading.isEmpty) continue;
+      if (headings.isEmpty) continue;
+      final String heading = headings.first.text;
       patched[i] = Chapter(
         href: chapters[i].href,
         title: heading,
@@ -560,14 +562,6 @@ class RustKernelSource implements BookSource {
   /// 占位标题判定（内核对无目录书的默认形态：`第 N 章`）。
   static bool _isPlaceholderTitle(String title) =>
       RegExp(r'^第\s*\d+\s*章$').hasMatch(title.trim());
-
-  /// 取块序列里**第一个标题块**的文本（无标题块返回空串）。
-  static String _firstHeadingText(List<rk.RkBlock> blocks) {
-    for (final rk.RkBlock b in blocks) {
-      if (b.kind == 'h' && b.text.trim().isNotEmpty) return b.text.trim();
-    }
-    return '';
-  }
 
   @override
   Future<List<Chapter>> chapters() async {
@@ -757,6 +751,66 @@ class RustKernelSource implements BookSource {
         await rk.kernelLoadResource(handle: _handle, key: href);
     return res?.data;
   }
+
+  // ── 能力面（内核 ABI 8/9/10 新出口；产品接线随需求启用）────────────
+  //
+  // `chapterId` 一律是**内核章 id**（[ChapterRef.id]，与锚点/内链同内核坐标系）；
+  // 偏移一律是章文本 **UTF-8 字节**坐标（本类头注「坐标系」口径）。
+
+  /// 章标题块列表（issue #13 轻量出口）：走章内容级缓存，免整章文本跨边界
+  /// 搬运；无标题/图片章返回空表。
+  Future<List<rk.RkHeading>> loadHeadings(int chapterId) =>
+      rk.kernelChapterHeadings(handle: _handle, chapterId: chapterId);
+
+  /// 轻量**单章**搜索（同步扫完即弃；坐标/snippet 与全书搜索同源）。
+  /// [contextChars] = 0 取默认 30；[maxHits] = 0 取默认上限 1000。
+  Future<rk.RkSearchPage> searchChapter(
+    int chapterId,
+    String query, {
+    bool caseSensitive = false,
+    int contextChars = 0,
+    int maxHits = 0,
+  }) =>
+      rk.kernelSearchChapter(
+        handle: _handle,
+        chapterId: chapterId,
+        query: query,
+        caseSensitive: caseSensitive,
+        contextChars: contextChars,
+        maxHits: maxHits,
+      );
+
+  /// 语义坐标 → 全书进度百分比 [0,1]（估算口径：按章权重线性插值、越界夹取）。
+  Future<double> progressOf(int chapterId, int byteOffset) => rk.kernelProgressOf(
+      handle: _handle, chapter: chapterId, byteOffset: byteOffset);
+
+  /// 进度百分比 [0,1] → 语义坐标（[progressOf] 的逆；同为估算口径）。
+  Future<rk.RkLocation> locate(double percent) =>
+      rk.kernelLocate(handle: _handle, percent: percent);
+
+  /// 批量偏移映射：章文本 UTF-8 字节偏移 ↔ UTF-16 code unit 偏移（Dart `String`
+  /// 是 UTF-16，标注 / 选区必经）。[toUtf16] = true 字节 → UTF-16（非字符边界
+  /// 向下取整）；false 反向（代理对中间取对首）。
+  Future<Uint32List> mapOffsets(
+    int chapterId, {
+    required bool toUtf16,
+    required List<int> offsets,
+  }) =>
+      rk.kernelMapOffsets(
+        handle: _handle,
+        chapter: chapterId,
+        toUtf16: toUtf16,
+        offsets: offsets,
+      );
+
+  /// 选区取文：`[start, end)` 夹到字符边界后返回章文本切片（免整章拉回）。
+  Future<String> sliceText(int chapterId, int start, int end) =>
+      rk.kernelSliceText(handle: _handle, chapter: chapterId, start: start, end: end);
+
+  /// 图片缩略图（无句柄、无状态）：解码 → 等比缩 [maxEdge]（长边）以内 → RGBA8。
+  /// AVIF/HEIC（内核不解像素）与损坏图的错误类别透传 `rrk-image` 语义。
+  static Future<rki.RkThumbnail> thumbnail(Uint8List data, int maxEdge) =>
+      rki.imageThumbnail(data: data, maxEdge: maxEdge);
 
   @override
   Future<void> dispose() async {

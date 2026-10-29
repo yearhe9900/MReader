@@ -86,6 +86,85 @@ Future<RkResource?> kernelLoadResource({
 Future<List<RkWeight>> kernelWeights({required BigInt handle}) =>
     RustLib.instance.api.crateApiKernelKernelWeights(handle: handle);
 
+/// 章标题块列表（issue #13 轻量出口）：走章内容级缓存（命中免解析），
+/// 且免整章文本跨边界搬运；无标题/图片章返回空表。
+Future<List<RkHeading>> kernelChapterHeadings({
+  required BigInt handle,
+  required int chapterId,
+}) => RustLib.instance.api.crateApiKernelKernelChapterHeadings(
+  handle: handle,
+  chapterId: chapterId,
+);
+
+/// 轻量**单章**搜索：不注册会话、同步扫完即弃，扫描/坐标/snippet 与全书
+/// 检索同源。`context_chars = 0` 取默认 30；`max_hits = 0` 取默认上限 1000。
+Future<RkSearchPage> kernelSearchChapter({
+  required BigInt handle,
+  required int chapterId,
+  required String query,
+  required bool caseSensitive,
+  required int contextChars,
+  required int maxHits,
+}) => RustLib.instance.api.crateApiKernelKernelSearchChapter(
+  handle: handle,
+  chapterId: chapterId,
+  query: query,
+  caseSensitive: caseSensitive,
+  contextChars: contextChars,
+  maxHits: maxHits,
+);
+
+/// 语义坐标 → 全书进度百分比 [0, 1]（估算口径：按章权重线性插值，越界夹取；
+/// 精确定位走 `page_at` 链路）。进度条与跨设备同步用。
+Future<double> kernelProgressOf({
+  required BigInt handle,
+  required int chapter,
+  required int byteOffset,
+}) => RustLib.instance.api.crateApiKernelKernelProgressOf(
+  handle: handle,
+  chapter: chapter,
+  byteOffset: byteOffset,
+);
+
+/// 进度百分比 [0, 1] → 语义坐标（[`kernel_progress_of`] 的逆；同为估算口径）。
+Future<RkLocation> kernelLocate({
+  required BigInt handle,
+  required double percent,
+}) => RustLib.instance.api.crateApiKernelKernelLocate(
+  handle: handle,
+  percent: percent,
+);
+
+/// 批量偏移映射：章文本 UTF-8 字节偏移 ↔ UTF-16 code unit 偏移。
+///
+/// `to_utf16 = true`：字节 → UTF-16（越界夹取、非字符边界向下取整）；
+/// `false`：UTF-16 → 字节（代理对中间取对首）。Dart `String` 是 UTF-16，
+/// 标注 / 选区必经。
+Future<Uint32List> kernelMapOffsets({
+  required BigInt handle,
+  required int chapter,
+  required bool toUtf16,
+  required List<int> offsets,
+}) => RustLib.instance.api.crateApiKernelKernelMapOffsets(
+  handle: handle,
+  chapter: chapter,
+  toUtf16: toUtf16,
+  offsets: offsets,
+);
+
+/// 选区取文：`[start, end)` 夹到字符边界后返回章文本切片（免整章拉回）。
+Future<String> kernelSliceText({
+  required BigInt handle,
+  required int chapter,
+  required int start,
+  required int end,
+}) => RustLib.instance.api.crateApiKernelKernelSliceText(
+  handle: handle,
+  chapter: chapter,
+  start: start,
+  end: end,
+);
+
 /// 内容块（`rrk_model::flatten_blocks` 的透传：引用块已摊平、分割线已丢弃）。
 ///
 /// 文本里的行内图片标记是**内核格式** `\u{FFFC}<key>\u{FFFC}`（宿主适配层转换）。
@@ -146,6 +225,10 @@ class RkCacheStats {
   final BigInt outlineHits;
   final BigInt outlineMisses;
 
+  /// open 索引命中/未命中（章级/页级缓存持久化：open 期免重建）。
+  final BigInt openHits;
+  final BigInt openMisses;
+
   const RkCacheStats({
     required this.tocHits,
     required this.tocMisses,
@@ -153,6 +236,8 @@ class RkCacheStats {
     required this.chapterMisses,
     required this.outlineHits,
     required this.outlineMisses,
+    required this.openHits,
+    required this.openMisses,
   });
 
   static Future<RkCacheStats> default_() =>
@@ -165,7 +250,9 @@ class RkCacheStats {
       chapterHits.hashCode ^
       chapterMisses.hashCode ^
       outlineHits.hashCode ^
-      outlineMisses.hashCode;
+      outlineMisses.hashCode ^
+      openHits.hashCode ^
+      openMisses.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -177,7 +264,9 @@ class RkCacheStats {
           chapterHits == other.chapterHits &&
           chapterMisses == other.chapterMisses &&
           outlineHits == other.outlineHits &&
-          outlineMisses == other.outlineMisses;
+          outlineMisses == other.outlineMisses &&
+          openHits == other.openHits &&
+          openMisses == other.openMisses;
 }
 
 /// 章索引项。
@@ -254,6 +343,26 @@ class RkChapterText {
           links == other.links;
 }
 
+/// 章标题块（issue #13 轻量出口）。
+class RkHeading {
+  /// 标题级别（1–6）。
+  final int level;
+  final String text;
+
+  const RkHeading({required this.level, required this.text});
+
+  @override
+  int get hashCode => level.hashCode ^ text.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RkHeading &&
+          runtimeType == other.runtimeType &&
+          level == other.level &&
+          text == other.text;
+}
+
 /// 正文内链区间（清洗后章文本的字节区间 → 目标 href）。
 ///
 /// 与 [`RkChapterText::text`] 同坐标系；宿主按区间把可点标记织回段落文本。
@@ -275,6 +384,27 @@ class RkLink {
           start == other.start &&
           end == other.end &&
           href == other.href;
+}
+
+/// 语义定位坐标（进度 ↔ 位置互转的公共形态）。
+class RkLocation {
+  final int chapter;
+
+  /// 章内字节偏移（章文本 UTF-8 坐标系）。
+  final int byteOffset;
+
+  const RkLocation({required this.chapter, required this.byteOffset});
+
+  @override
+  int get hashCode => chapter.hashCode ^ byteOffset.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RkLocation &&
+          runtimeType == other.runtimeType &&
+          chapter == other.chapter &&
+          byteOffset == other.byteOffset;
 }
 
 /// 书目元数据。
@@ -347,6 +477,86 @@ class RkResource {
           runtimeType == other.runtimeType &&
           mime == other.mime &&
           data == other.data;
+}
+
+/// 单章搜索命中（与全书搜索同源坐标：章文本字节偏移）。
+class RkSearchHit {
+  final int chapter;
+
+  /// 章正文 UTF-8 字节偏移（与锚点/内链同坐标系）。
+  final int offset;
+
+  /// 命中长度（字节）。
+  final int len;
+
+  /// 上下文片段（超长时两端带 `…`）。
+  final String snippet;
+
+  /// 片段在所属段落文本中的起点（字节），供宿主局部高亮。
+  final int snippetOffset;
+
+  const RkSearchHit({
+    required this.chapter,
+    required this.offset,
+    required this.len,
+    required this.snippet,
+    required this.snippetOffset,
+  });
+
+  @override
+  int get hashCode =>
+      chapter.hashCode ^
+      offset.hashCode ^
+      len.hashCode ^
+      snippet.hashCode ^
+      snippetOffset.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RkSearchHit &&
+          runtimeType == other.runtimeType &&
+          chapter == other.chapter &&
+          offset == other.offset &&
+          len == other.len &&
+          snippet == other.snippet &&
+          snippetOffset == other.snippetOffset;
+}
+
+/// 单章搜索结果页（同步扫完即全量；字段与全书会话批次同形）。
+class RkSearchPage {
+  final List<RkSearchHit> hits;
+
+  /// 已扫完的章数（单章搜索恒 ≤ 1）。
+  final int scanned;
+
+  /// 全书章数。
+  final int total;
+
+  /// 是否已扫完（拉模式批次结构同形字段）。单章搜索是一次性同步调用，
+  /// 结果即本批全量（`max_hits` 截断归上限语义），此字段不作判据。
+  final bool done;
+
+  const RkSearchPage({
+    required this.hits,
+    required this.scanned,
+    required this.total,
+    required this.done,
+  });
+
+  @override
+  int get hashCode =>
+      hits.hashCode ^ scanned.hashCode ^ total.hashCode ^ done.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RkSearchPage &&
+          runtimeType == other.runtimeType &&
+          hits == other.hits &&
+          scanned == other.scanned &&
+          total == other.total &&
+          done == other.done;
 }
 
 /// 目录节点（树形；`anchor` = 章内字节偏移，惰性解析，取不到为 `None`）。

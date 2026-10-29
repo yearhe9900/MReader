@@ -12,9 +12,8 @@
 //
 // 纯 Dart：**不 import Flutter、不 import `dart:io`**。
 // 因此本目录的类型可被纯层（`lib/format/**`）与 isolate 任务安全引用。
-// 触碰 FRB 的只有两处（2026-10-22 解析内核移植后）：探测面
-// `lib/highperf/ffi/high_perf_ffi_engine.dart`（加载 + ABI 探针）与解析调用面
-// `lib/format/rust_kernel_source.dart`（内核书源适配）。
+// 触碰 FRB 的只有两处：探测面 `lib/highperf/ffi/high_perf_ffi_engine.dart`
+// （加载 + ABI 探针）与解析调用面 `lib/format/rust_kernel_source.dart`（内核书源适配）。
 import 'high_perf_error.dart';
 
 /// Dart 侧期望的 Rust 加速层 ABI 版本（§A.3 情形 3 的**唯一可靠哨兵**）。
@@ -22,7 +21,7 @@ import 'high_perf_error.dart';
 /// 与 `rust/Cargo.toml` 的 `[package] version` **必须一致**：`probe()` 回传的版本串与
 /// 本常量不等即判「版本不匹配」、整体回落纯 Dart。
 /// **只靠「符号存在」发现不了不兼容**——符号在、约定变了，是最难查的一类问题。
-const String kRustAbiVersion = '0.1.0';
+const String kRustAbiVersion = '0.2.0';
 
 /// 目标平台是否在 Rust 层交付面内（`RUST-07`：五平台 = Android / iOS / Windows /
 /// macOS / Linux；Web 已整体放弃，故**不存在** Rust→WASM 编译链）。
@@ -38,8 +37,8 @@ const bool kRustSupportedPlatform = true;
 /// 切段行为是特定实现的隐式行为，Rust 几乎不可能逐字节复现 → `RUST-02` 的 L2
 /// 等价性不可验收）。因此 2b **不占枚举值**。
 ///
-/// **2026-10-23 增补 [cbzPages]**：不属于阈值表候选，而是解析内核统一后
-/// CBZ 解析实现的择一开关（`thresholdNo` = `null`），枚举总数 5 → 6。
+/// **增补 [cbzPages]**：不属于阈值表候选，而是解析内核统一后 CBZ 解析实现的
+/// 择一开关（`thresholdNo` = `null`），枚举总数 5 → 6。
 enum HighPerfCapability {
   /// 候选 1 · MOBI / AZW3 解压（PDB 容器 + KF6/KF8 + Huff/CDIC）。
   mobiDecompress,
@@ -56,7 +55,7 @@ enum HighPerfCapability {
   /// 候选 5 · RAG / BM25 索引构建（`AI-06`）。
   bm25Index,
 
-  /// CBZ 页级解析（2026-10-23 接线内核 `rrk-cbz`：zip 解压 + 自然序页表）。
+  /// CBZ 页级解析（内核 `rrk-cbz`：zip 解压 + 自然序页表）。
   ///
   /// **不占阈值表编号**（[thresholdNo] = `null`）：它不是「先测后引」的加速候选，
   /// 而是解析内核统一后 CBZ 解析实现的择一开关——纯 Dart `CbzSource` 仍为回落。
@@ -107,15 +106,15 @@ extension HighPerfCapabilityInfo on HighPerfCapability {
 
 /// 加速层引擎：**可插拔的实现缝**（`RUST-01 ④`「上层不感知实现来源」的落点）。
 ///
-/// ## 本抽象在 T01（M35-T01）冻结的范围
+/// ## 本抽象冻结的范围
 ///
-/// T01 只冻结**探测 + 能力声明**两件事——它们是「可用性协议」，与具体能力无关，
-/// 且两个实现（[NullHighPerfEngine] 与将来的 FFI 引擎）都要满足。
+/// 只冻结**探测 + 能力声明**两件事——它们是「可用性协议」，与具体能力无关，
+/// 且两个实现（[NullHighPerfEngine] 与 FFI 引擎）都要满足。
 ///
 /// **各能力的真实方法**（`openSource` / `readChapterChunk` / `searchStart` /
-/// `indexBuildStart` …，跨边界类型表见架构文档 §C.1）由 **M35-T04** 在本抽象上增补，
-/// 届时两个实现在**同一提交内**一起补齐。T01 不预置这些方法，是为了避免在
-/// FRB 生成物落地前凭想象冻结一张可能与真实桥接不匹配的签名表。
+/// `indexBuildStart` …，跨边界类型表见架构文档 §C.1）后续在本抽象上增补、
+/// 两个实现**同一提交内**一起补齐。不预置这些方法，是为了避免在 FRB 生成物落地前
+/// 凭想象冻结一张可能与真实桥接不匹配的签名表。
 abstract interface class HighPerfEngine {
   /// 后端标识：`'null'`（纯 Dart 回落）/ `'rust'`（真实加速层）。
   /// 只进调试日志与 `describe()`。

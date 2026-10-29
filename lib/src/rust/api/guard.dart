@@ -11,5 +11,6 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// ABI 版本探针（`M35-T03` 最小通路）：Dart 侧与 `kRustAbiVersion` 逐字比对，
 /// 不一致 = 情形 3「版本不匹配」→ 整体回落纯 Dart（`RUST-01` 探测表）。
-/// 返回值 = `0.1.0`，改版本号必须同步改 Dart 常量，否则探测必然失败。
+/// 返回值 = `0.2.0`（ABI 8/9/10 新出口接线批：镜像结构面变更，旧库快失败），
+/// 改版本号必须同步改 Dart 常量，否则探测必然失败。
 String probe() => RustLib.instance.api.crateApiGuardProbe();
