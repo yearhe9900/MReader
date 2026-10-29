@@ -1,19 +1,17 @@
-// `M4-T01`：WebDAV 同步通道（PRD §10 / `SYNC-01` / `SYNC-07`）。
+// WebDAV 同步通道（PRD §10 / `SYNC-01` / `SYNC-07`）。
 //
 // 依赖策略（与 `ai/ai_client.dart` 同）：只用 `dart:io` HttpClient + `xml` 解析
-// PROPFIND multistatus，**不加 http/dio 依赖**。通道只做一遍——T02~T06（进度 /
-// 条目 / 备份 / 触发 / 统计）全部复用本类，`STAT-08` 也复用它（PRD §17 明确理由）。
+// PROPFIND multistatus，**不加 http/dio 依赖**；进度 / 条目 / 备份 / 触发 / 统计
+// 全部复用本类（`STAT-08` 也复用，PRD §17 明确理由）。
 //
-// 职责：
-//   · PROPFIND / MKCOL / GET / PUT / DELETE + Basic 认证；
-//   · 「测试连接」（`SYNC-01` ①②）+ 远端目录**逐级自动创建**（`SYNC-01` ③：
-//     目录不存在 → 逐级 MKCOL，已存在 405 视作成功）；
-//   · 错误分类（`SYNC-07` 禁止静默失败）：401 / 404 / 网络不可达 / 磁盘满 →
-//     中文可读 [SyncException]；`retryable` 只标超时 / 网络 / 5xx（同 `AiException`）。
+// 职责：PROPFIND / MKCOL / GET / PUT / DELETE + Basic 认证；「测试连接」
+// （`SYNC-01` ①②）+ 远端目录**逐级自动创建**（`SYNC-01` ③：不存在 → 逐级
+// MKCOL，已存在 405 视作成功）；错误分类（`SYNC-07` **禁**静默失败）：401 /
+// 404 / 网络不可达 / 磁盘满 → 中文可读 [SyncException]，`retryable` 只标
+// 超时 / 网络 / 5xx（同 `AiException`）。
 //
-// 路径语义：远端根 = `{config.url}/{config.dir}/`（PRD §10.3），下列方法的
-// `under` 均**相对这个根**（如 `bookProgress/书名_作者.json`）；段逐个
-// percent-encode，中文书名 / 空格安全。
+// 路径语义：远端根 = `{config.url}/{config.dir}/`（PRD §10.3），`under` 均
+// **相对这个根**；段逐个 percent-encode，中文书名 / 空格安全。
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -106,9 +104,8 @@ class WebdavEntry {
 }
 
 /// 大文件传输的取消控制（`SYNC-05` ③；调用方创建并持有，显式传入）。
-///
-/// 取消是**协作式**的：[WebdavClient.uploadStream] 在分块间、
-/// [WebdavClient.downloadToFile] 在事件间检查 [cancelled]，命中即中止并抛
+/// 取消是**协作式**的：[WebdavClient.uploadStream] 分块间、
+/// [WebdavClient.downloadToFile] 事件间检查 [cancelled]，命中即中止并抛
 /// `SyncErrorKind.cancelled`（不可重试——重试违背取消意图）。
 class TransferControl {
   /// 是否已被取消。
@@ -145,10 +142,8 @@ class WebdavClient {
   // 公开通道（`SYNC-01` + T02~T06 复用面）
   // ───────────────────────────────────────────────────────────────────────────
 
-  /// 测试连接（`SYNC-01` ①②③）：
-  ///   ① 对 `config.url` 发 PROPFIND（Depth 0）验证地址与凭据；
-  ///   ② 401 / 404 等经 [SyncException] 给出可读中文错误；
-  ///   ③ 对远端目录逐级 MKCOL——**目录不存在时自动创建**。
+  /// 测试连接（`SYNC-01` ①②③）：对 `config.url` 发 PROPFIND（Depth 0）验证地址
+  /// 与凭据（401 / 404 → [SyncException] 可读中文错误）；再逐级 MKCOL 建远端目录。
   Future<void> testConnection({
     required SyncConfig config,
     required String password,
@@ -161,10 +156,8 @@ class WebdavClient {
   }
 
   /// 从 `config.url` 起逐级创建远端目录（`{url}/{dir}/{under}`；`SYNC-01` ③）。
-  ///
-  /// 每一级单独 MKCOL：已存在（405）视作成功；逐级创建保证父级总在前面出现，
-  /// 因此正常路径不会遇到 409。T02~T04 建 `bookProgress/`、`stats/`、`books/`
-  /// 等子目录也走本方法。
+  /// 每一级单独 MKCOL：已存在（405）视作成功；逐级创建保证父级先出现，
+  /// 正常路径不会遇到 409；各引擎建 `bookProgress/` 等子目录也走本方法。
   Future<void> ensureDirectory(
     SyncConfig config,
     String password, {
@@ -193,7 +186,6 @@ class WebdavClient {
   }
 
   /// 列出 `under` 目录（Depth 1）；404 → [SyncException] `notFound`。
-  ///
   /// 返回条目（含目录自身，`path` 为相对远端根的已解码路径）。
   Future<List<WebdavEntry>> list(
     SyncConfig config,
@@ -275,11 +267,9 @@ class WebdavClient {
   }
 
   /// 流式上传（PUT 定长 + 取消 + 进度；`SYNC-05` ③：大文件可取消且有进度）。
-  ///
-  /// 与 [upload]（整包字节）互补：书籍文件等大对象走本方法——[source] 分块
-  /// 写入请求体，每块前检查 [control] 取消、写后回调 [onProgress]（[sent]
-  /// 为已写字节、第二参为 [contentLength] 总长）。取消 / 源出错经 `abort`
-  /// 断连（不留半截 PUT），抛出的 [SyncException] 原样上抛。
+  /// 与 [upload]（整包字节）互补：书籍等大对象走本方法——[source] 分块写入，
+  /// 每块前查 [control] 取消、写后回调 [onProgress]（已写字节 / 总长）；
+  /// 取消 / 源出错经 `abort` 断连（不留半截 PUT），[SyncException] 原样上抛。
   Future<void> uploadStream(
     SyncConfig config,
     String password,
@@ -347,10 +337,9 @@ class WebdavClient {
   }
 
   /// 下载到文件（GET → 同目录 `.part` 临时文件 → 完整后原子替换 [target]）。
-  ///
-  /// `SYNC-05` ③：[onProgress] 按已收字节回调（第二参 = `Content-Length`，
-  /// 未知为 -1）；[control] 取消即中止，半截 `.part` 一并清理、**目标文件
-  /// 保持原样**。非 2xx 先读完响应体再按状态抛可读错误（带服务端细节）。
+  /// `SYNC-05` ③：[onProgress] 按已收字节回调（总长未知为 -1）；[control] 取消
+  /// 即中止，清理半截 `.part`、**目标文件保持原样**；非 2xx 先读完响应体
+  /// 再按状态抛可读错误（带服务端细节）。
   Future<void> downloadToFile(
     SyncConfig config,
     String password,

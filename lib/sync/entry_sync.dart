@@ -1,21 +1,18 @@
-// `M4-T03`：按条目合并的同步机制 + 书库索引同步（`SYNC-03`，PRD §10.1/§10.2）。
+// 按条目合并的同步机制 + 书库索引同步（`SYNC-03`，PRD §10.1/§10.2）。
 //
-// `SYNC-03` 的核心是「**按条目合并而非整包覆盖**」：两侧各有的条目都保留，
-// 同 key 冲突按内容裁决（双侧对称 → 收敛，不震荡）。本文件提供：
-//   · [mergeById]：通用并集合并（纯函数，零 IO）；
-//   · [byContent]：同 key 冲突的对称裁决器；
-//   · [IndexSync]：书库索引 `library/index.json` 的同步（本机制的首个消费者；
-//     `M4-T06` 统计并集已复用 [mergeById]，`M4-T05` 触发编排调各引擎入口）；
-//   · [requireWebdav] / [RemoteDirCache]：各同步引擎共用的连接与目录确保件。
+// `SYNC-03` 核心是「**按条目合并而非整包覆盖**」：两侧各有的条目都保留，同 key
+// 冲突按内容裁决（双侧对称 → 收敛不震荡）。本文件提供：[mergeById] 通用并集
+// 合并（纯函数）、[byContent] 同 key 对称裁决器、[IndexSync] 书库索引
+// `library/index.json` 同步（统计并集亦复用 [mergeById]）、[requireWebdav] /
+// [RemoteDirCache] 各引擎共用件。
 //
-// 远端路径约定（PRD §10.3 只点名 `bookProgress/`，本批补齐其余，命名贴本地布局）：
-//   · 书签 `bookmarks/{bookId}.json`（每本一文件，与本地 `bookmarks/` 同构）；
-//   · 设置 `settings/reading_prefs.json`；索引 `library/index.json`（单文件）；
-//   · 统计 `stats/sessions-YYYY-MM.json`（按月分片，`M4-T06` 镜像本地布局）。
+// 远端路径约定（PRD §10.3 只点名 `bookProgress/`，其余命名贴本地布局）：
+// 书签 `bookmarks/{bookId}.json`、设置 `settings/reading_prefs.json`、
+// 索引 `library/index.json`、统计 `stats/sessions-YYYY-MM.json`（按月分片）。
 //
-// 范围注记（诚实降级，`NF-C8`）：「笔记」当前只有占位页、无存储，待落地后
-// 并入 [mergeById] 同机制；书签**删除不跨设备传播**（并集语义下无墓碑，PRD
-// 未定义删除同步）——一端删除后再次同步会被对端并回，属已知口径。
+// 范围注记（诚实降级，`NF-C8`）：「笔记」当前只有占位页、无存储，待落地后并入
+// [mergeById] 同机制；书签**删除不跨设备传播**（并集语义下无墓碑，PRD 未定义
+// 删除同步）——一端删除后再次同步会被对端并回，属已知口径。
 import 'dart:convert';
 
 import '../library/book_index.dart';
@@ -58,14 +55,14 @@ class MergeResult<T> {
 
 /// 按 key 并集合并（`SYNC-03`「按条目合并」的通用实现，纯函数）。
 ///
-/// - [idOf]：条目身份（如书签 `createdAt`、索引 `bookId`）；
-/// - [encode]：条目内容指纹（通常 `jsonEncode(item.toJson())`）——变更判定
-///   按内容而非对象相等，同内容不同引用不计变更（**防无谓回写**）；
-/// - [resolve]：同 key 冲突裁决——必须**双侧对称**（见 [byContent]），
-///   否则 A 判 A 赢、B 判 B 赢 → 双侧互不相让，每次同步来回覆盖。
+/// - [idOf]：条目身份（书签 `createdAt`、索引 `bookId`）；
+/// - [encode]：内容指纹（通常 `jsonEncode(item.toJson())`）——变更按内容判定，
+///   同内容不同引用不计变更（**防无谓回写**）；
+/// - [resolve]：同 key 裁决——**必须双侧对称**（见 [byContent]），否则双侧
+///   各判各赢、每次同步来回覆盖。
 ///
-/// 变更口径：`localChanged` = 本地存在「远端独有 key」或「冲突后内容与本地
-/// 不同」；`remoteChanged` 对称。两侧内容一致时两者皆 `false`（幂等）。
+/// 变更口径：`localChanged` = 本地有「远端独有 key」或「冲突后内容不同」，
+/// `remoteChanged` 对称；两侧一致时皆 `false`（幂等）。
 MergeResult<T> mergeById<T>({
   required List<T> local,
   required List<T> remote,
@@ -133,11 +130,9 @@ MergeResult<T> mergeById<T>({
   );
 }
 
-/// 内容裁决器：同 key 冲突取**内容 JSON 字典序较大者**。
-///
-/// 纯内容决定 → `resolve(l, r)` 与 `resolve(r, l)` 返回**同一胜者**（对称），
-/// 双侧各自判出同内容 → 上传一致 → 收敛；内容恰好相同（[mergeById] 的
-/// 变更判定按内容）→ 不计变更，不产生回写。
+/// 内容裁决器：同 key 冲突取**内容 JSON 字典序较大者**；纯内容决定 →
+/// `resolve(l, r)` 与 `resolve(r, l)` 同一胜者（对称），双侧判出同内容 →
+/// 收敛；内容相同不计变更、不产生回写。
 T Function(T local, T remote) byContent<T>(String Function(T) encode) {
   return (T local, T remote) {
     final String left = encode(local);
@@ -270,11 +265,10 @@ class EntrySyncReport {
 /// 书库索引同步（`SYNC-03` 四类范围之一：书名 / 作者 / 格式 / 路径 / 导入时间 /
 /// 元数据来源标记与封面引用，按条目并集合并）。
 ///
-/// 冲突（同 `bookId` 两侧内容不同）走 [resolveIndexConflict]：
-/// ① `lastReadAt` 新者胜（阅读活动是客观时序）→ 平
-/// ② 有用户手动编辑标记（任一 origin == `user`）者胜（`META-09` 用户编辑
-///    不被重新解析覆盖）→ 平
-/// ③ 内容 JSON 字典序大者胜（纯内容、双侧同判 → 收敛）。
+/// 冲突（同 `bookId` 两侧内容不同）走 [resolveIndexConflict]：① `lastReadAt`
+/// 新者胜（阅读活动是客观时序）；② 有用户手动编辑标记（任一 origin == `user`）
+/// 者胜（`META-09` 用户编辑不被重新解析覆盖）；③ 内容 JSON 字典序大者胜
+/// （纯内容、双侧同判 → 收敛）。
 class IndexSync {
   /// 创建索引同步引擎（组合根注入，见 `lib/main.dart`）。
   IndexSync({
@@ -295,9 +289,8 @@ class IndexSync {
   final SyncConfigStore _configStore;
   final RemoteDirCache _dirs = RemoteDirCache();
 
-  /// 同步书库索引（单文件，双向并集合并）。
-  ///
-  /// 不抛业务异常：通道 / 配置 / 数据问题一律返回 failed + 可读 reason。
+  /// 同步书库索引（单文件，双向并集合并）；不抛业务异常：通道 / 配置 /
+  /// 数据问题一律返回 failed + 可读 reason。
   Future<EntrySyncOutcome> sync() async {
     try {
       final ({SyncConfig config, String password}) ctx =
@@ -412,10 +405,8 @@ class IndexSync {
       );
 }
 
-/// 索引同 `bookId` 冲突裁决（见 [IndexSync] 类注释的三级规则）。
-///
-/// **对称**：`f(l, r)` 与 `f(r, l)` 返回同一对象——①② 比较均与顺序无关，
-/// ③ 字典序取大与顺序无关；仅内容完全相同时返回入参之一（等价，无副作用）。
+/// 索引同 `bookId` 冲突裁决（见 [IndexSync] 类注释的三级规则）；**对称**：
+/// `f(l, r)` 与 `f(r, l)` 返回同一对象（①② 比较与顺序无关，③ 字典序取大同理）。
 BookRecord resolveIndexConflict(BookRecord local, BookRecord remote) {
   final int localRead = local.lastReadAt ?? -1;
   final int remoteRead = remote.lastReadAt ?? -1;

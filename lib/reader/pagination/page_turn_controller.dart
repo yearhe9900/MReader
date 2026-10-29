@@ -1,15 +1,14 @@
-// 翻页控制器（T04）：模式集合 + 跟手拖拽 commit/cancel + 页图层几何 +
-// 相邻页预排窗口（纯 Dart，无 Flutter 依赖，可单测）。
-// 选型 §6 ①③：slide + cover 首批、none 随后；scroll 归 T05、curl P2 不阻塞。
-// 保证③：动画期只回放页图层——几何与判定都在这里算好，视图层只做
-// Transform（见 `page_turn_layers.dart`）。
-// commit/cancel 在 [PageTurnController.endDrag] **一处判定**（0.3 距离阈值 /
-// 800 甩动阈值），视图无权改判。
+// 翻页控制器：模式集合 + 跟手拖拽 commit/cancel + 页图层几何 + 相邻页预排窗口
+// （纯 Dart，无 Flutter 依赖，可单测）。选型 §6 ①③：slide + cover 首批、none 随后；
+// `scroll` 归滚动容器、`curl` P2 不阻塞。
+// 保证③：动画期只回放页图层——几何与判定都在这里算好，视图层只做 Transform
+// （见 `page_turn_layers.dart`）。commit/cancel 在 [PageTurnController.endDrag]
+// **一处判定**（0.3 距离阈值 / 800 甩动阈值），视图无权改判。
 
 /// 翻页模式（§6 ③：slide + cover 首批、none 随后）。
 ///
-/// `scroll`（页纵向拼接）由 T05 的阅读页改造承载、不进本控制器；
-/// `curl`（仿真翻页）P2 不阻塞，落地时在此追加枚举值并补几何分支。
+/// `scroll`（页纵向拼接）由阅读页滚动容器承载、不进本控制器；`curl`（仿真翻页）
+/// P2 不阻塞，落地时在此追加枚举值并补几何分支。
 enum PageTurnMode {
   /// 左右滑动：两页并排平移。
   slide,
@@ -117,17 +116,10 @@ class PageLayerGeometry {
 
 /// 计算给定状态下的页图层几何（视图层的唯一输入；纯函数）。
 ///
-/// [progress] clamp 到 `[0,1]`；公式（页宽归一化，p = progress）：
-///
-/// | mode | dir | currentDx | incomingDx | onTop | shadow |
-/// |---|---|---|---|---|---|
-/// | slide | next | `-p` | `1-p` | 目标页 | 0 |
-/// | slide | prev | `p` | `-(1-p)` | 目标页 | 0 |
-/// | cover | next | `0` | `1-p` | 目标页 | p∈(0,1) 时 [kEdgeShadow]，挂目标页 |
-/// | cover | prev | `p` | `0` | **当前页**（掀起） | p∈(0,1) 时 [kEdgeShadow]，挂当前页 |
-/// | none | 任意 | `0` | `0` | 目标页 | 0 |
-///
-/// none 的全 0 几何 = 目标页原位盖住当前页（直接切页，无中间态）。
+/// [progress] clamp 到 `[0,1]`；页宽归一化（0 = 盖住视口，±1 = 完全移出）：
+/// slide 两页对开平移（目标页在上）；cover next 目标页从右盖上、prev 当前页向右
+/// 掀起（当前页在上）；none 全 0 = 目标页原位盖住当前页（直接切页，无中间态）。
+/// 阴影仅 cover 过渡期 `p∈(0,1)` 出现，恒挂**移动页**的左缘。
 PageLayerGeometry computeLayerGeometry({
   required PageTurnMode mode,
   required TurnDirection direction,
@@ -178,10 +170,9 @@ PageLayerGeometry computeLayerGeometry({
   }
 }
 
-/// 相邻页预排窗口（保证③「相邻页预排」的原料；T05 接线）：返回
-/// `[current-1, current, current+1, current+2]` 经 clamp / 去重后的**升序**
-/// 页码列表（prev/cur/next/nextPlus 共 4 页，边界只少不多）。
-/// [total] ≤ 0 → 空列表；[current] 越界按 clamp 处理。
+/// 相邻页预排窗口（保证③「相邻页预排」的原料）：返回
+/// `[current-1, current, current+1, current+2]` 经 clamp / 去重后的**升序**页码列表
+/// （共 4 页，边界只少不多）。[total] ≤ 0 → 空列表；[current] 越界 clamp。
 List<int> prebuildWindow({required int current, required int total}) {
   if (total <= 0) return const <int>[];
   final int cur = current.clamp(0, total - 1);
@@ -194,9 +185,8 @@ List<int> prebuildWindow({required int current, required int total}) {
 
 /// 翻页控制器：手势状态机 + commit/cancel 判定 + 图层几何入口。
 ///
-/// **只管一页跨度的翻页**（不碰章节/页码推进——那是 T05 接线层的职责，
-/// `finishSettle()` 后由调用方换页）。判定与几何都是纯函数的薄封装，
-/// 便于状态机整体走契约测试。
+/// **只管一页跨度的翻页**（不碰章节/页码推进——由接线层负责，`finishSettle()` 后
+/// 调用方换页）。判定与几何都是纯函数的薄封装，便于状态机整体走契约测试。
 class PageTurnController {
   PageTurnController({this.mode = PageTurnMode.slide});
 
@@ -248,15 +238,14 @@ class PageTurnController {
     return _progress;
   }
 
-  /// 松手判定：[velocity] = 沿**翻页方向**的速度分量（px/s；调用方把拖拽
-  /// 速度投影到方向上）。规则顺序判定（契约测试钉死）：
-  ///   1. `velocity ≥ kFlingVelocity` → **commit**（正向甩，无视距离）；
-  ///   2. `velocity ≤ -kFlingVelocity` → **cancel**（反向甩，已拖过 0.3 也退）；
-  ///   3. 否则 `progress ≥ kCommitDistance` → commit，其余 cancel。
+  /// 松手判定：[velocity] = 沿**翻页方向**的速度分量（px/s）。规则顺序判定（契约
+  /// 测试钉死）：① `velocity ≥ kFlingVelocity` → **commit**（正向甩，无视距离）；
+  /// ② `velocity ≤ -kFlingVelocity` → **cancel**（反向甩，已拖过 0.3 也退）；
+  /// ③ 否则 `progress ≥ kCommitDistance` → commit，其余 cancel。
   ///
-  /// 返回判定并进入 settling，**[progress] 停在松手值**——收尾动画由视图驱动
-  /// （[updateSettle] / [finishSettle]）。`none` 模式无过渡 → 直接回 idle，
-  /// 调用方据返回值**立刻**换页。非 dragging 阶段调用无效 → 返回 cancel。
+  /// 返回判定并进入 settling，**[progress] 停在松手值**（收尾动画由视图驱动）。
+  /// `none` 模式无过渡 → 直接回 idle，调用方据返回值**立刻**换页。
+  /// 非 dragging 阶段调用无效 → 返回 cancel。
   TurnCommit endDrag(double velocity) {
     if (_phase != PageTurnPhase.dragging) return TurnCommit.cancel;
 

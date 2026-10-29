@@ -1,18 +1,16 @@
-// 翻页体（`M-PAGE T05-d`，选型 §2.3 方案 A）：隐藏滚动体 + 翻页图层叠层。
+// 翻页体（选型 §2.3 方案 A）：隐藏滚动体 + 翻页图层叠层。
 //
-// 分工：本组件只管**一页跨度**的手势状态机与收尾动画——方向在第一个非零
-// drag delta 决定 → 跟手累积 progress → 松手一处判定（`PageTurnController`
-// 0.3 距离 / 800 甩动阈值）→ settle 收尾 → commit 交回调换页。语义坐标
-// 推进 / 窗口收敛 / 落盘都在调用方（`reader_page.dart` 的 `_onTurnCommitted`）。
+// 分工：本组件只管**一页跨度**的手势状态机与收尾动画——方向在第一个非零 drag delta
+// 决定 → 跟手累积 progress → 松手一处判定（`PageTurnController` 0.3 距离 / 800 甩动
+// 阈值）→ settle 收尾 → commit 交回调换页。语义坐标推进 / 窗口收敛 / 落盘都在调用方。
 //
-// 冻结配对（T04 保证③「动画期零排版」）：beginDrag 成功即
-// `scheduler.freeze()` + `onGestureActive(true)`（调用方借此作废在途停稳流、
-// 挡 reprime）；settle 完成 / 取消 / none 同步 commit / 拖拽取消 / dispose
-// 统一走 [_endActive] 解冻 + `onGestureActive(false)`。**边缘被阻**
-// （`canTurn` false）不 begin、不冻结。
+// 冻结配对（保证③「动画期零排版」）：beginDrag 成功即 `scheduler.freeze()` +
+// `onGestureActive(true)`（调用方借此作废在途停稳流、挡 reprime）；settle 完成 /
+// 取消 / none 同步 commit / 拖拽取消 / dispose 统一走 [_endActive] 解冻 +
+// `onGestureActive(false)`。**边缘被阻**（`canTurn` false）不 begin、不冻结。
 //
-// 零 rebuild 契约：incoming 页**起手惰性构建**存 state 字段；current 来自
-// props；动画期调用方不 rebuild → 两页实例稳定 → 图层只换 Transform 矩阵。
+// 零 rebuild 契约：incoming 页**起手惰性构建**存 state 字段；current 来自 props；
+// 动画期调用方不 rebuild → 两页实例稳定 → 图层只换 Transform 矩阵。
 import 'package:flutter/widgets.dart';
 
 import 'page_turn_controller.dart';

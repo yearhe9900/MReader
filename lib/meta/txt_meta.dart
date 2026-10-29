@@ -15,15 +15,10 @@ class FileNameMeta {
   String toString() => 'FileNameMeta(title: $title, author: $author)';
 }
 
-/// `META-04`：对**文件名主干**依序应用规则、**命中即停**，再清洗 + 兜底。
-///
-/// 内置规则集**至少覆盖四类**（顺序即优先级）：
-///   ① `《书名》…作者：X`
-///   ② `《书名》…`（括号书名；作者另从尾部抽）
-///   ③ `书名 作者：X`
-///   ④ `书名 by X`
-/// 全部未命中 → 清洗兜底（剥 `作者xxx` / `xxx 著` 尾巴）。
-/// 命中即停：[title] / [author] 为空串表示该字段未解析到，由调用方兜底。
+/// `META-04`：对**文件名主干**依序应用规则、**命中即停**，再清洗 + 兜底。内置规则集
+/// **至少覆盖四类**（顺序即优先级）：① `《书名》…作者：X`；② `《书名》…`（括号书名，
+/// 作者另从尾部抽）；③ `书名 作者：X`；④ `书名 by X`。全部未命中 → 清洗兜底（剥
+/// `作者xxx` / `xxx 著` 尾巴）。[title] / [author] 为空串 = 该字段未解析到，由调用方兜底。
 FileNameMeta parseFileNameStem(String stem) {
   final String s = stem.trim();
   if (s.isEmpty) return const FileNameMeta(title: '', author: '');
@@ -80,10 +75,9 @@ String _authorFromTail(String s) {
   return '';
 }
 
-/// 文件名清洗（`META-04`）：去除 `作者xxx` / `xxx 著` 尾巴并收拢多余空白。
-///
-/// **精确化兜底**：调用方只在「移除书名占位后另有非空作者候选」时保留作者，
-/// **不得**用「长度是否相同」这类粗糙判据（本函数不做长度比较）。
+/// 文件名清洗（`META-04`）：去除 `作者xxx` / `xxx 著` 尾巴并收拢多余空白。**精确化
+/// 兜底**：调用方只在「移除书名占位后另有非空作者候选」时保留作者，**不得**用
+/// 「长度是否相同」这类粗糙判据（本函数不做长度比较）。
 String cleanName(String raw) {
   var s = raw;
   // 去「作者…」尾巴（`作者：X` / `作者X` 均抹去）。
@@ -107,10 +101,9 @@ String _cleanAuthor(String raw) {
   return s.replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
-/// `META-04` + `META-01`：由文件名产出 TXT 的 [BookMeta]。
-///
-/// 来源标记：书名 / 作者来自文件名 -> `filename`；缺失 -> `none`
-/// （作者字段缺失时**仍**以「未知作者」兜底，但来源标记为 `none`，符合 `META-01`）。
+/// `META-04` + `META-01`：由文件名产出 TXT 的 [BookMeta]。来源标记：书名 / 作者来自
+/// 文件名 -> `filename`，缺失 -> `none`（作者缺失时**仍**以「未知作者」兜底，但来源
+/// 标记为 `none`，符合 `META-01`）。
 BookMeta buildTxtMeta({required String fileName}) {
   final String stem = fileStem(fileName);
   final FileNameMeta parsed = parseFileNameStem(stem);

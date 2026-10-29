@@ -1,4 +1,4 @@
-// `M4-T03`：书签同步测试（`SYNC-03` 验收①② + 幂等 + `SYNC-07` 汇总）。
+// `SYNC-03` 验收①② + 幂等 + `SYNC-07` 汇总：书签同步测试。
 //
 // 基建在 `sync_support.dart`（真 socket 纯 `test()`，非 FakeAsync 区）。
 import 'dart:convert';

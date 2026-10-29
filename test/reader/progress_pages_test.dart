@@ -1,6 +1,6 @@
 // `M-PAGE` T03：进度采样 / 恢复 与 页表 的桥接纯函数（progress_pages.dart）。
 //
-// 页表夹具 = T01 `pagination_incremental_test.dart` 实测的 4 段章 8 页表
+// 页表夹具 = `pagination_incremental_test.dart` 的 4 段章 8 页表
 // （等宽 fontSize 18 / height 1.6、pageWidth 180、pageHeight 200，100 字/段
 // 恒切 2 页）——期望值**硬编码字面量**，不引用被测常量。
 import 'package:flutter_test/flutter_test.dart';

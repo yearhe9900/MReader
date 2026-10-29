@@ -1,20 +1,16 @@
-// 阅读页取进度的**性能契约**（2026-10-08 真机「EPUB 章节加载特别慢 / 快滑多章没加载」）。
+// 阅读页取进度的**性能契约**（真机症状：EPUB 章节加载特别慢 / 快滑多章没加载）。
 //
 // 一句话契约：**开书路径不得做全书遍历**。
 //
-// 缺陷形态（本轮修掉的那条）：`_loadChapterWeights()` 原先调
-// `BookSource.chapterCharCounts()`——EPUB 的实现要**逐章解压 + 解析 XHTML**。
-// 真机 1152 章的书实测把主 isolate **独占秒级**（探针：300 章 247ms / 停顿
-// 217ms；800 章 679ms / 停顿 649ms），而它换来的只是一个**一位小数**的进度
-// 百分比；调用点又在开书后、用户开始滚动的那一刻 ⇒ 帧回调与分页 `step` 全部
-// 停摆，表现为「章节要等很久才出来」「快滑过去好几章还是空的」。
+// 缺陷形态：`_loadChapterWeights()` 原先调 `BookSource.chapterCharCounts()`
+// ——EPUB 的实现要**逐章解压 + 解析 XHTML**，多章书把主 isolate **独占秒级**，
+// 而它换来的只是一个**一位小数**的进度百分比；调用点又在开书后、用户开始滚动的
+// 那一刻 ⇒ 帧回调与分页 `step` 全部停摆，表现为「章节要等很久才出来」。
 //
 // 现改为 `chapterWeightEstimates()`（零解压：EPUB 读 zip 中央目录的
-// `uncompressedSize`，恒 32ms / 停顿 5ms，且不随章数增长）。
+// `uncompressedSize`，耗时恒定且不随章数增长）。
 //
 // 本文件用**调用计数探针**把契约钉死：精确口径一次都不许被调用。
-// 变异实测（把 `_loadChapterWeights` 改回 `chapterCharCounts()`）→ 判红
-// `Expected: <0>  Actual: <1>`。
 import 'dart:io';
 
 import 'package:flutter/material.dart';

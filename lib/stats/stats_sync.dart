@@ -1,23 +1,18 @@
-// `M4-T06`：阅读统计跨设备同步（`STAT-08`，PRD §10.1/§10.2/§10.3）。
+// 阅读统计跨设备同步（`STAT-08`，PRD §10.1/§10.2/§10.3）。
 //
-// 三要点（`STAT-08` 验收原文）：
-//   ① **按会话 `id` 并集**：远端 `stats/sessions-YYYY-MM.json` 按月分片镜像
-//      本地 [SessionStore] 布局（PRD §10.3 `stats/`）；新 id 追加、同 id 时长
-//      不一致**取较大值**——合并核复用 [mergeById]（对称裁决 → 双侧同判 →
-//      收敛，不震荡）；
-//   ② **幂等**：同一批数据连续同步 3 次总时长不变——本地写入交回
-//      [SessionStore.merge]（自带并集 + 无变化分片不落盘），远端按内容指纹
-//      判变更（[MergeResult.remoteChanged]），收敛后零写入；
-//   ③ **默认开启、可单独关闭**：[StatsSyncPrefsStore] 落 `stats_sync.json`，
-//      **缺失即 `true`**（fail-open——与书籍上传的 fail-closed 相反）；开关
-//      判定在一切网络请求**之前**（关闭 = 零请求），且关闭**不影响**进度 /
-//      书签 / 设置 / 备份的同步（`SyncTrigger` 各引擎互不相干）。
+// 口径（`STAT-08`）：**按会话 `id` 并集**（跨设备按 id 并集幂等）——远端
+// `stats/sessions-YYYY-MM.json` **按月分片**镜像本地 [SessionStore] 布局
+// （PRD §10.3）；新 id 追加、同 id 时长不一致**取较大值**（[mergeById] 对称
+// 裁决 → 收敛不震荡）；同一批数据重复同步总时长不变（幂等，收敛后零写入）。
+// **默认开启、可单独关闭**（[StatsSyncPrefsStore] 落 `stats_sync.json`，**缺失
+// 即 `true`**，fail-open）；开关判定在一切网络请求**之前**（关闭 = 零请求），
+// 且关闭**不影响**进度 / 书签 / 设置 / 备份的同步。
 //
 // 为什么不用「取更新」（PRD §10.2 明文）：统计数据是**可累加的事实**而非可
-// 回退的状态——按 id 并集 + 同 id 取大天然双向收敛，没有「以哪端为准」问题。
+// 回退的状态——按 id 并集 + 同 id 取大天然双向收敛。
 //
-// 触发范围（PRD §10.4）：与索引 / 书签 / 设置同批——退出 App 与手动「立即
-// 同步」（`SyncTrigger._syncEntries`）；启动仅拉进度、退出阅读页只报进度。
+// 触发范围（PRD §10.4）：与索引 / 书签 / 设置同批（退出 App 与手动「立即
+// 同步」）；启动仅拉进度、退出阅读页只报进度。
 import 'dart:convert';
 import 'dart:io';
 
@@ -31,10 +26,8 @@ import 'reading_session.dart';
 import 'session_store.dart';
 
 /// 阅读统计同步开关持久化（`stats_sync.json`；**默认开**）。
-///
-/// 形制与 `BookUploadPrefsStore` 同款（进程内共享 + 组合根显式注入），
-/// **默认值相反**：`STAT-08` ③ 要求统计同步默认开启——文件缺失 / 损坏 /
-/// 结构不符一律视为开启（fail-open），只有显式 `enabled == false` 才关闭。
+/// 形制与 `BookUploadPrefsStore` 同款但**默认值相反**（`STAT-08` ③）：缺失 /
+/// 损坏 / 结构不符一律视为开启（fail-open），显式 `enabled == false` 才关闭。
 class StatsSyncPrefsStore {
   /// 用数据目录构造（组合根注入，见 `lib/main.dart`）。
   StatsSyncPrefsStore(Directory dataDir)
@@ -64,8 +57,8 @@ class StatsSyncPrefsStore {
   }
 }
 
-/// 阅读统计同步引擎（`STAT-08`；进程内共享，组合根注入；触发时机由
-/// `M4-T05` 编排——退出 App 与手动「立即同步」经 `SyncTrigger._syncEntries`）。
+/// 阅读统计同步引擎（`STAT-08`；进程内共享，组合根注入；退出 App 与手动
+/// 「立即同步」经 `SyncTrigger._syncEntries` 调用）。
 class StatsSync {
   /// 创建引擎（依赖由组合根注入，见 `lib/main.dart`）。
   StatsSync({
@@ -89,10 +82,8 @@ class StatsSync {
   final StatsSyncPrefsStore _prefs;
   final RemoteDirCache _dirs = RemoteDirCache();
 
-  /// 同步阅读统计（按月分片双向并集）。
-  ///
-  /// 不抛业务异常：开关关闭 / 通道 / 配置 / 数据问题一律返回结果对象
-  /// （关闭 = 无事发生；其余为 failed + 可读 reason，`SYNC-07` 不静默）。
+  /// 同步阅读统计（按月分片双向并集）；不抛业务异常：关闭 = 无事发生，
+  /// 其余问题返回 failed + 可读 reason（`SYNC-07` 不静默）。
   Future<EntrySyncOutcome> sync() async {
     if (!_prefs.enabled) {
       // `STAT-08` ③：判定先于一切网络请求——关闭 = 零请求。
@@ -159,10 +150,9 @@ class StatsSync {
         resolve: _resolve,
       );
 
-      // 本地写入交回 [SessionStore.merge]（并集 + 幂等 + 无变化不落盘的唯一
-      // 事实源）；变更口径按 store 的实际写入条件判——新 id 追加、同 id 取
-      // **较大** duration 才写（平局不写；`mergeById` 的内容级 localChanged
-      // 在「同 id 同时长但坐标略异」时会多报，此处按落盘事实校正）。
+      // 本地写入交回 [SessionStore.merge]（并集 + 幂等 + 无变化不落盘）；
+      // 变更按 store 实际写入条件判（同 id 取**较大** duration 才写）——
+      // `mergeById` 的内容级 localChanged 在「同 id 同时长坐标略异」时会多报。
       if (_storeWouldChange(result.merged, localById)) {
         localChanged = true;
         await _sessionStore.merge(result.merged);

@@ -3,15 +3,14 @@
 // 测量留 root isolate（`TextPainter` 依赖渲染引擎）；「行 → 页」切页抽到
 // `page_breaker.dart`（不 import Flutter，纯 `test()` 可单测）。
 //
-// 投影：进度偏移口径 = 段落**原文**（含 `\x00` 标记与 `<b>/<i>` 标签），
-// 但标记不上屏——投影产可见文本 + `rawOfVisible` 映射，行边界再映回原文
-// （`a␀IMG:x.png␀b` → `a␣b`，`␣` = 1 个 U+FFFC）。语义必须与
-// `typeset.dart` span 构建一致，由 `pagination_measure_test.dart` 对拍钉死。
-// 投影恒加首行缩进（`kFirstLineIndentPrefix`，与渲染侧
-// `withFirstLineIndent` 一致）——故可见偏移比原文偏移多 2 个缩进字符。
+// 投影：进度偏移口径 = 段落**原文**（含 `\x00` 标记与 `<b>/<i>` 标签），但标记
+// 不上屏——投影产可见文本 + `rawOfVisible` 映射（`a␀IMG:x.png␀b` → `a␣b`，
+// `␣` = 1 个 U+FFFC）。语义**必须**与 `typeset.dart` span 构建一致，由
+// `pagination_measure_test.dart` 对拍钉死。投影恒加首行缩进（`kFirstLineIndentPrefix`，
+// 与渲染侧 `withFirstLineIndent` 一致）——故可见偏移比原文偏移多 2 个缩进字符。
 // 已知边界（里程碑 §2）：链接下划线不改变行度量，故不叠链接样式。
-// 图片真尺寸（T05-b）：`measureParagraphs(imageSizes:)` 查表 + [fitWithinWidth]
-// 与渲染同式；未命中回退 48×48 加载态（`typeset.dart` `_InlineImage`）。
+// 图片真尺寸：`measureParagraphs(imageSizes:)` 查表 + [fitWithinWidth] 与渲染同式；
+// 未命中回退 48×48 加载态（`typeset.dart` `_InlineImage`）。
 import 'package:flutter/material.dart';
 
 import '../../typography/typeset.dart';
@@ -21,7 +20,7 @@ import 'page_breaker.dart';
 /// 图片占位尺寸（= `typeset.dart` 里 `_InlineImage` 加载态 / 错误态的 48×48）。
 const Size kImagePlaceholderSize = Size(48, 48);
 
-/// 分页排版参数（T02 的 `PaginationCache` 直接拿它做配置哈希失效）。
+/// 分页排版参数（`PaginationCache` 直接拿它做配置哈希失效）。
 class PaginationConfig {
   const PaginationConfig({
     required this.pageWidth,
@@ -173,8 +172,8 @@ abstract final class PagePaginator {
               width: kImagePlaceholderSize.width,
               height: kImagePlaceholderSize.height,
             ),
-            // 对齐渲染侧：`typeset.dart` 的 WidgetSpan 用默认 bottom
-            //（探针实证混排行 middle 48.0 / bottom 51.0，测量必须取 bottom）。
+            // 对齐渲染侧：`typeset.dart` 的 WidgetSpan 用默认 bottom（middle
+            // 与 bottom 行高不同，测量必须取 bottom）。
             alignment: PlaceholderAlignment.bottom,
           ));
           placeholders++;
@@ -218,16 +217,14 @@ abstract final class PagePaginator {
 
   /// 测量整章：逐段排版 → 行（偏移已映射回**章内拼接原文空间**）。
   ///
-  /// 每段用同一样式同一可用宽独立排版——与渲染侧「每段一个 `InlineParagraph`」
-  /// 同构，故行断与渲染一致；贪心断行只依赖「行首字符 + 宽 + 样式」，页内段
-  /// 续行单独重排也得相同行断（「页内渲染 == 测量结果」的依据）。
+  /// 每段用同一样式同一可用宽独立排版——与渲染侧「每段一个 `InlineParagraph`」同构，
+  /// 故行断与渲染一致；贪心断行只依赖「行首字符 + 宽 + 样式」，页内段续行单独重排
+  /// 也得相同行断（「页内渲染 == 测量结果」的依据）。
   ///
-  /// [startIndex] / [baseOffset]：增量测量用——`paragraphs[0]` 在章内的段下标
-  /// 与原文起始偏移。全量（默认 0/0）与逐段产出**完全相同**的行表（契约钉死）。
-  ///
-  /// [imageSizes]：src → 真尺寸（`image_dimensions.dart` 头解析产物）。命中则
-  /// 占位按 [fitWithinWidth]（与渲染 `box.dart:317` 同式）适配页宽；未命中 /
-  /// 传 null 回退 [config.imageSize]（默认 48×48 加载态）。
+  /// [startIndex] / [baseOffset]：增量测量用——`paragraphs[0]` 在章内的段下标与原文
+  /// 起始偏移。全量（默认 0/0）与逐段产出**完全相同**的行表（契约钉死）。
+  /// [imageSizes]：src → 真尺寸。命中则占位按 [fitWithinWidth]（与渲染同式）适配
+  /// 页宽；未命中 / 传 null 回退 [config.imageSize]（默认 48×48 加载态）。
   static List<MeasuredLine> measureParagraphs({
     required List<String> paragraphs,
     required PaginationConfig config,

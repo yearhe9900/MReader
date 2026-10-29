@@ -1,28 +1,21 @@
-// BM25 关键词索引（M3-T04：`AI-06` 跟书问答的检索层；`Q6` 拍板——先用关键词/
-// BM25，不上向量；`AI-08`/`AI-09` 无关本层）。
+// BM25 关键词索引（`AI-06` 跟书问答的检索层；`Q6` 拍板——先用关键词 / BM25，
+// 不上向量；`AI-08`/`AI-09` 无关本层）。
 //
-// ## 两级检索（为什么章级倒排 + 段级重排）
+// 两级检索（为什么章级倒排 + 段级重排）：① **章级 BM25**（[RagIndexBuilder] →
+// [RagIndex.topChapters]）倒排表按「章」建 doc（k1=1.2 / b=0.75），问题分词
+// 打分取 Top-[kRagChapterCandidates] 候选章；② **段级重排**（`rag.dart`
+// [retrieveSnippets]）只在候选章内逐段线性打分，取各章最相关段落构造引用。
+// 为什么不直接建段级倒排：20MB 书按段建 doc 的 posting 总量在千万级，常驻
+// 内存逼近 PRD §15.6.3 **阈值 5**「索引内存 > 原文 1.5 倍」红线；章级倒排
+// 只有千级 doc（[RagIndex.approxBytes] 可实测），段级精度损失由「候选章内
+// 重排」补回——候选章 ≤8，线性扫开销相对取文可忽略。
 //
-//   1. **章级 BM25**（[RagIndexBuilder] → [RagIndex.topChapters]）：倒排表按
-//      「章」建 doc（k1=1.2 / b=0.75），问题分词打分取 Top-[kRagChapterCandidates]
-//      候选章；
-//   2. **段级重排**（`rag.dart` [retrieveSnippets]）：只在候选章内逐段线性打分，
-//      取各章最相关段落构造引用（[SearchHit] 同口径）。
-//
-// 为什么不直接建段级倒排：20MB 书按段建 doc 的 posting 总量在千万级，
-// 常驻内存逼近 PRD §15.6.3 **阈值 5**「索引内存 > 原文 1.5 倍」的红线；
-// 章级倒排只有千级 doc（[RagIndex.approxBytes] 可实测），段级精度损失由
-// 「候选章内重排」补回——候选章 ≤8，线性扫的开销相对取文可忽略。
-//
-// ## 分词口径
-//
-//   · ASCII 字母数字串 → 小写词元（`Hello` → `hello`）；
-//   · CJK 连续段 → 按字 + 二元组（`中文` → `中`/`文`/`中文`）：bigram 保精确、
-//     unigram 兜单字问题（同为「词元」，无词典依赖、纯 Dart 可进 isolate）；
-//   · 其余字符（标点 / 空白）为分隔符，不进索引。
+// 分词口径：ASCII 字母数字串 → 小写词元；CJK 连续段 → 按字 + 二元组
+// （bigram 保精确、unigram 兜单字问题，无词典依赖、纯 Dart 可进 isolate）；
+// 其余字符（标点 / 空白）为分隔符，不进索引。
 //
 // 本文件**纯 Dart**（不 import Flutter / dart:io）：构建逻辑可整体搬进
-// isolate（M3.5 阈值 5 若触发 Rust/后台化，此处是唯一改造面）。
+// isolate（阈值 5 若触发 Rust/后台化，此处是唯一改造面）。
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -74,10 +67,9 @@ bool _isAsciiWord(int cu) =>
 bool _isCjk(int cu) =>
     (cu >= 0x3400 && cu <= 0x9FFF) || (cu >= 0xF900 && cu <= 0xFAFF);
 
-/// 增量构建器：逐章喂入 → [finish] 产出 [RagIndex]。
-///
-/// 逐章构建的原因：取文是异步的（[RagIndexStore.ensure] 按章加载），
-/// 构建器必须能在章节之间 yield（长书不让主 isolate 连续卡死 10s）。
+/// 增量构建器：逐章喂入 → [finish] 产出 [RagIndex]。逐章构建的原因：取文是
+/// 异步的（[RagIndexStore.ensure] 按章加载），构建器须能在章间 yield
+/// （长书不让主 isolate 连续卡死）。
 class RagIndexBuilder {
   /// term → [doc, tf, doc, tf, …]（doc = 章下标，升序追加）。
   final Map<String, List<int>> _postings = <String, List<int>>{};
@@ -196,7 +188,6 @@ class RagIndex {
   }
 
   /// 常驻内存的**估算**字节数（阈值 5 内存口径的观察值，只用于打点，不分支）。
-  ///
   /// 口径：词条 UTF-16 字符 + Map/Int32List 对象头 + posting 每项 4B，
   /// 加章标题与长度数组；忽略 Dart 堆对齐等二阶项。
   int get approxBytes {

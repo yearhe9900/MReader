@@ -1,4 +1,4 @@
-// `M4-T03`：阅读设置同步测试（`SYNC-03`「取最近修改」+ 防回声 + `SYNC-07`）。
+// `SYNC-03`「取最近修改」+ 防回声 + `SYNC-07`：阅读设置同步测试。
 //
 // 基建在 `sync_support.dart`（真 socket 纯 `test()`，非 FakeAsync 区）。
 // HttpDate 仅 1 秒分辨率：「同刻」用例的本地 mtime 经 `setLastModified`

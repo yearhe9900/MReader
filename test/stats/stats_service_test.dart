@@ -1,5 +1,5 @@
-// `M3-T10`：StatsService 单测（`STAT-03`；真异步 IO，普通 `test()`——
-// FakeAsync 区会挂死真 IO，勿改 testWidgets）。
+// `STAT-03`：StatsService 单测（真异步 IO，普通 `test()`——
+// ⚠️ FakeAsync 区会挂死真 IO，**勿改 testWidgets**）。
 //
 // 覆盖：载入聚合逐秒一致（②）、起始日期过滤 + 持久化（③）、清空归零且
 // 不伤其它数据（④）、监听回调通知语义。

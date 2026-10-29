@@ -1,45 +1,38 @@
 // 应用主壳层：三 tab（书架 / 笔记 / 我的）+ mi_like_ui 玻璃浮动底栏 + 绿色圆钮。
 //
 // ══════════════════════════════════════════════════════════════════════════════
-// 结构（2026-09-28 定；参考 anx-reader 的 `page/home_page.dart`）
+// 结构（参考 anx-reader 的 `page/home_page.dart`）
 // ══════════════════════════════════════════════════════════════════════════════
-// 外层**不是** Scaffold，而是 `Stack`：子页与底栏叠放，底栏浮在最上层。
-// 子页各自持有 [GlassNavScaffold]（含自己的顶栏）——若外层再套一层 Scaffold，
-// 就会形成 `GlassScaffold` 嵌套 `GlassScaffold`，直接违反 `UI-04`
-// 「玻璃控件不可嵌套」。底栏（[GlassNavHost]）同样脱离 `GlassScaffold` 祖先
-// 浮在 Stack 最上层。
+// 外层**不是** Scaffold，而是 `Stack`：子页与底栏叠放，底栏浮在最上层。子页各自
+// 持有 [GlassNavScaffold]（含自己的顶栏）——若外层再套一层 Scaffold 就会形成
+// `GlassScaffold` 嵌套 `GlassScaffold`，直接违反 `UI-04`「玻璃控件不可嵌套」；
+// 底栏（[GlassNavHost]）同样脱离 `GlassScaffold` 祖先浮在 Stack 最上层。
 //
-// 底栏形态 = **mi_like_ui 玻璃悬浮胶囊**（2026-10-15 整组换参考项目
-// `D:\WorkBuddy\FlutterTest\bottom_nav_demo`，代码**一比一移植**入
-// `lib/ui/mi_like_ui/`，与上游逐字节一致；几何/材质/动效事实源 =
-// `MiGlassNavMetrics` / `MiGlassPalette`）。tab = 书架 / 笔记 / 我的，
-// 「设置」改名「我的」（图标用参考项目 `SmileyBeretIconPainter`），
-// **「统计」移出底栏**、入口收进「我的」页；右侧绿色圆钮（预留空位圆钮）
-// 按参考项目还原视觉（选中「书架」时弹出、切走收起），暂不接功能。
-// MReader 侧只做档位退化与明暗映射（见 `glass_nav_host.dart`）。
-//
-// 旧 [FrostedNavBar] / [NavBarStyle]（自磨砂复刻批）已随本批删除。
+// 底栏形态 = **mi_like_ui 玻璃悬浮胶囊**（整组一比一移植入 `lib/ui/mi_like_ui/`，
+// 与上游逐字节一致；几何/材质/动效事实源 = `MiGlassNavMetrics` / `MiGlassPalette`）。
+// tab = 书架 / 笔记 / 我的，「设置」改名「我的」（图标 `SmileyBeretIconPainter`）、
+// **「统计」移出底栏**、入口收进「我的」页；右侧绿色圆钮（预留空位圆钮）选中
+// 「书架」时弹出、切走收起，暂不接功能。MReader 侧只做档位退化与明暗映射
+// （见 `glass_nav_host.dart`）。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 底部避让
 // ══════════════════════════════════════════════════════════════════════════════
-// 胶囊是浮层、**不占布局高度**，所以各页的可滚动内容必须自己留出底部空白
-// （书架网格 / 设置列表 / 后续统计图表），额度用 [kShellBottomInset]。
-// 这与 anx-reader 给 `GridView` 写 `padding: (20, 12, 20, 80)` 是同一件事。
+// 胶囊是浮层、**不占布局高度**，各页可滚动内容必须自己留出底部空白，额度用
+// [kShellBottomInset]（同 anx-reader 给 `GridView` 写 `padding: (20, 12, 20, 80)`）。
 //
 // ══════════════════════════════════════════════════════════════════════════════
-// 宽屏自适应（2026-10-19 上游平板模式批）
+// 宽屏自适应
 // ══════════════════════════════════════════════════════════════════════════════
-// `maxWidth > 600`（`kShellRailBreakpoint`，与上游 `MiBreakpoints.navRail`
-// 严格大于口径逐像素同源）改用**玻璃侧边导航栏** [MiGlassSideNavBar]（上游
-// `demo_app.dart` 同款双形态：手机/窄窗 = 浮动胶囊底栏、平板/桌面 = 侧栏）。
-// 导航条目只有一份（[_navItems]）：底栏与侧栏吃同一份 items，换形态不换语义。
-// 布局照上游 demo：页面列让出 [MiGlassSideNavMetrics.gutterWidth]，侧栏贴左上、
-// 距左缘 railMargin、**让开状态栏**（`safeTop + railMargin`——edge-to-edge 后
-// 侧栏顶就在状态栏那一带，见 T12）。绿圆钮（导入书籍）两种形态共用同一份声明
-// （[_buildFab]）：窄窗挂底栏右侧（栏体左移让位）、宽屏挂侧栏栏尾下方。
-// 档位退化（`UI-06` ②「关」档 → Material [NavigationRail]）与明暗映射在
-// `glass_nav_host.dart` 的 [GlassSideNavHost]。
+// `maxWidth > 600`（`kShellRailBreakpoint`，与上游 `MiBreakpoints.navRail` 的
+// 严格大于口径同源）改用**玻璃侧边导航栏** [MiGlassSideNavBar]（手机/窄窗 = 浮动
+// 胶囊底栏、平板/桌面 = 侧栏）。导航条目只有一份（[_navItems]）：两种形态吃同一份
+// items，换形态不换语义。布局照上游 demo：页面列让出
+// [MiGlassSideNavMetrics.gutterWidth]，侧栏贴左上、距左缘 railMargin、**让开状态栏**
+// （`safeTop + railMargin`——edge-to-edge 后侧栏顶就在状态栏那一带）。绿圆钮
+// （导入书籍）两种形态共用同一份声明（[_buildFab]）：窄窗挂底栏右侧（栏体左移让位）、
+// 宽屏挂侧栏栏尾下方。档位退化（`UI-06` ②「关」档 → Material [NavigationRail]）
+// 与明暗映射在 `glass_nav_host.dart` 的 [GlassSideNavHost]。
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
 import 'dart:async';
@@ -75,32 +68,20 @@ import 'shelf_page.dart';
 import 'stats_page.dart';
 import 'vocab_page.dart';
 
-/// 浮动底栏为各页内容预留的底部空白。
-///
-/// 胶囊高 55.4（`MiGlassNavMetrics.barHeight`）+ 底部外边距 24.2（参考项目
-/// 实测浮起）≈ 80，+ 安全区与呼吸余量取 **100**。各页把它并入自己滚动容器的
-/// `padding.bottom`。
-///
-/// 2026-10-15 随「底栏整组换参考项目」批更新口径（62/27 → 55.4/24.2），
-/// 余量取整不变：各页底部避让测试的期望值不受影响。
+/// 浮动底栏为各页内容预留的底部空白。胶囊高 55.4（`MiGlassNavMetrics.barHeight`）
+/// + 底部外边距 24.2 ≈ 80，+ 安全区与呼吸余量取 **100**；各页把它并入自己滚动
+/// 容器的 `padding.bottom`。
 const double kShellBottomInset = 100;
 
 /// 宽屏断点（超过则改用侧边导航轨）；与 anx-reader 取值一致。
 const double kShellRailBreakpoint = 600;
 
-/// 底栏胶囊距**物理屏底**的浮起高度（`MiGlassNavMetrics` 注释「bar bottom
-/// sits 24.2 dp above **screen bottom**」的参考实测值）。
-///
-/// 从 [MiGlassNavMetrics.barHeight] 同族的实测读数取，**不在摆放处硬编码
-/// 24.2**——上游把它与 barHeight 等 token 并列在一处，这里同样收口成常量，
-/// 避免散落字面量（改实测口径只改这一行）。
+/// 底栏胶囊距**物理屏底**的浮起高度（`MiGlassNavMetrics` 同族实测读数，
+/// **不在摆放处硬编码**——收口成常量，改实测口径只改这一行）。
 ///
 /// ⚠️ 口径 = 距屏底，**不叠手势条 inset**：edge-to-edge 下 `Positioned.bottom`
 /// 本来就量到物理屏底，再叠 `safeBottom` 会把胶囊整整抬高一个手势条（~34dp）。
-/// 2026-10-18/19 两轮真机反馈「手机模式底部导航栏高度变了 / 还是没调整过来」
-/// 即此——第一轮误把上游 demo 自己的 edge-to-edge 补偿（`framed ? safeBottom`）
-/// 当成实测口径叠了上去。事实源以 `MiGlassNavMetrics` 注释与上游黄金图
-/// （`bottom: 24.2`、测试窗 inset=0）为准。
+/// 事实源以 `MiGlassNavMetrics` 注释与上游黄金图（`bottom: 24.2`、测试窗 inset=0）为准。
 const double kShellNavBarBottomLift = 24.2;
 
 /// 主壳层（底部导航）。
@@ -150,7 +131,7 @@ class HomeShell extends StatefulWidget {
   /// 在此**透传**给设置页——写入即由 `app.dart` 重建 `MaterialApp` 换色）。
   final SettingsStore settings;
 
-  /// 统计服务（统计页；`M3-T10`——组合根创建的进程内唯一实例，注入各页共享）。
+  /// 统计服务（统计页；组合根创建的进程内唯一实例，注入各页共享）。
   final StatsService statsService;
 
   /// AI 配置存储（设置页 → AI 设置页）。
@@ -159,53 +140,39 @@ class HomeShell extends StatefulWidget {
   /// AI 客户端（AI 设置页的测试连接）。
   final AiClient aiClient;
 
-  /// 生词本存储（笔记页入口计数 + 生词本页；`M3-T02`）。
-  ///
-  /// `null` = 未接线：笔记页回退占位骨架、书架划词禁用（降级口径不变）。
+  /// 生词本存储（笔记页入口计数 + 生词本页）；`null` = 未接线：笔记页回退
+  /// 占位骨架、书架划词禁用（降级口径不变）。
   final VocabStore? vocabStore;
 
-  /// 摘要缓存（阅读页章节/全书摘要与前情回顾，`AI-04`/`AI-05`；`M3-T03`）。
-  ///
-  /// `null` = 未接线：阅读页摘要入口隐藏（同款降级口径）。
+  /// 摘要缓存（阅读页章节/全书摘要与前情回顾，`AI-04`/`AI-05`）；`null` = 未接线：
+  /// 阅读页摘要入口隐藏（同款降级口径）。
   final SummaryCache? summaryCache;
 
-  /// 问答索引存储（阅读页跟书问答，`AI-06`；`M3-T04`）。
-  ///
-  /// `null` = 未接线：阅读页问答入口隐藏（同款降级口径）。
+  /// 问答索引存储（阅读页跟书问答，`AI-06`）；`null` = 未接线：阅读页问答入口隐藏。
   final RagIndexStore? ragStore;
 
-  /// 朗读设置存储（阅读页 `TTS-04`/`TTS-05`；`M3-T08`）。
-  ///
-  /// `null` = 未接线：阅读页朗读设置入口隐藏（同款降级口径）。
+  /// 朗读设置存储（阅读页 `TTS-04`/`TTS-05`）；`null` = 未接线：朗读设置入口隐藏。
   final TtsSettingsStore? ttsSettings;
 
-  /// 在线 TTS 配置存储（阅读页 `TTS-07`；`M3-T09`）。
-  ///
-  /// `null` = 未接线：朗读设置面板引擎选择区隐藏、只用系统引擎（同款降级口径）。
+  /// 在线 TTS 配置存储（阅读页 `TTS-07`）；`null` = 未接线：面板引擎选择区隐藏、
+  /// 只用系统引擎（同款降级口径）。
   final OnlineTtsStore? onlineTts;
 
-  /// 同步配置存储（设置页「同步备份」组；`M4-T01` `SYNC-01`）。
-  ///
-  /// `null` = 未接线：设置页同步组整体隐藏（同款降级口径）。
+  /// 同步配置存储（设置页「同步备份」组，`SYNC-01`）；`null` = 未接线：设置页
+  /// 同步组整体隐藏（同款降级口径）。
   final SyncConfigStore? syncStore;
 
-  /// WebDAV 客户端（同步设置页测试连接；`M4-T01`）。
-  ///
-  /// `null` = 未接线（与 [syncStore] 同进同退）。
+  /// WebDAV 客户端（同步设置页测试连接）；`null` = 未接线（与 [syncStore] 同进同退）。
   final WebdavClient? syncClient;
 
-  /// 书签存储（阅读页；`M2b-T06` 引入、`M4-T05` 才接上生产链路）。
-  ///
-  /// `null` = 未接线：书签不落库（同款降级口径）。
+  /// 书签存储（阅读页）；`null` = 未接线：书签不落库（同款降级口径）。
   final BookmarkStore? bookmarkStore;
 
-  /// 阅读偏好存储（字号/行距等；同 [bookmarkStore] 接线时点）。
+  /// 阅读偏好存储（字号/行距等）。
   final ReadingPrefsStore? readingPrefsStore;
 
-  /// 同步触发器（`M4-T05` `SYNC-06/07`）：启动拉进度、退页/退出上报 +
-  /// 设置页「同步状态与备份」入口。
-  ///
-  /// `null` = 未接线：无自动触发，状态页入口隐藏。
+  /// 同步触发器（`SYNC-06/07`）：启动拉进度、退页/退出上报 + 设置页「同步状态与
+  /// 备份」入口；`null` = 未接线：无自动触发，状态页入口隐藏。
   final SyncTrigger? syncTrigger;
 
   @override
@@ -214,7 +181,7 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   /// 书架页句柄：底栏**绿圆钮**的「导入书籍」动作经它转到
-  /// [ShelfPageState.pickAndImport]（2026-10-16 功能迁移批）。
+  /// [ShelfPageState.pickAndImport]。
   final GlobalKey<ShelfPageState> _shelfKey = GlobalKey<ShelfPageState>();
 
   /// 当前底栏下标。
@@ -250,13 +217,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   }
 
   /// 底栏标签（顺序即下标语义，**勿任意重排**）：书架 / 笔记 / 我的。
-  ///
-  /// 2026-10-15「底栏整组换参考项目」批（负责人拍板）：
-  ///   · **移除「统计」tab**——统计页入口收进「我的」页（`onOpenStats`）；
-  ///   · **「设置」改名「我的」**，图标用参考项目 `SmileyBeretIconPainter`；
-  ///   · 「书架」「笔记」图标按参考风格新画（`nav_icons.dart`，2026-10-16 随
-  ///     参考项目组织更名集中）。
-  ///
+  ///   · **无「统计」tab**——统计页入口收进「我的」页（`onOpenStats`）；
+  ///   · **「设置」改名「我的」**（图标 `SmileyBeretIconPainter`）。
   /// 图标 painter 的墨色随明暗模式（[MiColors.foregroundFor]）⇒ 在 build 里
   /// 组装，不是常量。
   List<MiGlassNavItem> _navItems(MiThemeMode mode) {
@@ -268,10 +230,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     ];
   }
 
-  /// 三个 tab 的内容页。
-  ///
-  /// 每页**自带** [GlassNavScaffold]（顶栏 + 不透明正文），本壳层只负责
-  /// 「选哪一页」与「底栏」。**统计页不在其中**（2026-10-15 移出底栏）——
+  /// 三个 tab 的内容页。每页**自带** [GlassNavScaffold]（顶栏 + 不透明正文），
+  /// 本壳层只负责「选哪一页」与「底栏」。**统计页不在其中**（移出底栏）——
   /// 入口收进「我的」页（`SettingsPage.onOpenStats`），从那里推入。
   List<Widget> _buildPages() => <Widget>[
     ShelfPage(
@@ -337,10 +297,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     );
   }
 
-  /// push 统计页（2026-10-15 统计移出底栏后，「我的」页的唯一入口）。
-  ///
-  /// 依赖与原底栏 tab 时代同源（组合根注入的 [StatsService] / [LibraryRepository]），
-  /// 统计页自身带 [GlassNavScaffold] 顶栏与返回键（`canPop` 时显示）。
+  /// push 统计页（统计移出底栏后，「我的」页的唯一入口）。依赖同源（组合根
+  /// 注入的 [StatsService] / [LibraryRepository]）；统计页自带 [GlassNavScaffold]
+  /// 顶栏与返回键（`canPop` 时显示）。
   Future<void> _openStatsPage() {
     return Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -357,17 +316,15 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     setState(() => _index = index);
   }
 
-  /// 导入书籍绿圆钮（**两种导航形态共用同一份声明**，上游口径）：
-  /// 窄窗挂底栏右侧（栏体左移让位）、宽屏挂侧栏栏尾下方；显隐契约、弹出曲线
-  /// 与直径/间距 token 两种形态逐帧同源（选中「书架」= `tabIndex 0` 时弹出）。
-  ///
-  /// 2026-10-16 功能迁移批：绿钮接「导入书籍」（经 [_shelfKey] 转
-  /// [ShelfPageState.pickAndImport]），取代原书架头部加号按钮。
+  /// 导入书籍绿圆钮（**两种导航形态共用同一份声明**，上游口径）：窄窗挂底栏
+  /// 右侧（栏体左移让位）、宽屏挂侧栏栏尾下方；显隐契约、弹出曲线与直径/间距
+  /// token 两种形态逐帧同源（选中「书架」= `tabIndex 0` 时弹出）。绿钮接
+  /// 「导入书籍」（经 [_shelfKey] 转 [ShelfPageState.pickAndImport]），取代原
+  /// 书架头部加号按钮。
   MiGlassNavFab _buildFab() => MiGlassNavFab(
     tabIndex: 0,
     onTap: () => _shelfKey.currentState?.pickAndImport(),
-    // 绿钮 glyph = 参考项目配套用法（`d6893f7`）：白色圆角加号
-    // （电话 App 截图 1220×378 实测）；此前点阵 glyph 是旧口径。
+    // 绿钮 glyph = 白色圆角加号（参考项目配套用法）。
     child: Semantics(
       label: '导入书籍',
       button: true,
@@ -396,16 +353,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   Widget _buildLayout(List<Widget> pages, bool sideNav) {
     final MiThemeMode mode = navThemeModeOf(context);
     final List<MiGlassNavItem> items = _navItems(mode);
-    // edge-to-edge（T12）后内容铺到状态栏 / 手势条下面，浮层类元素要让开
-    // 顶部安全区（侧栏顶）。底栏**不需要** bottom inset——浮起口径本身就是
-    // 距物理屏底 24.2（见 [kShellNavBarBottomLift]）。
+    // edge-to-edge 后内容铺到状态栏 / 手势条下面，浮层类元素要让开顶部安全区
+    // （侧栏顶）。底栏**不需要** bottom inset——浮起口径本身就是距物理屏底 24.2
+    // （见 [kShellNavBarBottomLift]）。
     final double safeTop = MediaQuery.paddingOf(context).top;
     // 页底色：与各页（书架 [shelfGradientBackground] 的 base）同源取
-    // `scaffoldBackgroundColor`，铺满**整个窗口**（含侧栏那一列）。
-    //
-    // 上游 `demo_app.dart` 同款做法：内容只占右侧列，侧栏列若不铺页底色，
-    // 露出的就是窗口底色——浅色下与页面之间出现一道色差（2026-10-18 亮色
-    // 反馈「亮色模式需要这样」：截图里侧栏列与内容列是同一片浅底）。
+    // `scaffoldBackgroundColor`，铺满**整个窗口**（含侧栏那一列）——侧栏列
+    // 若不铺页底色，露出的就是窗口底色，浅色下与页面之间会出现一道色差。
     final Color pageBg = Theme.of(context).scaffoldBackgroundColor;
     return ColoredBox(
       color: pageBg,
@@ -455,10 +409,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             // 放进 `bottomNavigationBar` 时底栏在内容**之上**，采样不到正文，
             // 磨砂会退化成一块纯色。
             //
-            // 栏体浮起 24.2dp = 参考实测「bar bottom sits 24.2 dp above screen
-            // bottom」——edge-to-edge 下 `bottom` 直接量到物理屏底，**不再叠
-            // 手势条 inset**（叠了会整抬 ~34dp，2026-10-18/19 两轮真机反馈
-            // 「高度变了」的根因，见 [kShellNavBarBottomLift] 注）。
+            // 栏体浮起 24.2dp：edge-to-edge 下 `bottom` 直接量到物理屏底，
+            // **不叠手势条 inset**（叠了会整抬一个手势条，见 [kShellNavBarBottomLift] 注）。
             Positioned(
               left: 0,
               right: 0,

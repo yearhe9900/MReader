@@ -46,12 +46,10 @@ class _TestAppPaths implements AppPaths {
   }
 }
 
-/// 可控的假内容源（`BookSource` 假实现）：章数 / 每章段落数可注入（默认 3 章 × 20 段，
-/// 标题 第一/二/三章）。
+/// 可控的假内容源（`BookSource` 假实现）：章数 / 每章段落数可注入（默认 3 章 × 20 段）。
 ///
-/// 每章默认给足 20 段，使整本内容**明显高于视口**——这样「恢复/跳章」必须真的滚动，
+/// 每章默认给足 20 段使内容**明显高于视口**——「恢复/跳章」必须真的滚动，
 /// 断言「第一章不可见」才有意义（内容过矮时整屏全可见，断言会失真）。
-/// 章数超过 3 时标题按中文数字顺延（第六章 / 第二十章…），href 恒为 `h{序号}`。
 class _FakeSource implements BookSource {
   _FakeSource({
     List<int>? paragraphCounts,
@@ -64,15 +62,13 @@ class _FakeSource implements BookSource {
   /// 每章段落数（下标 = 章下标；长度 = 章数）。
   final List<int> paragraphCounts;
 
-  /// 永不返回内容的章下标（`content` 挂起）——用来稳定构造「某些章始终未加载」：
-  /// 首帧批次之外的章永不驻留 → 布局不再变化、占位高不被实测值替换，
-  /// 恢复期布局可冻结（见回归②：章高模型 seek 的收敛前提；回归②b：未落定即关书）。
+  /// 永不返回内容的章下标（`content` 挂起）——稳定构造「某些章始终未加载」：
+  /// 永不驻留 → 布局冻结、占位高不被实测值替换（回归②/②b 的收敛前提）。
   final Set<int> hangIndices;
 
-  /// 可释放的加载闸门：`content(i)` 先 `await gates[i].future` 再返回——
-  /// 「该章暂时取不到、测试显式放行后才到货」（回归④：模拟上方章稍后补齐，
-  /// 观测占位→真实合入是否挪动视口）。与 [hangIndices] 的区别：hang 永不完成，
-  /// gate 由测试择机 `complete()` 放行。
+  /// 可释放的加载闸门：`content(i)` 先 `await gates[i].future` 再返回——模拟
+  /// 「该章稍后到货」（回归④：占位→真实合入）。与 [hangIndices] 的区别：
+  /// hang 永不完成，gate 由测试择机 `complete()` 放行。
   final Map<int, Completer<void>> gates;
 
   bool disposed = false;
@@ -244,12 +240,12 @@ void main() {
       expect(find.text('书架书名'), findsOneWidget);
       expect(find.text('内嵌书名'), findsNothing);
 
-      // 不含诊断信息（implId `dart-fake` / 旧格式 `N 章 · dart-*`）
+      // 不含诊断信息（implId `dart-fake` / `N 章 · dart-*`）
       expect(find.textContaining('dart-'), findsNothing);
 
       // 首章标题（正文目视）+ 进度百分比可见。
-      // 「第一章」自 2026-10-08 起有**两处**：正文里的章标题 + 底部读数左栏的
-      // 当前章标题（负责人指定的读数格式）——故这里断言 findsWidgets。
+      // 「第一章」有**两处**：正文章标题 + 底部读数左栏当前章标题（读数格式），
+      // 故这里断言 findsWidgets。
       expect(find.text('第一章'), findsWidgets);
       expect(find.textContaining('%'), findsWidgets);
       expect(find.textContaining('第1章'), findsWidgets);
@@ -267,7 +263,7 @@ void main() {
 
       expect(find.byType(ListTile), findsNWidgets(3));
 
-      // `UI-03`（M2a-T04）：目录壳层是玻璃底部弹窗，不是 Material bottom sheet。
+      // `UI-03`：目录壳层是玻璃底部弹窗，不是 Material bottom sheet。
       expect(find.byType(GlassSheet, skipOffstage: false), findsOneWidget);
       // `UI-04`：列表行垫在 OpaqueContentSurface 上（玻璃只留外壳）。
       expect(
@@ -356,31 +352,27 @@ void main() {
       expect(saved!.localHint, isNotNull);
       final LocalLayoutHint hint = saved!.localHint!;
       // 防假绿：第 3 章在书尾附近，seed 像素必明显大于 0——
-      // 若 seed 为 0，下面的 seed 断言与「旧实现从 0 起跳」就没有区分力。
+      // 若 seed 为 0，下面的 seed 断言就没有区分力。
       expect(hint.scrollOffset, greaterThan(0));
 
-      // ⚠️ 真·关书再开：`pumpWidget` 对**同类型无 key** 的 widget 走
-      // `Widget.canUpdate` → Element/State **复用**（`initState`/`dispose` 都不跑）。
-      // 直接再 pumpWidget(buildApp()) 的「第二次打开」是假绿——树根本没换、
-      // controller 是第一次的（原版断言即栽在这个坑里）。必须先换异类 widget
-      // 把树拆掉（同回归①②③），再排空 dispose 发起的假区保存（`AtomicFile._tails`
-      // 按路径串行，活区同路径 IO 必须等它排空，否则跨区死锁）。
+      // ⚠️ 真·关书再开：`pumpWidget` 对**同类型无 key** widget 走 `Widget.canUpdate`
+      // → Element/State **复用**（`initState`/`dispose` 都不跑），直接再
+      // pumpWidget(buildApp()) 的「第二次打开」是假绿——**必须**先换异类 widget 把树拆掉；
+      // 再排空 dispose 发起的假区保存（`AtomicFile._tails` 按路径串行，活区同路径 IO
+      // 不等它排空会跨区死锁）。
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 20)));
       await _settle(tester, rounds: 20);
 
-      // 第二次打开：同版面 → 用 initialScrollOffset 做首帧 seed。
-      // 这正是 backlog① 方案 A 的直接验收场景：3 章书恢复 target=2 而首帧
-      // 只载 [1,2] → `coversPrefix(2)=false`（「冷启动读中段」的普遍形态），
-      // 走的是**回退分支**；旧实现该分支 `ScrollController()` 从 0 起跳，
-      // 用户先看到「前几页」再被拉到「当前页」。
+      // 第二次打开：同版面 → 用 initialScrollOffset 做首帧 seed。3 章书恢复
+      // target=2 而首帧只载 [1,2] → `coversPrefix(2)=false`（「冷启动读中段」的
+      // 普遍形态），走**回退分支**——验收「首帧不从 0 起跳」（否则用户先看到前几页）。
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 第二次打开：分页模式 seed 按**语义坐标**（窗口位×页高 + 章内比例×
-      // 页高）落在目标章占位块——像素 hint 不再直接搬用，但「首帧不从 0 起跳」
-      // 的验收不变（旧 ListView 实现此分支从 0 起跳 → 用户先看到前几页）。
+      // 分页模式 seed 按**语义坐标**（窗口位×页高 + 章内比例×页高）落在目标章
+      // 占位块——像素 hint 不再直接搬用，但「首帧不从 0 起跳」的验收不变。
       final PagedScroller paged =
           tester.widget<PagedScroller>(find.byType(PagedScroller));
       final ScrollController? seedController = paged.controller;
@@ -423,8 +415,7 @@ void main() {
         await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 20)));
         // 先排空 dispose 发起的**假区**保存再做后续活区 IO：`AtomicFile._tails`
-        // 按路径串行化，假区保存的完成回调只有 pump 能排空；活区同路径写若
-        // 在其排空前入队，会 await 队尾 gate 永久挂起（跨区死锁 → 30s 超时）。
+        // 按路径串行，活区同路径写在其排空前入队会永久挂起（跨区死锁 → 30s 超时）。
         await _settle(tester, rounds: 20);
         final ReadingProgress? snap =
             await tester.runAsync<ReadingProgress?>(() => counting.load('testbook01'));
@@ -439,13 +430,12 @@ void main() {
           // 而不是「全员被闸门拦下」的假绿）。
           expect(counting.saveCount, greaterThanOrEqualTo(1));
           // 关书那次保存**不得丢掉像素快照**：`Scrollable` 子节点先于本 State
-          // 卸载、控制器已 detach → 现场读不到 offset，实现必须回退本会话最后
-          // 可信快照（`_lastLocalHint`）。用 null 覆盖会让下次开书失去首帧精确落点。
+          // 卸载、控制器已 detach → 现场读不到 offset，实现必须回退最后可信
+          // 快照（`_lastLocalHint`）；null 覆盖会让下次开书失去首帧精确落点。
           expect(snap.localHint, isNotNull,
               reason: 'dispose 保存必须带上最后可信的版面快照（不得被 null 覆盖）');
-          // 注入「已加载集合变化后同一像素指向别处」的脏 localHint
-          //（RC1/RC2 的历史产物）：语义字段保持 (1, 0.5)——
-          // 新实现必须用语义坐标自我纠正回来，旧实现会把落点错章写回存档。
+          // 注入「已加载集合变化后同一像素指向别处」的脏 localHint（RC1/RC2
+          // 的历史产物）：语义字段保持 (1, 0.5)——必须用语义坐标自我纠正回来。
           final LocalLayoutHint hint = snap.localHint!;
           await tester.runAsync(
             () => counting.save(
@@ -485,21 +475,13 @@ void main() {
       // 内容**，其余章（含目标章上方的 0~3）一律**永远挂起** → 后台补齐第一批就卡住，
       // 布局冻结在「0~3 用占位高 + 第 5 章(下标 4) 真实长章 + 目标章(下标 5)」上。
       //
-      // **旧实现**（2026-09-23 探针实测）：恢复期 `maxScrollExtent` 在 26157 ↔ 290816
-      // 之间振荡——懒构建下它是「已布局子项均值 × 剩余项数」的**外推估计值**，站在
-      // 第 5 章里就被外推成「全书皆长章」。于是估算落点（`maxExtent × 5.5/20`）在
-      // 7193 ↔ 79974 之间来回跳，8 帧耗尽仍不收敛、停在书尾占位区；目标章 box 始终
-      // 未构建（`_chapterPointOffset(5, ·)` 恒 `null`）→ `RC1` 闸门关闭、零落盘。
-      // 真机同型故障：2026-09-28 绍宋（447 章 EPUB）`[perf]` 日志 —— 8 帧全
-      // `kind=estimate`、`restore.end converged=false sampled=false`、遮罩 1248ms。
-      //
-      // **新实现**（分页一次落位）：恢复 seed 落目标章占位块，prime 按 offsetFor
-      // 精确算偏移单跳落位（首屏突发盖不住目标字符时挂估算落位，空闲帧补完后
-      // 二次精确收敛）。本用例锁死「必须收敛且写盘」——
-      // 这也正是修复前后的行为差异（旧断言是 `find.text('第六章') findsNothing` +
-      // 零落盘，前提已被本次修复消除，故整条改写）。
+      // 防回归因果：懒构建下 `maxScrollExtent` 是「已布局子项均值 × 剩余项数」的
+      // **外推估计值**，上方长章会把估算落点拽偏——恢复期实测大幅振荡、8 帧耗尽
+      // 仍不收敛，目标章 box 未构建 → `RC1` 闸门关闭、零落盘。分页一次落位：
+      // seed 落目标章占位块，prime 按 offsetFor 精确算偏移单跳落位（首屏突发盖不住
+      // 目标字符时挂估算落位，空闲帧补完后二次精确收敛）。
       final List<int> counts = List<int>.generate(20, (int i) {
-        if (i == 4) return 400; // 目标章上方唯一的真实长章：旧实现的估算落点被它拽偏
+        if (i == 4) return 400; // 目标章上方唯一的真实长章：估算落点会被它拽偏
         if (i == 5 || i == 6) return 2; // 首帧批次里目标章与下一章极矮
         return 150;
       });
@@ -520,7 +502,7 @@ void main() {
       expect(find.byType(RichText, skipOffstage: false), findsWidgets,
           reason: '应有内容渲染（占位章也算），排除空壳假绿');
 
-      // 收敛断言：目标章标题与正文都进了树（旧实现两者皆无）。
+      // 收敛断言：目标章标题与正文都进了树。
       expect(chapterHeading('第六章'), findsOneWidget,
           reason: '分页一次落位必须把目标章带进布局窗口并落定');
       // 注：正文段落由 `InlineParagraph` 渲染为 `Text.rich`（RichText），
@@ -528,7 +510,7 @@ void main() {
       expect(find.textContaining('第6章正文', findRichText: true), findsWidgets,
           reason: '目标章正文应可见（收敛的直接证据）');
 
-      // 收敛 → 语义坐标必须写回（与旧「零落盘」相反）。
+      // 收敛 → 语义坐标必须写回。
       expect(counting.saveCount, greaterThanOrEqualTo(2),
           reason: '恢复收敛后必须写回（播种 1 + 本次 ≥1）');
       final ReadingProgress? saved =
@@ -566,9 +548,7 @@ void main() {
 
       // 目标章（下标 5）超长 → 首屏突发（kFirstPaintBudget=16ms）盖不住 0.5
       // 处字符，prime 走估算分支挂 `_pendingLand`（打点 `paged.estimate`），
-      // `RC1` 闸门保持关闭；空闲帧还要排很久才可能精确落位——本用例看到
-      // 估算打点后立即关书，抓的就是「未落定」这个窗口（旧实现同型手法是
-      // 「遮罩在位」；分页一次落位无遮罩，改抓打点）。
+      // `RC1` 闸门保持关闭——看到估算打点后立即关书，抓的就是「未落定」这个窗口。
       await tester.pumpWidget(
         buildApp(
           source: _FakeSource(
@@ -631,19 +611,14 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 页区间断言（`T07` 迁移：几何契约 → 页区间契约，原「章标题滚出
-      // 视口 ≥300px」像素断言改判）：落点在第 2 章中部——视口顶采样落在
-      // h2 且章内字符比例 ≈0.5；且第 1 章已卸载、副标题切到「第2章」。
+      // 页区间断言（几何契约 → 页区间契约，像素断言改判）：落点在第 2 章中部——
+      // 视口顶采样落在 h2 且章内字符比例 ≈0.5；且第 1 章已卸载、副标题切到「第2章」。
       expect(chapterHeading('第二章'), findsOneWidget);
-      // 「第 1 章已离开视口」按**视口语义**判定，且锚在**正文段落**上而非章标题。
-      //
-      // · 锚章标题不行（2026-10-08 变异实测）：章标题按设计排在首行**上方**，
-      //   落到章首时标题恰在视口上方 ⇒ 标题 finder 无法区分「刚到第 1 章」与
-      //   「早已离开第 1 章」（把播种改成第 1 章开头，标题断言仍绿而本断言红）。
-      // · 也不再用「在不在树里」：`_window` = 当前章 ±1，但页**是否被构建**取决于
-      //   `PagedScroller` 的懒构建范围——底部让开手势导航条使页高 −34dp、落位偏移
-      //   由 906 变 1065 后，第 1 章标题被纳入构建范围（仍在视口上方、不可见），
-      //   旧断言因此误红。构建范围是性能细节，不是产品契约。
+      // 「第 1 章已离开视口」按**视口语义**判定，且锚在**正文段落**上而非章标题：
+      // · 章标题按设计排在首行**上方**，落到章首时标题恰在视口上方 ⇒ 标题 finder
+      //   区分不了「刚到第 1 章」与「早已离开第 1 章」（断言会假绿/误红）。
+      // · 也不用「在不在树里」：页**是否被构建**随 `PagedScroller` 懒构建范围
+      //   （性能细节，非产品契约）漂移，会误红。
       expect(
         find.textContaining('第1章正文', findRichText: true).hitTestable(),
         findsNothing,
@@ -698,9 +673,8 @@ void main() {
       );
 
       await tester.pumpWidget(buildApp());
-      // 逐帧轮询中间态。旧 ListView 实现契约 = 校正期间**有**遮罩（盖住跳动）；
-      // 分页实现契约相反 = **一次落位**——seed 已把首帧放在目标章占位块上，
-      // 恢复全程不得出现遮罩，也不得闪现书首内容（「前几页 → 当前页」跳变）。
+      // 逐帧轮询中间态。分页实现契约 = **一次落位**：seed 已把首帧放在目标章
+      // 占位块上，恢复全程**不得**出现遮罩，也**不得**闪现书首内容（跳变）。
       final Finder mask = find.byKey(const Key('reader-restore-mask'));
       bool sawMask = false;
       bool sawWrongChapter = false;
@@ -759,16 +733,14 @@ void main() {
       final double d1 =
           tester.getTopLeft(title).dy - tester.getTopLeft(viewport).dy;
 
-      // 放行第 1 章：真实高度（2 段，很矮）合入 → 上方瞬间缩短数百像素。
-      // 旧实现在合入后不重锚：像素偏移不动、同一 offset 指向别处 → 视口
-      // 内容整体后移，用户看到「当前章跳走」（实机「进书从 40 多章跳到
-      // 300 多章」即此漂移在长书上的放大形态）。
+      // 放行第 1 章：真实高度（2 段，很矮）合入 → 上方瞬间缩短。若合入后不重锚，
+      // 同一 offset 指向别处 → 视口内容整体后移，用户看到「当前章跳走」。
       gate0.complete();
       await _settle(tester);
 
       final double d2 =
           tester.getTopLeft(title).dy - tester.getTopLeft(viewport).dy;
-      // 断言主句放最前：修前红时直接报出 d1/d2 实测漂移量。
+      // 断言主句放最前：红时直接报出 d1/d2 漂移量。
       expect((d2 - d1).abs(), lessThanOrEqualTo(2),
           reason: '占位→真实合入改变上方高度后必须语义重锚；'
               'd1=$d1 d2=$d2（旧实现在此漂移数百像素）');

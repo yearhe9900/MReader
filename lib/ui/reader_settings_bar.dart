@@ -1,16 +1,12 @@
-// 阅读设置控制条（`TYP-01` ~ `TYP-03`）。
+// 阅读设置控制条（`TYP-01` ~ `TYP-03`）：字号 / 行距 / 页边距 / 主题。
+// [ReaderSettings] 在 `lib/typography/reader_settings.dart`，此处只做 UI。
 //
-// 从 `lib/typography/reader_settings_bar.dart` 提取并扩展：字号 / 行距 / 页边距 / 主题。
-// [ReaderSettings] 已移至 `lib/typography/reader_settings.dart`，此处只做 UI。
-//
-// ## 分组收纳（2026-10-06）
-// 改前 7 个控件（`字号−/数值/字号+` + `行距图标/滑块` + `页边距` + `主题`）在 48dp
-// 单行里平铺，靠 `SizedBox(width: 8)` 隐式分组——窄屏上滑块被压到不足 80dp。
-// 改为「排版」分组盒内再按用途切三个子块（`字号` / `行距` / `版面`），子块间用竖分隔
-// 线划界；行距子块给滑块 `Expanded` 独占剩余宽度。功能、文案、回调不变。
+// 分组收纳：控件收进「排版」分组盒、按用途切三个子块（`字号` / `行距` / `版面`），
+// 子块间用竖分隔线划界，行距子块给滑块 `Expanded` 独占剩余宽度（单行平铺时窄屏
+// 滑块被压到不足 80dp 不可用）。功能、文案、回调不变。
 //
 // 本组件是**内容层**（非导航层）：底色由 [ReaderControlBar] 的 Material 提供，
-// 故不再自带 `Material` / `SafeArea`（改前嵌套两层 Material，底部多出一条阴影）。
+// 故不自带 `Material` / `SafeArea`（嵌套两层 Material 会在底部多出一条阴影）。
 import 'package:flutter/material.dart';
 
 import '../settings/settings_store.dart';
@@ -50,11 +46,10 @@ class ReaderSettingsBar extends StatelessWidget {
       child: ReaderControlGroup(
         label: showLabel ? '排版' : null,
         expand: true,
-        // 宽度不够时把行距滑块**换行独占一行**（下方 [LayoutBuilder]）——
-        // 固定内容（字号 3 控件 + 版面 2 控件 + 2 条分隔线 + 内外边距）实测约
-        // 334dp，393dp 屏上留给滑块仅 ~27dp（等于没有）。宁可多一行高度，
-        // 也不把滑块压成不可用——这是「空间不足时优先保证层级清晰与内容不重叠」
-        // 的直接落法。
+        // 宽度不够时把行距滑块**换行独占一行**（下方 [LayoutBuilder]）：固定内容
+        // （字号 3 控件 + 版面 2 控件 + 2 条分隔线 + 内外边距）实测约 334dp，窄屏
+        // 留给滑块不足 30dp（等于没有）。宁可多一行高度，也不把滑块压成不可用——
+        // 这是「空间不足时优先保证层级清晰与内容不重叠」的直接落法。
         //
         // ⚠️ [LayoutBuilder] 必须包在 [Expanded] 里：它在 [ReaderControlGroup] 的
         // `Row` 中是**非 flex 子节点**，而 `Row` 给非 flex 子节点无界宽度 → builder
@@ -74,11 +69,9 @@ class ReaderSettingsBar extends StatelessWidget {
 
   /// 排版组的内容：宽屏时同行三块（字号 / 行距 / 版面），极窄屏时行距换行独占。
   ///
-  /// 宽度取舍（实测）：排版组的固定内容 = 字号 122 + 版面 100 + 行距图标 26 +
-  /// 2 条分隔线 26 + 内外边距 ≈ 322dp。393dp 屏上留给滑块 ≈ 71dp（可用）；
-  /// 再给「行距」也套一层盒子（+12dp）滑块就只剩 59dp，再加两个文字组标题
-  /// （+96dp）滑块归零。故：**行距块不套内盒**（它由两侧分隔线界定，宽度天然
-  /// 自适应），字号/版面保留内盒。
+  /// 横向预算（实测）：固定内容 ≈ 322dp，393dp 屏上留给滑块 ≈ 71dp（可用）；再给
+  /// 「行距」套内盒（+12dp）或加文字组标题（+96dp）滑块就归零。故：**行距块不套
+  /// 内盒**（由两侧分隔线界定，宽度天然自适应），字号/版面保留内盒。
   Widget _buildFontBlock(
     BuildContext context,
     BoxConstraints constraints,
@@ -119,8 +112,7 @@ class ReaderSettingsBar extends StatelessWidget {
   /// 子块「字号」：减号 / 数值 / 加号。
   ///
   /// **不套内盒**：三个控件本身就是一组，靠左右分隔线界定即可；套盒要多付 12~16dp
-  /// 横向空间，而在 393dp 屏上这 12~16dp 直接决定行距滑块是 43dp（不可用）还是
-  /// 79dp（可用）。见 [_buildFontBlock] 的横向预算。
+  /// 横向空间，直接决定行距滑块是不可用还是可用（见 [_buildFontBlock] 的横向预算）。
   Widget _fontButtons(BuildContext context, bool canShrink, bool canGrow) {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -170,11 +162,10 @@ class ReaderSettingsBar extends StatelessWidget {
     );
   }
 
-  /// 子块「行距」：图标作标签+ 滑块。
+  /// 子块「行距」：图标作标签 + 滑块。
   ///
-  /// **不套内盒**（与字号/版面不同）：横向预算已到底（见 [_buildFontBlock]的实测
-  /// 数字），再套一层盒子要多付 12dp；行距块本身由左右两条分隔线界定，边界已经
-  /// 足够清楚，省下的宽度全部给滑块。
+  /// **不套内盒**（与字号/版面不同）：横向预算已到底（见 [_buildFontBlock]），行距块
+  /// 本身由左右两条分隔线界定、边界已足够清楚，省下的宽度全部给滑块。
   Widget _lineHeightSlider(BuildContext context) {
     return Row(
       mainAxisSize: MainAxisSize.min,

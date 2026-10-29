@@ -1,4 +1,4 @@
-// 章尾反复开关书的稳定性回归（2026-10-09 真机「多次开关图书，章节跳动」）。
+// 章尾反复开关书的稳定性回归（真机症状：多次开关图书，章节跳动）。
 //
 // ## 症状与根因（完整链条见 §2.80）
 //
@@ -25,7 +25,7 @@ import 'package:mreader/reader/reader_page.dart';
 import 'reader_harness.dart';
 import '../test_config.dart';
 
-/// 25 段 × 一行 ≈ 1125px ⇒ 每章 2 页，第二页是「短尾页」（正是负责人说的「页尾」）。
+/// 25 段 × 一行 ⇒ 每章 2 页，第二页是「短尾页」（即「页尾」）。
 const List<int> kCounts = <int>[25, 25, 25, 25, 25, 25];
 
 void main() {

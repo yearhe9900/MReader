@@ -1,4 +1,4 @@
-// `M4-T03`：`SYNC-03` 按条目合并（纯函数）+ 书库索引同步（`IndexSync`）测试。
+// `SYNC-03` 按条目合并（纯函数）+ 书库索引同步（`IndexSync`）测试。
 //
 // 合并 / 裁决零 IO 直接断言；`IndexSync` 集成走 `sync_support.dart` 的 MockDav
 // （真 socket 纯 `test()`，非 FakeAsync 区）。

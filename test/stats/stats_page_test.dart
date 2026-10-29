@@ -1,4 +1,4 @@
-// `M3-T10`：统计页 widget 测试（`STAT-03` 首屏三指标 / 起始日期 / 清空）。
+// `STAT-03` 首屏三指标 / 起始日期 / 清空：统计页 widget 测试。
 //
 // ⚠️ FakeAsync 铁律（同 `shelf_page_test.dart`）：`testWidgets` 体内禁真异步 IO，
 // 页面 initState 的 `service.load()` 与回调里的落盘都要用 [_settle]

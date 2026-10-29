@@ -1,4 +1,4 @@
-// `M4-T01`：SyncConfig 模型测试（`SYNC-01` 五要素 / `DATA-02` ① 结构性不含密码）。
+// `SYNC-01` 五要素 / `DATA-02` ① 结构性不含密码：SyncConfig 模型测试。
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/sync/sync_config.dart';
 

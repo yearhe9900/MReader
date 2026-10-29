@@ -1,12 +1,11 @@
 // 凭据的**降级**实现（PRD `DATA-02` ③）。
 //
-// 定位：M1-T01 只提供「接口 + 降级实现」。系统密钥库插件（Android Keystore /
-// iOS Keychain / 桌面 libsecret / kwallet）留到 M4 接入（见排期 M1-T01 备注）。
-// Linux 等无可用密钥库的平台按 `DATA-02` ③「明确标注为明文存储并告知用户」，
-// 由 [isSecure] / [securityNotice] 暴露给 UI。
+// 定位：只提供「接口 + 降级实现」，系统密钥库插件（Android Keystore / iOS Keychain /
+// 桌面 libsecret / kwallet）留待后续接入。Linux 等无可用密钥库的平台按 `DATA-02` ③
+// 「明确标注为明文存储并告知用户」，由 [isSecure] / [securityNotice] 暴露给 UI。
 //
-// ⚠️ 安全提醒：本实现为**明文存储**。严禁把凭据内容写入任何日志——
-// 本文件内不做任何 print / debugPrint，异常信息也不携带凭据值。
+// ⚠️ 安全提醒：本实现为**明文存储**。严禁把凭据内容写入任何日志——本文件内不做任何
+// print / debugPrint，异常信息也不携带凭据值。
 import 'dart:io';
 
 import '../storage/atomic_file.dart';

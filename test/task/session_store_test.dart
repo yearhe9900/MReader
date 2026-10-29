@@ -1,5 +1,5 @@
-// `M2b-T08`：会话持久化单测（`STAT-02` / `STAT-08`；纯 Dart `test()`，
-// 临时目录真异步 IO，**不用** `testWidgets`——FakeAsync 区会挂死真 IO）。
+// `STAT-02` / `STAT-08`：会话持久化单测（纯 Dart `test()`，临时目录真异步 IO，
+// ⚠️ **禁用** `testWidgets`——FakeAsync 区会挂死真 IO）。
 //
 // 覆盖：按月分片落盘、按 id 并集合并、重复合并幂等、同 id 取较大时长、
 // 禁止 `duration <= 0` 落盘、聚合正确性（经存储往返后仍逐秒一致）。
@@ -185,9 +185,8 @@ void main() {
       expect(raw.contains('"duration":0'), isFalse);
       expect(raw.contains('"duration":-5'), isFalse);
 
-      // 只合入禁写记录 → 连分片文件都不产生：用**未写过的 8 月** zeroAug
-      // （若过滤失效它会建 sessions-2026-08.json）——原断言误测了从未触碰的
-      // 月份，平凡真，这里换成真正「本会被创建」的分片键。
+      // 只合入禁写记录 → 连分片文件都不产生：探针用**未写过的 8 月** zeroAug
+      // （过滤失效它会建 sessions-2026-08.json；探针必须选真正会被创建的分片键）。
       final ReadingSession zeroAug = _session(
           bookId: 'bookA', dayKey: '2026-08-05', startedAt: _ts(2026, 8, 5, 10), duration: 0);
       await store.merge(<ReadingSession>[zeroAug]);

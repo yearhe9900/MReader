@@ -1,14 +1,11 @@
-// M1-T05 元数据测试的公共夹具：封面字节 + 最小可解码图片。
-//
-// 本文件属测试脚手架（`test/`），不属 `lib/` 产物。
+// 元数据测试的公共夹具：封面字节 + 最小可解码图片。
 import 'dart:convert';
 import 'dart:typed_data';
 
 /// 1×1 真实可解码 PNG（RGB 红点；供魔数嗅探、缩略图生成与图片页测试复用）。
 ///
-/// 2026-09-24 换过一次：旧串 IDAT 的 CRC 损坏、chunk 结构崩坏，Flutter
-/// `instantiateImageCodec` 解码必败（「Codec failed to produce an image」），
-/// 连带 cover_store 缩略图生成失败。新串由 zlib 自构造，三 chunk CRC 全过。
+/// ⚠️ 必须用真实可解码串：坏串令 `instantiateImageCodec` 解码必败，连带
+/// cover_store 缩略图生成失败。
 final Uint8List kTinyPng = base64Decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mP4z8AAAAMBAQD3A0FDAAAAAElFTkSuQmCC',
 );

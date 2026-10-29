@@ -1,5 +1,5 @@
 // 分页测量层单测（T01）：投影契约 + 行偏移映射 + 端到端切页。
-// 期望值一律硬编码字面量。夹具（flutter test 等宽字体实测）：fontSize 18
+// 期望值一律硬编码字面量。夹具（flutter test 等宽字体）：fontSize 18
 // → 字宽 18（pageWidth 180 = 10 字/行）、行高 **29.0**、图片占位混排行高 **51.0**
 //（占位 48 + 缩进文本同行，bottom 对齐——与渲染 `typeset.dart` WidgetSpan 默认一致）。
 // 投影恒加 2 字符首行缩进前缀（`kFirstLineIndentPrefix`）：可见偏移 ≈ 原文 + 2。
@@ -136,7 +136,7 @@ void main() {
         config: config,
         imageSizes: imageSizes,
       );
-      // 60×30 原样进占位（fit 不动）：行高实测 33.0——flutter test 字体下
+      // 60×30 原样进占位（fit 不动）：行高 33.0——flutter test 字体下
       // 「30 高占位 + 缩进文本同行」的 bottom 对齐行盒值，与回退的 51.0 可区分。
       expect(small.single.height, 33.0);
 

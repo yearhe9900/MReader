@@ -1,5 +1,4 @@
-// `M2b-T08`：会话采集内核单测（`STAT-01` / `STAT-02`；纯 Dart `test()`，
-// 不涉及 widget / FakeAsync / IO）。
+// `STAT-01` / `STAT-02`：会话采集内核单测（纯 Dart `test()`，无 widget / FakeAsync / IO）。
 //
 // 覆盖：空闲切会话、跨 0 点拆天、聚合正确性、JSON 往返防御。
 // 断言预期值均先**人工推演**（各用例注释给出推演式），时间一律用本地

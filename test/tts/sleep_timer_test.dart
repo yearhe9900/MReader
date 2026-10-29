@@ -1,10 +1,7 @@
-// `TTS-05` 定时停止计时器（M3-T08）。
-//
-// 验收映射：到点自动停的**计时面**（PRD TTS-05 ① 的时序底座）——「停朗读」
+// `TTS-05` 定时停止计时器：到点自动停的**计时面**（① 的时序底座）——「停朗读」
 // 动作在调用方（`ReaderPage._onSleepFire`），分钟合法性在 `TtsSettings.clampSleep`。
 //
-// 口径：真实短时长（**不引入 fake_async**——它不在 pubspec 依赖里）；
-// 时序留足余量（计划 30ms、等待 150ms）防慢机抖动。
+// 口径：真实短时长、**不引入 fake_async**（不在 pubspec 依赖里）；时序留足余量防抖。
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/tts/sleep_timer.dart';
 

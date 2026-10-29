@@ -6,49 +6,38 @@
 //   · `\x00A:href\x00文字\x00A\x00` 链接标记 → 可点下划线 `TextSpan`（`CNT-04b`）；
 //   · `\x00ID:id\x00` 锚点标记渲染吞掉不上屏（`CNT-04b`）。
 //
-// **不做完整 CSS 级联**（`TYP-04` 明确说不做）；不做 `<br>` / 表格 / 脚注（`M2a-T02`）。
+// **不做完整 CSS 级联**（`TYP-04`）；不做 `<br>` / 表格 / 脚注。
 import 'dart:typed_data';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 /// 首行缩进前缀：两个全角空格（U+3000），宽度恒 = 2 × 中文字宽。
-/// 渲染（`withFirstLineIndent`）与分页测量（`page_paginator.dart` 的
-/// `project`）共用此常量，保证行断一致。
+/// 渲染（`withFirstLineIndent`）与分页测量（`page_paginator.dart` 的 `project`）共用，保证行断一致。
 const String kFirstLineIndentPrefix = '\u3000\u3000';
 
-/// 给段落文本加首行缩进（`TYP-04`）。
-///
-/// 全角空格（U+3000）宽度恒 = 1 个中文字宽，不受字号 / 字体影响。
-/// 对纯英文段落亦适用（宽度约 2em，符合中文排版惯例）。
+/// 给段落文本加首行缩进（`TYP-04`）。全角空格（U+3000）宽度恒 = 1 个中文字宽、
+/// 不受字号 / 字体影响，纯英文段落亦适用（约 2em，符合中文排版惯例）。
 String withFirstLineIndent(String text) => '$kFirstLineIndentPrefix$text';
 
-/// 搜索命中高亮底色（琥珀半透明；`CNT-06` 验收②「关键词高亮」）。
-///
-/// 半透明是为了同时适配亮 / 暗主题与各背景色板（`TYP-08`）：
-/// 叠在任意正文色上都保可读，且不覆盖文字本身的颜色语义（粗体 / 链接下划线）。
+/// 搜索命中高亮底色（琥珀半透明；`CNT-06` 验收②「关键词高亮」）。半透明以适配
+/// 亮 / 暗主题与各背景色板（`TYP-08`），不覆盖文字颜色语义（粗体 / 链接下划线）。
 const Color kSearchHighlightColor = Color(0x66FFC107);
 
-/// 划词选区高亮底色（`AI-02`/`AI-03`；同为半透明以适配亮 / 暗主题与各背景色板）。
-///
-/// 与搜索高亮同范式：只叠 `backgroundColor`，不改文字颜色语义。
-/// 选区着色在搜索高亮**之后**应用（选中段的底色以选区为准）。
+/// 划词选区高亮底色（`AI-02`/`AI-03`）。与搜索高亮同范式：只叠 `backgroundColor`、
+/// 不改文字颜色语义；着色在搜索高亮**之后**应用（选中段底色以选区为准）。
 const Color kSelectionHighlightColor = Color(0x6642A5F5);
 
-/// 朗读段高亮底色（`TTS-01`/`TTS-02` 段落朗读；同款半透明适配亮 / 暗主题）。
-///
-/// 绿色与搜索琥珀 / 选区蓝区分；只叠底色不改文字颜色语义（同上两色范式）。
+/// 朗读段高亮底色（`TTS-01`/`TTS-02`）。绿色与搜索琥珀 / 选区蓝区分；
+/// 同款半透明、只叠底色不改文字颜色语义。
 const Color kSpeakingHighlightColor = Color(0x6666BB6A);
 
 /// 白名单：只保留 `<b>` 和 `<i>` 的开闭标签，其它标签在上游已剥离。
 final RegExp _inlineTagPattern = RegExp(r'<(/?)([bi])>');
 
-/// 把一段含 `<b>` / `<i>` 标签的文本解析成 [InlineSpan] 列表，供 `Text.rich` 消费。
-///
-/// 逐字符扫标签，跟踪 bold / italic 状态，切出「带样式」与「不带样式」片段。
-/// 未识别标签（如 `<unknown>`）**原样显示文本**（不吞内容、不报错）。
-///
-/// [baseStyle] 作为基线；bold / italic 叠加在其上（`copyWith`）。
+/// 把一段含 `<b>` / `<i>` 标签的文本解析成 [InlineSpan] 列表（供 `Text.rich`）：
+/// 逐字符扫标签跟踪 bold / italic 状态切出带 / 不带样式片段，未识别标签
+/// **原样显示文本**（不吞内容、不报错）；[baseStyle] 为基线，bold / italic 叠加其上。
 List<InlineSpan> parseInlineStyles(String text, TextStyle baseStyle) {
   final List<InlineSpan> spans = <InlineSpan>[];
   bool bold = false;
@@ -56,7 +45,6 @@ List<InlineSpan> parseInlineStyles(String text, TextStyle baseStyle) {
   int cursor = 0;
 
   for (final Match match in _inlineTagPattern.allMatches(text)) {
-    // 标签之前的纯文本。
     if (match.start > cursor) {
       final String segment = text.substring(cursor, match.start);
       spans.add(TextSpan(
@@ -74,7 +62,6 @@ List<InlineSpan> parseInlineStyles(String text, TextStyle baseStyle) {
     cursor = match.end;
   }
 
-  // 尾部纯文本。
   if (cursor < text.length) {
     final String segment = text.substring(cursor);
     spans.add(TextSpan(
@@ -116,22 +103,12 @@ const String _kLinkClose = 'A';
 /// 锚点标记体前缀（`\x00ID:id\x00` 内层）——渲染吞掉，不上屏。
 const String _kIdMarker = 'ID:';
 
-/// 把一段含标记的文本解析成 [InlineSpan] 列表。
-///
-/// 标记格式（与 `section_extractor.dart` 写入一致）：
-/// - 图片：`\x00IMG:src\x00` → [WidgetSpan]（异步加载，失败占位图标）；
-/// - 链接：`\x00A:href\x00文字\x00A\x00` → 文字带下划线 [TextSpan]，
-///   挂 [TapGestureRecognizer]，onTap 时调 [onLinkTap] 传出 href；
-/// - 锚点：`\x00ID:id\x00` → 吞掉（不上屏，不产生 span）。
-///
-/// 按 NUL 切分：奇数段 = 标记体，偶数段 = 可见文本（可能含 `<b>`/`<i>`）。
-///
-/// recognizer 生命周期由调用方管理：所有 recognizer 经 [recognizerSink]
-/// 收集，调用方负责 `dispose`（推荐用 [InlineParagraph]，自动管理）。
-/// [onLinkTap] 为 null 时链接只渲染下划线样式，不创建 recognizer。
-///
-/// 脏数据容错：未闭合的 `\x00A:` 开标记延伸到段末；孤立 `\x00A\x00`
-/// 闭标记吞掉；未知标记体（非 IMG/A/ID）吞掉。绝不抛异常。
+/// 把含标记的文本解析成 [InlineSpan] 列表：图片 → [WidgetSpan]（异步加载，失败占位）；
+/// 链接 → 下划线 [TextSpan] + recognizer（onTap 调 [onLinkTap] 传 href；为 null 只渲染
+/// 下划线不建 recognizer）；锚点吞掉不上屏。按 NUL 切分：奇数段 = 标记体，偶数段 =
+/// 可见文本（可含 `<b>`/`<i>`）。recognizer 经 [recognizerSink] 交调用方 `dispose`
+/// （推荐 [InlineParagraph] 自动管理）。脏数据容错**绝不抛异常**：未闭合开标记延伸到
+/// 段末，孤立闭标记与未知标记体吞掉。
 List<InlineSpan> parseContentSpans(
   String text,
   TextStyle baseStyle,
@@ -145,7 +122,6 @@ List<InlineSpan> parseContentSpans(
   }
 
   final List<InlineSpan> spans = <InlineSpan>[];
-  // 按 NUL 字符分割：奇数段 = 标记体，偶数段 = 可见文本。
   final List<String> parts = text.split('\x00');
   // 当前链接状态：href 非空 = 处于链接文字内。
   String? openHref;
@@ -189,12 +165,11 @@ List<InlineSpan> parseContentSpans(
       }
       // 其余未知标记体 → 吞掉（防御脏数据）
     } else if (part.isNotEmpty) {
-      // 可见文本段：调 parseInlineStyles 处理 <b>/<i>。
       final List<InlineSpan> segments = parseInlineStyles(part, baseStyle);
       if (openHref == null) {
         spans.addAll(segments);
       } else {
-        // 链接文字：叠加下划线样式 + recognizer（链接内可含 <b>/<i>）。
+        // 链接内可含 `<b>`/`<i>`（各片段挂同一 recognizer）。
         for (final InlineSpan segment in segments) {
           final TextSpan plain = segment as TextSpan;
           spans.add(TextSpan(
@@ -217,18 +192,12 @@ List<InlineSpan> parseContentSpans(
 TextStyle _linkStyle(TextStyle base) =>
     base.copyWith(decoration: TextDecoration.underline);
 
-/// 对已解析的 span 列表做搜索高亮后处理（`CNT-06` 验收②「关键词高亮」）。
-///
-/// 对每个 [TextSpan] 的文本按 [query] **非重叠**切分（与各格式 `search()`
-/// 的命中计数口径一致），命中片段的样式叠 [color] 背景——原样式的
-/// 颜色 / 粗斜体 / 下划线全保留；[TextSpan.recognizer] **复制**到所有子片段
-/// （链接整段可点性不变，与 `parseContentSpans` 给链接文字挂同一 recognizer
-/// 的既有模式一致）。[WidgetSpan]（图片）原样保留，不参与切分。
-///
-/// [query] 为空或整表无命中时返回原列表；本函数**不创建** recognizer，
-/// 生命周期仍归 [InlineParagraph] 管。`parseContentSpans` 的无标记快路径
-/// 与标记路径产出的都是扁平 span 列表（TextSpan 只有 text 不带 children），
-/// 故这里只做顶层切分、不递归 children。
+/// 对已解析的 span 列表做搜索高亮后处理（`CNT-06` 验收②「关键词高亮」）：对每个
+/// [TextSpan] 文本按 [query] **非重叠**切分（与各格式 `search()` 命中计数口径一致），
+/// 命中片段样式叠 [color] 背景——原颜色 / 粗斜体 / 下划线全保留，[TextSpan.recognizer]
+/// **复制**到所有子片段（链接整段可点性不变）；[WidgetSpan] 不参与切分。[query] 空或
+/// 无命中返回原列表；本函数**不创建** recognizer（生命周期归 [InlineParagraph]）。
+/// 两条解析路径产出的都是扁平 span 列表，故只做顶层切分、不递归 children。
 List<InlineSpan> highlightSpans(
   List<InlineSpan> spans,
   String query, {
@@ -277,16 +246,12 @@ List<InlineSpan> highlightSpans(
   return any ? out : spans;
 }
 
-/// 对已解析的 span 列表做**选区**着色后处理（`AI-02`/`AI-03` 划词高亮）。
-///
-/// 按渲染文本空间偏移 `[start, end)` 切分：命中片段叠 [color] 背景，原样式
-/// （颜色 / 粗斜体 / 下划线）与 [TextSpan.recognizer] 全保留——与
-/// [highlightSpans] 同范式。[WidgetSpan]（图片）按 1 个替换字符计入偏移、
-/// 自身不切分。无交集时返回原列表（不产生无谓 rebuild）。
-///
-/// 为什么在 span 内着色而非 overlay：分页模式相邻页同段双实例各自被
-/// ClipRect 裁切，翻页 Transform 动画期间 overlay 会与文字错位，span 内
-/// 着色随页图层一起走，天然同步。
+/// 对已解析的 span 列表做**选区**着色后处理（`AI-02`/`AI-03` 划词高亮）：按渲染文本
+/// 空间偏移 `[start, end)` 切分，命中片段叠 [color] 背景，原样式与
+/// [TextSpan.recognizer] 全保留（与 [highlightSpans] 同范式）；[WidgetSpan] 按 1 个
+/// 替换字符计入偏移、自身不切分；无交集返回原列表。着色在 span 内而非 overlay：
+/// 分页相邻页同段双实例被 ClipRect 裁切，翻页动画期 overlay 会与文字错位，
+/// span 内着色随页图层一起走，天然同步。
 List<InlineSpan> selectionSpans(
   List<InlineSpan> spans,
   int start,
@@ -339,13 +304,10 @@ List<InlineSpan> selectionSpans(
   return any ? out : spans;
 }
 
-/// 整段可点链接的段落 widget（`CNT-04b`）：管理 recognizer 生命周期。
-///
-/// [parseContentSpans] 创建的 [TapGestureRecognizer] 必须 `dispose`：
-/// - span 因输入变化重建时，旧 recognizer 延后到帧结束再释放
-///   （当前帧渲染树仍可能引用旧 span 的 recognizer，立即 dispose 会崩）；
-/// - State.dispose 时释放当前批。
-/// 输入不变的 rebuild 复用缓存 span 列表，不重复创建 recognizer。
+/// 整段可点链接的段落 widget（`CNT-04b`）：管理 recognizer 生命周期——span 因输入
+/// 变化重建时，旧 recognizer 延后到帧结束再释放（当前帧渲染树仍可能引用旧 span 的
+/// recognizer，立即 dispose 会崩）；State.dispose 时释放当前批。输入不变的 rebuild
+/// 复用缓存 span 列表，不重复创建 recognizer。
 class InlineParagraph extends StatefulWidget {
   const InlineParagraph({
     super.key,
@@ -369,14 +331,12 @@ class InlineParagraph extends StatefulWidget {
   /// 链接点击回调（href 为归一化形态）；null = 链接不可点，仅下划线展示。
   final void Function(String href)? onLinkTap;
 
-  /// 搜索高亮关键词（`CNT-06` 验收②）：非空时命中片段叠高亮底色
-  /// （[highlightSpans] 后处理，快路径与标记路径都覆盖）；
-  /// `null` / 空串 = 不高亮。
+  /// 搜索高亮关键词（`CNT-06` 验收②）：非空时命中片段叠高亮底色（[highlightSpans]
+  /// 后处理，快路径与标记路径都覆盖）；`null` / 空串 = 不高亮。
   final String? highlightQuery;
 
-  /// 划词选区（`AI-02`/`AI-03`）：渲染文本空间 `[start, end)` 非空时该段
-  /// 对应片段叠选区底色（[selectionSpans] 后处理，在搜索高亮之后）；
-  /// `null` = 无选区。
+  /// 划词选区（`AI-02`/`AI-03`）：渲染文本空间 `[start, end)` 非空时该段对应片段叠
+  /// 选区底色（[selectionSpans] 后处理，在搜索高亮**之后**）；`null` = 无选区。
   final ({int start, int end})? selection;
 
   @override
@@ -450,10 +410,8 @@ class _InlineParagraphState extends State<InlineParagraph> {
   }
 }
 
-/// 异步加载的内嵌图片 widget（`CNT-01`）。
-///
-/// 生命周期：`initState` 发起加载 → 加载中显示进度指示 → 成功显示图片 → 失败显示占位图标。
-/// 每次 rebuild 不重新加载（`_bytes` 缓存在 State 里）。
+/// 异步加载的内嵌图片 widget（`CNT-01`）：`initState` 发起加载（`_bytes` 缓存在
+/// State，rebuild 不重新加载），加载中 / 失败分别显示进度 / 占位图标。
 class _InlineImage extends StatefulWidget {
   const _InlineImage({required this.src, required this.resolveImage});
 

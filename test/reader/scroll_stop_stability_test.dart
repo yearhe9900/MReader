@@ -1,5 +1,4 @@
-// 滚动模式「停手不许跳动」契约（2026-10-09，真机「顶部文字显示一半，会弹跳一下
-// 显示全部，所以每次滚动，都会跳动」）。
+// 滚动模式「停手不许跳动」契约（真机症状：顶端行弹跳露全、每次滚动都跳）。
 //
 // ## 缺陷
 //
@@ -7,10 +6,7 @@
 // 为「开书/跳转后不从半行开始读」而设）。但 `_onPagedStopped` ⑤ 的
 // `_ensurePagedActive()` **每次停手**都调 `_primeOpenSync(charOffset:
 // _currentCharOffset())`，于是自由滚动的视口顶被反复吸附到行顶：
-// 内容整块下移「该行已被滚过的余量」⇒ 顶端那行露全。
-//
-// 探针实测（`_probe_scroll_jump_test`，连续四次停手）：位移恒为 **−12.0px**，
-// `paged.prime` 打点 `char=8 off=88`（现场 100 → 落位 88）。
+// 内容整块下移「该行已被滚过的余量」⇒ 顶端那行露全（实测每次停手位移恒定）。
 //
 // ## 修法（`_scrollRemainderOf`）
 //
@@ -152,7 +148,7 @@ void main() {
         final Map<String, double> topsDuring = visiblePageTops(tester);
 
         // **判别力自检**：现场必须**不在行顶**，否则「停手不跳」是句废话
-        // （本来就没得跳）。改前实测余量 12.0 / 24.0 / −9.0 / 3.0。
+        // （本来就没得跳）。
         final ScrollSample sample = st.sampleNow()!;
         final double? lineTop = st.offsetForCharOffset(sample.href, sample.charOffset);
         expect(lineTop, isNotNull);

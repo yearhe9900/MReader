@@ -1,16 +1,12 @@
-// `TTS-01`/`TTS-02` ReaderPage 朗读接线 widget 测试（M3-T06）。
+// `TTS-01`/`TTS-02` ReaderPage 朗读接线 widget 测试。
 //
-// 验收映射：
-//   ①（TTS-01 ①）点「朗读」从当前段起读：引擎收到正文文本、朗读段高亮
-//      在场、按钮切「停止朗读」；再点 → 停止并撤高亮；
-//   ②（PRD §15.3）init 不可用 → 中文提示「本机未安装语音引擎」，
-//      不静默失败、不发声；
-//   ③（TTS-02 ③）手动滚动暂停自动跟随：拖拽后再推进，滚动位移不变；
-//   ④（TTS-02 ②）自动跟随：连续推进 14 段后滚动位移明显增长，高亮持续在场。
+// 覆盖：①（`TTS-01` ①）点「朗读」从当前段起读——引擎收到正文、高亮在场、按钮
+// 切「停止朗读」，再点停止并撤高亮；②（§15.3）init 不可用 → 中文提示「本机未
+// 安装语音引擎」，不静默失败、不发声；③（`TTS-02` ③）手动滚动暂停自动跟随；
+// ④（`TTS-02` ②）自动跟随滚动位移增长、高亮持续在场。
 //
-// 口径：装具复用 `test/reader/reader_harness`（FakeBookSource 3 章 × 20 段 /
-// settle / 假仓库）；玻璃钉「关」档（builder 形制）；引擎注入 [FakeTtsEngine]
-// （speak 挂起等手动结局）；widget 内真异步 IO 用 [settle] 推进。
+// 口径：装具复用 `test/reader/reader_harness`；玻璃钉「关」档；引擎注入
+// [FakeTtsEngine]（speak 挂起等手动结局）；widget 内真异步 IO 用 [settle] 推进。
 import 'dart:io';
 
 import 'package:flutter/material.dart';

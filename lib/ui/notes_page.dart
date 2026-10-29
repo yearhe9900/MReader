@@ -1,9 +1,9 @@
 // 笔记汇聚页：生词本入口（`AI-03`）+ 划线 / 批注占位。
 //
-// 生词本 = 已落地能力（M3-T02）：入口行显示词条数，点击经 [onOpenVocab]
-// （组合根注入的回调，HomeShell 持有全部依赖 → push `VocabPage`）打开列表。
-// 划线 / 批注 / 书签汇聚依赖阅读页标注能力（`HOOK` 类需求），本轮仍是占位。
-// [vocabStore] 为 null（未接线 / 测试构造）→ 整页回退原占位骨架，行为一字不变。
+// 生词本 = 已落地能力：入口行显示词条数，点击经 [onOpenVocab]（组合根注入的回调，
+// HomeShell 持有全部依赖 → push `VocabPage`）打开列表。划线 / 批注 / 书签汇聚依赖
+// 阅读页标注能力（`HOOK` 类需求），仍是占位。[vocabStore] 为 null（未接线 / 测试
+// 构造）→ 整页回退原占位骨架，行为一字不变。
 //
 // 视觉红线（`UI-04`）：内容由 [OpaqueContentSurface] 承载，玻璃只在顶栏。
 import 'package:flutter/material.dart';

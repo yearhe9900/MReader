@@ -1,21 +1,18 @@
-// 玻璃作用域：把「当前有效亮度 / 当前生效档位配置 / 玻璃隔离范围」收敛到一处。
-//
-// 作用域的三个值都从环境解析、可显式覆盖：
-//   · 有效亮度 —— 来自玻璃库的 `GlassTheme.brightnessOf`（它内部是三级级联：
-//     外部 `brightnessResolver`（Material 集成）→ Cupertino 主题 → 系统亮度）；
-//   · 档位配置 —— 默认 [GlassRuntime.config]（用户偏好 × 自动降级的生效结果）；
-//     [GlassScopeProvider] 订阅 [GlassRuntime]，档位切换时**整树重建**、
-//     各薄封装层（`glass_kit.dart`）经 [GlassScope.configOf] 自动跟档；
+// 玻璃作用域：把「当前有效亮度 / 当前生效档位配置 / 玻璃隔离范围」收敛到一处，
+// 三个值都从环境解析、可显式覆盖：
+//   · 有效亮度 —— 玻璃库的 `GlassTheme.brightnessOf`（内部三级级联：外部
+//     `brightnessResolver` → Cupertino 主题 → 系统亮度）；
+//   · 档位配置 —— 默认 [GlassRuntime.config]；[GlassScopeProvider] 订阅
+//     [GlassRuntime]，档位切换时**整树重建**，薄封装层（`glass_kit.dart`）
+//     经 [GlassScope.configOf] 自动跟档；
 //   · 玻璃隔离范围 —— `glassAllowed`，供内容层把「此范围内禁止玻璃」显式表达出来（`UI-04`）。
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'glass_runtime.dart';
 
-/// 玻璃作用域（[InheritedWidget]）。
-///
-/// 让下游不必各自去猜「现在是亮是暗、该用哪档、这里能不能放玻璃」。
-/// `UI-01` ② 的落点之一：[brightnessOf] 优先本作用域，其次交给库级联。
+/// 玻璃作用域（[InheritedWidget]）：下游不必各自去猜「现在是亮是暗、该用哪档、
+/// 这里能不能放玻璃」。`UI-01` ② 的落点之一：[brightnessOf] 优先本作用域，其次交给库级联。
 class GlassScope extends InheritedWidget {
   /// 创建一个玻璃作用域。
   const GlassScope({
@@ -44,7 +41,6 @@ class GlassScope extends InheritedWidget {
       maybeOf(context)?.brightness ?? GlassTheme.brightnessOf(context);
 
   /// 当前生效档位配置：优先本作用域；否则 [GlassRuntime.config]。
-  ///
   /// 薄封装层（`glass_kit.dart`）应经本方法取值——`dependOn` 建立的依赖保证
   /// 档位切换（作用域重建）时自动重跑 `build`（`UI-05` ③ 切档即生效）。
   static GlassTierConfig configOf(BuildContext context) =>
@@ -54,9 +50,8 @@ class GlassScope extends InheritedWidget {
   static GlassQuality qualityOf(BuildContext context) =>
       configOf(context).scrollQuality;
 
-  /// 该上下文是否允许玻璃存在（`UI-04` 隔离范围）。
-  ///
-  /// 无作用域时**宽松默认允许**——玻璃默认可见，只有显式标注为内容层的子树才禁止。
+  /// 该上下文是否允许玻璃存在（`UI-04` 隔离范围）；无作用域时**宽松默认允许**——
+  /// 玻璃默认可见，只有显式标注为内容层的子树才禁止。
   static bool allowsGlass(BuildContext context) =>
       maybeOf(context)?.glassAllowed ?? true;
 
@@ -68,7 +63,6 @@ class GlassScope extends InheritedWidget {
 }
 
 /// 从环境解析并下发 [GlassScope]（放在 `MaterialApp` 之下、业务页之上）。
-///
 /// **订阅 [GlassRuntime]**：生效档位变化（切档 / 「降低视觉特效」/ 自动降档）时
 /// 重建作用域，整棵子树的玻璃控件跟档（`UI-05` ③ / `UI-06` 的生效触点）。
 class GlassScopeProvider extends StatefulWidget {

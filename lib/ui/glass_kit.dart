@@ -3,35 +3,33 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // UI-04 红线（内容层不透明）—— 违反即返工
 // ══════════════════════════════════════════════════════════════════════════════
-// 1. 内容层**一律不透明**、**不得**嵌套玻璃。内容层包括：书架列表行、目录列表行、
-//    搜索结果行、生词本行、**统计排行列表行与统计图表**、**阅读页正文区 / 图片区 / 漫画页**、
-//    书籍详情页的封面区与简介文本区（PRD §11.2 + `UI-04`）。
-//    内容层统一用 [OpaqueContentSurface]（本文件是「不透明」的**唯一出口**），
-//    不要各页自己写 `Container(color:)`。
-// 2. `premium` **严禁**进入 `ListView` / `CustomScrollView` —— 放进滚动区会渲染异常
-//    （PRD §11.2 理由③ + §11.4）。滚动区一律 `standard` 或 `minimal`。
-// 3. 玻璃控件**不可嵌套** —— 玻璃卡片里只能放不透明内容（`GlassCard` 内不得再放
-//    `GlassButton` 等，PRD §11.4）。用 [isGlassWidget] 在 debug 下自检。
+// 1. 内容层**一律不透明**、**不得**嵌套玻璃（书架 / 目录 / 搜索 / 生词本 / 统计排行行与
+//    图表、阅读页正文 / 图片 / 漫画区、详情页封面与简介区，PRD §11.2 + `UI-04`）：
+//    统一用 [OpaqueContentSurface]（本文件是「不透明」的**唯一出口**），不要各页
+//    自己写 `Container(color:)`。
+// 2. `premium` **严禁**进入 `ListView` / `CustomScrollView`（滚动区会渲染异常，
+//    PRD §11.2 理由③ + §11.4）；滚动区一律 `standard` 或 `minimal`。
+// 3. 玻璃控件**不可嵌套**（`GlassCard` 内不得放 `GlassButton` 等，PRD §11.4），
+//    用 [isGlassWidget] debug 自检。
 //
 // ══════════════════════════════════════════════════════════════════════════════
-// UI-05 / UI-06 档位生效接线（M2b-T07 接线批）—— 本文件是**唯一消费点**
+// UI-05 / UI-06 档位生效接线 —— 本文件是**唯一消费点**
 // ══════════════════════════════════════════════════════════════════════════════
-// 每个薄封装在 `build` 里经 `GlassScope.configOf(context)` 取**生效配置**
-// （用户偏好 ×「降低视觉特效」× 低端钳制 × 帧预算降档；真值在 `glass_runtime.dart`）：
+// 每个薄封装在 `build` 里经 `GlassScope.configOf(context)` 取**生效配置**（用户偏好 ×
+// 「降低视觉特效」× 低端钳制 × 帧预算降档；真值在 `glass_runtime.dart`）：
 //   · 固定表面（顶栏 / 底栏）—— 高档不覆盖（库自动提升 `premium`，`UI-05` ①）；
 //     中 / 低档以 `GlassIsolationScope(defaultQuality:)` 显式钉 `standard` / `minimal`
-//     （库 `GlassThemeHelpers.resolveQuality` 优先级链：最近的隔离作用域 defaultQuality
-//     压过 `GlassScaffold` 内层的 `premium` 提示）；
+//     （库 `GlassThemeHelpers.resolveQuality` 优先级链：最近隔离作用域压过
+//     `GlassScaffold` 内层的 `premium` 提示）；
 //   · 滚动区 / 浮层 —— 显式传 `scrollQuality`（永不 `premium`）；
 //   · 「关」档（`UI-06` ②）—— 整体退化为 Material 纯色（[AppBar] / [NavigationBar] /
 //     [Scaffold] / [showDialog] / [showModalBottomSheet]），功能完整可用。
 //
-// 质量档位策略（PRD §11.3）：
-//   · 固定表面（顶栏 / 底栏）→ 由库的 `GlassScaffold → GlassIsolationScope` **自动提升为
-//     `premium`**，高档下本项目**不手动传 `premium`**；
-//   · 浮层（对话框 / 底部弹窗）与滚动区内的玻璃 → `standard`（高档）；
-//   · P0 **不使用** `adaptiveQuality` / `GlassAdaptiveScope`（`@experimental`，首启要跑
-//     约 3 秒基准，PRD §11.3）。自动降级走项目自己的 `PerfDegradePolicy` + `PerfFrameMonitor`。
+// 质量档位策略（PRD §11.3）：固定表面由库 `GlassScaffold → GlassIsolationScope`
+// **自动提升 `premium`**（高档下本项目**不手动传 `premium`**）；浮层与滚动区玻璃 →
+// `standard`（高档）；P0 **不使用** `adaptiveQuality` / `GlassAdaptiveScope`
+// （`@experimental`，首启要跑约 3 秒基准）——自动降级走项目自己的
+// `PerfDegradePolicy` + `PerfFrameMonitor`。
 import 'dart:async';
 
 // `showCupertinoDialog` 不经 `material.dart` 导出（同 `CupertinoPageTransitionsBuilder`
@@ -45,23 +43,14 @@ import 'glass_material.dart';
 import 'glass_runtime.dart';
 import 'glass_scope.dart';
 
-/// 玻璃对话框动作按钮类型（[GlassOverlays.showAlert] 的参数元素）——
-/// 在此 re-export，调用方只需 import 本文件。
-///
-/// 同 `GlassTab` / `GlassTabBarExtraButton`：导航壳层（`home_shell.dart`）需要它们
-/// 构造底栏标签，re-export 后全仓页面**不必直接 import 玻璃库**。
-///
-/// `GlassLargeTitle` / `GlassLargeTitleController` 同理（2026-09-29 设置页大标题）：
-/// 前者要作为 `CustomScrollView` 的首个 sliver，后者既是
-/// [GlassTopBar.largeTitleController] 的参数类型、又是页面 `State` 的成员
-/// ——不 re-export 的话，用到大标题的页面就必须直接 import 玻璃库。
-///
-/// `GlassToastType` 同理（[GlassOverlays.showToast] 的语义参数）。
-///
-/// 2026-10-12 参考图批新增 re-export：`GlassButton` / `GlassChip` /
-/// `GlassTextField`（书架搜索胶囊 / 分组 chips / 书库搜索页输入框的真玻璃实现）+
-/// `GlassDefaults` / `LiquidGlassSettings` / `LiquidRoundedRectangle`
-/// （控件级显式材质与胶囊形状）。理由同上：业务页面只 import 本文件。
+/// 玻璃库符号 re-export，业务页面只 import 本文件、**不必直接 import 玻璃库**：
+/// [GlassOverlays.showAlert] 的动作按钮、`GlassTab` / `GlassTabBarExtraButton`
+/// （导航壳层构造底栏标签）、`GlassLargeTitle`（`CustomScrollView` 首个 sliver）与
+/// `GlassLargeTitleController`（[GlassTopBar.largeTitleController] 的参数类型 +
+/// 页面 `State` 成员）、`GlassToastType`（[GlassOverlays.showToast] 的语义参数）、
+/// `GlassButton` / `GlassChip` / `GlassTextField`（搜索胶囊 / 分组 chips / 搜索输入框
+/// 的真玻璃实现）、`GlassDefaults` / `LiquidGlassSettings` / `LiquidRoundedRectangle`
+/// （控件级显式材质与胶囊形状）。
 export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
     show
         GlassButton,
@@ -83,19 +72,13 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
 /// **默认值**常量；运行时生效值见 [GlassKit.overlayQuality]（`UI-05` 接线后随档位变）。
 const GlassQuality kAppGlassQuality = GlassQuality.standard;
 
-/// 底栏选中指示块的**液态形变强度**（参考图批 2026-10-12）。
-///
-/// 库默认 `0.4`（iOS 26 的折中档，`glass_tab_bar.dart:802`）。参考图切换 tab
-/// 时指示块的拉宽与边缘 pinch 明显更强 ⇒提到 `0.75`：**不取 1.0**，满档在
-/// thickness 1.0 时 pinch 深度上限过大，指示块边缘会啃进图标（库 doc 明确
-/// pinch 幅度受 `thickness` 约束）。`0.0` = 关闭（退化为纯平移）。
+/// 底栏选中指示块的**液态形变强度**。库默认 `0.4`（iOS 26 折中档）；参考图的
+/// 拉宽 + 边缘 pinch 更强 ⇒ `0.75`。**不取 1.0**：满档在 thickness 1.0 时 pinch
+/// 深度上限过大、指示块边缘会啃进图标。`0.0` = 关闭（退化为纯平移）。
 const double kNavPinchStrength = 0.75;
 
-/// 底栏选中指示块**静止态**的磨砂强度（参考图批 2026-10-12）。
-///
-/// 库默认 `0.0` = 不画静置磨砂（`glass_tab_bar.dart:818`）。参考图的选中块
-/// 明显比底栏本体「亮一档」，靠的正是静置磨砂 + 指示块自身的浅色玻璃叠加。
-/// `0.0` = 关闭。
+/// 底栏选中指示块**静止态**的磨砂强度（库默认 `0.0` = 不画静置磨砂）：参考图的
+/// 选中块比底栏本体「亮一档」，靠静置磨砂 + 指示块自身的浅色玻璃叠加。`0.0` = 关闭。
 const double kNavRestingBlur = 0.6;
 
 /// 档位策略的运行时出口（生效值来自 [GlassRuntime.config]）。
@@ -195,7 +178,6 @@ class OpaqueContentSurface extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 /// 把 `defaultQuality` 钉进最近的 [GlassIsolationScope]（固定表面降档用）。
-///
 /// [GlassScaffold] 内层给条面包了 `GlassIsolationScope(defaultQuality: premium)`；
 /// 在条面**更内侧**再包一层同类型作用域即可覆盖该提示（库
 /// `GlassThemeHelpers.resolveQuality` 取最近作用域）。[quality] 为 `null`
@@ -210,17 +192,12 @@ Widget _withFixedSurfaceQuality(GlassQuality? quality, Widget bar) {
 }
 
 /// 把顶栏标题包成「随手滚动淡入」（[GlassTopBar.largeTitleController] 的
-/// **关档等价实现**）。
-///
-/// 公式照抄库 `glass_app_bar.dart:426-436`：先取 `collapseProgress` 的**后半段**
-/// （`(p - 0.5) / 0.5`），再过 `Curves.easeOut`——即大标题走完一半才开始出现、
-/// 走完才完全可见。两处**必须逐字一致**，否则切档（玻璃 ⇄ 纯色）会出现
-/// 标题明暗跳变。
-///
-/// 为什么必须自己写：玻璃档走 [GlassAppBar]，它内建 `ListenableBuilder`
-/// （`glass_app_bar.dart:421-438`）；**关档**退化成 Material [AppBar]，
-/// `AppBar` 不认 `GlassLargeTitleController`。不补这段，「内容层大标题 + 顶栏标题」
-/// 会同时可见（两条一模一样的「设置」上下叠着）。
+/// **关档等价实现**）。公式**必须与库 `glass_app_bar.dart` 的实现逐字一致**
+/// （先取 `collapseProgress` 后半段 `(p - 0.5) / 0.5`、再过 `Curves.easeOut`），
+/// 否则切档（玻璃 ⇄ 纯色）会出现标题明暗跳变。为什么自己写：玻璃档走
+/// [GlassAppBar]（内建 `ListenableBuilder`），**关档**退化成 Material [AppBar]、
+/// 不认 `GlassLargeTitleController`——不补这段，「内容层大标题 + 顶栏标题」
+/// 会同时可见（两条一模一样的标题上下叠着）。
 Widget? _fadeInBarTitle(Widget? title, GlassLargeTitleController? controller) {
   if (title == null || controller == null) return title;
   return ListenableBuilder(
@@ -273,7 +250,7 @@ class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
   /// 工具条高度。
   final double toolbarHeight;
 
-  /// 大标题 ⇄ 顶栏标题的收起联动控制器（可选；2026-09-29 设置页大标题用）。
+  /// 大标题 ⇄ 顶栏标题的收起联动控制器（可选；设置页大标题用）。
   ///
   /// 传入后顶栏标题**随滚动淡入**：内容层大标题滚走一半才开始出现、滚完完全可见。
   /// **必须**与内容层 `GlassLargeTitle` 共用同一个 `GlassLargeTitleController`
@@ -319,59 +296,39 @@ class GlassTopBar extends StatelessWidget implements PreferredSizeWidget {
 }
 
 /// 导航层底栏（薄封装 [GlassTabBar.bottom]；库的原生形态即 **iOS 26 浮动胶囊**——
-/// 左右 / 底部各留内边距、圆角、64 高，**不是贴底通栏**）。
+/// 左右 / 底部各留内边距、圆角、64 高，**不是贴底通栏**）。显式传档位（高档
+/// `null` = 吃 `GlassScaffold` 的 `premium` 提示）；「关」档退化为 Material [NavigationBar]。
 ///
-/// 显式传档位（高档 `null` = 吃 `GlassScaffold` 的 `premium` 提示）；
-/// 「关」档退化为 Material [NavigationBar]。
-///
-/// 2026-10-12 参考图批：显式传 `settings: GlassMaterial.settingsFor(context)`——
-/// 库的底栏**不吃主题**（`tab_bar_bottom_layout.dart:256` 用私有预设
-/// `kBottomBarGlassDefaults`：blur 3 / 折射 1.59 / 玻璃色 α0.24，iOS News 风），
-/// 不传就永远是那套；且 [GlassThemeSettings] 表达不了 `whitenStrength`，
-/// 增白纱罩只能在控件级给。**形态不变**（负责人 2026-10-12 拍板：保持悬浮胶囊，
-/// 只升材质——参数与参考图对照见 `glass_material.dart`）。
-///
-/// 各尺寸参数的默认值与库一致——传出去等价于不传，**只作显式化**，
-/// 便于将来按平台/档位微调（`UI-05`）。**不暴露 `barBorderRadius`**：
-/// 库的默认圆角是私有常量，硬编码会与库升级脱钩。
+/// 显式传 `settings: GlassMaterial.settingsFor(context)`：库的底栏**不吃主题**
+/// （私有预设 `kBottomBarGlassDefaults`：blur 3 / 折射 1.59 / 玻璃色 α0.24），
+/// 不传就永远是那套；且 [GlassThemeSettings] 表达不了 `whitenStrength`，增白纱罩
+/// 只能在控件级给。**形态不变**（拍板：保持悬浮胶囊、只升材质，见 `glass_material.dart`）。
+/// 各尺寸参数与库默认一致——**只作显式化**，便于按平台 / 档位微调（`UI-05`）；
+/// **不暴露 `barBorderRadius`**（库默认圆角是私有常量，硬编码会与库升级脱钩）。
 ///
 /// ══════════════════════════════════════════════════════════════════════════
-/// 触摸反馈口径（2026-09-29 拍板：移除「放大」）
+/// 触摸反馈口径（拍板：移除「放大」）
 /// ══════════════════════════════════════════════════════════════════════════
-/// 负责人「移除导航栏放大特效」。库 `GlassTabBar` 的 `interactionBehavior` 缺省是
-/// **`GlassInteractionBehavior.full`**（= 方向光晕 **+** 物理弹簧缩放；doc 自述
-/// "the glass **inflates** subtly (bottom-anchored spring) on touch"），本项目原先
-/// **未透传** → 点击底栏时整个胶囊会膨胀（同 `showSheet` 未透传 `interactionScale`
-/// 一类坑：薄封装没暴露的参数会以库默认值静默生效）。
-///
-/// 现显式传 [GlassInteractionBehavior.glowOnly]（= 只手指出现柔和高光、**不做形变**，
-/// 库 doc 正是推荐给「flat navigation bars that should remain spatially stable
-/// while still feeling reactive to touch」；消费点 `tab_bar_bottom_layout.dart:390`
-/// 据此把 `interactionScale` 钉成 `1.0`）。
-///
-/// **若连高光也要去掉**：改传 `GlassInteractionBehavior.none` 即可（一行，
-/// 该档 doc："fully rigid glass, no directional glow"）。
+/// 库 `GlassTabBar` 的 `interactionBehavior` 缺省是 `GlassInteractionBehavior.full`
+/// （= 方向光晕 **+** 物理弹簧缩放），薄封装不透传就会以库默认值静默生效（同
+/// `showSheet` 未透传 `interactionScale` 一类坑）。故显式传
+/// [GlassInteractionBehavior.glowOnly]（只出柔和高光、**不做形变**）。
+/// **若连高光也要去掉**：改传 `GlassInteractionBehavior.none`（一行）。
 ///
 /// ══════════════════════════════════════════════════════════════════════════
-/// 指示块形变 vs 按下缩放：两套独立机制（参考图批 2026-10-12）
+/// 指示块形变 vs 按下缩放：两套独立机制
 /// ══════════════════════════════════════════════════════════════════════════
-/// 参考图的招牌动效是「**切换 tab 时指示块横向拉宽、边缘向内 pinch 成透镜、
-/// 静置时带磨砂**」。查库源码确认这三件事全都不在 `interactionBehavior` 管辖
-/// 范围内，而是底栏指示块自己的机制：
-///
 /// | 观感 | 库参数 | 本项目口径 |
 /// |---|---|---|
-/// | 整条胶囊被按下时膨胀/回弹 | `interactionBehavior`（`full` 含弹簧缩放） | **保持 [GlassInteractionBehavior.glowOnly]**（2026-09-29 拍板） |
+/// | 整条胶囊被按下时膨胀/回弹 | `interactionBehavior`（`full` 含弹簧缩放） | **保持 [GlassInteractionBehavior.glowOnly]** |
 /// | 指示块切换时的拉宽 + 边缘 pinch | `indicatorPinchStrength` | [kNavPinchStrength]（库默认 0.4 → 0.75） |
 /// | 指示块静止时的磨砂 | `innerBlur`（库默认 0.0 = 关闭） | [kNavRestingBlur] |
 ///
-/// 指示块滑动的回弹弹簧由库固定为 iOS 26 默认 jelly 弹簧（`bottom` 工厂**不透传**
-/// `springDescription`，`glass_tab_bar.dart:240-296` 逐参数转发可证），本封装
-/// 不暴露无效开关。
-///
-/// ⚠️「移除放大」的拍板**不需要撤销**：负责人当时指的是**按下时整个胶囊膨胀**
-/// （`tab_bar_bottom_layout.dart:390` 据此把 `interactionScale` 钉成 1.0），
-/// 与指示块在切换时的形变是两回事。两条同时成立即库文档推荐的组合。
+/// 指示块滑动的回弹弹簧由库固定（`bottom` 工厂**不透传** `springDescription`），
+/// 本封装不暴露无效开关。
+/// ⚠️「移除放大」的拍板**不需要撤销**：它指的是**按下时整个胶囊膨胀**（消费点
+/// 据此把 `interactionScale` 钉成 1.0），与指示块切换时的形变是两回事，
+/// 两条同时成立即库文档推荐的组合。
 class GlassNavBar extends StatelessWidget {
   /// 创建玻璃底栏（默认即浮动胶囊形态）。
   const GlassNavBar({
@@ -405,21 +362,17 @@ class GlassNavBar extends StatelessWidget {
   final ValueChanged<int> onTabSelected;
 
   /// 胶囊内的醒目附加按钮（贴右侧、与标签区分开，如「＋」/ 主操作）。
-  ///
-  /// 「关」档（Material [NavigationBar]）**不渲染**该按钮——退化档以功能完整为准，
-  /// 需要它的页面应另有入口（如顶栏按钮）。
+  /// 「关」档（Material [NavigationBar]）**不渲染**该按钮——需要它的页面应
+  /// 另有入口（如顶栏按钮）。
   final GlassTabBarExtraButton? extraButton;
 
-  /// 是否作为**独立浮层**使用（没有 [GlassScaffold] 祖先，例如 `Stack` 里浮起的胶囊）。
-  ///
-  /// 库的固定表面 `premium` 提升来自 `GlassScaffold` 内层注入的
-  /// `GlassIsolationScope(defaultQuality: premium)`（`UI-05 ①`）。脱离该祖先时
-  /// `GlassThemeHelpers.resolveQuality` 会落到 `fallback = GlassQuality.standard`，
-  /// 高档就跟不上设计意图。`standalone: true` 时本封装**只在高档**显式声明
-  /// `premium`，语义与「库自动提升」等价——**不是「写死 premium」**：
-  /// 中 / 低档仍由 [GlassScope] 的 `fixedSurfaceQualityOverride` 钉 standard / minimal。
-  ///
-  /// `GlassNavScaffold` 内的常规用法保持 `false`。
+  /// 是否作为**独立浮层**使用（没有 [GlassScaffold] 祖先，例如 `Stack` 里浮起的
+  /// 胶囊）。库的固定表面 `premium` 提升来自 `GlassScaffold` 内层注入的
+  /// `GlassIsolationScope(defaultQuality: premium)`（`UI-05` ①）；脱离该祖先时
+  /// `GlassThemeHelpers.resolveQuality` 落到 `fallback = standard`，高档跟不上
+  /// 设计意图。`standalone: true` 时本封装**只在高档**显式声明 `premium`，语义与
+  /// 「库自动提升」等价——**不是「写死 premium」**（中 / 低档仍由 [GlassScope] 的
+  /// `fixedSurfaceQualityOverride` 钉 standard / minimal）。常规用法保持 `false`。
   final bool standalone;
 
   /// 胶囊高度。
@@ -452,23 +405,16 @@ class GlassNavBar extends StatelessWidget {
   /// 未选中态图标颜色。
   final Color? unselectedIconColor;
 
-  /// 选中指示块（滑动胶囊）的**液态形变强度**。
-  ///
-  /// 参考图批（2026-10-12）：切换 tab 时指示块横向拉宽、边缘向内 pinch 成
-  /// 透镜。库默认 `0.4`（iOS 26 折中档），参考图更接近「看得见的液态」⇒ 提到
-  /// [kNavPinchStrength]。`1.0` = 库文档的 Apple 满档（`thickness == 1.0` 时
+  /// 选中指示块的**液态形变强度**（切换 tab 时横向拉宽、边缘向内 pinch 成透镜）：
+  /// 库默认 `0.4`，提到 [kNavPinchStrength]。`1.0` = 满档（thickness 1.0 时的
   /// pinch 深度上限），`0.0` = 完全关闭。
-  ///
-  /// ⚠️ 与 [GlassNavBar] 的「触摸反馈口径」**互不干涉**：pinch 管指示块在
-  /// **切换/拖动**时的形变，`interactionBehavior` 管**整条胶囊被按下**时的
-  /// 缩放。前者要、后者不要（2026-09-29 拍板），两者可同时成立。
+  /// ⚠️ 与「触摸反馈口径」**互不干涉**：pinch 管指示块**切换/拖动**时的形变，
+  /// `interactionBehavior` 管**整条胶囊被按下**时的缩放；前者要、后者不要，
+  /// 两者可同时成立。
   final double indicatorPinchStrength;
 
-  /// 指示块**静止态**的磨砂强度（`0.0` = 关闭，库默认）。
-  ///
-  /// Apple 式「frost at rest」：静置时指示块带磨砂、与背景明确分层；滑动时
-  /// 磨砂化开、morph 成液态透镜（`animated_glass_indicator.dart:135-141`）。
-  /// 参考图的选中块明显比底栏更「亮一档」，一部分来自这个参数。
+  /// 指示块**静止态**的磨砂强度（`0.0` = 关闭，库默认）：静置带磨砂、与背景
+  /// 明确分层，滑动时磨砂化开、morph 成液态透镜；选中块「亮一档」的一部分来源。
   final double indicatorInnerBlur;
 
   @override
@@ -504,7 +450,7 @@ class GlassNavBar extends StatelessWidget {
       indicatorColor: indicatorColor,
       selectedIconColor: selectedIconColor,
       unselectedIconColor: unselectedIconColor,
-      // 参考图批 2026-10-12：选中块滑动时的液态形变 + 静置磨砂。
+      // 选中块滑动时的液态形变 + 静置磨砂。
       // 这两项**不改按下反馈**（仍是下方glowOnly）——`interactionBehavior` 管
       // 整条胶囊被按下的缩放，pinch / innerBlur 管指示块自身的形变，两套独立。
       indicatorPinchStrength: indicatorPinchStrength,
@@ -519,8 +465,8 @@ class GlassNavBar extends StatelessWidget {
       // 触摸反馈：移除「放大」（不做形变、保留手指位置的柔和高光）
       // —— 见 [GlassNavBar] doc 的「触摸反馈口径」。库默认是 `full`（光晕 + 弹簧缩放）。
       interactionBehavior: GlassInteractionBehavior.glowOnly,
-      // 材质：控件级显式设置（库底栏不吃主题 + 主题无 whitenStrength，
-      // 2026-10-12 参考图批；固定表面档位仍由上面的 quality 逻辑决定）。
+      // 材质：控件级显式设置（库底栏不吃主题 + 主题无 whitenStrength；
+      // 固定表面档位仍由上面的 quality 逻辑决定）。
       settings: GlassMaterial.settingsFor(context),
     );
   }
@@ -555,19 +501,14 @@ class GlassNavScaffold extends StatelessWidget {
   /// 背景层（仅玻璃档生效；退化档由 Scaffold 自身背景承担）。
   final Widget? background;
 
-  /// 正文是否铺满全屏、从顶栏下**穿过**（edge-to-edge；2026-09-29 书架浮动头部）。
+  /// 正文是否铺满全屏、从顶栏下**穿过**（edge-to-edge；`UI-02` ②）。
   ///
-  /// 默认 `false` = 正文避让顶栏（`top: topPad + appBarHeight`），多数页面保持
-  /// 此形态。传 `true` 后正文从 y=0 起、滚动时从玻璃顶栏下穿过，顶栏下方的
-  /// 内容透出**磨砂模糊**（`GlassScrollEdgeStyle.blur`，即 PRD `UI-02` ②
-  /// 「滚动时顶栏下内容透出模糊而非纯色遮挡」的正式落地形态——此前
-  /// `extendBody: false` 连渐隐都关着，该验收项实际未满足）。
-  ///
-  /// **传 `true` 的页面必须自行保证「首行不被盖住」**：给滚动内容的
-  /// `padding.top` 留出 `状态栏 + 顶栏高 + 间距`（书架见
-  /// `shelfGridPadding`），否则网格首行会被浮动顶栏永久压住——这正是
-  /// 2026-09-29 上午真机截图实证过的 bug，`test/ui/glass_nav_inset_test.dart`
-  /// 对**默认 `false`** 保留回归锁。
+  /// 默认 `false` = 正文避让顶栏，多数页面保持此形态。传 `true` 后正文从 y=0 起、
+  /// 滚动时从玻璃顶栏下穿过，顶栏下方内容透出**磨砂模糊**（`GlassScrollEdgeStyle.blur`，
+  /// 即 PRD `UI-02` ②「滚动时顶栏下内容透出模糊而非纯色遮挡」的正式落地形态）。
+  /// **传 `true` 的页面必须自行保证「首行不被盖住」**：给滚动内容的 `padding.top`
+  /// 留出 `状态栏 + 顶栏高 + 间距`（书架见 `shelfGridPadding`），否则网格首行会被
+  /// 浮动顶栏永久压住；`test/ui/glass_nav_inset_test.dart` 对**默认 `false`** 保留回归锁。
   final bool extendBody;
 
   @override
@@ -591,31 +532,24 @@ class GlassNavScaffold extends StatelessWidget {
       appBar: appBar,
       bottomBar: bottomBar,
       background: background,
-      // [extendBody] 语义与历史注释（2026-09-29 演进，原「必须 false」口径收窄）：
+      // [extendBody] 语义：库默认 `true` → 正文铺满整屏从 y=0 起；`false` →
+      // 正文避让顶栏。默认保持 `false`（漏传该参数曾把书架筛选栏顶进状态栏、
+      // 网格首行被顶栏盖住）；库文档声称会「automatically add a top spacer」，
+      // 但全文**零处实现**——以代码为准。
       //
-      // 库默认 `extendBody: true` → `glass_scaffold.dart:487-489` 走
-      // `Positioned.fill`，正文铺满整屏从 y=0 起。默认 `false` 走
-      // `:491-494` 的 `top: topPad + appBarHeight`（正文避让顶栏）——
-      // 2026-09-29 上午批次① `06063c8` 漏传该参数曾把书架筛选栏顶进状态栏、
-      // 网格首行被顶栏盖住（真机截图实证），故默认保持 `false`；
-      // 库文档 `:153` / `:83` 声称会「automatically add a top spacer」，
-      // 但 1.7.0 全文 grep 只有这三处文字、**零处实现**——以代码为准。
+      // 书架页显式传 `true`：内容 edge-to-edge、从浮动玻璃头部下穿过，首行保护
+      // 改由页面自己的 `padding.top` 承担（见 [extendBody] 文档）。
+      // **传 true 必须配套内容顶部留白。**
       //
-      // 书架页（2026-09-29 浮动头部批）显式传 `true`：内容 edge-to-edge、
-      // 从浮动玻璃头部下穿过，首行保护改由页面自己的 `padding.top` 承担
-      // （见 [extendBody] 文档）。**传 true 必须配套内容顶部留白。**
-      //
-      // 底部不受影响：本项目底栏是 `home_shell` 自己 `Positioned` 的
-      // 浮动胶囊，**不走** `GlassScaffold.bottomBar`，故 `bottomBar == null`
-      // → 两档 `bottom` 恒 0，底部留白仍由各页的 `kShellBottomInset` 独立承担。
+      // 底部不受影响：本项目底栏是 `home_shell` 自己 `Positioned` 的浮动胶囊，
+      // **不走** `GlassScaffold.bottomBar`，故 `bottomBar == null` → 两档 `bottom`
+      // 恒 0，底部留白仍由各页的 `kShellBottomInset` 独立承担。
       extendBody: extendBody,
-      // 边缘效果：**blur 档**（`UI-02` ②「顶栏下内容透出模糊」）。
-      // 库默认 `soft` 是「内容渐隐进背景」= 接近该验收项否定的「纯色遮挡」；
-      // `blur` 用 `ProgressiveBlur` 把穿顶栏滚动的内容渐进磨砂（顶部 sigma 最高），
-      // 与参考图（HyperOS 主题商店：搜索胶囊下横幅磨砂透出）同形态。
-      // 仅 `extendBody: true` 时生效（`:458` 的 `if (extendBody && …)`）。
-      // 代价（库文档自述）：Skia/Android 上 `BackdropFilterLayer` 逐帧合成，
-      // 比 soft 略贵——要退回渐隐档改传 `GlassScrollEdgeStyle.soft`（一行）。
+      // 边缘效果：**blur 档**（`UI-02` ②「顶栏下内容透出模糊」）。库默认 `soft`
+      // 是「内容渐隐进背景」= 接近该验收项否定的「纯色遮挡」；`blur` 把穿顶栏
+      // 滚动的内容渐进磨砂（顶部 sigma 最高）。仅 `extendBody: true` 时生效。
+      // 代价（库文档自述）：Skia/Android 上 `BackdropFilterLayer` 逐帧合成，比
+      // soft 略贵——要退回渐隐档改传 `GlassScrollEdgeStyle.soft`（一行）。
       edgeStyle: GlassScrollEdgeStyle.blur,
     );
   }
@@ -628,66 +562,42 @@ class GlassNavScaffold extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // 浮层共有配置（对话框 / 底部弹窗 / 轻提示 三处入口的**唯一**参数源）
 // ---------------------------------------------------------------------------
-//
-// 2026-09-30 批 —— 负责人「玻璃弹框的共有参数，采用统一配置」。
-//
-// 改之前的病灶：遮罩色与形态参数**散在** `showAlert` / `showSheet` 各自的默认值
-// 与方法体里，且四个入口的遮罩**来自三个不同源头**（已实读库与 SDK 源码核清）：
-//   · `showSheet` 玻璃档 / 关档 —— 本文件原先的 `kSheetBarrierColor` = `0x3D000000`；
-//   · `showAlert` 玻璃档 —— 库 `GlassDialog.show` 的 `barrierColor` 是**死参数**
-//     （`glass_dialog.dart:268` 声明、`:271-283` 调 `showCupertinoDialog` 时**未透传**）
-//     ⇒ 实际吃 `kCupertinoModalBarrierColor`（`cupertino/route.dart:53-56`：
-//     亮 `0x33000000` α0.2 / 暗 `0x7A000000` **α0.478**）；
-//   · `showAlert` 关档 —— Material `DialogRoute` 的 `super.barrierColor = Colors.black54`
-//     （`material/dialog.dart:1825`）= `0x8A000000` **α0.541**，正是 2026-09-29 已判为
-//     「太重的灰」的同一个值 —— 属**已拍板口径没落到确认框上**，不只是风格分歧。
-//
-// `AskUserQuestion` 两项拍板（2026-09-30）：① 四路遮罩**全统一**；② 统一范围 =
-// **遮罩 + 形态 + 尺寸**。
-//
-// 因此 [OverlayStyle] 成为本项目浮层参数的**唯一事实源**：三个入口一律从这里取，
-// **不要在方法体里另写默认值**。玻璃档与「关」档共用 [OverlayStyle.barrier]（两档
-// 观感一致）；其余「玻璃专属」项（形态 / 尺寸）在关档退化为 Material 时**不适用**
-// ——关档走平台标准外观（沿用原口径：`maxWidth` 等是玻璃档参数，见 `showAlert` 注释）。
+// 背景：遮罩色与形态参数曾散在 `showAlert` / `showSheet` 各自的默认值与方法体里，
+// 四个入口的遮罩来自三个不同源头（库 `GlassDialog.show` 的 `barrierColor` 是**死参数**、
+// 未透传；Material `DialogRoute` 默认 `Colors.black54` = 已判「太重的灰」那个值）。
+// 拍板：① 四路遮罩**全统一**；② 统一范围 = **遮罩 + 形态 + 尺寸**。故 [OverlayStyle]
+// 是本项目浮层参数的**唯一事实源**：三个入口一律从这里取，**不要在方法体里另写
+// 默认值**。玻璃档与「关」档共用 [OverlayStyle.barrier]（两档观感一致）；其余
+// 「玻璃专属」项（形态 / 尺寸）在关档退化为 Material 时**不适用**——关档走平台
+// 标准外观（`maxWidth` 等是玻璃档参数，见 `showAlert` 注释）。
 
 /// 浮层（对话框 / 底部弹窗 / 轻提示）的共有配置——**本项目浮层参数的唯一事实源**。
 ///
-/// 改这里即三处入口同改；同理，**不要在 [GlassOverlays.showAlert] /
+/// 改这里即三处入口同改；**不要在 [GlassOverlays.showAlert] /
 /// [GlassOverlays.showSheet] 的方法体里另写常量**（那就又散回去了）。
 /// 契约测试：`test/ui/overlay_style_test.dart`（常量字面量）+
 /// `test/ui/glass_sheet_form_test.dart`（玻璃档四路遮罩与形态尺寸的透传）。
 abstract final class OverlayStyle {
   /// 模态遮罩色——**四个入口**（玻璃/关 × 弹窗/确认框）共用同一色源。
   ///
-  /// 2026-09-29 修「长按书卡，**在操作单出现之前**整屏先蒙一层灰」时引入，
-  /// 2026-09-30 由「只管弹窗」扩到「管全部模态浮层」。
+  /// **为什么必须压淡**（不只是审美）：遮罩与弹窗共用 350ms 转场，而弹窗从屏幕外
+  /// 滑入 ⇒ 头 ~150ms「灰幕已到场、弹窗还没进屏」，深灰在那一瞬就是一条**纯灰幕**
+  /// （详见 `GlassOverlays.showSheet`）。**取值** `0x3D000000`（α ≈ **0.24**，约库
+  /// 默认的 45%）——既保留「背后内容退到次要层」的模态语义（`UI-03` 浮层玻璃要求
+  /// 遮罩在场、「点遮罩关闭」也要有可点的遮罩面），又不会在弹窗到位前形成突兀
+  /// 灰幕。**只换色源、不动时序**（同 `bookCoverShadowOf` 口径）：时序归库，要改
+  /// 就得抄一份 `showGeneralDialog` 并放弃库的液态玻璃渲染，代价不成比例。
   ///
-  /// **为什么必须压淡**（不只是审美）：`GlassSheet.show` 的遮罩与弹窗共用 350ms
-  /// `transitionDuration`，而弹窗是从 `Offset(0, 1)`（屏幕外）往上滑的
-  /// （`glass_sheet.dart:320-332`）⇒ 头 ~150ms 是「灰幕已到场、弹窗还没进屏」。
-  /// 逐帧实测：50ms 时遮罩 α 已 0.093、100ms 已 **0.262**，而弹窗 top 仍 **788**
-  /// （屏高 700，即完全在屏外）。0.54 的深灰在那一瞬就是一条**纯灰幕**，
-  /// 这正是负责人反馈的「出现弹框前会有灰色背景」。详见 `GlassOverlays.showSheet`。
-  ///
-  /// **取值**：`0x3D000000`（α = 61/255 ≈ **0.24**）。约等于库默认的 45%——
-  /// 既保留「背后内容退到次要层」的模态语义（`UI-03` 浮层玻璃要求遮罩在场、
-  /// 「点遮罩关闭」也要有可点的遮罩面），又不会在弹窗到位前形成一条突兀的灰幕。
-  /// **只换色源、不动时序**（同 `bookCoverShadowOf` 的口径）：时序归库，
-  /// 要改就得抄一份 `showGeneralDialog` 并放弃库的液态玻璃渲染，代价不成比例。
-  ///
-  /// ⚠️ **统一带来的代价（真机对照项）**：暗色主题下确认框的遮罩由 Cupertino 的
-  /// α0.478 变淡到 0.239，模态压迫感会明显减弱；若真机上觉得确认框「压不住背景」，
-  /// **只调本项**即可（四个入口会同步变重，这正是"统一"的本意）。
+  /// ⚠️ **统一带来的代价（真机对照项）**：暗色主题下确认框遮罩变淡、模态压迫感
+  /// 减弱；若真机觉得「压不住背景」，**只调本项**（四个入口同步变重，正是
+  /// 「统一」的本意）。
   static const Color barrier = Color(0x3D000000);
 
   // ── 形态：触摸反馈 ──────────────────────────────────────────────────────────
-  // 2026-09-29 拍板「去除弹框点击会有放大高亮特效」。三项均为本薄封装原先吃掉的
-  // **库默认值**（同 `GlassScaffold.extendBody` 库默认 `true` 一类坑），故在此写死。
-  // 症状 ↔ 库参数逐一对上：
-  //   · 「点击放大」 = `interactionScale`（库默认 **1.01**，`stretch.dart:249`
-  //     按下时 `pressed ? interactionScale : 1.0`）；
-  //   · 「点击高亮」 = `enableInteractionGlow`（库默认 true，"Glint follows finger"）
-  //     + `enableSaturationGlow`（库默认 true，"Pulsation on touch"），两条独立通路。
+  // 拍板「去除弹框点击放大高亮特效」。三项均为薄封装原先吃掉的**库默认值**
+  // （同 `GlassScaffold.extendBody` 一类坑），故在此写死：「点击放大」=
+  // `interactionScale`；「点击高亮」= `enableInteractionGlow` + `enableSaturationGlow`
+  // （两条独立通路）。
 
   /// 按压缩放系数——`1.0` 即**无放大**。
   static const double interactionScale = 1.0;
@@ -699,15 +609,11 @@ abstract final class OverlayStyle {
   static const bool saturationGlow = false;
 
   // ── 形态：拖拽 ─────────────────────────────────────────────────────────────
-  // 2026-09-29 拍板「不需要上划的弹框，去除小横条」。
-  // 「上划」的确切含义 = **禁止拖拽关闭手势**：`enableDrag: false` 后库的
-  // `_DismissibleSheetWrapper` **完全不加 `GestureDetector`**（`glass_sheet.dart:433`
-  // 的 if 分支跳过，直接返回 child，零副作用）；**底部滑入的入场动画保留**——
-  // `GlassSheet.show` 的 `transitionBuilder` 是独立的 `SlideTransition`
-  // （`glass_sheet.dart:319`），与 `enableDrag` 无关；**点遮罩关闭不变**。
+  // 拍板「不需要上划的弹框，去除小横条」：「上划」= **禁止拖拽关闭手势**
+  // （`enableDrag: false` 后库完全不加拖拽手势、零副作用；**底部滑入的入场动画
+  // 保留**、与 `enableDrag` 无关；**点遮罩关闭不变**）。
 
-  /// 顶部小横条——关（库内还带一个覆盖顶部 44px 的可拖拽 `handleZone`，
-  /// `glass_modal_sheet_internal.dart:294`）。
+  /// 顶部小横条——关（库内还带一个覆盖顶部的可拖拽 `handleZone`）。
   static const bool dragIndicator = false;
 
   /// 拖拽关闭手势——关。
@@ -750,14 +656,12 @@ abstract final class GlassOverlays {
 
   /// 弹出玻璃确认框（薄封装 [GlassDialog.show]；「关」档退化 [showDialog]）。
   ///
-  /// 返回值语义与 `showDialog<T>` 一致：动作回调里
-  /// `Navigator.pop(ctx, value)`，barrier 关闭（[barrierDismissible]）返回 `null`。
-  /// [barrierDismissible] 缺省 `false`（库默认）——确认框须显式选择，防误触取消。
-  ///
-  /// ⚠️ **玻璃档不走 `GlassDialog.show`**（缘由见方法体内注释：它的 `barrierColor`
-  /// 是**死参数**，无法经由它统一遮罩）。外观与行为与原先逐项等价，只是遮罩色与
-  /// `maxWidth` 都改从 [OverlayStyle] 取；`test/ui/glass_sheet_form_test.dart`
-  /// 有断言钉住这两项。
+  /// 返回值语义与 `showDialog<T>` 一致：动作回调里 `Navigator.pop(ctx, value)`，
+  /// barrier 关闭（[barrierDismissible]）返回 `null`。[barrierDismissible] 缺省
+  /// `false`（库默认）——确认框须显式选择，防误触取消。
+  /// ⚠️ **玻璃档不走 `GlassDialog.show`**（它的 `barrierColor` 是**死参数**，无法
+  /// 经由它统一遮罩，缘由见方法体内注释）。外观与行为逐项等价，只是遮罩色与
+  /// `maxWidth` 都改从 [OverlayStyle] 取（`test/ui/glass_sheet_form_test.dart` 钉住）。
   static Future<T?> showAlert<T>({
     required BuildContext context,
     required List<GlassDialogAction> actions,
@@ -774,10 +678,8 @@ abstract final class GlassOverlays {
       return showDialog<T>(
         context: context,
         barrierDismissible: barrierDismissible,
-        // 遮罩统一（2026-09-30）：Material `DialogRoute` 的默认是
-        // `super.barrierColor = Colors.black54`（`material/dialog.dart:1825`，
-        // `0x8A000000`、**α0.541**）——正是 2026-09-29 已判为「太重」的那个值，
-        // 当时只改了底部弹窗、漏了确认框。这里显式换成共用的 [OverlayStyle.barrier]。
+        // 遮罩统一：Material `DialogRoute` 默认 `Colors.black54`（`0x8A000000`、
+        // **α0.541**）正是已判「太重」的那个值，这里显式换成共用的 [OverlayStyle.barrier]。
         barrierColor: OverlayStyle.barrier,
         builder: (BuildContext dialogContext) => AlertDialog(
           title: title == null ? null : Text(title),
@@ -839,69 +741,31 @@ abstract final class GlassOverlays {
   /// 避免纵向滚动视图嵌套（外层会吃掉内层的拖拽手势）。
   ///
   /// ══════════════════════════════════════════════════════════════════════════
-  /// 本项目弹层形态口径（2026-09-29 拍板）—— 参数源自 2026-09-30 起**统一收在
-  /// [OverlayStyle]**（本方法只负责透传，不再自带默认值）
+  /// 本项目弹层形态口径 —— 参数**统一收在 [OverlayStyle]**（本方法只负责透传）
   /// ══════════════════════════════════════════════════════════════════════════
-  /// 负责人「去除弹框点击会有放大高亮特效，不需要上划的弹框，去除小横条」；
-  /// `AskUserQuestion` 两项拍板：①「上划」= **禁止拖拽关闭手势**（保留底部滑入动画）；
-  /// ② **全部弹层统一生效**（改本处即 6 处弹层同时生效）。
+  /// 拍板「去除弹框点击放大高亮特效、不需要上划的弹框、去除小横条」：①「上划」=
+  /// **禁止拖拽关闭手势**（保留底部滑入动画）；② **全部弹层统一生效**。症状与库
+  /// 参数一一对应（原先吃库默认值，同 `GlassScaffold.extendBody` 一类坑，故写死）：
+  /// 「点击放大」= `interactionScale` → 1.0；「点击高亮」= `enableInteractionGlow`
+  /// + `enableSaturationGlow` → 均关；「小横条」= `showDragIndicator` → 关；
+  /// 「上划」= `enableDrag` → 关。
   ///
-  /// 三项症状与库参数**逐一对上**（均为本薄封装原先吃掉的库默认值，同
-  /// `GlassScaffold.extendBody` 库默认 `true` 一类坑，故这里直接写死）：
-  ///   · 「点击放大」 = `interactionScale`（库默认 **1.01**，doc 自述
-  ///     "Visual scale feedback on touch"；库 `stretch.dart:249` 按下时
-  ///     `pressed ? interactionScale : 1.0`）→ 传 **1.0** 即无放大；
-  ///   · 「点击高亮」 = `enableInteractionGlow`（默认 `true`，"Glint follows finger"）
-  ///     + `enableSaturationGlow`（默认 `true`，"Pulsation on touch"）→ 均关；
-  ///   · 「小横条」   = `showDragIndicator`（默认 `true`）→ 关（库内还带一个
-  ///     覆盖顶部 44px 的可拖拽 `handleZone`，见 `glass_modal_sheet_internal.dart:294`）；
-  ///   · 「上划」     = `enableDrag`（默认 `true`）→ 关。
-  ///
-  /// **「上划」的确切含义**：`enableDrag: false` 后库的 `_DismissibleSheetWrapper`
-  /// **完全不加 `GestureDetector`**（`glass_sheet.dart:433` 的 `if (widget.enableDrag)`
-  /// 分支跳过，直接返回 child），零副作用；**底部滑入的入场动画保留**——`GlassSheet.show`
-  /// 的 `transitionBuilder` 是独立的 `SlideTransition`（`glass_sheet.dart:319`），
-  /// 与 `enableDrag` 无关；**点遮罩关闭不变**（`isDismissible` 仍为库默认 `true`）。
-  ///
-  /// **未动（真机上若仍有按压形变再看）**：`stretch`（库默认 `0.5`，拖拽时的液态拉伸）
-  /// 与 `topBorderRadius` 等外观参数——前者是「拉伸」不属负责人描述的「放大」，
-  /// 且 `enableDrag: false` 后已无拖拽手势触发它。
-  ///
-  /// 「关」档（`UI-06` ②）同步：`showModalBottomSheet(enableDrag: false)`，
-  /// 并**删去原先自绘的 36×4 拖拽指示条**（本薄封装自己画的那条，非库的）。
+  /// **「上划」的确切含义**：`enableDrag: false` 后库完全不加拖拽 `GestureDetector`，
+  /// 零副作用；**底部滑入的入场动画保留**（独立 `SlideTransition`，与 `enableDrag`
+  /// 无关）；**点遮罩关闭不变**。**未动**：`stretch`（拖拽液态拉伸）与
+  /// `topBorderRadius` 等外观参数——前者不属「放大」，且已无拖拽手势触发它。
+  /// 「关」档（`UI-06` ②）同步 `enableDrag: false`，并**删去自绘的拖拽指示条**。
   ///
   /// ══════════════════════════════════════════════════════════════════════════
-  /// 弹层遮罩（2026-09-29 修「出现弹框前会出现灰色背景」）—— 显式传 [OverlayStyle.barrier]
+  /// 弹层遮罩 —— 显式传 [OverlayStyle.barrier]
   /// ══════════════════════════════════════════════════════════════════════════
-  /// 症状：长按书卡，**在操作单露头之前**，整屏先蒙上一层灰。
-  ///
-  /// 根因（读库源码 + 逐帧探针实测，见 §2.56）：
-  /// `GlassSheet.show` 走 `showGeneralDialog`，`barrierColor` **没传** → 吃库默认
-  /// `GlassDefaults.barrierColor` = `0x8A000000`（`glass_defaults.dart:154`，**α=0.541**，
-  /// ≈54% 黑）。遮罩用 `transitionDuration: 350ms`（`glass_sheet.dart:320`）淡入，
-  /// 而**弹窗自己还在 `SlideTransition` 里从 `Offset(0, 1)` 往上滑**
-  /// （`glass_sheet.dart:322-332`）——两者共用这 350ms，但**弹窗起点在屏幕外**。
-  /// 逐帧实测（屏高 700、弹窗高 120）：
-  ///
-  ///   | 时刻 | 遮罩 α | 弹窗 top |
-  ///   |---|---|---|
-  ///   | 0ms   | 0.000 | 1248（屏外） |
-  ///   | 50ms  | 0.093 | 979（屏外） |
-  ///   | 100ms | **0.262** | **788（屏外）** |
-  ///   | 175ms | 0.434 | 635（刚入屏） |
-  ///   | 350ms | **0.541** | 548（到位） |
-  ///
-  /// ⇒ 头 ~150ms 是「灰幕已铺到 26%、弹窗一个字都还没进屏」= 负责人看到的
-  /// 「出现弹框前会有灰色背景」。
-  ///
-  /// 处置：**只换遮罩色源、不动时序**（与 `bookCoverShadowOf`「只换色源」同口径）。
-  /// 两档**都**显式传同一个 [OverlayStyle.barrier]：
-  ///   · 玻璃档 → `GlassSheet.show(barrierColor: …)`（库参数，`glass_sheet.dart:309`）；
-  ///   · 「关」档 → `showModalBottomSheet(barrierColor: …)`（Material 同名参数，默认
-  ///     也是 `Colors.black54` = `0x8A000000`，同一副「太重的灰」）。
-  /// **为什么不改时序**：`transitionDuration` 是库常量、`SlideTransition` 也是库内部
-  /// 构造，要改就得抄一份 `showGeneralDialog`（放弃库的液态玻璃渲染）——代价远大于
-  /// 收益；把遮罩压淡后，「弹窗迟到」在观感上就不再是一条灰幕了。
+  /// 症状（§2.56，历史例：书架长按操作单——该入口 2026-10-23 起改走 mi_like_ui
+  /// `MiDialog`，其余底部弹层同此口径）：**在弹层露头之前**整屏先蒙一层灰。根因：遮罩与
+  /// 弹窗共用 350ms 转场，而弹窗从屏幕外滑入 ⇒ 头 ~150ms「灰幕已铺开、弹窗还没
+  /// 进屏」。处置：**只换遮罩色源、不动时序**（与 `bookCoverShadowOf` 同口径）——
+  /// 两档**都**显式传同一个 [OverlayStyle.barrier]。**为什么不改时序**：转场时长
+  /// 与滑入动画都是库内部构造，要改就得抄一份 `showGeneralDialog`（放弃库的液态
+  /// 玻璃渲染）；遮罩压淡后「弹窗迟到」在观感上就不再是一条灰幕。
   static Future<T?> showSheet<T>({
     required BuildContext context,
     required WidgetBuilder builder,
@@ -915,7 +779,7 @@ abstract final class GlassOverlays {
         context: context,
         isScrollControlled: true,
         enableDrag: false,
-        // 遮罩统一（2026-09-30）：两档共用 [OverlayStyle.barrier]。
+        // 遮罩统一：两档共用 [OverlayStyle.barrier]。
         barrierColor: OverlayStyle.barrier,
         builder: (BuildContext sheetContext) => Padding(
           padding: EdgeInsets.only(
@@ -941,9 +805,8 @@ abstract final class GlassOverlays {
       quality: config.scrollQuality,
       isScrollable: isScrollable,
       // 以下各项一律取自 [OverlayStyle]（浮层参数的唯一事实源）：
-      // 「无横条、不可拖拽关闭、无触摸放大 / 光晕 / 饱和度脉冲」口径（2026-09-29 拍板）
-      // + 尺寸（2026-09-30 收口）+ 遮罩色（库默认 0x8A000000 太重、且先于弹窗可见，
-      // 见上方本方法注释）。
+      // 「无横条、不可拖拽关闭、无触摸放大 / 光晕 / 饱和度脉冲」口径 + 尺寸 +
+      // 遮罩色（库默认 0x8A000000 太重、且先于弹窗可见，见上方本方法注释）。
       showDragIndicator: OverlayStyle.dragIndicator,
       enableDrag: OverlayStyle.enableDrag,
       interactionScale: OverlayStyle.interactionScale,

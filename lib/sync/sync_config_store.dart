@@ -1,14 +1,13 @@
-// `M4-T01`：WebDAV 同步配置持久化（`SYNC-01` 连接配置 + `DATA-02` 凭据隔离）。
+// WebDAV 同步配置持久化（`SYNC-01` 连接配置 + `DATA-02` 凭据隔离）。
 //
-// 形制与 `ai/provider_store.dart` 完全同款（勿改）：
-//   · 进程内共享实例 + 监听回调，页面 initState 订阅 / dispose 退订；禁 Provider/Riverpod；
-//   · 实例在 `main()` 显式创建并注入，不用可变全局单例；
-//   · 落盘经 [JsonStore] → [AtomicFile]（`DATA-01` 原子写入）。
+// 形制与 `ai/provider_store.dart` 完全同款（勿改）：进程内共享实例 + 监听回调
+// （页面订阅 / 退订，**禁** Provider/Riverpod）；实例在 `main()` 显式创建注入，
+// 不用可变全局单例；落盘经 [JsonStore] → [AtomicFile]（`DATA-01` 原子写入）。
 //
-// `DATA-02` ①：**密码结构性不进配置 JSON**——`sync_config.json` 只存 [SyncConfig]
-// （其 toJson 不含 password），密码单独走 [SyncPasswordVault]（SecureStore，
-// 前缀 `sync.password.`，与 `AiKeyVault` 的 `ai.key.` 命名空间隔离）。
-// 备份包 / 日志里搜不到密码（`SYNC-04` / `DATA-02` ③）。
+// `DATA-02` ①：**密码结构性不进配置 JSON**——`sync_config.json` 只存
+// [SyncConfig]（其 toJson 不含 password），密码单独走 [SyncPasswordVault]
+// （SecureStore，前缀 `sync.password.`，与 `AiKeyVault` 的 `ai.key.` 命名空间
+// 隔离）；备份包 / 日志里搜不到密码（`SYNC-04` / `DATA-02` ③）。
 import 'dart:io';
 
 import '../platform/secure_store.dart';
@@ -51,12 +50,9 @@ class SyncPasswordVault {
   String get securityNotice => _store.securityNotice;
 }
 
-/// 同步配置存储（进程内共享，显式注入）。
-///
-/// 用法（见 lib/main.dart）：
-///   ① `final sync = SyncConfigStore(dataDir, SyncPasswordVault(secureStore)); await sync.load();`
-///   ② 注入设置页 / 同步设置页（构造参数）；
-///   ③ 页面 `initState` 订阅、`dispose` 退订，回调内 setState。
+/// 同步配置存储（进程内共享，显式注入；用法见 `lib/main.dart`）：构造后
+/// [load]，注入设置页 / 同步设置页（构造参数）；页面 `initState` 订阅、
+/// `dispose` 退订，回调内 `setState`。
 class SyncConfigStore {
   SyncConfigStore(Directory dataDir, SyncPasswordVault vault)
       : _vault = vault,

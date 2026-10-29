@@ -1,15 +1,10 @@
 // `RD-04` / `NAV-01`：阅读页底部控制条。
 //
-// 组成：上/下一章 + 全书进度 + 排版设置（复用 [ReaderSettingsBar]）。
-// 目录入口**统一放在 AppBar**（`NAV-01` 明确要求「AppBar 目录按钮」），故本控制条
-// 不再重复放目录按钮，避免同一页出现两个功能相同的入口。
+// 组成：上/下一章 + 全书进度 + 排版设置（复用 [ReaderSettingsBar]）。目录入口**统一
+// 放在 AppBar**（`NAV-01` 明确要求「AppBar 目录按钮」），本控制条**不再重复放目录按钮**。
 //
-// ## 分组收纳（2026-10-06）
-// 改前两行共 11 个控件平铺（`上一章/下一章/AI/朗读/朗读设置` + 进度文本 +
-// `字号−/数值/字号+/行距图标/滑块/页边距/主题`），按钮 48dp 且无分组边界，窄屏上
-// 彼此贴死、进度文本被挤到最右与滑块抢位。按「同一用途归一组」重排为三个带标题的
-// 分组盒（`章节` / `朗读与 AI` / `排版`），组间留白 + 竖分隔线，尺寸统一到
-// [kReaderControlButton]。功能、文案、回调、Key 全部不变，只改布局。
+// 分组收纳：按「同一用途归一组」排为三个带标题的分组盒（`章节` / `朗读与 AI` /
+// `排版`），组间留白 + 竖分隔线，尺寸统一到 [kReaderControlButton]。
 import 'package:flutter/material.dart';
 
 import '../typography/reader_settings.dart';
@@ -67,13 +62,13 @@ class ReaderControlBar extends StatelessWidget {
   /// `null` = 摘要未启用（依赖未齐 / 全局开关关）→ 按钮不渲染。
   final VoidCallback? onAi;
 
-  /// 朗读开关（`TTS-01`，M3-T06）：点一次从当前段开读，再点停止。
+  /// 朗读开关（`TTS-01`）：点一次从当前段开读，再点停止。
   final VoidCallback? onTts;
 
   /// 朗读进行中（按钮显示「停止」形态）。
   final bool ttsActive;
 
-  /// 朗读设置入口（`TTS-04`/`TTS-05`：语速音色 / 定时停止；`M3-T08`）。
+  /// 朗读设置入口（`TTS-04`/`TTS-05`：语速音色 / 定时停止）。
   ///
   /// `null` = 朗读设置未注入 → 按钮不渲染（同 [onAi] 降级口径）。
   final VoidCallback? onTtsSettings;
@@ -102,8 +97,7 @@ class ReaderControlBar extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 // ── 第一行：章节组 + 朗读与 AI 组 ──
-                // 两组各自成盒、互不贴死；进度读数进「章节」组成为该组的读数，
-                // 不再孤零零漂在整行最右（改前它与滑块争夺同一段横向空间）。
+                // 两组各自成盒、互不贴死；进度读数进「章节」组成为该组的读数。
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
                     12,
@@ -151,9 +145,8 @@ class ReaderControlBar extends StatelessWidget {
                       if (_hasAssistEntry) ...<Widget>[
                         const SizedBox(width: 8),
                         // 极窄屏（< kReaderControlProgressMinWidth）下第二组
-                        // **不参与 flex**：两个 `Flexible` 互相挤到只剩 2px 会溢出
-                        // （实测 340dp 溢出 2px、320dp 溢出 12px）。此时让它保持
-                        // 自身宽度并换行独占，空间全给「章节」组。
+                        // **不参与 flex**：两个 `Flexible` 互相挤会溢出。此时让它
+                        // 保持自身宽度并换行独占，空间全给「章节」组。
                         if (showProgress)
                           Flexible(child: _buildAssistGroup(showLabels))
                         else

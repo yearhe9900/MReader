@@ -1,16 +1,11 @@
 // 底栏宿主：把「一比一移植」的 mi_like_ui 玻璃底栏接到 MReader 的档位 / 主题体系。
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 职责边界（2026-10-15「底栏整组换参考项目」批）
-// ══════════════════════════════════════════════════════════════════════════════
 // [MiGlassNavBar] 本身**逐字节保持与参考项目 `bottom_nav_demo` 一致**（明暗配方、
 // 果冻飞行、沉降、拖拽、按压全在其内），本类只补两件参考项目不管的事：
-//
 //   ① **「关」档退化**（`UI-06` ②）：玻璃特效关闭时底栏换 Material [NavigationBar]
-//      纯色形态——与旧 [FrostedNavBar] 的退化口径一致，功能完整可用；
+//      纯色形态，功能完整可用；
 //   ② **明暗映射**（`UI-01` ②）：[MiThemeMode] 由 `GlassScope` 级联亮度驱动
-//      （应用主题三态，而非只跟系统亮度），标签墨色由调用方按同一亮度取
-//      [MiColors.foregroundFor]，与栏体配方同源。
+//      （应用主题三态，而非只跟系统亮度），标签墨色与栏体配方同源。
 //
 // 选中块位置 / 手势 / 动效**不在这里**——全在移植体内部，改动请改上游再重拷。
 import 'package:flutter/material.dart';
@@ -82,12 +77,10 @@ MiThemeMode navThemeModeOf(BuildContext context) =>
 
 /// mi_like_ui 玻璃**侧边**导航栏的 MReader 宿主（档位退化 + 明暗映射）。
 ///
-/// 2026-10-19 上游平板模式批：`maxWidth > kShellRailBreakpoint` 时取代底栏
-/// [GlassNavHost]（上游 `demo_app.dart` 同款「侧栏 ⇄ 底栏」双形态）。
-/// 与 [GlassNavHost] 逐条同构：
-///   ① **「关」档退化**（`UI-06` ②）：换 Material [NavigationRail] 纯色形态，
-///      功能完整可用（原宽屏实现即 Material rail，行为不变）；
-///   ② **明暗映射**（`UI-01` ②）：[MiThemeMode] 由 `GlassScope` 级联亮度驱动。
+/// `maxWidth > kShellRailBreakpoint` 时取代底栏 [GlassNavHost]（上游「侧栏 ⇄ 底栏」
+/// 双形态）；与 [GlassNavHost] 逐条同构：① **「关」档退化**（`UI-06` ②）换 Material
+/// [NavigationRail] 纯色形态、功能完整可用；② **明暗映射**（`UI-01` ②）：[MiThemeMode]
+/// 由 `GlassScope` 级联亮度驱动。
 ///
 /// 摆放位置（贴顶 + 距左缘 / 安全区留白）由宿主（`home_shell.dart`）给出——
 /// 与底栏「栏体位置在壳层」的同构做法；本类只负责栏体本身。

@@ -1,7 +1,6 @@
 // 翻页体接线契约（`M-PAGE T05-d`）：`PageTurnBody` 手势状态机 → 页图层
 // 几何 → settle 收尾 → commit 上抛 的端到端行为（配 `PageTurnLayers` +
-// `PaginationScheduler`）。期望值一律硬编码（探针 `_probe_drag_test`
-// 实跑回填，用完即删）。
+// `PaginationScheduler`）。期望值一律硬编码（探针实跑回填，用完即删）。
 //
 // 手势数学（实证）：`tester.drag` 分两段 moveBy(-20)/moveBy(余量)，
 // acceptance 在 down 的微任务期完成 → **两个 delta 都作为 update 投递**，

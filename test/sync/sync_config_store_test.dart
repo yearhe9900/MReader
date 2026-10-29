@@ -1,4 +1,4 @@
-// `M4-T01`：SyncConfigStore / SyncPasswordVault 测试。
+// SyncConfigStore / SyncPasswordVault 测试。
 //
 // 覆盖：`DATA-01` 原子落盘往返、`DATA-02` ① 密码不进配置 JSON、
 // remove 连带删密码、损坏回退、监听通知。

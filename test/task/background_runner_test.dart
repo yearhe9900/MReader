@@ -1,4 +1,4 @@
-// 统一后台任务抽象的单测（`M35-T01` / 架构 §F；`RUST-05` / `RUST-10` 的纯 Dart 预备）。
+// 统一后台任务抽象的单测（架构 §F；`RUST-05` / `RUST-10` 的纯 Dart 预备）。
 //
 // 纯 Dart `test()`（不涉及 widget / FakeAsync）。
 //

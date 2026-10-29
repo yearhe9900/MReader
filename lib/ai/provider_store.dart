@@ -1,12 +1,11 @@
 // AI Provider 配置持久化（PRD `AI-01` 多配置 + `AI-09` 全局开关 / 最保守模式）。
 //
-// 设计约定（与 SettingsStore 同形制，勿改）：
-//   · 进程内共享实例 + 监听回调，页面 initState 订阅 / dispose 退订；禁 Provider/Riverpod；
-//   · 实例在 `main()` 显式创建并注入，不用可变全局单例；
-//   · 落盘经 [JsonStore] → [AtomicFile]（`DATA-01` 原子写入）。
+// 设计约定（与 SettingsStore 同形制，勿改）：进程内共享实例 + 监听回调（页面
+// 订阅 / 退订，**禁** Provider/Riverpod）；实例在 `main()` 显式创建注入，不用
+// 可变全局单例；落盘经 [JsonStore] → [AtomicFile]（`DATA-01` 原子写入）。
 //
 // `DATA-02` ①：**apiKey 结构性不进本文件**——配置 JSON 只存 [AiProviderConfig]
-// （其 toJson 不含 key），密钥单独走 [AiKeyVault]（SecureStore）。持久化文件
+// （其 toJson 不含 key），密钥单独走 [AiKeyVault]（SecureStore）；持久化文件
 // 整体搜不到任何密钥。
 import 'dart:io';
 
@@ -82,12 +81,9 @@ class AiPrefs {
   }
 }
 
-/// AI Provider 配置存储（进程内共享，显式注入）。
-///
-/// 用法（见 lib/main.dart）：
-///   ① `final ai = ProviderStore(dataDir, AiKeyVault(secureStore)); await ai.load();`
-///   ② 注入设置页 / AI 页（构造参数）；
-///   ③ 页面 `initState` 订阅、`dispose` 退订，回调内 setState。
+/// AI Provider 配置存储（进程内共享，显式注入；用法见 `lib/main.dart`）：
+/// 构造后 [load]，注入设置页 / AI 页（构造参数）；页面 `initState` 订阅、
+/// `dispose` 退订，回调内 `setState`。
 class ProviderStore {
   ProviderStore(Directory dataDir, AiKeyVault vault)
       : _vault = vault,

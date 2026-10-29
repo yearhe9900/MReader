@@ -1,4 +1,4 @@
-// `TTS-01` 系统引擎降级面（M3-T06）：测试进程无 flutter_tts 平台实现 →
+// `TTS-01` 系统引擎降级面：测试进程无 flutter_tts 平台实现 →
 // `MissingPluginException` → init 返回 false、speak 以 error 结局不悬挂。
 //
 // 这正是 Linux 等无引擎平台的运行时形态（PRD §15.3：UI 层给中文提示，

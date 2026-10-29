@@ -19,12 +19,8 @@ import '../epub/zip_paths.dart';
 import '../model/chapter.dart';
 import '../typography/anchor.dart';
 
-/// 拆分链接 href 为「文件路径」与「fragment（不含 `#`）」。
-///
-/// - `#note1` → `(path: '', fragment: 'note1')`（章内锚点）；
-/// - `ch2.xhtml#s` → `(path: 'ch2.xhtml', fragment: 's')`（跨文件带锚点）；
-/// - `ch2.xhtml` → `(path: 'ch2.xhtml', fragment: '')`（跳目标章开头）。
-///
+/// 拆分链接 href 为「文件路径」与「fragment（不含 `#`）」：`#note1` → 章内锚点、
+/// `ch2.xhtml#s` → 跨文件带锚点、`ch2.xhtml` → 跳目标章开头。
 /// 空串 / 无 `#` 时 fragment 恒为空串（不返回 null）。
 ({String path, String fragment}) splitLinkHref(String href) {
   final int hash = href.indexOf('#');
@@ -40,9 +36,9 @@ String _matchKey(String href) => decodePercentPath(href).toLowerCase();
 /// **不能按索引一一对应**：目录项数与 spine 项数可以不相等（目录常合并/拆分章节）。
 /// 空 [path]（章内链接）返回 `-1`——「章内」由调用方落到当前章。
 ///
-/// 匹配两级（2026-10-22）：**精确 href 优先**，其次按 `#` 前的**路径段**——
-/// 章表里同文件多目录项的条目 href 带 `#<anchor>` 唯一化后缀（Rust 内核源的
-/// 细粒度目录），链接目标是文件路径本身时落到该文件的第一个目录项。
+/// 匹配两级：**精确 href 优先**，其次按 `#` 前的**路径段**——章表里同文件多目录项的
+/// 条目 href 带 `#<anchor>` 唯一化后缀（Rust 内核源的细粒度目录），链接目标是文件
+/// 路径本身时落到该文件的第一个目录项。
 int findChapterIndex(List<Chapter> chapters, String path) {
   if (path.isEmpty) return -1;
   final String target = _matchKey(path);

@@ -1,33 +1,29 @@
-// `M2b-T08`：阅读会话采集内核（`STAT-01` / `STAT-02`）——**纯 Dart 数据层**，
-// 不 import Flutter / dart:io，可在 isolate 与单测中直接使用。落盘在
-// `session_store.dart`（JSON 按月分片 + 原子写入，`DATA-01`）。
+// 阅读会话采集内核（`STAT-01` / `STAT-02`）——**纯 Dart 数据层**，不 import
+// Flutter / dart:io，可在 isolate 与单测中直接使用；落盘在 `session_store.dart`
+// （JSON 按月分片 + 原子写入，`DATA-01`）。
 //
-// 模型字段 ↔ PRD `STAT-02` 明细字段（沿用工程 camelCase JSON 惯例，同 `RD-04`）：
+// 模型字段 ↔ PRD `STAT-02` 明细（camelCase JSON 惯例，同 `RD-04`）：
 //   id        ↔ `id`（稳定唯一；由 `bookId + startedAt` **确定性派生**，
-//                故同一批记录反复合并天然幂等，`STAT-08`）
-//   bookId    ↔ `book_id`；dayKey ↔ `day_key`（`YYYY-MM-DD`，**本地时区**，专用于聚合）
-//   startedAt ↔ `started_at`（毫秒，专用于排序与「最近阅读时刻」）
-//   duration  ↔ `duration`（**秒**，有效阅读时长；**禁止 ≤ 0 的记录**落盘）
-//   endedAt   —— 结束时间戳（毫秒，任务书要求）
-//   start/end —— 起止语义坐标 (chapterHref, chapterPos)（对齐 `RD-04` 进度语义，
-//                任务书要求；跨 0 点拆天时按「边界前最后一次活跃事件」的坐标取值，
-//                拆分接缝两侧坐标一致，不虚构边界处的未知位置）。
+//                反复合并天然幂等，`STAT-08`）
+//   bookId    ↔ `book_id`；dayKey ↔ `day_key`（`YYYY-MM-DD`，**本地时区**，聚合用）
+//   startedAt ↔ `started_at`（毫秒，排序与「最近阅读时刻」用）
+//   duration  ↔ `duration`（**秒**，有效阅读时长；**禁止 ≤ 0 记录**落盘）
+//   endedAt   —— 结束时间戳（毫秒）
+//   start/end —— 起止语义坐标 (chapterHref, chapterPos)（对齐 `RD-04` 进度语义；
+//                跨 0 点拆天按「边界前最后一次活跃事件」坐标取值，接缝两侧
+//                坐标一致，不虚构边界处的未知位置）。
 //
-// 会话切分口径（任务书 + `STAT-01`）：
-//   · **活跃事件驱动**：`noteActivity` 记录交互（进入阅读页时调用一次即起表）；
-//   · 相邻活跃**空闲超过 [sessionIdleTimeoutMs]（3 分钟，`Q12`）即切会话**——
-//     前段只计到「最后活跃 + 3 分钟」（空闲宽限），后段自新活跃重新起算；
-//   · 单段内空闲 ≤ 3 分钟**照常计时**（`STAT-01`：连续 N 分钟无交互才暂停计时）；
-//     故段内有效时长连续 = `endedAt - startedAt`；
-//   · 退出阅读页 / 切后台 = `finish` 收尾（`STAT-01`：停止计时并落库；
-//     翻页**不**触发写库）；不带收尾时刻时按「最后活跃 + 3 分钟宽限」收口；
-//   · **跨 0 点的会话按实际秒数拆成两条**，两条各有自己的 `dayKey`（`STAT-02` ①）。
+// 会话切分口径（`STAT-01`）：**活跃事件驱动**（`noteActivity` 起表）；相邻活跃
+// 空闲**超过** [sessionIdleTimeoutMs]（3 分钟，`Q12`）即切会话，前段只计到
+// 「最后活跃 + 3 分钟」宽限；段内空闲 ≤ 3 分钟**照常计时**（有效时长连续 =
+// `endedAt - startedAt`）；退出 / 切后台 = `finish` 收尾（**翻页不写库**），
+// 不带收尾时刻按「最后活跃 + 3 分钟宽限」收口；**跨 0 点按实际秒数拆成两条**，
+// 各归各 `dayKey`（`STAT-02` ①）。
 //
-// 口径说明（最保守处置，见回报）：`STAT-01` ③「恢复交互后继续累计」在本实现里
-// 落为**切会话后新会话继续累计**（任务书明文「空闲超过 3 分钟即切会话」优先）——
-// 总时长 / 按天归属 / 按书归属与「同会话暂停续计」完全一致，仅明细条数不同。
-// 另：时长按**整秒向下取整**（不虚报），拆天两段各自取整，合计可能比整段少
-// 不足 2 秒（`STAT-01` ①「误差 ≤ 5s」容差内）。
+// 口径说明（最保守处置）：`STAT-01` ③「恢复交互后继续累计」落为**切会话后新
+// 会话继续累计**（「空闲超过 3 分钟即切会话」优先）——总时长 / 归属一致，仅
+// 明细条数不同；时长**整秒向下取整**（不虚报），拆天两段各自取整，合计误差
+// 在 `STAT-01` ①「≤ 5s」容差内。
 
 /// 空闲超时（毫秒）：连续 3 分钟无活跃即切会话 / 暂停计时（`STAT-01` N=3，`Q12`）。
 const int sessionIdleTimeoutMs = 3 * 60 * 1000;
@@ -102,9 +98,8 @@ class ReadingSession {
   });
 
   /// 稳定唯一 id：`<startedAt 毫秒>_<bookId>`（确定性派生，并集合并幂等）。
-  ///
-  /// 故意**不含** `endedAt` / `duration`：同一逻辑会话在两台设备上收尾时刻略异时
-  /// 仍应视为同一 id（`STAT-08`「同 id 取较大时长」），否则同步会双计。
+  /// 故意**不含** `endedAt` / `duration`：同一逻辑会话两台设备收尾略异仍须
+  /// 同 id（`STAT-08`「同 id 取较大时长」），否则同步会双计。
   static String makeId(String bookId, int startedAtMs) => '${startedAtMs}_$bookId';
 
   /// 稳定唯一 id。
@@ -222,11 +217,9 @@ class ReadingActivity {
   final SessionPosition position;
 }
 
-/// 活跃事件驱动的会话采集器（`STAT-01`；纯 Dart，无计时器 / 无 IO——
-/// 时刻由调用方注入，故可确定性单测）。
-///
-/// 用法：进入阅读页后每次交互 `noteActivity` 一次；退出阅读页 / 切后台 /
-/// 会话需落库时 `finish`，拿回**已按 0 点拆天、已剔除 `duration <= 0`** 的记录。
+/// 活跃事件驱动的会话采集器（`STAT-01`；纯 Dart，无计时器 / 无 IO——时刻由
+/// 调用方注入，可确定性单测）。用法：每次交互 `noteActivity`，退出 / 切后台 /
+/// 落库时 `finish`，拿回**已按 0 点拆天、已剔除 `duration <= 0`** 的记录。
 class SessionTracker {
   SessionTracker({required this.bookId, this.idleLimitMs = sessionIdleTimeoutMs});
 
@@ -251,14 +244,10 @@ class SessionTracker {
   }
 
   /// 收尾并产出会话记录（幂等读取：不清空已采集事件，可重复调用结果一致）。
-  ///
-  /// [at]   —— 收尾时刻（退出阅读页 / 切后台的时刻）；缺省按
-  ///           「最后活跃 + [idleLimitMs] 宽限」收口（`STAT-01` ②）。
-  /// [chapterHref] / [chapterPos] —— 收尾时的阅读位置（可选；只影响末条记录
-  ///           的终点坐标，缺省取边界前最后一次活跃事件的坐标）。
-  ///
-  /// 产出规则：空闲 > [idleLimitMs] 切会话（前段只计到最后活跃 + 宽限）；
-  /// 跨本地 0 点按实际秒数拆成多条；`duration <= 0` 的条目**不产出**（`STAT-02` ②）。
+  /// [at] = 收尾时刻，缺省按「最后活跃 + [idleLimitMs] 宽限」收口（`STAT-01` ②）；
+  /// [chapterHref] / [chapterPos] = 收尾位置（只影响末条终点坐标，缺省取边界前
+  /// 最后一次活跃事件的坐标）。产出规则：空闲 > [idleLimitMs] 切会话、跨 0 点
+  /// 拆多条、`duration <= 0` **不产出**（`STAT-02` ②）。
   List<ReadingSession> finish({
     int? at,
     String? chapterHref,
@@ -302,9 +291,8 @@ class SessionTracker {
     return out;
   }
 
-  /// 一段连续有效阅读的收尾时刻：
-  /// `min(收尾时刻, 最后活跃 + 空闲宽限)`，且**不早于最后活跃**。
-  /// 被空闲切分的段没有收尾时刻 → 只计「最后活跃 + 宽限」。
+  /// 一段连续有效阅读的收尾时刻：`min(收尾时刻, 最后活跃 + 空闲宽限)` 且
+  /// **不早于最后活跃**；被空闲切分的段只计「最后活跃 + 宽限」。
   int _segmentEnd(
     List<ReadingActivity> events,
     int from,

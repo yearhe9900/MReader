@@ -34,17 +34,12 @@ final File _baselineFile = File('${_fixturesDir.path}/baseline.json');
 
 /// 把 href 归一化成「可比较」的形态：百分号解码 + 转小写。
 ///
-/// 为什么需要（显式口径，非「默默改断言」）：
-///   `EpubSection.href` 是解析器**按 OPF 声明**解析出的逻辑路径；而 fixture 的
-///   baseline 记录的是**包内真实条目**路径。二者指向同一章，但大小写 / 百分号编码
-///   形态可能不同：
-///     - fx03：container 声明 `oebps/content.opf`、href 写 `TEXT/CH1.XHTML`，
-///       解析器得到 `oebps/TEXT/CH1.XHTML`，真实条目却是 `OEBPS/text/ch1.xhtml`；
-///     - fx02b：真实条目名本身就是 `OEBPS/%E7%AC%AC…`（编码），
-///       baseline 记的是解码后的 `OEBPS/第一章.xhtml`。
-///   解析器对包内路径的匹配本就是**大小写不敏感 + 百分号解码/编码双试探**，
-///   因此这里也按同一口径归一化后比较。**该 href 口径差异已作为交付发现单独标注**，
-///   供团队决定后续是否把 `EpubSection.href` 改为「匹配到的真实条目路径」。
+/// 为什么需要（显式口径，非「默默改断言」）：`EpubSection.href` 是解析器**按 OPF 声明**
+/// 解析出的逻辑路径，而 baseline 记录的是**包内真实条目**路径，二者大小写 / 百分号编码
+/// 形态可能不同（fx03 声明与真实条目大小写不一致；fx02b 条目名本身是编码形态）。
+/// 解析器对包内路径的匹配本就是**大小写不敏感 + 百分号解码/编码双试探**，因此这里也按
+/// 同一口径归一化后比较。**该 href 口径差异已作为交付发现单独标注**，供团队决定后续
+/// 是否把 `EpubSection.href` 改为「匹配到的真实条目路径」。
 String normHref(String href) {
   var s = href;
   try {

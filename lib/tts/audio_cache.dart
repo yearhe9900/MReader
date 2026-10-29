@@ -1,13 +1,10 @@
 // 在线 TTS 音频本地缓存（`TTS-07` ②「同一段文本二次朗读命中音频缓存」）。
 //
-// 形制：
-//   · 目录 = `<dataDir>/tts_audio/`，一条音频一个文件；
-//     文件名 = 请求指纹的 sha256 hex（指纹算法在 `online_tts.dart`
-//     [OnlineTts.buildCacheKey]）——命中判定 = 文件存在；
-//   · 写入走「临时文件 + rename」：半截下载绝不覆盖既有条目（部分写免疫）；
-//     Windows 上 rename 到已存在文件会失败 → 先删目标再 rename
-//     （同 `AtomicFile` 轮转口径）；
-//   · 不设容量上限（段落音频以 KB 计），[clear] 留给设置页手动清理。
+// 形制：目录 = `<dataDir>/tts_audio/`，一条音频一个文件，文件名 = 请求指纹的 sha256
+// hex（指纹算法见 `online_tts.dart` [OnlineTts.buildCacheKey]），命中判定 = 文件存在；
+// 写入走「临时文件 + rename」（半截下载绝不覆盖既有条目），Windows 上 rename 到已
+// 存在文件会失败 → 先删目标再 rename（同 `AtomicFile` 轮转口径）；不设容量上限
+// （段落音频以 KB 计），[clear] 留给设置页手动清理。
 import 'dart:io';
 import 'dart:typed_data';
 

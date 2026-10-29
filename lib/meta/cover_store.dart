@@ -31,7 +31,7 @@ abstract interface class CoverStore {
     required PendingCover pending,
   });
 
-  /// 用户换封面（M2a `META-09`）：写入用户图，**并删除** [previous] 指向的旧文件（`META-06 ①`）。
+  /// 用户换封面（`META-09`）：写入用户图，**并删除** [previous] 指向的旧文件（`META-06 ①`）。
   Future<StoredCover> replaceWithUserPick({
     required String bookId,
     required Uint8List bytes,
@@ -49,21 +49,17 @@ abstract interface class CoverStore {
   Future<void> delete(CoverRef ref);
 
   /// 「清空缓存」：删除 `covers/` 下**不被任何书籍引用**的孤儿（`META-06 ③`）。
-  ///
-  /// [referencedFileNames] 由**书库（M1-T03）**汇总所有在库书籍的 `StoredCover.fileName`。
-  /// **安全规则（写死，§N.7）**：只删 `covers/` 内、且**不在** [referencedFileNames] 中的文件；
-  /// 返回删除数；**幂等**；`covers/` 之外的任何路径**永不触碰**。
-  ///
-  /// **本批补充（team-lead 指派）**：`AtomicFile` 会在目标旁留 `.tmp` / `.bak` / `.corrupt`
-  /// **兄弟文件**——GC 必须把它们**随其基文件一同处置**（基文件被引用 → 兄弟保留；
-  /// 基文件是孤儿 → 兄弟一起删），否则会把「主文件损坏时唯一可回退的 `.bak`」删掉，
-  /// 破坏 `AtomicFile` 的降级路径。**缩略图**同理随其基封面处置。
+  /// [referencedFileNames] 由书库汇总所有在库书籍的 `StoredCover.fileName`。
+  /// **安全规则（写死，§N.7）**：只删 `covers/` 内、且**不在** [referencedFileNames]
+  /// 中的文件；返回删除数；**幂等**；`covers/` 之外的任何路径**永不触碰**。
+  /// `AtomicFile` 的 `.tmp` / `.bak` / `.corrupt` **兄弟文件必须随基文件处置**（基文件
+  /// 被引用 → 兄弟保留；基文件是孤儿 → 兄弟一起删），否则会删掉主文件损坏时唯一可回退
+  /// 的 `.bak`、破坏降级路径；**缩略图**同理随其基封面处置。
   Future<int> purgeOrphans({required Set<String> referencedFileNames});
 }
 
-/// 基于 [AppPaths] + [AtomicFile] 的默认实现。
-///
-/// 落盘目录：`AppPaths.subDir('covers')`（**不**硬编码路径、**不**直接 import `path_provider`）。
+/// 基于 [AppPaths] + [AtomicFile] 的默认实现。落盘目录：`AppPaths.subDir('covers')`
+/// （**不**硬编码路径、**不**直接 import `path_provider`）。
 class FileCoverStore implements CoverStore {
   FileCoverStore(this._paths);
 
@@ -112,9 +108,8 @@ class FileCoverStore implements CoverStore {
     final String coverName = '$bookId.cover.${extensionOf(pending.format)}';
     await AtomicFile(_join(dir, coverName)).writeBytes(pending.bytes);
 
-    // 缩略图：独立文件，书架只解码它。
-    // 命名用 `png` 而非源格式——`dart:ui` 只能编码 PNG，若用源扩展名会「后缀名与内容不符」
-    // （`META-05` 明令禁止）。此处遵循「后缀与真实格式一致」。
+    // 缩略图：独立文件，书架只解码它。命名用 `png` 而非源格式——`dart:ui` 只能编码
+    // PNG，用源扩展名会「后缀名与内容不符」（`META-05` 明令禁止）。
     final Uint8List? thumb = await _renderThumbPng(pending.bytes);
     if (thumb != null) {
       await AtomicFile(_join(dir, '$bookId.thumb.png')).writeBytes(thumb);

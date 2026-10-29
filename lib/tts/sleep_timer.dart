@@ -2,11 +2,10 @@ import 'dart:async';
 
 /// 定时停止计时器（TTS-05）。
 ///
-/// 只负责「到点回调」——停朗读、持久化设定都在调用方（阅读页）完成：
-/// · 分钟数的合法性（10~180、10 步进）由 `TtsSettings.clampSleep` 归一，
-///   本类收 `Duration`，测试可直接用秒级短时长（**不引入 fake_async**）；
-/// · 计时是进程内的：重启后是否恢复由持久化的 `sleepMinutes` 决定
-///   （重启保留的是**设定值**，不恢复剩余时间）。
+/// 只负责「到点回调」——停朗读、持久化设定都在调用方（阅读页）完成：分钟数的
+/// 合法性（10~180、10 步进）由 `TtsSettings.clampSleep` 归一，本类收 `Duration`，
+/// 测试可直接用秒级短时长（**不引入 fake_async**）；计时是进程内的，重启后是否
+/// 恢复由持久化的 `sleepMinutes` 决定（重启保留**设定值**，不恢复剩余时间）。
 class SleepTimer {
   /// 创建计时器；[onFire] 在到点时于主 isolate 同步调用。
   SleepTimer({required this.onFire});

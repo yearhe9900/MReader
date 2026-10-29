@@ -1,7 +1,7 @@
-// `M4-T02`：阅读进度同步引擎测试（`SYNC-02` 验收①②③ + F7 流程 + `SYNC-07` 汇总）。
+// `SYNC-02` 验收①②③ + F7 流程 + `SYNC-07` 汇总：阅读进度同步引擎测试。
 //
-// 内存 WebDAV 服务端与临时目录 / 凭据假件在 `sync_support.dart`（`M4-T03` 抽出
-// 共用）：均为纯 `test()`（无 FakeAsync 区），真实 socket 异步可正常排空。
+// 内存 WebDAV 服务端与临时目录 / 凭据假件在 `sync_support.dart`（共用）：
+// 均为纯 `test()`（无 FakeAsync 区），真实 socket 异步可正常排空。
 import 'dart:convert';
 import 'dart:io';
 

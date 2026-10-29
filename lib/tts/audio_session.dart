@@ -1,20 +1,18 @@
-// 后台播放与系统集成编排（`TTS-03`，M3-T07）。
+// 后台播放与系统集成编排（`TTS-03`）。
 //
-// 职责：把 [SystemAudioBackend] 的系统事件翻译成朗读侧动作，把朗读侧状态
-// 上屏到通知栏 / 锁屏；**不持有 TtsController**——播控动作经回调
-// （[onPlay] / [onPause] / …）注入，纯 Dart + 假后端即可全量单测。
+// 职责：把 [SystemAudioBackend] 的系统事件翻译成朗读侧动作，把朗读侧状态上屏到
+// 通知栏 / 锁屏；**不持有 TtsController**——播控动作经回调（[onPlay] / [onPause] /
+// …）注入，纯 Dart + 假后端即可全量单测。
 //
-// `TTS-03` 验收映射：
-//   ① 锁屏继续朗读 = 后端的前台服务 / 后台音频（Android/iOS 清单 + 插件），
-//      编排层无感；② 通知栏播放/暂停/上一章/下一章 = play/pause/skip 事件；
-//   ③ 耳机媒体键与通知栏共用同一 media session → 同一事件口；
-//   ④ 来电暂停 = [SystemAudioEvent.focusLost]（仅当在播才暂停、且记
-//      「因焦点暂停」），挂断恢复 = [SystemAudioEvent.focusGained] 且带该
-//      标记才续播（用户先手暂停的不被焦点事件抢走）。
-//   耳机拔出（becomingNoisy）= 暂停且**不**自动恢复。
+// `TTS-03` 验收映射：① 锁屏继续朗读 = 后端的前台服务 / 后台音频（清单 + 插件），
+// 编排层无感；② 通知栏播放/暂停/上一章/下一章 = play/pause/skip 事件；③ 耳机媒体键
+// 与通知栏共用同一 media session → 同一事件口；④ 来电暂停 = [SystemAudioEvent.focusLost]
+// （仅当在播才暂停、且记「因焦点暂停」），挂断恢复 = [SystemAudioEvent.focusGained]
+// 且带该标记才续播（用户先手暂停的不被焦点事件抢走）；耳机拔出（becomingNoisy）
+// = 暂停且**不**自动恢复。
 //
-// 降级：后端 [SystemAudioBackend.open] 返回 `false`（桌面平台 / 插件初始化
-// 失败）→ [begin] 回 `false`，朗读照常仅前台——不提示（PRD §15.3 拍板）。
+// 降级：后端 [SystemAudioBackend.open] 返回 `false`（桌面平台 / 插件初始化失败）
+// → [begin] 回 `false`，朗读照常仅前台——不提示（PRD §15.3 拍板）。
 import 'dart:async';
 
 import '../platform/audio_service.dart';

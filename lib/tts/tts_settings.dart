@@ -1,13 +1,12 @@
 // 朗读设置持久化（语速 / 音色 / 跟随系统语速 / 定时停止）。
 //
-// 与 [ShelfPrefsStore] **同一形制**，勿另创写法：
-//   · 落盘一律经 `JsonStore` → `AtomicFile`（`DATA-01` 原子写入）；
-//   · 跨页面共享用「进程内共享实例 + 监听回调」，页面 `initState` 订阅、
-//     `dispose` 退订、回调内 `setState`（**不引入 Provider / Riverpod**）；
-//   · **不使用可变全局单例**：实例在 `main()` 显式创建并构造注入。
+// 与 [ShelfPrefsStore] **同一形制**，勿另创写法：落盘一律经 `JsonStore` → `AtomicFile`
+// （`DATA-01` 原子写入）；跨页面共享用「进程内共享实例 + 监听回调」（页面 `initState`
+// 订阅、`dispose` 退订、回调内 `setState`，**不引入 Provider / Riverpod**）；
+// **不使用可变全局单例**（实例在 `main()` 显式创建并构造注入）。
 //
-// 为什么单独一个文件：进度联动（TTS-06）**不在此**——朗读进度复用
-// `ReadingProgress` 单一模型，本文件只管「怎么读」（多快、哪个音色、读多久停）。
+// 为什么单独一个文件：进度联动（TTS-06）**不在此**——朗读进度复用 `ReadingProgress`
+// 单一模型，本文件只管「怎么读」（多快、哪个音色、读多久停）。
 import 'dart:io';
 
 import '../storage/atomic_file.dart';
@@ -85,11 +84,9 @@ class TtsSettings {
   /// 定时停止步进（分钟）。
   static const int sleepStepMinutes = 10;
 
-  /// 复制并覆盖部分字段。
-  ///
-  /// 可空字段（[voiceName] / [voiceLocale]）**无法用它显式置空**
-  /// （`null` = 不修改）；回到默认音色走 [TtsSettingsStore.setVoice]
-  /// 传 `null`，它直接构造新值对象。
+  /// 复制并覆盖部分字段。可空字段（[voiceName] / [voiceLocale]）**无法用它显式
+  /// 置空**（`null` = 不修改）；回到默认音色走 [TtsSettingsStore.setVoice] 传
+  /// `null`，它直接构造新值对象。
   TtsSettings copyWith({
     TtsEngineKind? engine,
     double? rate,
@@ -228,9 +225,8 @@ class TtsSettingsStore {
     return _update(_value.copyWith(followSystemRate: follow));
   }
 
-  /// 选音色；`name` / `locale` 任一为 `null` 即回到系统默认（清音色）。
-  ///
-  /// `copyWith` 的可空参数无法显式置空 → 回默认路径直接构造新值对象。
+  /// 选音色；`name` / `locale` 任一为 `null` 即回到系统默认（清音色）。`copyWith`
+  /// 的可空参数无法显式置空 → 回默认路径直接构造新值对象。
   Future<void> setVoice({String? name, String? locale}) {
     if (name == null || name.isEmpty || locale == null || locale.isEmpty) {
       if (_value.voiceName == null && _value.voiceLocale == null) {

@@ -1,16 +1,9 @@
-// `M3-T03`：AI 摘要面板 widget 测试（`AI-04` ①②③ / `AI-05` ①②③ /
-// `AI-08` ①② / `AI-09` ①）。
+// `AI-04` ①②③ / `AI-05` ①②③ / `AI-08` ①② / `AI-09` ①：AI 摘要面板 widget
+// 测试（长度档、缓存命中零请求、重新生成、逐章递进、中断续做只补缺章、回顾合并
+// 带「上次读到」、失败重试、范围行逐模式）。
 //
-// 验收映射：
-//   · `AI-04` ① 长度档可指定、② 二次进入命中缓存（缓存 tag + 零请求）、
-//     ③ 手动重新生成（force 发新请求）；
-//   · `AI-05` ① 全书摘要逐章递进、③ 中断（停止）→「已中断」→ 继续只补缺章；
-//   · `AI-05` ② 前情回顾模式的范围行与「上次读到」背景进合并请求；
-//   · `AI-08` ② 失败回显中文原因 + 重试；无配置 / 无密钥只给引导、不给重试；
-//   · `AI-09` ① 范围行逐模式说明发什么。
-//
-// 三条测试口径同 `selection_ai_sheet_test`：关档宿主（`MaterialApp.builder`
-// 形制）、真异步 IO 统一 [settleReal] 推进、mock OpenAI 端点本机 HttpServer。
+// 测试口径同 `selection_ai_sheet_test`：关档宿主（`MaterialApp.builder` 形制）、
+// 真异步 IO 统一 [settleReal] 推进、mock OpenAI 端点本机 HttpServer。
 import 'dart:convert';
 import 'dart:io';
 

@@ -1,13 +1,11 @@
-// `M4-T01`：WebDAV 同步连接配置模型（PRD §10 / `SYNC-01`）。
+// WebDAV 同步连接配置模型（PRD §10 / `SYNC-01`）。
 //
 // 五要素（`SYNC-01`）：`url` / `account` / `password` / 远端目录（默认 `mreader`）
 // / 设备名；**`password` 不在本模型内**（`DATA-02` 结构性保证）——配置 JSON 只存
-// 连接信息，密码经 `SyncPasswordVault`（`sync_config_store.dart`）走 SecureStore，
-// 备份包 / 配置导出里搜不到密码。
+// 连接信息，密码经 `SyncPasswordVault` 走 SecureStore，备份包 / 导出搜不到密码。
 //
-// 远端目录语义（PRD §10.3）：所有远端路径都落在 `{webdavUrl}/{dir}/` 之下
-// （`dir` 默认 `mreader`）；目录不存在时由 `WebdavClient` 逐级 MKCOL 自动创建
-// （`SYNC-01` ③）。
+// 远端目录语义（PRD §10.3）：所有远端路径都落在 `{webdavUrl}/{dir}/` 之下；
+// 目录不存在由 `WebdavClient` 逐级 MKCOL 自动创建（`SYNC-01` ③）。
 
 /// 服务商预设（`SYNC-01`：支持多家服务商预设；点选回填服务器地址）。
 class WebdavPreset {
@@ -45,10 +43,8 @@ class SyncConfig {
   /// 设备名默认值（用于 `backup-{yyyy-MM-dd}-{device}.zip` 命名，§10.3）。
   static const String defaultDeviceName = 'MReader';
 
-  /// 服务商预设（`SYNC-01`）。
-  ///
-  /// 前两家是 concrete 地址；自托管（Nextcloud / 群晖等）给**模板地址**，
-  /// 用户按脚注提示改成自己的域名与用户名。
+  /// 服务商预设（`SYNC-01`）：前两家是 concrete 地址；自托管（Nextcloud /
+  /// 群晖等）给**模板地址**，用户按脚注提示改成自己的域名与用户名。
   static const List<WebdavPreset> presets = <WebdavPreset>[
     WebdavPreset(
       name: '坚果云',

@@ -1,9 +1,8 @@
 // `PERF-02`：章正文的**有界 LRU 缓存** + **按距离补齐的加载规划**（纯 Dart，可单测）。
 //
-// 为什么单独成文件：`ReaderPage` 的「增量加载 + 淘汰上界」是 `PERF-02` 的核心逻辑，
-// 但它必须在**纯 Dart 单测**里能被直接断言——`testWidgets` 的 FakeAsync 区一旦
-// `await` 真异步 IO 就会挂死（见 `68578e4`）。故把「缓存 + 规划」
-// 抽成本文件两个不依赖 Flutter 的类，由 `ReaderPage` 驱动、由 `test/perf/*` 直接测。
+// 单独成文件是为了能在**纯 Dart 单测**里直接断言（`testWidgets` 的 FakeAsync 区
+// `await` 真异步 IO 会挂死）：「缓存 + 规划」抽成两个不依赖 Flutter 的类，由
+// `ReaderPage` 驱动、由 `test/perf/*` 直接测。
 //
 // ⚠️ 本文件**不 import Flutter、不 import `dart:io`**（可进 isolate）。
 import 'dart:async';
@@ -110,12 +109,9 @@ class ChapterCache {
 
 /// 章正文的**增量加载驱动器**（纯 Dart）。
 ///
-/// 与 [ChapterCache] 配合：
-///   · [loadFirstBatch] 只等目标章，邻章（±1）各自到货、不阻塞（首帧用）；
-///   · [fillOnce] 在后台按「离当前章由近及远」逐批（[kLoadBatchSize] 章）补齐。
-///
-/// 每批加载后调用 [_protectWindow]：把窗口内的章全部标为「最近使用」，
-/// 于是 [ChapterCache] 的 LRU 淘汰只会逐出**窗口外**的章，窗口内不受影响。
+/// 与 [ChapterCache] 配合：[loadFirstBatch] 只等目标章，邻章各自到货、不阻塞
+/// （首帧用）；[fillOnce] 在后台按「离当前章由近及远」逐批补齐。每批加载后
+/// [_protectWindow] 把窗口内的章标为「最近使用」，LRU 淘汰只会逐出**窗口外**的章。
 class ChapterAutoLoader {
   ChapterAutoLoader({
     required this.chapterCount,
@@ -138,10 +134,8 @@ class ChapterAutoLoader {
 
   /// 首帧批次：加载「[target] ± [kFirstBatchRadius]」（clamp 到边界，去重）。
   ///
-  /// **只等目标章**（首帧渲染依赖它）；邻章并发启动但**不阻塞**返回，各自
-  /// 到货各自入缓存——对齐 567Reader `ReadBook.loadContent` 的语义（cur±1
-  /// 并行加载、仅目标章驱动显示、邻章后台到货不拖首帧）。旧实现 `Future.wait`
-  /// 全等：任一邻章解析慢（甚至挂起）都会拖住整个开书流程与同批他章。
+  /// **只等目标章**（首帧渲染依赖它）；邻章并发启动但**不阻塞**返回，各自到货各自
+  /// 入缓存——若全等，任一邻章解析慢（甚至挂起）都会拖住整个开书流程。
   Future<void> loadFirstBatch(int target) async {
     final List<int> batch =
         cache.planLoad(target, chapterCount, radius: kFirstBatchRadius);

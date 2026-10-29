@@ -1,18 +1,9 @@
-// `M3-T04`：跟书问答面板 widget 测试（`AI-06` ①②③ / F5 流程 /
-// `AI-08` ①② / `AI-09` ①③）。
+// `AI-06` ①②③ / `AI-08` ①② / `AI-09` ①③ / F5：跟书问答面板 widget 测试
+// （检索→范围行→流式答案+引用跳转、不发全书、零命中直答、最保守受限、失败重试）。
 //
-// 验收映射：
-//   · F5：输入 → 检索 → 范围行「将发送 K 个片段，共 X 字」→ 流式答案 +
-//     引用条目 → 点引用传出命中（关面板 + 跳转由调用方执行）；
-//   · `AI-06` ③ 不发全书：请求体只含片段（断言不含未命中章的正文）；
-//   · `AI-06` ② 零命中不发请求、直答「书中未提及」；
-//   · `AI-09` ③ 最保守模式（selectionOnly）下问答标注受限且不可发送；
-//   · `AI-08` ② 失败回显中文原因 + 重试；① 停止保留半截输出。
-//
-// 三条测试口径同 `summary_sheet_test`：关档宿主（`MaterialApp.builder`
-// 形制）、真异步 IO 统一 [settleReal] 推进、mock OpenAI 端点本机 HttpServer。
-// ⚠️ 输入框聚焦后光标闪烁是周期定时器：**enterText 之后禁止 pumpAndSettle**
-// （会永不收束），改用 [settleUntil] 定轮推进 + 静态画面直接 tap。
+// 测试口径同 `summary_sheet_test`：关档宿主、真异步 IO 统一 [settleReal] 推进、
+// mock OpenAI 端点本机 HttpServer。⚠️ 输入框聚焦后光标闪烁是周期定时器：
+// **enterText 之后禁用 `pumpAndSettle`**（永不收束），改 [settleUntil] 定轮推进。
 import 'dart:convert';
 import 'dart:io';
 

@@ -1,4 +1,4 @@
-// `test/search/search_jump_test.dart`：搜索跳转与关键词高亮端到端（`CNT-06` 验收②）。
+// `CNT-06` 验收②：搜索跳转与关键词高亮端到端。
 //
 // 真按钮链：`reader-search` → 面板输入提交 → 点命中行 → 弹层 pop →
 // 跳到目标章 + 正文关键词高亮（`InlineParagraph.highlightQuery`）。
@@ -100,19 +100,16 @@ void main() {
       await settle(tester); // 跳转：loadFirstBatch + 「估算 + 校正」收敛。
       await tester.pumpAndSettle();
 
-      // 跳转后 chrome 自动收起（`_exitChrome`，2026-10-09）：chrome 是覆盖层
-      // （`extendBody*`），顶栏压在正文上沿 56dp；而跳转落位一律「目标在页顶」。
-      // 顶栏若还开着，目标整行都压在它下面 ⇒ 探针实测两态目标矩形**完全相同**
-      // （`Rect(8,0,792,29)`），差别只在可命中性（开 0 / 收 1）。
-      // 故下一条同时钉住「跳转即退出 chrome」这一新契约。
+      // ⚠️ 跳转后 chrome 必须自动收起（`_exitChrome`）：chrome 是覆盖层，顶栏压在
+      // 正文上沿，而跳转落位一律「目标在页顶」——顶栏若还开着，目标整行都压在它
+      // 下面，两态目标矩形完全相同，差别只在可命中性（开 0 / 收 1）。
       expect(find.byType(AppBar), findsNothing,
           reason: '从弹层跳转后应收起 chrome，否则页顶的目标被顶栏压住');
 
-      // 跳到第 2 章：第 1 章滚出视口、**目标段落**落在视口内。
-      // 分页模式下 `_window` 把三章页面整棵构建在树上，`find.text` 的
-      // 「在树上」不再等于「在视口内」→ 视口语义一律用 hitTestable
-      // （视口外页面被裁剪、不参与命中）；章标题只作「目标章已载入」的存在性
-      // 断言——段落级对齐会把章题滚到视口上方，本就不该要求它在视口内。
+      // ⚠️ 视口语义一律用 hitTestable：分页模式下 `_window` 把三章页面整棵构建在
+      // 树上，`find.text` 的「在树上」不等于「在视口内」（视口外页面被裁剪、不参与
+      // 命中）；章标题只作「目标章已载入」的存在性断言——段落级对齐会把章题滚到
+      // 视口上方，本就不该要求它在视口内。
       expect(find.textContaining('第2章'), findsWidgets);
       expect(find.text('第一章').hitTestable(), findsNothing);
       expect(find.textContaining('第2章正文3').hitTestable(), findsWidgets);

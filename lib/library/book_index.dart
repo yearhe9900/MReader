@@ -19,7 +19,7 @@ const String _libraryDirName = 'library';
 /// 书库索引：读 / 写 [BookRecord] 列表，底层经 `JsonStore` 落盘。
 ///
 /// **逐条降级**（`LIB-03`）：[load] 逐条 try-catch，单条解析失败 → 跳过，
-/// 其余正常返回；不会因某一条损坏而导致整库无法加载。
+/// 不会因某一条损坏而导致整库无法加载。
 class BookIndex {
   BookIndex(this._paths);
 
@@ -35,9 +35,8 @@ class BookIndex {
     return _store!;
   }
 
-  /// 加载全部记录；无数据或首次运行时返回空列表。
-  ///
-  /// `LIB-03` 逐条降级：每条 try-catch，失败跳过（不崩全库）。
+  /// 加载全部记录（无数据 / 首次运行返回空列表）；`LIB-03` 逐条降级：
+  /// 每条 try-catch，失败跳过（不崩全库）。
   Future<List<BookRecord>> load() async {
     final JsonStore store = await _ensureStore();
     final Object? raw = await store.read();
@@ -59,9 +58,8 @@ class BookIndex {
     return records;
   }
 
-  /// 写入全量记录列表（**覆盖式**：旧内容被完全替换）。
-  ///
-  /// 经 `AtomicFile` 原子写入，任何时刻断电都不会留下半截文件。
+  /// 写入全量记录列表（**覆盖式**：旧内容被完全替换）。经 `AtomicFile`
+  /// 原子写入，任何时刻断电都不会留下半截文件。
   Future<void> save(List<BookRecord> records) async {
     final JsonStore store = await _ensureStore();
     await store.write(

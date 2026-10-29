@@ -1,6 +1,6 @@
 // 字节级格式判据 —— **中立共享层**（与 `image_pages.dart` 同一存在理由）。
 //
-// `FMT-06`（M2b-T03）魔数纠偏的判据实现住这里：不进各 `BookSource` 实现类
+// `FMT-06` 魔数纠偏的判据实现住这里：不进各 `BookSource` 实现类
 // （架构 §A.1 铁律：实现类互不感知），也不混进 `book_registry.dart` 的分发
 // 逻辑（判据可独立于 `FormatKind` 单测）。
 //
@@ -38,14 +38,13 @@ bool looksLikeText(Uint8List bytes) {
 /// 是否是 MOBI 系容器（MOBI / AZW3，`FMT-06` ①）。
 ///
 /// 判据 = PalmDB 头的 type + creator 字段（偏移 60..68 == ASCII `BOOKMOBI`，
-/// 即 type "BOOK" + creator "MOBI"）——tmp_book 真实《牧神记》.mobi 与 .azw3
-/// **双样本实测互证**：两文件偏移 60..68 均为 `42 4f 4f 4b 4d 4f 42 49`。
+/// 即 type "BOOK" + creator "MOBI"），有真样本双证。
 ///
 /// 为什么不能用「头可打印性」判：AZW3 头 8 字节是 PDB name 字段（可打印
-/// ASCII，实测 `epubor.c`），改名 `.txt` 时纯文本启发式会误判——所以
-/// `sniffFormat` 把本判据放在纯文本判定**之前**（`FMT-06` 验收①）。
+/// ASCII），改名 `.txt` 时纯文本启发式会误判——所以 `sniffFormat` 把本判据放在
+/// 纯文本判定**之前**（`FMT-06` 验收①）。
 ///
-/// 边界声明（M2b-T03）：
+/// 边界声明：
 /// ① 不做 MOBI 与 AZW3 的家族内区分（同判据同信号；DRM/加密另由
 ///    `encryptedMobi` 错误码在解析层处理）；
 /// ② 非 `BOOKMOBI` 的其他 PalmDB（PalmDOC 等）不命中，仍落 `unsupported`；
@@ -63,11 +62,11 @@ bool hasMobiMagic(Uint8List bytes) {
   return true;
 }
 
-/// 是否是 PDF 容器（`FMT-01`，M2b-T01）。
+/// 是否是 PDF 容器（`FMT-01`）。
 ///
 /// 判据 = 文件头 `%PDF`（0x25 0x50 0x44 0x46）。PDF 规范要求 header 位于**文件起始**，
 /// 故本判据只看偏移 0（不做「头 1024 字节内搜索」的宽松变体——宁可落 `unsupported`
-/// 也不误开）。真样本 `tmp_book/小狗钱钱.pdf` 实测命中。
+/// 也不误开）。
 ///
 /// 为什么它也要放在 `sniffFormat` 的后缀判定**之前**：与 `hasMobiMagic` 同理——
 /// **魔数压过后缀**。PDF 头是纯 ASCII 且前几行常含可打印文本，改名 `.txt` 后

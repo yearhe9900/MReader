@@ -1,13 +1,11 @@
-// `M4-T03`：书签同步（`SYNC-03`，PRD §10.1「书签 / 笔记：按条目合并」）。
+// 书签同步（`SYNC-03`，PRD §10.1「书签 / 笔记：按条目合并」）。
 //
-// 每本书一个远端文件 `bookmarks/{bookId}.json`（与本地 `bookmarks/` 同构，
-// 文件格式同 `BookmarkStore`——`{"bookId": …, "bookmarks": […]}`，下载直接
-// 复用 `parseBookmarks` 防御式解析，不另造第二套格式）。
+// 每本书一个远端文件 `bookmarks/{bookId}.json`（与本地同构，格式同
+// `BookmarkStore`，下载复用 `parseBookmarks` 防御式解析，不另造第二套格式）。
 //
-// 合并 = 并集（`entry_sync.mergeById`）：
-//   · key = [Bookmark.createdAt]（`TYP-06`：兼作条目身份）；
-//   · 两侧各加一条 → 同步后两条都在（验收②）；一侧加 → 对端可见（验收①）；
-//   · 同 key 冲突取内容字典序大者（[byContent]，双侧对称收敛）。
+// 合并 = 并集（`entry_sync.mergeById`）：key = [Bookmark.createdAt]（`TYP-06`：
+// 兼作条目身份）；两侧各加一条 → 同步后都在（验收②），一侧加 → 对端可见
+// （验收①）；同 key 冲突取内容字典序大者（[byContent]，双侧对称收敛）。
 //
 // 口径：**删除不跨设备传播**（并集无墓碑，PRD 未定义删除同步——一端删除后
 // 再同步会被对端并回）；「笔记」当前无存储（占位页），待落地后并入同机制。
@@ -20,7 +18,7 @@ import 'sync_config.dart';
 import 'sync_config_store.dart';
 import 'webdav_client.dart';
 
-/// 书签同步引擎（进程内共享，显式注入；触发时机由 `M4-T05` 编排）。
+/// 书签同步引擎（进程内共享，显式注入；触发时机由同步触发编排调用）。
 class BookmarkSync {
   /// 创建引擎（组合根注入，见 `lib/main.dart`）。
   BookmarkSync({
@@ -45,10 +43,9 @@ class BookmarkSync {
   /// （bookId 过 `BookmarkStore` 白名单，天然路径安全）。
   static String remotePathFor(String bookId) => '$remoteDir/$bookId.json';
 
-  /// 同步一批书的书签（`M4-T05`「退出 App 上报全部变更」入口）。
-  ///
-  /// [bookIds] 取在库书籍（无书则无可读对象，跳过对端书签）。
-  /// 配置缺失 → 全部 failed；单本失败不中断整体（`SYNC-07`）。
+  /// 同步一批书的书签（「退出 App 上报全部变更」入口）：[bookIds] 取在库书籍
+  /// （无书则无可读对象，跳过对端书签）；配置缺失 → 全部 failed，单本失败
+  /// 不中断整体（`SYNC-07`）。
   Future<EntrySyncReport> syncAll({required List<String> bookIds}) async {
     final ({SyncConfig config, String password})? ctx =
         await _tryContext();
@@ -68,9 +65,8 @@ class BookmarkSync {
     return EntrySyncReport(outcomes);
   }
 
-  /// 同步单本书的书签（退出阅读页等单书时机由 `M4-T05` 调用）。
-  ///
-  /// 不抛业务异常：通道 / 配置 / 数据问题一律返回 failed + 可读 reason。
+  /// 同步单本书的书签（退出阅读页等单书时机）；不抛业务异常：通道 / 配置 /
+  /// 数据问题一律返回 failed + 可读 reason。
   Future<EntrySyncOutcome> syncBook(String bookId) async {
     final ({SyncConfig config, String password})? ctx = await _tryContext();
     if (ctx == null) {
@@ -155,8 +151,7 @@ class BookmarkSync {
     }
   }
 
-  /// 远端字节 → 书签列表；坏 JSON / 非 Map / `bookId` 串档 → `null`（损坏）。
-  ///
+  /// 远端字节 → 书签列表；坏 JSON / 非 Map / `bookId` 串档 → `null`（损坏）；
   /// 结构合法但列表为空是**合法空集**（返空表，交并集处理）。
   List<Bookmark>? _decode(List<int> bytes, String bookId) {
     final Object? json;

@@ -1,33 +1,27 @@
-// 空段章契约（2026-10-09，真机《枭臣》「初次打开图书，章间卡着一条
-// 『第 2 章 · 载入中…』不消失」）。
+// 空段章契约（真机现象：初次打开图书，章间卡着一条「第 2 章 · 载入中…」不消失）。
 //
 // ## 根因
 //
-// TOC 规则（legado `txtTocRule` 的 `正文(?!完|结)`）把孤行「正文」切成独立章，
-// 正文区间只含空行 ⇒ `_splitParagraphs` 后 **0 段**。旧真身判据掺
-// `paragraphList.isNotEmpty` ⇒ 空段章**永驻**占位分支——把「这一章没有正文」
-// 错当成「正文还没来」；`_registerWindowUnpaginated` 又跳过空段章 ⇒ 永无分页
-// 条目，占位块永远换不成真身（楔子真身在下方渲染出来了，占位带还卡在章间）。
+// TOC 规则把孤行「正文」切成独立章、正文区间只含空行 ⇒ `_splitParagraphs` 后
+// **0 段**。旧真身判据掺 `paragraphList.isNotEmpty` ⇒ 空段章**永驻**占位分支——
+// 把「这一章没有正文」错当成「正文还没来」；`_registerWindowUnpaginated` 又跳过
+// 空段章 ⇒ 永无分页条目，占位块永远换不成真身。
 //
-// ## 修法（负责人拍板「可以只显示章节名」）
+// ## 修法（可以只显示章节名）
 //
-// 空段章走完分页管线拿**天生空页**（分页内核空章契约：`PageBreaker.paginate([])`
-// 「每章至少一页」返回一页空页、`IncrementalPaginator` 空段构造即完成），
-// 真身判据 = 「内容已就绪 + 页表已出」（**刻意不看段落数**）⇒ 空段章渲染
-// **只有章标题**的真身块。签名 / 翻页零改动（空页使占位→真切换、翻页落页 0
-// 显示章名都自然成立）。
+// 空段章走完分页管线拿**天生空页**（`PageBreaker.paginate([])`「每章至少一页」
+// 返回一页空页、`IncrementalPaginator` 空段构造即完成），真身判据 = 「内容已就绪
+// + 页表已出」（**刻意不看段落数**）⇒ 空段章渲染**只有章标题**的真身块。
+// 签名 / 翻页零改动（空页使占位→真切换、翻页落页 0 显示章名都自然成立）。
 //
-// 夹具：`FakeBookSource(paragraphCounts: [60, 0, 60])`——第 2 章 0 段，与
-// 《枭臣》孤行「正文」切出的空段章同构（`content` 非 null、段落表空）。
-// 视口 800×600（页高 572 = 600 − 28 指示条让位），与 `placeholder_band_test` 同款。
+// 夹具：`FakeBookSource(paragraphCounts: [60, 0, 60])`——第 2 章 0 段（`content`
+// 非 null、段落表空）。视口 800×600（页高 572 = 600 − 28 指示条让位）。
 //
-// ## 2026-10-21 窗口构成去脆弱化（配合 `initialReady` 放宽）
+// ## 窗口构成去脆弱化（配合 `initialReady` 放宽）
 //
-// 「1 页即上屏」后首屏卷更矮，拖动 -6000 的落点随首切片实测段数在
-// 「章 1 深处 / 章 2 深处」两态间摆动，停稳 ±1 收敛出 [h1,h2,h3] /
-// [h2,h3] 两种合法窗口——数据断言按 href 取章、不钉窗口长度；「章名
-// 照显」是渲染口径，用 `PagedLayout` 章顶 `jumpTo` 定点后查树，不依赖
-// 拖动落点把标题恰好带进可见带。
+// 「1 页即上屏」后首屏卷更矮，拖动落点随首切片实测段数在两态间摆动、停稳 ±1
+// 收敛出两种合法窗口——数据断言按 href 取章、不钉窗口长度；「章名照显」是渲染
+// 口径，用 `PagedLayout` 章顶 `jumpTo` 定点后查树，不依赖拖动落点。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -87,11 +81,8 @@ void main() {
 
       final PagedScroller sc = scroller(tester);
       final List<PagedChapterView> views = sc.chapters;
-      // 窗口构成**不钉死**（2026-10-21）：`initialReady` 放宽到「1 页即上屏」
-      // 后首屏卷更矮，拖动 -6000 的落点在「章 1 深处（cur=0）」与「章 2 深处
-      // （cur=2）」两种终态间随首切片实测段数摆动，停稳 ±1 收敛分别得
-      // [h1,h2,h3] / [h2,h3]——两种都合法。故按 href 取章钉事实；
-      // 「尾追加到第 3 章」= 末章 h3 必在窗。
+      // 窗口构成**不钉死**：`initialReady` 放宽后拖动落点在两态间摆动、停稳 ±1
+      // 收敛得两种合法窗口，故按 href 取章钉事实；「尾追加到第 3 章」= 末章 h3 必在窗。
       expect(views.last.href, 'h3', reason: '窗口应已尾追加到第 3 章');
       PagedChapterView byHref(String href) =>
           views.firstWhere((PagedChapterView v) => v.href == href);
@@ -103,8 +94,8 @@ void main() {
       }
 
       // 空段章（第 2 章）：走完分页管线拿到**一页空页**（内核「每章至少一页」）。
-      // 改前 `pages` 恒空（`_registerWindowUnpaginated` 跳过空段章 ⇒ 永无页表）
-      // ⇒ 永驻占位分支。
+      // 空段章走完分页管线拿一页空页（`_registerWindowUnpaginated` 若跳过空段章
+      // ⇒ 永无页表、永驻占位分支）。
       final PagedChapterView emptyView = byHref('h2');
       expect(emptyView.paragraphs, isEmpty, reason: '空段章段落表为空');
       expect(emptyView.lines, isEmpty, reason: '空页没有行');
@@ -157,14 +148,11 @@ void main() {
     testWidgets('窗口第 3 章的空段章拿天生空页（窗口登记路径，非 ±1 邻章）',
         (WidgetTester tester) async {
       // [60, 0, 0]：尾部连排两个空段章（夹具刻意为之）。拖动后 target 停在
-      // 章 0 深处（-2500 实测 px=2540、prime index=0），views[2] **不是**
-      // target ±1（= 0,1）⇒ `_primeOpenSync` 的 prev/next 路径覆盖不到它，
-      // 页表只能来自 `_registerWindowUnpaginated`（窗口全量登记，空段章也
-      // 登记——登记即秒完成入缓存）。这条用例把「窗口登记放行空段章」单独
-      // 钉住：变异（登记时跳过空段章）后 views[2] 恒无页表 ⇒ 永驻占位。
-      //
-      // 章 1 也是空段（矮）⇒ 窗口 [0,1] 尾近，视口底越过窗口尾即触发尾追加
-      // [0,1,2]（换正常高章则窗口尾远、尾追加不触发——第一版就栽在这）。
+      // 章 0 深处，views[2] **不是** target ±1 ⇒ `_primeOpenSync` 的 prev/next
+      // 路径覆盖不到它，页表只能来自 `_registerWindowUnpaginated`。
+      // 「窗口登记放行空段章」单独钉住：变异（登记时跳过空段章）后 views[2] 恒无
+      // 页表 ⇒ 永驻占位。章 1 也是空段（矮）⇒ 窗口 [0,1] 尾近，视口底越过窗口尾
+      // 即触发尾追加 [0,1,2]（换正常高章则尾追加不触发）。
       final Widget app = MaterialApp(
         home: ReaderPage(
           source: FakeBookSource(paragraphCounts: const <int>[60, 0, 0]),

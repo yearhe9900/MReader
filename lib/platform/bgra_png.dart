@@ -1,25 +1,18 @@
 // BGRA 原始位图 → PNG 字节（PDF 页渲染结果的编码出口）。
 //
-// ## 为什么需要它
+// 为什么需要它：pdfrx 的 `PdfImage` 只给到 `BGRA8888` 原始像素，而阅读页的图片页
+// 管线吃**编码后的图片字节**（CBZ 直接给 JPEG/PNG 原始字节 → `Image.memory`）。
+// 要复用同一条管线（含点页全屏缩放的原始字节解码），适配器必须把 BGRA 编成 PNG——
+// 这是「让 PDF 页与 CBZ 页对上层完全同形」的代价。
 //
-// pdfrx 的 `PdfImage` 只给到 `BGRA8888` 原始像素（`pdf_image.dart` 实证），
-// 而阅读页的图片页管线吃的是**编码后的图片字节**（CBZ 直接给 JPEG/PNG 原始字节，
-// 见 `cbz_source.dart` → `Image.memory`）。要复用同一条管线（含点页全屏缩放的原始字节
-// 解码），适配器必须把 BGRA 编成 PNG——这是「让 PDF 页与 CBZ 页对上层完全同形」的代价。
+// 为什么手写而不用现成库：1. 只要「一种无损编码」，PNG 结构极简（签名 + IHDR +
+// IDAT + IEND），deflate 用 `dart:io` 的 `ZLibEncoder`（zlib 流正是 IDAT 格式）；
+// 2. 少一个依赖 = 少一个跨平台变量；3. 纯函数、可被单测逐字节验证
+// （`test/format/bgra_png_test.dart` 解回像素比对）。
 //
-// ## 为什么手写而不用现成库
-//
-//   1. 不需要解码能力，只要「一种无损编码」：PNG 结构极简（签名 + IHDR + IDAT + IEND），
-//      deflate 用 `dart:io` 的 `ZLibEncoder`（zlib 流正是 PNG 的 IDAT 格式）；
-//   2. 少一个依赖 = 少一个跨平台变量（M3.5 的 Rust 加速层也不碰这条链）；
-//   3. 纯函数、可被单测逐字节验证（`test/format/bgra_png_test.dart` 解回像素比对）。
-//
-// ## 格式细节
-//
-//   · 色彩类型 6（truecolor + alpha，每像素 4 字节），位深 8 → 与 BGRA 一一对应，
-//     只需把 B 与 R 换位（PNG 是 RGBA 顺序）；
-//   · 每行前置 1 字节过滤器类型 0（None）——不解压后再过滤，省一遍内存扫描；
-//   · **本文件是平台层**（用 `dart:io` 的 zlib），不进格式层，不违反纯 Dart 铁律。
+// 格式细节：色彩类型 6（truecolor + alpha，每像素 4 字节）位深 8，与 BGRA 一一对应，
+// 只需 B 与 R 换位（PNG 是 RGBA 顺序）；每行前置 1 字节过滤器类型 0（None）；
+// **本文件是平台层**（用 `dart:io` 的 zlib），不进格式层，不违反纯 Dart 铁律。
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';

@@ -1,9 +1,9 @@
-// `IsolateRunner` 护栏单测（纯 Dart `test()`，不涉及 widget / FakeAsync）。
+// `IsolateRunner` 护栏单测（`PERF-01` 接线前置；纯 Dart `test()`，无 widget / FakeAsync）。
 //
 // 目标：证明「顶层纯函数 + 可序列化入参」可往返；而「不可序列化入参 / 捕获闭包」
-// 会**明确失败**（不静默）——这是 `M2a-T06`（`PERF-01` 接线）的前置护栏。
-// 另证明两条接线契约：① 任务**确实跑在新 isolate**（`debugName` 取证）；
-// ② `runWithFallback` 的诚实降级（派发失败 → 同一任务回落本 isolate 现跑）。
+// 会**明确失败**（不静默）。另证明两条接线契约：① 任务**确实跑在新 isolate**
+// （`debugName` 取证）；② `runWithFallback` 的诚实降级（派发失败 → 同一任务回落
+// 本 isolate 现跑）。
 import 'dart:isolate';
 
 import 'package:flutter_test/flutter_test.dart';

@@ -1,13 +1,10 @@
-// 未分页占位块契约（2026-10-08，真机「章节间有大段空白 / 滚动时跳动」）。
+// 未分页占位块契约（真机症状：章节间有大段空白 / 滚动时跳动）。
 //
 // 两条被钉死的行为：
-//   ① 占位块高 = **章标题占高 + 一行正文 + 24**，不再是整页高。
-//      改前 `_buildPageViews` 给未分页章 `headingHeight: cfg.pageHeight` ⇒
-//      滚动长卷里每个待排章先占**一整屏**空白（探针实测 572dp），用户看到
-//      「上一章正文 → 一整屏空白 → 下一章正文」。
-//   ② 占位块→真实章的合入**不许移动视口**（占位 1 屏 → 真实 5 屏，约 4.8 倍
-//      高度突变）。改前实测视口从 5454 掉到 4882（Δ = 572 = 一整屏）——
-//      这正是「滚动时跳动」的量级。
+//   ① 占位块高 = **章标题占高 + 一行正文 + 24**，不再是整页高（否则滚动长卷里
+//      每个待排章先占**一整屏**空白，用户看到「上一章正文 → 一整屏空白 → 下一章」）。
+//   ② 占位块→真实章的合入**不许移动视口**（占位 1 屏 → 真实多屏的高度突变，
+//      正是「滚动时跳动」的量级）。
 //
 // 夹具：`FakeBookSource(paragraphCounts: [60,60,60])`，第 3 章用闸门挂住内容
 // ⇒ 它必然停在占位块（可稳定观察）。视口 800×572（800×600 − 28dp 指示条让位）。
@@ -85,9 +82,8 @@ void main() {
       expect(views[1].pages, isNotEmpty, reason: '第 2 章应是真页表');
       expect(views[2].pages, isEmpty, reason: '第 3 章被闸门挂住 ⇒ 占位块');
 
-      // ① 占位块高：改前 = `cfg.pageHeight`（572.0 = 整屏）。现 = 116.0
-      //    （标题 60.0 + 正文一行 20×1.6 = 32 + 24 呼吸；默认字号 20，
-      //    `TYP-01` 2026-10-13 起）。
+      // ① 占位块高：改前 = `cfg.pageHeight`（整屏）。现 = 116.0
+      //    （标题 60.0 + 正文一行 20×1.6 = 32 + 24 呼吸；默认字号 20，`TYP-01`）。
       //    标题占高 60.0 = 文本 24 + `_kHeadingGapTop` 24 + `_kHeadingGapBottom` 12
       //    （章标题改版后留白链 19→36，`§2.82`）。
       expect(views[2].headingHeight, 116.0);
@@ -111,8 +107,7 @@ void main() {
       await tester.pumpWidget(buildApp());
       await settle(tester);
 
-      // 两次下拖才真正顶到滚动域下界（单次 drag 的位移会被手势/物理层截断，
-      // 探针实测单次 −6000 只到 4885、再 −3000 才到 max）。
+      // 两次下拖才真正顶到滚动域下界（单次 drag 的位移会被手势/物理层截断）。
       final Finder area =
           find.byKey(const ValueKey<String>('reader-content-area'));
       await tester.drag(area, const Offset(0, -6000));
@@ -133,8 +128,7 @@ void main() {
       await settle(tester, rounds: 40);
 
       final double after = scrollerState(tester).offset;
-      // 断言主句放最前：修前实测 5454.0 → 4882.0（Δ = 572.0 = 一整屏），
-      // 真机表现即「章节间有一大段空白，然后视口跳一下」。
+      // 断言主句放最前：修前实测 Δ = 一整屏——真机表现即「章节间一大段空白、视口跳一下」。
       expect((after - before).abs(), lessThanOrEqualTo(2.0),
           reason: '占位→真实的高度合入必须零扰动（before=$before after=$after）');
       expect(scroller(tester).chapters[2].pages, isNotEmpty,

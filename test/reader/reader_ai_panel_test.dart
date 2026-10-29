@@ -1,7 +1,7 @@
 // 阅读页 AI 面板（`AI-04`~`AI-07` 分组收纳入口）的 widget 测试。
 //
 // 改前 4 个 AI 入口平铺在 AppBar：搜索/书签/前情回顾/AI 摘要/AI 问答/人物与设定/
-// 外观/目录/全屏共 9 个 48dp 按钮 = 432dp > 手机屏宽（393dp），书名与副标题被挤没。
+// 外观/目录/全屏共 9 个 48dp 按钮超出手机屏宽，书名与副标题被挤没。
 // 收进面板后 AppBar 只剩 6 个按钮；本测试钉住「面板四行都在、回调一一对应、
 // 关闭后回到阅读页」，确保收纳没有丢功能。
 import 'dart:io';
@@ -46,7 +46,7 @@ void main() {
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
 
-      // 面板标题 + 四行（文案与改前 tooltip 一致）。
+      // 面板标题 + 四行（文案与 tooltip 一致）。
       expect(find.text('AI 助手'), findsOneWidget);
       for (final String label in <String>[
         'AI 摘要',
@@ -57,7 +57,7 @@ void main() {
         expect(find.text(label), findsOneWidget, reason: '缺入口：$label');
       }
 
-      // Key 与改前 AppBar 一致（便于既有查找口径延续）。
+      // Key 与 AppBar 一致（便于既有查找口径延续）。
       expect(find.byKey(const Key('reader-summary')), findsOneWidget);
       expect(find.byKey(const Key('reader-ask')), findsOneWidget);
       expect(find.byKey(const Key('reader-entities')), findsOneWidget);
@@ -133,12 +133,12 @@ void main() {
       await showChrome(tester); // 默认沉浸全屏：顶栏要主动唤出（TYP-09）
 
       final AppBar bar = tester.widget<AppBar>(find.byType(AppBar));
-      // 顶栏动作数上限：搜索/书签/AI/外观/目录 = 5（全屏切换按钮已于
-      // 2026-10-08 移除，详见 `reader_page._fullscreen` 注释）。
+      // 顶栏动作数上限：搜索/书签/AI/外观/目录 = 5（全屏切换按钮已移除，
+      // 详见 `reader_page._fullscreen` 注释）。
       expect(bar.actions!.length, lessThanOrEqualTo(5),
           reason: '顶栏动作过多会把标题挤没（9 × 48dp > 393dp 屏宽）');
 
-      // 书名与副标题都还在（改前被挤成 0 宽）。
+      // 书名与副标题都还在（不被挤成 0 宽）。
       expect(find.text('书架书名'), findsOneWidget);
       expect(find.textContaining('第1章'), findsWidgets);
 
@@ -151,7 +151,7 @@ void main() {
       ]) {
         expect(find.byKey(Key(key)), findsOneWidget, reason: '缺入口 $key');
       }
-      // 全屏切换按钮**已移除**（负责人要求：默认即全屏、点正文切换）。
+      // 全屏切换按钮**已移除**（默认即全屏、点正文切换）。
       expect(find.byKey(const Key('reader-fullscreen-enter')), findsNothing);
       expect(find.byKey(const Key('reader-fullscreen-exit')), findsNothing);
     });

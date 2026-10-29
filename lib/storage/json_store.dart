@@ -19,9 +19,8 @@ class JsonStore {
   /// 底层原子文件通道。
   final AtomicFile atomicFile;
 
-  /// 写入任意可 JSON 序列化的值（通常是 `Map` / `List`）。
-  ///
-  /// 写入经 [AtomicFile]，满足 `DATA-01` 原子性与备份轮转。
+  /// 写入任意可 JSON 序列化的值（通常是 `Map` / `List`）；经 [AtomicFile] 满足
+  /// `DATA-01` 原子性与备份轮转。
   Future<void> write(Object? value) async {
     final String encoded = jsonEncode(value);
     await atomicFile.writeString(encoded);

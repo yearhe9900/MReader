@@ -1,13 +1,11 @@
 // `TYP-09`：细粒度阅读进度指示——左「当前章标题」+ 右「章内页/本章总页 + 全书百分比」
 // + 2px 细进度条。
 //
+// 格式（§2.72，负责人拍板口径）：左章节标题、右「8/20 22.2%」（章内页 / 本章总页 /
+// 全书百分比**一位小数**）+ 2px 进度条。
+//
 // 独立于 AppBar / 控制条（`TYP-09` 验收①②：全屏时那两者都隐藏，本指示器必须仍在）；
 // 由 `ReaderPage` 以**滚动实时采样**的显示值驱动（验收②「进度随滚动实时更新」）。
-//
-// ## 格式变更（2026-10-08，负责人拍板）
-// 改前 = 「第 N/M 章 · X%」（整数百分比）+ 2px 条。负责人指定改为截图口径：
-// 左章节标题、右「8/20 22.2%」（章内页 / 本章总页 / 全书百分比**一位小数**）。
-// 2px 进度条按负责人选择保留。详见 §2.72。
 //
 // 页读数在**页表未就绪**（增量分页首帧 / 占位章）时退化为只显示百分比——
 // 不显示「0/0」这种没有信息量的读数。
@@ -36,15 +34,11 @@ class ReaderProgressIndicator extends StatelessWidget {
   /// 全书进度百分比（0.0 ~ 100.0，一位小数）。
   final double percent;
 
-  /// 底部系统栏让位（`MediaQuery.padding.bottom`，手势导航条约 34dp）。
+  /// 底部系统栏让位（`MediaQuery.padding.bottom`）。
   ///
-  /// **必须由本组件内部吃掉、而不是外面包 `SafeArea`**：包在外层时
-  /// `DecoratedBox` 的底色也被一起顶上去，系统栏区域会露出正文（观感是
-  /// 「进度条浮在文字上、底下漏一条」）。放在 Column 末尾则底色铺到屏幕下缘，
-  /// 只有文字让开——与截图口径一致。
-  ///
-  /// 调用方（`ReaderPage`）必须把**同一个量**加进正文的 reserve，否则正文会被
-  /// 指示器多盖住 [bottomInset]。
+  /// **必须由本组件内部吃掉、而不是外面包 `SafeArea`**：包在外层时 `DecoratedBox`
+  /// 底色也被顶上去，系统栏区域会露出正文（「进度条浮在文字上、底下漏一条」）。
+  /// 调用方（`ReaderPage`）**必须**把同一个量加进正文的 reserve，否则正文会被多盖住。
   final double bottomInset;
 
   @override
@@ -78,7 +72,7 @@ class ReaderProgressIndicator extends StatelessWidget {
             backgroundColor: theme.dividerColor.withValues(alpha: 0.2),
           ),
           Padding(
-            // 水平 12：与正文的页边距对齐观感（改前无水平内边距，贴边）。
+            // 水平 12：与正文的页边距对齐观感（避免贴边）。
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: Row(
               children: <Widget>[

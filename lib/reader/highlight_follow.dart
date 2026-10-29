@@ -1,4 +1,4 @@
-// `TTS-02` 朗读高亮与自动跟随（M3-T06）。
+// `TTS-02` 朗读高亮与自动跟随。
 //
 // 三件东西：
 //   · [HighlightFollow] —— 跟随开关策略：手动滚动即暂停跟随（`TTS-02` ③），
@@ -41,10 +41,9 @@ bool isParagraphVisible(Rect paragraph, Rect viewport, {double ratio = 0.5}) {
 
 /// 朗读段高亮（`TTS-02` ①：高亮与朗读内容一致）。
 ///
-/// **结构恒定**：恒为一层 [DecoratedBox]（不活跃时空白 decoration），
-/// `active` 只切 decoration 不换子树形状——若按 active 在「裸 child /
-/// 包一层」之间切换，child 元素会搬家重建，[InlineParagraph] 的手势
-/// recognizer 与图片 State 全部重来。恒定包装下翻转零重建。
+/// **结构恒定**：恒为一层 [DecoratedBox]，`active` 只切 decoration 不换子树形状——
+/// 若在「裸 child / 包一层」间切换，child 元素会搬家重建（手势 recognizer 与图片
+/// State 全部重来），恒定包装下翻转零重建。
 class SpeakingHighlight extends StatelessWidget {
   const SpeakingHighlight({
     super.key,

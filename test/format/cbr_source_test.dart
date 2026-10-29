@@ -1,8 +1,8 @@
-// `lib/format/cbr_source.dart` 单测（`FMT-03`，`Q5` 退化口径，M2b-T02）。
+// `lib/format/cbr_source.dart` 单测（`FMT-03`，`Q5` 退化口径）。
 //
 // 两条分支：
 // · **退化分支（现值）**：默认 [UnavailableRarExtractor] → `load()` 抛
-//   `cbrUnsupported`（导入即拒绝，与加密文件处理一致——2026-09-24 拍板）；
+//   `cbrUnsupported`（导入即拒绝，与加密文件处理一致）；
 // · **升级分支**：假 [RarExtractor] 注入 → 行为与 CBZ 一致（`FMT-03` ②：
 //   每页一章 / 自然序 / 首页图封面），锁住将来的升级缝不被改坏。
 import 'dart:convert';

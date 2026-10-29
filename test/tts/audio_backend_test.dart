@@ -1,15 +1,14 @@
-// 平台后端契约（M3-T07）：桌面工厂降级；真机实现的「init 一次性守卫」与
+// 平台后端契约：桌面工厂降级；真机实现的「init 一次性守卫」与
 // 多轮 open / publish / close 全链路。
 //
-// 钉住的风险：`AudioService.init` 自带 `assert(_cacheManager == null)`——
-// 进程内只能 init 一次，多轮朗读会话必须复用同一 handler（静态守卫），
-// 本测试连续 open 两次即验证不重 init（否则 debug 下直接断言炸）。
+// ⚠️ 钉住的风险：`AudioService.init` 自带 `assert(_cacheManager == null)`——
+// 进程内只能 init 一次，多轮朗读会话必须复用同一 handler（静态守卫），本测试
+// 连续 open 两次即验证不重 init（否则 debug 下直接断言炸）。
 //
-// 口径：测试宿主为 Windows 桌面 → 无平台通道，audio_service 落 NoOp 默认
-// 实现（Windows/Linux 见其 platform_interface 源码）、audio_session 落
-// 「Unsupported platform」防御分支——恰好让 init → 配置语音会话 → 激活
-// 焦点 → 上屏 → 撤场在零原生环境下跑通。真机失败路径（清单缺失 →
-// PlatformException → `_failed` 终态降级）本机不可复现，属代码审查项。
+// 口径：测试宿主为 Windows 桌面 → 无平台通道，audio_service 落 NoOp 默认实现、
+// audio_session 落「Unsupported platform」防御分支，全链路在零原生环境下跑通；
+// 真机失败路径（清单缺失 → PlatformException → `_failed` 终态降级）本机不可
+// 复现，属代码审查项。
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';

@@ -1,4 +1,4 @@
-// `M3-T01`：AI 设置页 widget 测试（`AI-01` 界面 / `AI-09` 开关 / `DATA-02` ③ 标注）。
+// `AI-01` 界面 / `AI-09` 开关 / `DATA-02` ③ 标注：AI 设置页 widget 测试。
 import 'dart:io';
 
 import 'package:flutter/material.dart';

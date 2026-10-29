@@ -1,12 +1,10 @@
-// `M2b-T07`：档位生效接线的**验收映射**测试（`UI-05` ③ / `UI-06` ②）。
+// 档位生效接线的**验收映射**测试（`UI-05` ③ / `UI-06` ②）。
 //
-// ⚠️ **2026-10-15：本文件只覆盖「库玻璃」那条线**。产品窄屏底栏已换成 mi_like_ui
-// 玻璃底栏（一比一移植 `bottom_nav_demo`，见 [GlassNavHost]），其契约测试见
-// `test/ui/glass_nav_host_test.dart`（关档退化 + 明暗映射）与
-// `test/ui/mi_like_ui/`（移植套件，黄金图锁像素）。本文件保留的原因：`GlassNavBar`
-// 仍在库里且仍被 `glass_nav_form_test` / `glass_material_test` 覆盖，删掉会让库的
-// 档位链失去唯一防线。**真机若见到底栏不随档位变化，以 `glass_nav_host_test`
-// 为准**（mi_like_ui 底栏不依赖着色器，档位只影响「关档退化」这一件事）。
+// ⚠️ 本文件只覆盖「库玻璃」那条线。产品窄屏底栏已换成 mi_like_ui 玻璃底栏（一比一移植
+// `bottom_nav_demo`，见 [GlassNavHost]），其契约测试见 `test/ui/glass_nav_host_test.dart`
+// 与 `test/ui/mi_like_ui/`（移植套件）。本文件保留的原因：`GlassNavBar` 仍在库里且仍被
+// `glass_nav_form_test` / `glass_material_test` 覆盖，删掉会让库的档位链失去唯一防线。
+// **真机若见底栏不随档位变化，以 `glass_nav_host_test` 为准**。
 //
 // PRD 验收条目 → 断言：
 //   · `UI-06` ②「关闭特效后 UI 仍完整可用（退化为纯色）」→ 关档下无任何玻璃控件
@@ -208,11 +206,10 @@ void main() {
     expect(find.text('删除书籍'), findsOneWidget);
     expect(find.text('取消'), findsOneWidget);
 
-    // 遮罩统一（2026-09-30 批）：关档确认框原先吃 Material `DialogRoute` 的默认
-    // `super.barrierColor = Colors.black54`（`material/dialog.dart:1825`，
-    // `0x8A000000`、**α0.541**）——正是 2026-09-29 已判为「太重」的那个值，
-    // 当时只改了底部弹窗、**漏了确认框**。现与弹窗共用 `OverlayStyle.barrier`。
-    // 断言读遮罩自己渲染出的色，不引用薄封装常量（与弹窗用例同口径）。
+    // 遮罩统一：关档确认框原先吃 Material `DialogRoute` 的默认 barrierColor
+    // （`0x8A000000`、**α0.541**，即已判「太重」的那个值——当时只改了底部弹窗、**漏了
+    // 确认框**）。现与弹窗共用 `OverlayStyle.barrier`；断言读遮罩自己渲染出的色，
+    // 不引用薄封装常量（与弹窗用例同口径）。
     final Animation<Color?> alertBarrierAnim = tester
         .widget<AnimatedModalBarrier>(find.byType(AnimatedModalBarrier))
         .color;
@@ -253,8 +250,8 @@ void main() {
     await tester.pumpAndSettle();
 
     // 推演：关档走 showModalBottomSheet（BottomSheet 在树），内容照常渲染，无 GlassSheet。
-    // 2026-09-29 拍板（`glass_kit.dart` `showSheet` 形态口径）：本项目弹层一律
-    // **不可拖拽关闭、无拖拽指示条**，关档同步——原先那条自绘的 36×4 横条已删。
+    // 形态口径（`glass_kit.dart` `showSheet`）：本项目弹层一律**不可拖拽关闭、无拖拽
+    // 指示条**，关档同步（原先自绘的 36×4 横条已删）。
     expect(find.byType(GlassSheet), findsNothing);
     expect(find.byType(BottomSheet), findsOneWidget);
     expect(
@@ -277,10 +274,9 @@ void main() {
     );
     expect(find.text('关闭'), findsOneWidget);
 
-    // 遮罩色源（2026-09-29 修「长按书卡，在操作单出现之前先蒙一层灰」）：
-    // `showModalBottomSheet` 的 `barrierColor` 默认 `Colors.black54`（= `0x8A000000`），
-    // 与玻璃库默认**同一个值**——两档共用 `OverlayStyle.barrier`（`0x3D000000`）。
-    // 断言读遮罩自己渲染出的色，不引用薄封装常量（与玻璃档用例同口径）。
+    // 遮罩色源：`showModalBottomSheet` 的 `barrierColor` 默认 `Colors.black54`
+    // （= `0x8A000000`），与玻璃库默认**同一个值**——两档共用 `OverlayStyle.barrier`
+    // （`0x3D000000`）。断言读遮罩自己渲染出的色，不引用薄封装常量（同玻璃档口径）。
     final Animation<Color?> barrierAnim = tester
         .widget<AnimatedModalBarrier>(find.byType(AnimatedModalBarrier))
         .color;

@@ -1,14 +1,12 @@
 // 系统 TTS 引擎（flutter_tts 4.2.5 包装；`TTS-01`）。
 //
-// 三个平台事实（读包源码钉死，非文档转述）：
-//   · `speak()` 的 future **立即返回**（invokeMethod 确认即回），读完靠
-//     `setCompletionHandler`（平台 `onDone` → `speak.onComplete`）；
-//   · `stop()` 触发 `setCancelHandler`（Android `onStop` 非暂停分支 →
-//     `speak.onCancel`）——**不是** completion，controller 据此区分
-//     「读完推进」与「主动停止」；
-//   · 包**无 linux 实现**（无 `linux/` 目录、pubspec 无条目）→ Linux 上
-//     任何 invokeMethod 抛 `MissingPluginException` → [init] 返回 `false`
-//     → UI 层中文提示（PRD §15.3 不静默失败）。
+// 三个平台事实（读包源码钉死，非文档转述）：· `speak()` 的 future **立即返回**
+// （invokeMethod 确认即回），读完靠 `setCompletionHandler`（平台 `onDone` →
+// `speak.onComplete`）；· `stop()` 触发 `setCancelHandler`（Android `onStop` 非
+// 暂停分支 → `speak.onCancel`）——**不是** completion，controller 据此区分
+// 「读完推进」与「主动停止」；· 包**无 linux 实现** → Linux 上任何 invokeMethod 抛
+// `MissingPluginException` → [init] 返回 `false` → UI 层中文提示（PRD §15.3
+// 不静默失败）。
 import 'dart:async';
 
 import 'package:flutter_tts/flutter_tts.dart';

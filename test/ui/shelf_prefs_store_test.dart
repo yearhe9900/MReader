@@ -1,7 +1,6 @@
-// `ShelfPrefsStore` 纯逻辑测试：**分组筛选**（2026-09-29 改版，`P2-02`）。
+// `ShelfPrefsStore` 纯逻辑测试：**分组筛选**（`P2-02`）。
 //
-// 背景：筛选项原为「阅读状态」（`ShelfReadingFilter { unread, reading, finished }`，
-// 单选），现按拍板改为**分组**——`groupId` 为 `null` 表示「全部」，非空表示
+// 筛选项是**分组**（曾为「阅读状态」单选）：`groupId` 为 `null` 表示「全部」，非空表示
 // 只看该分组；旧 `filters` 键（阅读状态语义）**忽略不迁移**。
 //
 // 全部是 `test()`，无 `testWidgets`——不涉及 FakeAsync 铁律，可照常 await 真 IO。

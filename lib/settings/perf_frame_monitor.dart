@@ -1,4 +1,4 @@
-// 帧预算监控（`UI-06` 自动降级的帧侧触发器，M2b-T07 接线批）。
+// 帧预算监控（`UI-06` 自动降级的帧侧触发器）。
 //
 // 口径对齐玻璃库 `GlassPerformanceMonitor`：单帧 `FrameTiming.rasterDuration`
 // 超 [PerfDegradePolicy.frameBudget]（16ms）计「超预算」，连续

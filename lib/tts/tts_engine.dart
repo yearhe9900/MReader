@@ -1,8 +1,8 @@
-// TTS 引擎抽象与段落可读性判定（`TTS-01`，M3-T06）。
+// TTS 引擎抽象与段落可读性判定（`TTS-01`）。
 //
-// 分层：引擎只回答「一段话读完 / 被停掉 / 出错」三件事；推进策略（逐段、
-// 跨章、纯标点跳过）全部在 `tts_controller.dart`——策略层可脱离平台在测试
-// 里全量验证（PRD §9.2 按段落粒度）。
+// 分层：引擎只回答「一段话读完 / 被停掉 / 出错」三件事；推进策略（逐段、跨章、
+// 纯标点跳过）全部在 `tts_controller.dart`——策略层可脱离平台在测试里全量验证
+// （PRD §9.2 按段落粒度）。
 import '../reader/selection_overlay.dart' show plainParagraphText;
 
 /// 一次 [TtsEngine.speak] 的结局。
@@ -41,9 +41,9 @@ class TtsVoice {
 abstract class TtsEngine {
   /// 初始化并探测引擎可用性；`false` = 本机无可用语音引擎。
   ///
-  /// PRD §15.3：flutter_tts 无 linux 实现 → Linux 上探测抛
-  /// `MissingPluginException` → 这里返回 `false`，由 UI 层给中文提示
-  /// 「本机未安装语音引擎」，**不得静默失败**。结果由实现缓存。
+  /// PRD §15.3：flutter_tts 无 linux 实现 → Linux 上探测抛 `MissingPluginException`
+  /// → 这里返回 `false`，由 UI 层给中文提示「本机未安装语音引擎」，**不得静默失败**。
+  /// 结果由实现缓存。
   Future<bool> init();
 
   /// 朗读一段纯文本；future 以结局完结（读完 / 停止 / 出错）。
@@ -63,11 +63,9 @@ abstract class TtsEngine {
   Future<void> setVoice(TtsVoice? voice);
 }
 
-/// 段落是否值得朗读（`TTS-01` ③：纯标点 / 空白段被跳过）。
-///
-/// 先剥渲染标记（NUL 链接 / 锚点标记与 `<b>`/`<i>`，[plainParagraphText]），
-/// 再查是否残留**可读字符**（字母 / 数字，含 CJK）：全角空格、纯标点、
-/// 纯符号、纯标签段落一律跳过。
+/// 段落是否值得朗读（`TTS-01` ③：纯标点 / 空白段被跳过）。先剥渲染标记（NUL 链接 /
+/// 锚点标记与 `<b>`/`<i>`，[plainParagraphText]），再查是否残留**可读字符**（字母 /
+/// 数字，含 CJK）：全角空格、纯标点、纯符号、纯标签段落一律跳过。
 bool shouldSpeakParagraph(String raw) =>
     _readableChar.hasMatch(plainParagraphText(raw));
 

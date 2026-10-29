@@ -1,6 +1,6 @@
 // CBR 的 [BookSource] 实现（`'dart-cbr'`，`FMT-03` / `META-11` ③）。
 //
-// ## Q5 退化拍板（2026-09-24 负责人确认「导入即拒绝」口径）
+// ## Q5 退化拍板（「导入即拒绝」口径）
 //
 // Dart 生态无 rar 解压 → 退化为「**识别 + 明确提示**」，**与加密文件的处理一致**：
 // [load()] 抛 [FormatErrorCode.cbrUnsupported]（中文文案含「转换为 CBZ」指引），

@@ -1,14 +1,12 @@
-// `TTS-07` 在线 TTS 配置页 widget 测试（M3-T09）。
+// `TTS-07` 在线 TTS 配置页 widget 测试。
 //
-// 验收映射：
-//   · 双模式表单切换（URL 模板 ↔ OpenAI 兼容：组随模式显隐）；
-//   · 保存前 validate 中文校验弹窗（无 `{text}` 被拦）；
-//   · 合法填写保存 → 落盘到 `OnlineTtsStore` + 页面返回；
-//   · API Key 不回显（`DATA-02`）：已存密钥只给「留空保持」提示；
-//   · 音频缓存计数与「清理」入口（`TTS-07` ② 管理面）。
+// 覆盖：双模式表单切换（URL 模板 ↔ OpenAI 兼容，组随模式显隐）；保存前 validate
+// 中文校验弹窗（无 `{text}` 被拦）；合法填写保存 → 落盘 `OnlineTtsStore` + 页面
+// 返回；API Key 不回显（`DATA-02`，已存密钥只给「留空保持」提示）；音频缓存计数
+// 与「清理」入口（② 管理面）。
 //
-// 口径：装具同 `ai_settings_page_test`（`capTestTimeout` / `tall` /
-// `settleReal`）；真 IO（落盘 / 读密钥）包 `tester.runAsync`；期望值硬编码。
+// 口径：装具同 `ai_settings_page_test`（`capTestTimeout` / `tall` / `settleReal`）；
+// 真 IO（落盘 / 读密钥）包 `tester.runAsync`；期望值硬编码。
 import 'dart:io';
 import 'dart:typed_data';
 

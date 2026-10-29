@@ -1,20 +1,17 @@
-// 人物关系与设定梳理驱动（M3-T05：`AI-07`）。
+// 人物关系与设定梳理驱动（`AI-07`）。
 //
-// 验收对应：
-//   · `AI-07` ① 名字与书中一致：抽取提示词强制 name 用正文原写法，成品原样
-//     展示不改写；
-//   · `AI-07` ② 每条含出场章节引用：chapters 由模型按输入里的【章节 N】标注
-//     回填（0-based），点章跳转经 UI 的 onJump 回调；
-//   · `AI-07` ③ 「仅已读部分」防剧透：本层只按传入的 from..upto 抽取，
-//     范围夹取（0..readUpto，RD-04 `chapterIndex` 口径）由调用方决定；
-//   · `AI-08` ① 流式（JSONL 逐行解析、边抽边回调）/ 可取消（协作式 +
-//     [AiCall.cancel]，中断不写缓存）/ 结果缓存（PRD §8.3「按 进度范围 +
-//     内容 hash」——复用 [SummaryCache] 合并级条目，kind = [kEntityCacheKind]）。
+// 验收对应：`AI-07` ① 名字与书中一致（抽取提示词强制 name 用正文原写法，成品
+// 原样展示不改写）；② 每条含出场章节引用（chapters 按输入【章节 N】标注回填
+// 0-based，点章跳转经 UI onJump）；③ 「仅已读部分」防剧透（本层只按传入
+// from..upto 抽取，范围夹取 0..readUpto 由调用方决定，RD-04 `chapterIndex`
+// 口径）；`AI-08` ① 流式（JSONL 逐行解析、边抽边回调）/ 可取消（协作式 +
+// [AiCall.cancel]，中断不写缓存）/ 结果缓存（PRD §8.3「按 进度范围 + 内容
+// hash」，复用 [SummaryCache] 合并级条目，kind = [kEntityCacheKind]）。
 //
 // 输出契约（提示词钉死 JSON Lines）：每行一个
 // `{"name":…,"type":"人物|势力|专有名词","desc":…,"chapters":[N]}`；
-// [parseEntityOutput] 对模型不守约（数组 / 围栏 / pretty-print 多对象）做整段
-// 兜底。跨段去重合并在**代码侧**完成（[mergeEntityItems]）——不经模型二次
+// [parseEntityOutput] 对模型不守约（数组 / 围栏 / pretty-print 多对象）整段
+// 兜底。跨段去重合并**在代码侧**完成（[mergeEntityItems]）——不经模型二次
 // 合并，名字与章节引用原样保真（验收①② 的关键取舍）。
 //
 // 驱动层不依赖 Flutter / BookSource：章文本经 `loadText` 回调注入，本文件只做
@@ -235,7 +232,6 @@ class EntityOutcome {
 }
 
 /// 一次可取消的人物梳理作业（一个页面一个实例；dispose 时必须 [cancel]）。
-///
 /// 取消是协作式的：步骤间检查 `_cancelled`，在途请求经 [AiCall.cancel] 中止
 /// （静默收流，半截结果**不写缓存**，`AI-08` ①）。
 class EntityJob {
@@ -264,7 +260,6 @@ class EntityJob {
   }
 
   /// 抽取范围 [fromChapter]..[uptoChapter]（闭区间）内各章的实体清单。
-  ///
   /// 流程：取文 → 算范围内容 hash → 分段打包 → 查缓存 → 逐段流式抽取
   /// （JSONL 逐行解析，[onItems] 每抽到一条回调一次合并快照）→ 合并去重
   /// → 落缓存。[force] 绕过缓存读，结果仍回写。
@@ -426,7 +421,6 @@ class EntityJob {
   }
 
   /// 收流 + 增量按行解析（JSONL 流式：每凑齐一行抽一条并回调合并快照）。
-  ///
   /// 返回 (原始输出, 行解析成功条数)；坏行留给整段兜底。
   Future<(String, int)> _collectLines(
     AiCall call, {

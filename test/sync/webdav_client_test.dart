@@ -1,4 +1,4 @@
-// `M4-T01`：WebdavClient 通道测试（`SYNC-01` ①②③ / `SYNC-07` 失败可见）。
+// `SYNC-01` ①②③ / `SYNC-07` 失败可见：WebdavClient 通道测试。
 //
 // 用本机 `HttpServer` 模拟 WebDAV 服务端（同 `ai_client_test.dart` 的 `_serve`
 // 口径）：均为纯 `test()`（无 FakeAsync 区），真实 socket 异步可正常排空。

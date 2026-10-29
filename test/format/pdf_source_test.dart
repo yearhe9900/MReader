@@ -1,7 +1,7 @@
 // `PdfSource` 契约测试（`FMT-01` 验收①②③ / `META-10` ①② / `RD-05` 错误码映射）。
 //
 // 渲染内核用假引擎（`pdf_fakes.dart`），因此本组纯 Dart、离线、确定性：
-// 真渲染只在 `M2b-T09` 用 `tmp_book/小狗钱钱.pdf` 走端到端冒烟。
+// 真渲染只在真样本冒烟（`tmp_book/`）走端到端路径。
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';

@@ -1,16 +1,14 @@
-// `M4-T04`：书籍文件上传 / 下载（`SYNC-05`，PRD §10.1「书籍文件及其封面——
-// 可选开关，**默认关闭**」/ §10.3 `books/` 目录约定）。
+// 书籍文件上传 / 下载（`SYNC-05`，PRD §10.1「书籍文件及其封面——可选开关，
+// **默认关闭**」/ §10.3 `books/` 目录约定）。
 //
-// 三要点（`SYNC-05` 验收）：
-//   ① **默认不传**：[BookUploadPrefsStore] 落盘 `book_upload.json`，缺失即
-//      `false`——开关判定在任何网络请求**之前**（零请求）；
-//   ② 开启后可上传与下载（远端 `books/{文件名}`，单层目录）；
-//   ③ 大文件可取消且有进度：透传 [TransferControl] / `onProgress` 给
-//      `WebdavClient.uploadStream` / `downloadToFile`。
+// 三要点（`SYNC-05` 验收）：① **默认不传**（[BookUploadPrefsStore] 落盘
+// `book_upload.json`，缺失即 `false`——开关判定在任何网络请求**之前**，零请求）；
+// ② 开启后可上传与下载（远端 `books/{文件名}`，单层目录）；③ 大文件可取消且
+// 有进度（透传 [TransferControl] / `onProgress` 给 uploadStream / downloadToFile）。
 //
 // 文件名净化与远端安全：basename 过 Windows 非法字符净化（口径同
-// `progress_sync._safeSegment`），`.` / `..` / 空名拒绝——WebDAV 单层路径
-// 由 WebdavClient 逐段 percent-encode，中文书名安全。
+// `progress_sync._safeSegment`），`.` / `..` / 空名拒绝；单层路径由
+// WebdavClient 逐段 percent-encode，中文书名安全。
 import 'dart:io';
 
 import '../storage/atomic_file.dart';
@@ -21,10 +19,8 @@ import 'sync_config_store.dart';
 import 'webdav_client.dart';
 
 /// 书籍上传开关持久化（`book_upload.json`；**默认关**）。
-///
-/// 形制与 `SettingsStore` 同款：进程内共享实例 + 组合根显式注入；
-/// `load()` 由启动流程调用，未加载 / 缺失一律 `false`（fail-closed——
-/// 忘记加载只会导致「不上传」，不会误传）。
+/// 形制与 `SettingsStore` 同款（组合根显式注入）；`load()` 由启动流程调用，
+/// 未加载 / 缺失一律 `false`（fail-closed——忘记加载只会「不上传」，不会误传）。
 class BookUploadPrefsStore {
   /// 用数据目录构造（组合根注入，见 `lib/main.dart`）。
   BookUploadPrefsStore(Directory dataDir)
@@ -94,7 +90,7 @@ class BookUploadOutcome {
   bool get failed => action == BookTransferAction.failed;
 }
 
-/// 书籍文件传输引擎（进程内共享，显式注入；触发时机由 `M4-T05` 编排）。
+/// 书籍文件传输引擎（进程内共享，显式注入；触发时机由同步触发编排调用）。
 class BookUploadEngine {
   /// 创建引擎（依赖由组合根注入，见 `lib/main.dart`）。
   BookUploadEngine({
@@ -115,11 +111,9 @@ class BookUploadEngine {
   final SyncConfigStore _configStore;
   final RemoteDirCache _dirs = RemoteDirCache();
 
-  /// 上传一本书（`SYNC-05` ②③：开关关 → skipped 零请求；开启 → 流式
-  /// 上传带进度、可取消）。
-  ///
-  /// 不抛业务异常：配置 / 通道 / 数据问题一律返回
-  /// [BookTransferAction.failed] + 可读 reason（`SYNC-07` 不静默）。
+  /// 上传一本书（`SYNC-05` ②③：开关关 → skipped 零请求；开启 → 流式上传带
+  /// 进度、可取消）；不抛业务异常：一律返回 [BookTransferAction.failed] +
+  /// 可读 reason（`SYNC-07` 不静默）。
   Future<BookUploadOutcome> uploadBook(
     File file, {
     TransferControl? control,
@@ -161,9 +155,8 @@ class BookUploadEngine {
     }
   }
 
-  /// 下载一本书到 [target]（原子替换；开关关 → skipped 零请求）。
-  ///
-  /// 不抛业务异常，失败分类同 [uploadBook]。
+  /// 下载一本书到 [target]（原子替换；开关关 → skipped 零请求）；不抛业务
+  /// 异常，失败分类同 [uploadBook]。
   Future<BookUploadOutcome> downloadBook(
     String fileName,
     File target, {

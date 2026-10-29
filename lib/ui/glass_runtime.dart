@@ -1,4 +1,4 @@
-// 玻璃质量档位的**映射与运行时生效配置**（PRD `UI-05` / `UI-06`，M2b-T07 接线批）。
+// 玻璃质量档位的**映射与运行时生效配置**（PRD `UI-05` / `UI-06`）。
 //
 // 本文件收敛三件事（依赖图最底层，**不得**反向 import glass_kit / glass_scope）：
 //   ① 档位 → 玻璃库配置的唯一映射 [glassTierConfigFor]（[GlassTierConfig]）；
@@ -8,9 +8,8 @@
 //   ③ 档位标签 / 脚注文案（设置页与降级提示共用）。
 //
 // 消费方式（薄封装层 `glass_kit.dart` 与作用域 `glass_scope.dart` 均从此取值）：
-//   · 有 [BuildContext] 时优先 `GlassScope.configOf(context)`（可被子树覆盖、
-//     且建立依赖以便档位切换时自动重建）；
-//   · 无 context 的静态调用点读 [GlassRuntime.config]。
+//   有 [BuildContext] 时优先 `GlassScope.configOf(context)`（可被子树覆盖、且建立
+//   依赖以便档位切换时自动重建）；无 context 的静态调用点读 [GlassRuntime.config]。
 //
 // 视觉红线（`UI-04`）：`GlassTierConfig.scrollQuality` **严禁 `premium`**（进滚动区
 // 会渲染异常，PRD §11.4），构造期 assert 守住；「关」档 = 无玻璃纯色回退（`UI-06` ②）。
@@ -102,13 +101,8 @@ GlassTierConfig glassTierConfigFor(GlassQualityTier tier) {
 
 /// 档位的人类可读名（「高 / 中 / 低 / 关」）。
 ///
-/// 2026-09-29：原消费点是 `SegmentedButton` 的分段标签，该控件已随设置页改版
-/// 换成「行 + 弹层单选」；本函数的契约（返回「高 / 中 / 低 / 关」）不变。
-///
-/// **2026-10-20**：设置页的「效果质量 / 降低视觉特效」两行整组移除后，本函数
-/// 暂无生产消费者（仅 `glass_runtime_test` 钉契约）——保留是因为档位模型仍在
-/// （`GlassRuntime` 折算链 + 关档退化路径），后续重加入口或设备自动降级提示
-/// 都要用它出文案。
+/// 目前暂无生产消费者（仅 `glass_runtime_test` 钉契约）——保留是因为档位模型仍在
+/// （`GlassRuntime` 折算链 + 关档退化路径），后续重加入口或设备自动降级提示都要用它出文案。
 String glassQualityTierLabel(GlassQualityTier tier) {
   switch (tier) {
     case GlassQualityTier.high:
@@ -192,9 +186,8 @@ abstract final class GlassRuntime {
           isLowEndDevice: _isLowEndDevice,
         );
     final GlassQualityTier next = PerfDegradePolicy.degradeOnce(current);
-    // 到底档（low→low、off→off）**直接短路、不留状态**：不得把「到底」写进
-    // _budgetTier 当残留上限，否则用户之后切回高档会被残留钳住（min(high, off)
-    // = off 就再也开不了玻璃 = off 被自动降级「带出」，违反本类契约）。
+    // 到底档（low→low、off→off）**直接短路、不留状态**：**不得**把「到底」写进
+    // _budgetTier 当残留上限，否则之后切回高档会被残留钳住（off 被自动降级「带出」）。
     if (next == current) return;
     _budgetTier = next;
     _resync();

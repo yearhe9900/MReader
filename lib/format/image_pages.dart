@@ -1,4 +1,4 @@
-// 图片页识别判据（CBZ / CBR 共享，M2b-T02）。
+// 图片页识别判据（CBZ / CBR 共享）。
 //
 // 独立于 `CbzSource` / `CbrSource` 两个实现类之外的中立小模块：
 // 实现类之间保持**零 import**（格式选择只发生在 `book_registry.dart`），

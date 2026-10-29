@@ -1,10 +1,8 @@
-// `TTS-06` 朗读进度联动 widget 测试（M3-T08）。
+// `TTS-06` 朗读进度联动 widget 测试。
 //
-// 验收映射：
-//   ② 数据面：朗读期间每段推进即写入阅读进度（progressStore 落盘可见推进）；
-//   ① 落点面：手动滚动暂停跟随后（视口被拖离、与朗读位不同步），停止并
-//      关书（dispose 收尾保存）落点仍是**朗读坐标**——陈旧视口坐标不得覆盖
-//      （`_ttsProgress` override 的核心防线）。
+// 覆盖：② 数据面——朗读期间每段推进即写入阅读进度（progressStore 落盘可见推进）；
+// ① 落点面——手动滚动暂停跟随后（视口被拖离、与朗读位不同步）停止并关书，落点
+// 仍是**朗读坐标**，陈旧视口坐标**不得覆盖**（`_ttsProgress` override 的核心防线）。
 //
 // 口径：装具复用 `test/reader/reader_harness`（FakeBookSource 3 章 × 20 段 /
 // settle / 假仓库）；玻璃钉「关」档；引擎注入 [FakeTtsEngine]（speak 挂起等

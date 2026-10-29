@@ -76,11 +76,10 @@ class HighPerfRegistry {
   /// 纯 Dart 回落注册表：**进程内共享的只读实例**。
   ///
   /// 与「不引入可变全局单例」不冲突：它的 `_probeOk` 已定死为 `false`、引擎是
-  /// [NullHighPerfEngine]，`noteFailure` / `noteSuccess` 对已定型实例直接短路
-  /// （见各自实现），因此它**没有任何可观测的可变状态**。
-  ///
-  /// 共享实例换来两件事：① `const BookRegistry()` 依然成立（默认值需是非空常量路径）；
-  /// ②「未注入 = 纯 Dart」这一事实在测试里可用 `identical` 取证，不必靠行为反推。
+  /// [NullHighPerfEngine]，`noteFailure` / `noteSuccess` 对已定型实例直接短路，
+  /// **没有任何可观测的可变状态**。共享实例换来两件事：① `const BookRegistry()`
+  /// 依然成立（默认值需是非空常量路径）；②「未注入 = 纯 Dart」在测试里可用
+  /// `identical` 取证，不必靠行为反推。
   static final HighPerfRegistry _pureDartFallback = HighPerfRegistry._settled(
     engine: const NullHighPerfEngine(),
     probeOk: false,
@@ -94,11 +93,9 @@ class HighPerfRegistry {
   /// 隐藏设置项 [debugForcePureDart] > 默认自动探测**。
   ///
   /// **不给 [engine] 与「给了一个空引擎」是两件事**：前者是「本次构建根本没有加速层」
-  /// ——直接取 [fallback]（结论已定型为不可用、原因 [kPureDartFallbackReason]），
-  /// **不 probe**、也不编造「版本不匹配」这类失败原因；后者才进入真实探测路径。
-  ///
-  /// 强制纯 Dart 时**不接管**调用方传进来的 [engine]（不 probe、不 dispose），
-  /// 与 §A.5 原型一致——调用方仍应把 `engine` 交给本方法，由本方法决定用不用。
+  /// ——直接取 [fallback]（结论已定型为不可用），**不 probe**、也不编造失败原因；
+  /// 后者才进入真实探测路径。强制纯 Dart 时**不接管**调用方传进来的 [engine]
+  /// （不 probe、不 dispose），调用方仍应把 `engine` 交给本方法，由本方法决定用不用。
   factory HighPerfRegistry.fromEnvironment({HighPerfEngine? engine}) {
     if (_forcedPureDart) {
       return HighPerfRegistry._settled(
@@ -113,7 +110,7 @@ class HighPerfRegistry {
 
   /// 隐藏设置项（`RUST-10 ④`：**不进用户主流程、无文案**）。
   ///
-  /// 设置页的「强制回落」开关（M35-T05）与测试写入这里；默认 `false`。
+  /// 设置页的「强制回落」开关与测试写入这里；默认 `false`。
   /// 与编译期开关是**或**关系（见 [fromEnvironment]）。
   static bool debugForcePureDart = false;
 
@@ -156,12 +153,10 @@ class HighPerfRegistry {
 
   /// 探测（**幂等**：已探测过直接返回，抖动探针不会把结论翻回来）。
   ///
-  /// 五种失败情形的处置见架构文档 §A.3，逐条落点：
-  ///   · 情形 1/2/3 → 引擎的 `probe()` 抛 [HighPerfException]（kind 区分），此处转成
-  ///     `probeOk = false` + 中文原因；
-  ///   · 情形 4 → [kRustSupportedPlatform] 编译期短路，**不尝试加载**；
-  ///   · 情形 5 → **不在此处**（运行期单点失败，见 [noteFailure]）。
-  ///
+  /// 五种失败情形的处置见架构文档 §A.3，逐条落点：情形 1/2/3 → 引擎的 `probe()`
+  /// 抛 [HighPerfException]（kind 区分），此处转成 `probeOk = false` + 中文原因；
+  /// 情形 4 → [kRustSupportedPlatform] 编译期短路，**不尝试加载**；
+  /// 情形 5 → **不在此处**（运行期单点失败，见 [noteFailure]）。
   /// 任何失败都**不抛出**（`RUST-01`：不阻塞主链路、不崩溃、不向用户报错）。
   Future<void> warmUp({Duration timeout = kHighPerfProbeTimeout}) async {
     if (_probeOk != null) return;
@@ -236,14 +231,11 @@ class HighPerfRegistry {
     _failureStreak.remove(capability);
   }
 
-  /// 记录一次**真实调用失败**（§A.3 情形 5）。
-  ///
-  /// 两条写死的语义：
+  /// 记录一次**真实调用失败**（§A.3 情形 5）。两条写死的语义：
   ///   · **不翻转 [probeOk]**——否则「某本书的坏字节」会永久禁用整个加速层；
   ///   · 同一能力**连续**失败 ≥ [kHighPerfFailureStreakLimit] 次 → 该能力惰性降级，
-  ///     避免每次调用都踩同一个坑。
-  ///
-  /// 降级只针对**具体能力**，其余能力不受影响；上层始终拿到 `BookSource`，无感。
+  ///     避免每次调用都踩同一个坑。降级只针对**具体能力**，其余不受影响；
+  ///     上层始终拿到 `BookSource`，无感。
   void noteFailure(HighPerfCapability capability) {
     if (_probeOk != true) return;
     final int streak = (_failureStreak[capability] ?? 0) + 1;
@@ -254,7 +246,6 @@ class HighPerfRegistry {
   }
 
   /// 可观测快照（`RUST-10 ②`）：**只写调试日志**，不做 UI、不进用户文案。
-  ///
   /// 字段与 §A.5 约定一致（`engineId` / `probeOk` / `degraded[]` / `abiVersion`），
   /// 另补 `forcedPureDart` 与逐能力结论——「能通过日志判断当前生效的是哪一份实现」
   /// 需要这两项才可判定。
@@ -296,8 +287,8 @@ class HighPerfRegistry {
 /// 这里不是：① 探测结论仍在实例字段里，`HighPerfRegistryProvider.current` 只是
 /// **引用**；② 写入点是组合根（`main()`）与测试，**业务层无写入口**；
 /// ③ 需要细粒度控制的调用点仍可走 `BookRegistry(highPerf: …)` 构造注入（优先）。
-/// 这与 M2b-T01 为 `PdfEngine` 引入 `PdfEngineProvider.current` 是同一条取舍，
-/// 两处保持同一形制，避免本项目出现两套 `Provider` 风格。
+/// 与 `PdfEngineProvider.current` 是同一条取舍，两处保持同一形制，避免本项目
+/// 出现两套 `Provider` 风格。
 class HighPerfRegistryProvider {
   HighPerfRegistryProvider._();
 

@@ -1,13 +1,9 @@
-// `M4-T05`/`M4-T06`：同步状态与手动操作页 widget 测试（`SYNC-07` 失败可见 +
-// 重试 / §10.4 手动三行 / `STAT-08` ③ 统计开关默认开且落盘 / `SYNC-05` 开关
-// 默认关且落盘 / 设置页入口接线）。
+// `SYNC-07` 失败可见 + 重试 / §10.4 手动三行 / `STAT-08` ③ 统计开关默认开且
+// 落盘 / `SYNC-05` 开关默认关且落盘 / 设置页入口接线：同步状态与手动操作页测试。
 //
-// 三条口径（同 `sync_settings_page_test`）：
-//   ① 宿主钉「关」档（玻璃浮层在软件光栅下开销大）；
-//   ② 真异步 IO（落盘 / 读密码）经 `runAsync` / `settleReal` 排空；
-//   ③ **真实 socket 不进 widget 测试**（`HttpOverrides` 把 suite 内
-//      `HttpClient` 全拦 400）→ 注入 [_FakeDav]（覆写通道方法，零网络），
-//      真网络语义在纯 `test()` 的 `sync_trigger_test` / `webdav_client_test`。
+// 三条口径同 `sync_settings_page_test`（关档宿主、真异步 IO 走 `settleReal`、
+// ⚠️ 真实 socket 不进 widget 测试——`HttpOverrides` 全拦 400 → [_FakeDav] 零网络，
+// 真网络语义在纯 `test()` 的 `sync_trigger_test` / `webdav_client_test`）。
 import 'dart:io';
 
 import 'package:flutter/material.dart';

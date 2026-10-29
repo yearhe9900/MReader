@@ -1,19 +1,15 @@
-// 阅读页正文**不被常驻进度条遮挡**的布局契约（2026-10-06 起，2026-10-08 订正）。
+// 阅读页正文**不被常驻进度条遮挡**的布局契约。
 //
-// 起因：负责人真机截图「字没显示全」。当时归因成「首行被 AppBar 压住、
-// 末行被常驻 [ReaderProgressIndicator] 压住」，据此做了两处改动；
-// 2026-10-08 读 Flutter 源码核对后订正为：
+// 归因（读 Flutter 源码核对后）：
 //   · 「首行被 AppBar 压住」**不成立**——`Scaffold` 给 body 的 MediaQuery 做了
-//     `removePadding(removeTop: appBar != null)`（`scaffold.dart:3030`），
-//     并把 body 放在 AppBar 之下（`scaffold.dart:1114`）；正文区里的
-//     `mq.padding.top` 恒为 0。（首行被切的真因在落位，见
-//     `PagedScrollerState.offsetFor` 的「为什么按行顶」。）
-//   · 「末行被进度条压住」**成立**，且改前**没修好**：28dp 预留被加在正文
-//     Stack **外面**，而指示条在 Stack **里面** `bottom: 0`，两者同步上移、
-//     照旧重叠，还在控制条上方白留 28dp。
+//     `removePadding(removeTop: appBar != null)`、body 放在 AppBar 之下，
+//     正文区里 `mq.padding.top` 恒为 0（首行被切的真因在落位，见
+//     `PagedScrollerState.offsetFor` 的「为什么按行顶」）。
+//   · 「末行被进度条压住」**成立**：预留若加在正文 Stack **外面**，而指示条在
+//     Stack **里面** `bottom: 0`，两者同步上移照旧重叠、还在控制条上方白留 28dp。
 //
 // 本测试钉住三件事：正文排版区确实让开了指示条；正文区高 = 分页预算 `usableHeight`；
-// **唤出 / 收起 chrome 不改变正文排版区**（`TYP-09` 契约，2026-10-09 负责人拍板）。
+// **唤出 / 收起 chrome 不改变正文排版区**（`TYP-09` 契约）。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -68,23 +64,14 @@ void main() {
         (WidgetTester tester) async {
       await pumpPhone(tester);
 
-      // 探针实测基线（393×852，top44/bottom34，**默认沉浸全屏**）：
+      // 几何基线（探针实测 393×852，top44/bottom34，**默认沉浸全屏**）：
       //   viewport      top=44  bottom=852 h=808（顶让开 44 状态栏）
       //   content-area  top=44  bottom=790 h=746（= viewport − 62 让位）
       //   indicator     top=792 bottom=852 h=60（26 内容 + 34 导航条让位）
       //   ⇒ content.bottom(790) ≤ indicator.top(792)，两者不重叠。
-      //
-      // 注 1：2026-10-08 前 viewport 高是 587——28dp 让位加在视口**外面**、
-      // 把整个视口连同指示条一起压扁了；现在让位挪到视口内部。
-      // 注 2：`AppBar` 不在树上、`extendBody*` 让 body 从 y=0 起画，顶部让位由
-      // **外层**系统 inset 的 `padding.top`（44）承担；底部 34 是系统手势导航条
-      // （`systemMq.padding.bottom`，显式交给正文 `reserve` 与读数行），
-      // 故让位合计 28 + 34 = 62。
-      //
-      // 2026-10-09 订正：改前此处写的是「因 `bottomNavigationBar` 不存在、
-      // `Scaffold` 不再 `removeBottomPadding` 才多出 34」——那是**巧合**口径
-      // （读外层 mq 恰好等于 body mq）。现在底部层恒在（读数常驻该槽），
-      // 34 一律由外层系统 inset 显式给出，与 chrome 状态无关。
+      // 让位 = 28dp 指示条 + 34 手势条 = 62：`AppBar` 不在树上、`extendBody*` 让
+      // body 从 y=0 起画，顶部让位由**外层**系统 inset 的 `padding.top` 承担，底部
+      // 34 由外层 `systemMq.padding.bottom` 显式交给正文 `reserve` 与读数行（与 chrome 状态无关）。
       final Rect viewport = tester.getRect(find.byKey(const Key('reader-viewport')));
       expect(viewport.top, moreOrLessEquals(44, epsilon: 0.5),
           reason: '全屏态正文顶让开状态栏');
@@ -112,10 +99,8 @@ void main() {
 
     testWidgets('不遮挡契约：内容底 ≤ 指示条顶（变异即判红）',
         (WidgetTester tester) async {
-      // 这条同时是**变异护栏**：
-      //   · 删掉让位 Padding      → `reader-content-area` 找不到 / 底边与指示条同高 → 红；
-      //   · 把 Padding 挪到 Stack 外 → `viewport.bottom − content.bottom == 0` → 红
-      //     （2026-10-08 改前就是这个形态，真机表现为末行被 85% 底色盖住发暗）。
+      // **变异护栏**：删掉让位 Padding 或把它挪到 Stack 外 → `content.bottom`
+      // 与 `indicator.top` 重叠 / 差值为 0 → 判红。
       await pumpPhone(tester);
 
       final Rect content =
@@ -130,20 +115,13 @@ void main() {
 
     testWidgets('TYP-09：唤出 / 收起 chrome 不得改动正文排版区（变异即判红）',
         (WidgetTester tester) async {
-      // 负责人原话（2026-10-09）：「阅读页点击中间菜单，不应该修改阅读区的高度」。
+      // 唤出 chrome 时若正文可排版高变化（`appBar`/`bottomNavigationBar` 是
+      // Scaffold 占位槽会挤压 body），整页重排、阅读位置跳。修法 = 两个
+      // `extendBody*` + 正文预算只吃 Scaffold **外层**的系统 inset。
       //
-      // 改前 `appBar` / `bottomNavigationBar` 是 Scaffold 的**占位**槽
-      // （`_ScaffoldLayout`：`contentTop = appBarHeight`、
-      // `contentBottom = bottom − max(minInsets.bottom, bottomWidgetsHeight)`），
-      // 唤出 chrome 时 body 852 → 615、正文可排版高 **746 → 587**（探针实测，
-      // −159px ≈ 5 行）⇒ 整页重排、阅读位置肉眼可见地跳。
-      // 修法 = 两个 `extendBody*` + 正文预算只吃 Scaffold **外层**的系统 inset。
-      //
-      // 变异判别力：
-      //   · 去掉任一 `extendBody*` → 正文区矩形变（高 746→587）→ 红；
-      //   · 正文预算改回读 body 内那份 MediaQuery → 同上判红；
-      //   · 把常驻读数挪回正文 Stack 的 `bottom: 0` → 控制条盖住它 →
-      //     「读数底 == 控制条顶」判红。
+      // 变异判别力：去掉任一 `extendBody*` 或正文预算改回读 body 内 MediaQuery
+      // → 正文区矩形变 → 红；把常驻读数挪回正文 Stack 的 `bottom: 0` → 控制条
+      // 盖住它 → 判红。
       await pumpPhone(tester);
 
       // 用户可见口径放最前：**正文里的字**两态必须一像素不挪。
@@ -183,10 +161,9 @@ void main() {
       expect(bar.bottom, moreOrLessEquals(viewport0.bottom, epsilon: 0.5),
           reason: '控制条应贴屏幕下缘');
 
-      // 读数与控制条之间**不留空带**：控制条自带 `SafeArea(bottom: true)`，
-      // 读数在它上方时不该再吃一遍系统 inset。
-      // 变异判别力：`bottomInset` 恒传系统值（不按 `_fullscreen` 分支）⇒
-      // 两者之间多出 34dp 空白，实测 readout.bottom 距 bar.top 由 4 变 38 → 红。
+      // 读数与控制条之间**不留空带**：控制条自带 `SafeArea(bottom: true)`，读数在
+      // 它上方时不该再吃一遍系统 inset。变异判别力：`bottomInset` 恒传系统值
+      // （不按 `_fullscreen` 分支）⇒ 多出 34dp 空白 → 判红。
       final Rect readout =
           tester.getRect(find.byKey(const Key('reader-progress-text')));
       expect(bar.top - readout.bottom, lessThanOrEqualTo(8),

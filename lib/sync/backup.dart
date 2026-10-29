@@ -1,7 +1,7 @@
-// `M4-T04`：全量备份包构建与上传（`SYNC-04`，PRD §10.3 备份包约定）。
+// `SYNC-04`：全量备份包构建与上传（PRD §10.3 备份包约定）。
 //
-// 包内布局严格按 §10.3（至少包含且**不含凭据**——`M4-T09` 验收「备份包内
-// 搜不到 API Key 与 WebDAV 密码」）：
+// 包内布局严格按 §10.3（至少包含且**不含凭据**——验收「备份包内搜不到
+// API Key 与 WebDAV 密码」）：
 // ```
 // bookshelf.json   书架（library/index.json + shelf_layout + shelf_prefs 三段）
 // progress/        全部书籍进度（原字节）
@@ -14,10 +14,10 @@
 // ```
 // 另附本地 `vocab.json`、`tts_settings.json`（§10.3「至少包含」的超集）。
 //
-// **凭据靠白名单结构性排除**（非黑名单）：`sync_config.json`（连接配置）、
-// `credentials.json`（SecureStore 明文壳）、`sync_state.json`、`perf_prefs.json`、
-// `ai_providers.json`、书籍副本 / `structure/` / `covers/` 与 `.bak` / `.corrupt`
-// / `.tmp` 兄弟文件都不在白名单内，永不可能进包。
+// **凭据靠白名单结构性排除**（非黑名单）：`sync_config.json`、
+// `credentials.json`、`sync_state.json`、`perf_prefs.json`、`ai_providers.json`、
+// 书籍副本 / `structure/` / `covers/` 与 `.bak` / `.corrupt` / `.tmp` 兄弟文件
+// 不在白名单，永不可能进包。
 //
 // 远端命名（§10.3）：`backup-{yyyy-MM-dd}-{device}.zip`，落在远端根目录。
 import 'dart:convert';
@@ -78,14 +78,14 @@ class BackupEntry {
   /// 创建条目。
   const BackupEntry({required this.path, required this.lastModified});
 
-  /// 相对远端根的文件名（如 `backup-2026-10-05-MReader.zip`）。
+  /// 相对远端根的文件名（如 `backup-{yyyy-MM-dd}-{device}.zip`）。
   final String path;
 
   /// 远端修改时间（服务器未返回为 `null`）。
   final DateTime? lastModified;
 }
 
-/// 全量备份引擎（进程内共享，显式注入；触发时机由 `M4-T05` 编排）。
+/// 全量备份引擎（进程内共享，显式注入；触发时机由同步触发编排调用）。
 class BackupEngine {
   /// 创建引擎（依赖由组合根注入，见 `lib/main.dart`）；[clock] 仅测试拨时。
   BackupEngine({
@@ -107,9 +107,8 @@ class BackupEngine {
   final RemoteDirCache _dirs = RemoteDirCache();
 
   /// 构建备份包（`SYNC-04` ①：白名单收集 → zip 字节）。
-  ///
-  /// [includeAiCache] 默认 `false`（§10.1：AI 缓存体积大、可选）。
-  /// 本地缺失 / 损坏的段**不进包**（不传播损坏，恢复端也不覆盖该段）。
+  /// [includeAiCache] 默认 `false`（§10.1：AI 缓存体积大、可选）；本地缺失 /
+  /// 损坏的段**不进包**（不传播损坏，恢复端也不覆盖该段）。
   Future<({Uint8List zip, int fileCount})> buildZip({
     bool includeAiCache = false,
   }) async {
@@ -220,8 +219,7 @@ class BackupEngine {
     );
   }
 
-  /// 立即全量备份（构建 zip → 上传远端根 `backup-{日期}-{设备}.zip`）。
-  ///
+  /// 立即全量备份（构建 zip → 上传远端根 `backup-{日期}-{设备}.zip`）；
   /// 不抛业务异常：配置 / 通道 / 本地数据问题一律返回 failed + 可读 reason
   /// （`SYNC-07` 不静默）。
   Future<BackupOutcome> backupNow({bool includeAiCache = false}) async {
@@ -247,9 +245,8 @@ class BackupEngine {
   }
 
   /// 列出远端备份包（根目录 `backup-*.zip`，按 mtime 新→旧；404 → 空表）。
-  ///
-  /// 未配置 / 通道错误**原样抛** [SyncException]（可读原因）——列表失败
-  /// 若静默成空表会让用户误以为「从未备份过」（`SYNC-07`）。
+  /// 未配置 / 通道错误**原样抛** [SyncException]——列表失败静默成空表会让
+  /// 用户误以为「从未备份过」（`SYNC-07`）。
   Future<List<BackupEntry>> listBackups() async {
     final ({SyncConfig config, String password}) ctx =
         await requireWebdav(_configStore);

@@ -1,4 +1,4 @@
-// `M3-T01`：ProviderStore 持久化 / 用途路由 / 密钥联动 / 全局开关测试。
+// ProviderStore 持久化 / 用途路由 / 密钥联动 / 全局开关测试。
 //
 // 核心断言 `DATA-02` ①：**配置落盘文件里搜不到密钥**（密钥只在 credentials.json）。
 import 'dart:convert';

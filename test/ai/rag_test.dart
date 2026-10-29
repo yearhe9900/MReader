@@ -1,15 +1,11 @@
-// `M3-T04`：问答驱动与检索层单测（`AI-06` ①③ / F5 范围字数 / PRD §8.3
-// 索引本地持久化 / M3.5 阈值 5 埋点存在性）。
+// `AI-06` ①③ / F5 / `CNT-06` / §8.3：问答驱动与检索层单测。
 //
-// 验收映射：
-//   · `AI-06` ③ 不发全书：[retrieveSnippets] 只回 Top-K 片段、单条
-//     ≤ [kRagSnippetChars]、总字数 ≤ [kRagTotalChars]（ragMessages 的 user
-//     消息由片段拼出，结构上不可能携带全书）；
-//   · `AI-06` ① 引用口径：[SearchHit.offset] = 段落长度累加 + 段内命中位
-//     （与 `CNT-06` 搜索同口径 → 阅读页 `_jumpToSearchHit` 可直接复用）；
-//   · 零命中返空列表（面板据此不发请求、直答「书中未提及」）；
-//   · [RagIndexStore] 内存缓存 / 磁盘命中零取文 / removeBook 连带清理，
-//     以及构建 / 内存埋点落 [PerfLog.records]（阈值 5 基线数据源）。
+// 覆盖：[retrieveSnippets] 只回 Top-K 片段（单条 ≤ [kRagSnippetChars]、总字数
+// ≤ [kRagTotalChars]，ragMessages 的 user 由片段拼出，结构上不可能携带全书）、
+// [SearchHit.offset] = 段落长度累加 + 段内命中位（与 `CNT-06` 搜索同口径，
+// 阅读页 `_jumpToSearchHit` 可直接复用）、零命中返空列表、[RagIndexStore]
+// 内存缓存 / 磁盘命中零取文 / removeBook 连带清理，构建与内存埋点落
+// [PerfLog.records]（阈值 5 基线数据源）。
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';

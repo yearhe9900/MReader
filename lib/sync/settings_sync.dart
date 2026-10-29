@@ -1,15 +1,13 @@
-// `M4-T03`：阅读设置同步（`SYNC-03`，PRD §10.1「阅读设置：字号/行距/边距/
-// 主题/字体/亮度 —— 增量，取最近修改」）。
+// 阅读设置同步（`SYNC-03`，PRD §10.1「阅读设置：字号/行距/边距/主题/字体/
+// 亮度——增量，取最近修改」）。
 //
 // 单文件双向同步 `settings/reading_prefs.json`（内容 = 本地
-// `prefs/reading_prefs.json` 同构，即 `ReadingPrefs.toJson()`）。判定顺序：
-//   ① 远端缺失 → 本地有则上传，双无 → 无事；
-//   ② 内容相等 → 不写任何一侧（防「下载→本地 mtime 变新→再上传」回声）；
-//   ③ 内容不同 → 比**修改时间**，新者胜（验收③「设置冲突以最近修改为准」）；
-//      时间戳缺失的一方视为最旧（对端胜）；完全同刻 → 远端胜（云端为准，
-//      双侧同判 → 收敛）。
+// `prefs/reading_prefs.json` 同构）。判定顺序：① 远端缺失 → 本地有则上传；
+// ② 内容相等 → 不写任何一侧（防「下载→本地 mtime 变新→再上传」回声）；
+// ③ 内容不同 → 比**修改时间**新者胜（验收③「设置冲突以最近修改为准」），
+// 时间戳缺失一方视为最旧（对端胜），完全同刻 → 远端胜（双侧同判 → 收敛）。
 //
-// 本地修改时间取偏好**文件 mtime**（原子写入的时间即用户改动时刻），不给
+// 本地修改时间取偏好**文件 mtime**（原子写入时间即用户改动时刻），不给
 // `ReadingPrefs` 加时间字段——不动 `TYP-06` 数据模型。
 import 'dart:convert';
 import 'dart:io';
@@ -21,7 +19,7 @@ import 'sync_config.dart';
 import 'sync_config_store.dart';
 import 'webdav_client.dart';
 
-/// 阅读设置同步引擎（进程内共享，显式注入；触发时机由 `M4-T05` 编排）。
+/// 阅读设置同步引擎（进程内共享，显式注入；触发时机由同步触发编排调用）。
 class SettingsSync {
   /// 创建引擎（组合根注入，见 `lib/main.dart`）。
   SettingsSync({
@@ -42,9 +40,8 @@ class SettingsSync {
   final SyncConfigStore _configStore;
   final RemoteDirCache _dirs = RemoteDirCache();
 
-  /// 同步阅读设置（单文件，「取最近修改」）。
-  ///
-  /// 不抛业务异常：通道 / 配置 / 数据问题一律返回 failed + 可读 reason。
+  /// 同步阅读设置（单文件，「取最近修改」）；不抛业务异常：通道 / 配置 /
+  /// 数据问题一律返回 failed + 可读 reason。
   Future<EntrySyncOutcome> sync() async {
     try {
       final ({SyncConfig config, String password}) ctx =

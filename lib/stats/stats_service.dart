@@ -1,19 +1,16 @@
-// M3-T10：统计服务（`STAT-03` 的数据侧——进程内唯一实例 + 监听回调）。
+// 统计服务（`STAT-03` 的数据侧——进程内唯一实例 + 监听回调）。
 //
-// 职责：
-//   · 载入 / 刷新会话明细（经 [SessionStore]，`STAT-02` 分片存储的唯一入口）；
-//   · [ingest] 回吐会话（阅读页关书 / 切后台 → 合并落库 + 内存刷新 + 通知，
-//     `STAT-01` 的**唯一写入入口**，采集侧只管 `finish` 不碰存储）；
-//   · 持有「起始日期」配置（`STAT-03` ③，落 `stats/stats-config.json`——与会话
-//     分片**分文件**：改起始日期不该重写全部会话分片）；
-//   · 暴露 [overview] 聚合与 [sessions] 原始明细（供 T11~T13 的周期聚合复用）；
-//   · [clearAll] 清空统计数据（`STAT-03` ④：只删会话分片，书架 / 进度 / 书签 /
-//     笔记一概不动，起始日期配置也保留）。
+// 职责：载入 / 刷新会话明细（经 [SessionStore]，`STAT-02` 分片存储唯一入口）；
+// [ingest] 回吐会话（关书 / 切后台 → 合并落库 + 刷新 + 通知，`STAT-01` 的
+// **唯一写入入口**，采集侧只管 `finish` 不碰存储）；持有「起始日期」配置
+// （`STAT-03` ③，落 `stats/stats-config.json`——与会话分片**分文件**，改起始
+// 日期不重写会话分片）；暴露 [overview] 与 [sessions]（供周期聚合复用）；
+// [clearAll] 清空统计（`STAT-03` ④：只删会话分片，书架 / 进度 / 书签 / 笔记
+// 与起始日期配置一概不动）。
 //
-// 跨页面共享状态用**监听回调**（`void Function()` 列表），UI 侧配
-// `StatefulWidget + setState`（§15.5 禁 Riverpod / Provider）。「进程内单例」的
-// 落法 = 组合根（`main.dart`）创建唯一实例经 `HomeShell` 注入——不加静态全局，
-// 与其它存储的注入纪律一致（`HomeShell` 头注：依赖全部由组合根注入）。
+// 跨页面共享用**监听回调**（`void Function()` 列表），UI 配 `StatefulWidget +
+// setState`（§15.5 禁 Riverpod / Provider）；「进程内单例」= 组合根（`main.dart`）
+// 创建唯一实例经 `HomeShell` 注入——不加静态全局，与其它存储注入纪律一致。
 //
 // 本文件属 `lib/stats/`：纯 Dart（零 Flutter 插件，`STAT-02` ⑤）。
 import 'dart:io';
@@ -71,9 +68,8 @@ class StatsService {
     }
   }
 
-  /// 载入（或刷新）全部会话明细 + 起始日期配置；完成即通知。
-  ///
-  /// 可重复调用（阅读页退出后回刷统计页即走这里）。
+  /// 载入（或刷新）全部会话明细 + 起始日期配置；完成即通知；可重复调用
+  /// （阅读页退出后回刷统计页即走这里）。
   Future<void> load() async {
     _sessions = await _store.loadAll();
     _sinceDay = await _readSinceDay();
@@ -81,11 +77,9 @@ class StatsService {
     _notify();
   }
 
-  /// 回吐会话（阅读页关书 / 切后台时调用；`STAT-01` 写入的唯一入口）。
-  ///
-  /// 按 `id` 并集合并进月分片（`STAT-08` 幂等，`duration <= 0` 由存储侧丢弃）→
-  /// 重载内存明细 → 通知（统计页即时刷新）。尚未 [load] 时先载入，防止用
-  /// 空表当真值；写失败静默（统计落库失败不影响阅读）。
+  /// 回吐会话（关书 / 切后台时调用；`STAT-01` 写入的唯一入口）：按 `id` 并集
+  /// 合并进月分片（`STAT-08` 幂等，`duration <= 0` 由存储侧丢弃）→ 重载 → 通知。
+  /// 尚未 [load] 时先载入（防用空表当真值）；写失败静默（落库失败不影响阅读）。
   Future<void> ingest(Iterable<ReadingSession> sessions) async {
     if (sessions.isEmpty) return;
     if (!_loaded) await load();
@@ -105,9 +99,8 @@ class StatsService {
     _notify();
   }
 
-  /// 清空全部统计数据（`STAT-03` ④）：删会话分片、内存归零、通知。
-  ///
-  /// **不动**：书架、阅读进度、书签、笔记、起始日期配置。
+  /// 清空全部统计数据（`STAT-03` ④）：删会话分片、内存归零、通知；**不动**
+  /// 书架 / 进度 / 书签 / 笔记 / 起始日期配置。
   Future<void> clearAll() async {
     await _store.clearAll();
     _sessions = const <ReadingSession>[];

@@ -1,16 +1,15 @@
-// 递进摘要驱动（M3-T03：`AI-04` 章节摘要 / `AI-05` 全书摘要 + 前情回顾）。
+// 递进摘要驱动（`AI-04` 章节摘要 / `AI-05` 全书摘要 + 前情回顾）。
 //
-// 三条验收的落点：
-//   · `AI-05` ③ 长书可中断可续做：逐章生成、**每章完成即写 [SummaryCache]**
-//     章级缓存；中断（[SummaryJob.cancel]）后重跑，已生成章直接命中跳过，
-//     只补缺的章——续做的持久化点就是章级缓存本身；
-//   · schedule:222「缓存键必须能区分生成到第几章」：章级键含 href+hash+模型+
-//     长度；合并级键含范围起止章 + inputHash（见 summary_cache.dart 头注）；
-//   · PRD §8.3「超长则分块递进」：> [kSummaryChunkChars] 的章先分块各自出
-//     梗概，再合并成章梗概（[SummaryJob._summarizeLong]）。
+// 验收落点：`AI-05` ③ 长书可中断可续做：逐章生成、**每章完成即写
+// [SummaryCache] 章级缓存**，中断（[SummaryJob.cancel]）后重跑已生成章直接
+// 命中跳过、只补缺章——续做的持久化点就是章级缓存本身；schedule:222「缓存键
+// 必须能区分生成到第几章」：章级键含 href+hash+模型+长度，合并级键含范围
+// 起止章 + inputHash（见 summary_cache.dart 头注）；PRD §8.3「超长则分块
+// 递进」：> [kSummaryChunkChars] 的章先分块各自出梗概再合并
+// （[SummaryJob._summarizeLong]）。
 //
-// 驱动层**不依赖 Flutter / BookSource**：章文本经 `loadText` 回调注入
-// （阅读页传 `_contentAt` 的纯文本形态），本文件只做编排 + 缓存 + 取消。
+// 驱动层**不依赖 Flutter / BookSource**：章文本经 `loadText` 回调注入，
+// 本文件只做编排 + 缓存 + 取消。
 import 'dart:async';
 
 import 'ai_client.dart';
@@ -61,7 +60,6 @@ class SummaryOutcome {
 }
 
 /// 一次可取消的摘要作业（一个面板一个实例；dispose 时必须 [cancel]）。
-///
 /// 取消是协作式的：步骤间检查 `_cancelled`，在途请求经 [AiCall.cancel] 中止
 /// （静默收流，不把半截文本写缓存）。
 class SummaryJob {
@@ -89,11 +87,9 @@ class SummaryJob {
     _call?.cancel();
   }
 
-  /// `AI-04`：单章摘要（带缓存 + 超长分块）。
-  ///
-  /// [onDelta] 逐字回调（单块直发流式；分块章在最终合并段才回调）。
-  /// [force] = `AI-04` ③ 手动重新生成：绕过缓存读，结果仍回写覆盖。
-  /// 取消时返回**已生成的部分**且**不写缓存**（半截文本不可当成品）。
+  /// `AI-04`：单章摘要（带缓存 + 超长分块）。[onDelta] 逐字回调（单块直发
+  /// 流式；分块章在最终合并段才回调）；[force] = `AI-04` ③ 手动重新生成：
+  /// 绕过缓存读，结果仍回写覆盖；取消时返回**已生成的部分**且**不写缓存**。
   Future<SummaryOutcome> chapter({
     required String bookId,
     required String href,
@@ -181,9 +177,8 @@ class SummaryJob {
   }
 
   /// `AI-05` ①：全书摘要——章级递进生成（0..[uptoChapter]）后合并。
-  ///
-  /// [loadText] 按章索引取纯文本；[onProgress] 每完成一章回调一次
-  /// （done/total，含缓存命中）；[onDelta] 合并段流式增量。
+  /// [loadText] 按章索引取纯文本；[onProgress] 每完成一章回调一次（含缓存
+  /// 命中）；[onDelta] 合并段流式增量。
   Future<SummaryOutcome> book({
     required String bookId,
     required int uptoChapter,
@@ -492,9 +487,8 @@ List<String> splitSummaryChunks(String text) {
 }
 
 /// 是否应显示「前情回顾」入口（`AI-05` ②：停读 ≥ [kRecapIdleDays] 天）。
-///
-/// [lastReadAtMs] = 上次进度的 `updatedAt`（Unix 毫秒）；无进度 / 时间戳非法
-/// 返 false（没读过书不出回顾入口）。
+/// [lastReadAtMs] = 上次进度的 `updatedAt`（Unix 毫秒）；无进度 / 时间戳
+/// 非法返 false（没读过书不出回顾入口）。
 bool shouldShowRecapEntrance({
   required int? lastReadAtMs,
   required int nowMs,

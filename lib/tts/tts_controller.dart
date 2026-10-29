@@ -1,12 +1,10 @@
-// 段落朗读驱动（`TTS-01`，M3-T06）：逐段送引擎 → 读完推进 → 章末跨章。
+// 段落朗读驱动（`TTS-01`）：逐段送引擎 → 读完推进 → 章末跨章。
 //
-// 推进语义（PRD §9.2 / TTS-01 验收）：
-//   ① 从指定 (章, 段) 起读；
-//   ② 读完自动进下一章——章内扫不到可读段 → `chapterIndex + 1` 从头再扫；
-//   ③ 纯标点 / 空白段跳过（[shouldSpeakParagraph]，在 onActive 之前就跳，
-//      不高亮、不发声）；
-// 结局语义靠 [TtsSpeakResult] 区分：只有 `done` 推进，`cancelled` 是主动
-// 停止 / 暂停（引擎层已把 stop 归为 cancelled，见 system_tts.dart 文件头）。
+// 推进语义（PRD §9.2 / TTS-01 验收）：① 从指定 (章, 段) 起读；② 读完自动进下一章
+// ——章内扫不到可读段 → `chapterIndex + 1` 从头再扫；③ 纯标点 / 空白段跳过
+// （[shouldSpeakParagraph]，在 onActive 之前就跳，不高亮、不发声）。结局语义靠
+// [TtsSpeakResult] 区分：只有 `done` 推进，`cancelled` 是主动停止 / 暂停（引擎层
+// 已把 stop 归为 cancelled，见 system_tts.dart 文件头）。
 //
 // 与进度的关系（PRD §9.4 / RD-04）：控制器**不写任何进度**——朗读推进只通过
 // reader 侧的跟随滚动汇入既有 `(章节索引, 章内位置)` 模型，不产生第二套真值。
@@ -103,7 +101,7 @@ class TtsController {
     await _engine.stop();
   }
 
-  /// 暂停（`TTS-02` ③ 的对偶面 / M3-T08 面板入口）：停引擎、**留位**当前段。
+  /// 暂停（`TTS-02` ③ 的对偶面 / 面板入口）：停引擎、**留位**当前段。
   Future<void> pause() async {
     if (!isActive) return;
     _paused = true;

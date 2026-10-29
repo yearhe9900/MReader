@@ -40,12 +40,10 @@ const Set<String> _skipTags = <String>{
   'audio', 'video', 'iframe', 'object', 'embed',
 };
 
-/// 把一章 XHTML 的原始字节解析成 [ExtractedSection]。
-///
-/// 这是纯函数（无 IO、无 Flutter），可以直接单测。
+/// 把一章 XHTML 的原始字节解析成 [ExtractedSection]（纯函数，可直接单测）。
 ///
 /// [baseDir]：XHTML 文件所在目录的包内路径（如 `OEBPS/text`），用于把
-/// `<img src="...">` 的相对路径归一化为绝对包内路径。为空时 src 原样保留。
+/// `<img src="...">` 的相对路径归一化为绝对包内路径；为空时 src 原样保留。
 ///
 /// ## CNT-04a 标记格式（NUL 包裹，渲染层吞掉、绝不显示到屏幕上）
 ///
@@ -54,22 +52,15 @@ const Set<String> _skipTags = <String>{
 /// | `\x00A:<href>\x00文字\x00A\x00` | 链接：归一化后的 href 包住所包文字 |
 /// | `\x00ID:<id>\x00` | 锚点：跳转目标；块级元素的标记位于**段落开头** |
 ///
-/// 两类标记可共存于同一段落（脚注返回锚：段首 ID + 段内链接）。
-/// href 归一化口径：`#frag` 原样保留；跨文件与 `<img src>` 同走
-/// [resolveHref]（fragment 单独切出后接回，resolveHref 本身会丢弃 fragment）。
-///
-/// **查询方式（派生扫描 paragraphs 即可，不新增字段）**：
-/// 章内 `#id` 跳转 = `paragraphs.indexWhere((p) => p.contains('\x00ID:$id\x00'))`；
+/// 两类标记可共存于同一段落（脚注返回锚：段首 ID + 段内链接）。href 归一化口径：
+/// `#frag` 原样保留；跨文件与 `<img src>` 同走 [resolveHref]（fragment 切出后接回）。
+/// 查询：章内 `#id` = `paragraphs.indexWhere((p) => p.contains('\x00ID:$id\x00'))`；
 /// 链接 = 按 `\x00` 切分后奇数段以 `A:` 开头者即 href（闭合标记为 `A`）。
 ExtractedSection extractSection(Uint8List bytes, {String baseDir = ''}) {
-  // ── 首帧「一次性门」定位探针（2026-10-06，见 §2.69 附四/五）──
-  // 真机 release 档 `reader.firstBatch` 291~442ms，而按内容量归一后
-  // 「后台补齐章0.01ms/段、首帧章 2.3~3.5ms/段」⇒ 慢在「第一次」而非数据量。
-  // 本探针把 `extractSection` 内部切成三段，用于判定这批成本**落在哪一段**：
-  // 若三段之和远小于 `reader.content` 的总耗时 ⇒ 门在 `extractSection` **之外**
-  // （引擎侧首触 / 归档读取器首触），H1 方案（提前开门）才有效；反之则可直接优化本函数。
-  // 用 PerfWatch 而非 Stopwatch：口径与既有 `reader.*` 段一致，且可被
-  // `--dart-define=MREADER_PERF_LOG=false` 整体静音。
+  // ── 首帧「一次性门」定位探针（§2.69 附四/五）──
+  // 把 `extractSection` 内部切成三段计时：三段之和远小于 `reader.content` 总耗时 ⇒
+  // 慢在**门外**（引擎 / 归档读取器首触），「提前开门」方案才有效。
+  // 用 PerfWatch 保持 `reader.*` 口径，且可被 `--dart-define=MREADER_PERF_LOG=false` 整体静音。
   final PerfWatch decodeWatch = PerfLog.watch('se.decode');
   final String? decoded = _tryDecodeText(bytes);
   decodeWatch.done('rawKB=${bytes.length ~/ 1024}');
@@ -98,10 +89,8 @@ ExtractedSection extractSection(Uint8List bytes, {String baseDir = ''}) {
 
   final _ResolvedTitle title = _resolveTitle(body, doc);
 
-  // 只有当「章标题取自正文里的 h1~h6」时，才把与之重复的首段去掉，
-  // 避免「UI 单独渲染的标题」与「正文首段」重复显示同一句话。
-  // 若标题其实来自 XHTML 的 `<title>`（正文里没有对应的标题块），
-  // 那么首段是**真正的正文**，绝不能删（回归 fixture 覆盖此点）。
+  // 只有「章标题取自正文里的 h1~h6」时才把与之重复的首段去掉（避免与 UI 单独渲染的
+  // 标题重复）；若标题来自 `<title>`，首段是**真正的正文**，绝不能删。
   // 比较用「剥离标记后的可见文本」（CNT-04a：带 id 的 h1 首段含 ID 标记）。
   final bool dropFirstTitle = title.fromHeading &&
       title.text.isNotEmpty &&
@@ -139,9 +128,8 @@ dom.Document? _tryParseHtml(String source) {
 
 /// 内联标签白名单：保留为段落文本里的 HTML 标签，供 `typeset.dart` 的
 /// `parseInlineStyles` 解析为 `TextSpan`（`TYP-04` `<b>` / `<i>` 支持）。
-///
-/// 其它内联标签（`<span>` / `<em>` 等）的文本内容正常保留，但标签本身剥掉；
-/// `<a>` 特殊（CNT-04a）：带 href 时写成 `\x00A:…\x00` 链接标记，无 href 只留文字。
+/// 其它内联标签（`<span>` / `<em>` 等）只留文字；`<a>` 特殊（CNT-04a）：
+/// 带 href 时写 `\x00A:…\x00` 链接标记，无 href 只留文字。
 const Set<String> _preservedInlineTags = <String>{'b', 'i'};
 
 /// 深度优先遍历，遇到块级标签就切段。
@@ -150,8 +138,8 @@ const Set<String> _preservedInlineTags = <String>{'b', 'i'};
 /// `<table>` 按行退化为纯文本（`CNT-03`，见 [_walkTable]）。
 /// [baseDir] 用于把 `<img src="...">` 的相对路径归一化为绝对包内路径。
 void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir) {
-  // 入口节点本身是 <table>（fragment 定位路径可能直接给出表/表后继节点）
-  // 时同样走按行退化，避免锚点定位退回「每单元格一段」的旧切法。
+  // 入口节点本身是 <table>（fragment 定位路径可能直接给出表节点）时同样走按行退化，
+  // 不退回「每单元格一段」的切法。
   if (node is dom.Element && _tagName(node) == 'table') {
     _flush(buffer, out);
     _walkTable(node, out, baseDir);
@@ -168,9 +156,8 @@ void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir)
     final String tag = _tagName(child);
     if (_skipTags.contains(tag)) continue;
 
-    // <br>：行内换行（`CNT-02`）——写入 '\n' 不切段，诗歌等逐行内容
-    // 保持「行距」而非「段间距」。'\n' 是代码写入的，不受 Text 节点
-    // 空白折叠影响；_flush 的 trim 会自然去掉段首段尾换行。
+    // <br>：行内换行（`CNT-02`）——写入 '\n' 不切段，诗歌等逐行内容保持「行距」。
+    // '\n' 由代码写入、不受空白折叠影响；_flush 的 trim 会去掉段首段尾换行。
     if (tag == 'br') {
       buffer.write('\n');
       continue;
@@ -193,9 +180,8 @@ void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir)
       continue; // <img> 是 void 元素，无子节点
     }
 
-    // <table>：按行退化为纯文本（`CNT-03`）——表格前的悬挂文本先成段，
-    // 行的组装（单元格 ' | ' 连接、整行一个段落）全部在 _walkTable 内完成，
-    // 不再走通用块逻辑（那会把每个单元格切成独立段落）。
+    // <table>：按行退化为纯文本（`CNT-03`）——悬挂文本先成段，行的组装（单元格
+    // ' | ' 连接、整行一个段落）全在 _walkTable 内完成，不走通用块逻辑。
     if (tag == 'table') {
       _flush(buffer, out);
       _walkTable(child, out, baseDir);
@@ -206,13 +192,12 @@ void _walk(dom.Node node, List<String> out, StringBuffer buffer, String baseDir)
     if (isBlock) _flush(buffer, out);
 
     // CNT-04a：id / name 锚点标记。块级 flush 之后写入 → 标记位于段落**开头**
-    // （「跳到 #id」= 找含该标记的段落滚过去）；内联元素（如 `<a id>`）则落在
-    // 当前缓冲位置。与同段落内的链接标记可共存（脚注返回锚的常见组合）。
+    // （「跳到 #id」= 找含该标记的段落滚过去）；内联元素（如 `<a id>`）落在当前
+    // 缓冲位置；可与链接标记共存（脚注返回锚的常见组合）。
     final String? anchorId = _anchorIdOf(child);
     if (anchorId != null) buffer.write('\x00ID:$anchorId\x00');
 
-    // CNT-04a：`<a href>` 链接标记——归一化后的 href 包住所包文字。
-    // 无 href 的 `<a>`（纯锚点 / 纯文字）不产生链接标记，只保留文字。
+    // CNT-04a：`<a href>` 链接标记——归一化后的 href 包住所包文字；无 href 不产生标记。
     final String? linkHref =
         tag == 'a' ? _normalizeLinkHref(baseDir, child.attributes['href']) : null;
     if (linkHref != null) buffer.write('\x00A:$linkHref\x00');
@@ -247,28 +232,10 @@ final RegExp _kAnyMarkerPair = RegExp(r'\x00[^\x00]*\x00');
 /// 段落**开头**连续的 NUL 标记（用于标题剥离时把锚点接力到下一段）。
 final RegExp _kLeadingMarkers = RegExp(r'^(?:\x00[^\x00]*\x00)+');
 
-/// **HTML 空白折叠**（HTML 规则：一串连续空白 → 单个空格）。
+/// **HTML 空白折叠**（一串连续空白 → 单个空格）。
 ///
-/// ## 为什么要提成 `static final`（2026-10-06，真机 CPU Profiler 定案）
-///
-/// 改前是 `child.text.replaceAll(RegExp(r'\s+'), ' ')` —— 在 [_walk] 的
-/// **每个 Text 节点**上**现场构造**一个 `RegExp` 对象。真机 CPU Profiler
-/// （3714 样本 / 1.17s）实测：
-///
-/// | 帧 | self time | 占比 |
-/// |---|---|---|
-/// | `_RegExp._ExecuteMatch` | 376ms | 32% |
-/// | `_RegExp._RegExp`（**构造**） | 19ms | 2% |
-/// | `_FilterImpl.processed`（replaceAll 的扫描） | 87ms | 7% |
-///
-/// ⇒ 纯 RegExp 相关合计 **398ms / 34%**，是**当时开书慢的第一名**（远超分页
-/// 调度的 52ms）。而 `extractSection` 的「se.parse / se.walk 实测 0ms」之所以
-/// 与此不矛盾：探针量的章**段落少**（真机 447 章的书 paragraphs 少、且探针是
-/// 短文本），而真机正文长 ⇒ Text 节点多 ⇒ 逐节点构造 RegExp 的代价被放大。
-/// **这正是「探针环境与真机不等价」的第四个实例。**
-///
-/// 提成 `static final` 后，`RegExp` 只构造一次（首次使用时），后续所有节点
-/// 复用同一实例；`\s+` 的语义**一字未改**。
+/// 必须提成 `static final`：曾在 [_walk] 的**每个 Text 节点**上现场构造 `RegExp`，
+/// 实测是开书 CPU 的大户；提出后只构造一次（首次使用时），`\s+` 语义**一字未改**。
 final RegExp _kWhitespaceRun = RegExp(r'\s+');
 
 /// 兜底去标签用的「任意标签」模式（仅 [_stripTags] 一处用，构造次数可忽略）。
@@ -276,21 +243,12 @@ final RegExp _kAnyTag = RegExp(r'<[^>]*>');
 
 /// 取标签名的**小写**形式，供 `_skipTags` / `_blockTags` 等小写集合比对。
 ///
-/// ## R2：为什么不是直接 `localName.toLowerCase()`（2026-10-06，§2.69 附九）
-///
-/// CPU Profiler 实测：`_OneByteString.toLowerCase` 35ms + `contains` 33ms
-/// + `==` 6ms ≈ **开书窗口 45ms（14%）**——因为 [_walk] 对**每个元素节点**都调
-/// 一次 `toLowerCase()`（HTML 允许 `<P>`、`<BR>`，故小写化**不能删**，
-/// 14 个脏书 fixture 覆盖了大写标签）。
-///
-/// 但**绝大多数真机正文里标签本来就是小写**（XHTML 输出），此时
-/// `toLowerCase()` 仍要**完整扫描并分配一个新字符串**（`'p'.toLowerCase()`
-/// 也会走通用路径）。本函数先做「是否已小写」的廉价判定：
-///
-/// - 已小写（`true`，覆盖绝大多数节点）→ **直接返回原串，零分配零扫描**；
-/// - 含大写（脏书）→ 退回 `toLowerCase()`，**语义与原先一字不差**。
-///
-/// 判定用 `codeUnitAt` 逐字符比而非正则，同样避免分配。
+/// ## R2：为什么不是直接 `localName.toLowerCase()`（§2.69 附九）
+/// [_walk] 对**每个元素节点**都要调一次，而 `toLowerCase()` 即便已小写也要完整扫描
+/// 并分配新串（实测开书窗口的大头之一）；小写化本身**不能删**（HTML 允许 `<P>`、
+/// `<BR>`，脏书 fixture 覆盖大写标签）。故先做「是否已小写」的廉价判定
+/// （`codeUnitAt` 逐字符比、零分配）：已小写（绝大多数节点）**直接返回原串**；
+/// 含大写才退回 `toLowerCase()`，**语义一字不差**。
 String _tagName(dom.Element element) {
   final String? name = element.localName;
   if (name == null || name.isEmpty) return '';
@@ -340,10 +298,9 @@ String? _normalizeLinkHref(String baseDir, String? raw) {
 
 /// CNT-04a：把「纯标记段落」（只有 ID/链接标记、无可见文字）并入相邻段落。
 ///
-/// 块级带 id 的元素嵌套块级子元素时（`<aside id="fn"><p>…</p></aside>`），
-/// ID 标记会先被 flush 成独立的「纯标记段」——渲染层吞掉标记后就是空白段。
-/// 这里把它接力到**下一段**开头（锚点语义 = 下一段内容的位置）；
-/// 没有下一段则挂到上一段末尾；整章皆空则丢弃。
+/// 块级带 id 元素嵌套块级子元素时（`<aside id="fn"><p>…</p></aside>`）ID 标记会被
+/// flush 成独立纯标记段（渲染层吞标记后是空白段），接力到**下一段**开头（锚点语义 =
+/// 下一段内容的位置）；无下一段则挂上一段末尾；整章皆空则丢弃。
 void _mergeMarkerOnlyParagraphs(List<String> paragraphs) {
   for (int i = 0; i < paragraphs.length;) {
     if (_visibleText(paragraphs[i]).isNotEmpty) {
@@ -362,15 +319,12 @@ void _mergeMarkerOnlyParagraphs(List<String> paragraphs) {
 
 /// CNT-03：把 `<table>` 退化为「每个 `<tr>` 一个段落」的纯文本。
 ///
-/// - 先把 `<caption>` 退化为表格前的独立段落（内容不丢失）；
-/// - 遍历子树收集所有 `<tr>`：透明穿过 `thead` / `tbody` / `tfoot`，
-///   不进入嵌套表格或单元格（那些随所在单元格递归降级，避免同一内容
-///   既并入单元格又单独成行）；
-/// - 每行的 `td` / `th` 文本各自收集，以 `' | '` 连接，整行只产出一个
-///   段落；整行无内容的空行不产出；
-/// - 单元格内容仍走通用 [_walk]：`<b>` / `<i>` 保留字面标签、`<br>` 变
-///   `'\n'`（单元格内行内换行）、单元格内的嵌套表格递归降级为文本行；
-/// - 产出的是纯文本段落，随渲染自然折行，宽表格不会横向溢出。
+/// - `<caption>` 退化为表格前的独立段落（内容不丢失）；
+/// - 收集所有 `<tr>`（透明穿过 `thead` / `tbody` / `tfoot`，不进入嵌套表格或单元格
+///   ——那些随所在单元格递归降级，避免同一内容既并入单元格又单独成行）；
+/// - 每行 `td` / `th` 文本以 `' | '` 连接，整行只产出一个段落，整行无内容不产出；
+/// - 单元格内容仍走通用 [_walk]（`<b>` / `<i>` 保留字面标签、`<br>` 变 `'\n'`、
+///   嵌套表格递归降级）；产出纯文本随渲染自然折行，宽表格不横向溢出。
 void _walkTable(dom.Element table, List<String> out, String baseDir) {
   // <caption>：表题/表说明退化为表格前的独立段落，避免内容丢失。
   for (final dom.Node child in table.nodes) {
@@ -400,11 +354,9 @@ void _walkTable(dom.Element table, List<String> out, String baseDir) {
   }
 }
 
-/// 收集 [root]（`<table>`）子树里的所有 `<tr>`（文档序）。
-///
-/// 透明穿过 `thead` / `tbody` / `tfoot` 等包装层；在 `tr` 处停下（行不再
-/// 向内找行），并跳过嵌套 `<table>` 与 `td` / `th`——嵌套内容随所在单元格
-/// 递归处理，避免既并入单元格文本又单独成行的重复。
+/// 收集 [root]（`<table>`）子树里的所有 `<tr>`（文档序）：透明穿过 `thead` / `tbody`
+/// / `tfoot` 包装层，在 `tr` 处停下，跳过嵌套 `<table>` 与 `td` / `th`（嵌套内容随
+/// 所在单元格递归处理，避免既并入单元格文本又单独成行的重复）。
 void _collectTableRows(dom.Node root, List<dom.Element> rows) {
   for (final dom.Node child in root.nodes) {
     if (child is! dom.Element) continue;
@@ -418,10 +370,8 @@ void _collectTableRows(dom.Node root, List<dom.Element> rows) {
   }
 }
 
-/// 收集一行（`<tr>`）内的 `td` / `th` 单元格（文档序）。
-///
-/// 不进入单元格内部找单元格（畸形嵌套忽略），也不进入嵌套 `<table>`
-/// （其内容随所在单元格的 [_walk] 递归降级）。
+/// 收集一行（`<tr>`）内的 `td` / `th` 单元格（文档序）：不进入单元格内部找单元格
+/// （畸形嵌套忽略），也不进入嵌套 `<table>`（内容随所在单元格的 [_walk] 递归降级）。
 List<dom.Element> _rowCells(dom.Element tr) {
   final List<dom.Element> cells = <dom.Element>[];
   void visit(dom.Node node) {
@@ -453,7 +403,7 @@ class _ResolvedTitle {
 
 /// 章标题：h1~h6 -> `<title>`（长度 <= 60 才采用，避免那句「书名 - 出版社」）。
 ///
-/// 返回值额外标注来源：只有来源是正文标题块（h1~h6）时，调用方才应把重复的首段去掉
+/// 返回值额外标注来源：只有来源是正文标题块（h1~h6）时调用方才应把重复的首段去掉
 /// （见 [extractSection]）；来自 `<title>` 时首段是真正文，不能删。
 _ResolvedTitle _resolveTitle(dom.Element body, dom.Document doc) {
   for (final String tag in const <String>['h1', 'h2', 'h3', 'h4', 'h5', 'h6']) {
@@ -499,11 +449,10 @@ List<String> _stripTags(String source) {
 
 /// 从 [fragment] 锚点起的段落（`Chapter.locate` 的 **best-effort** 实现）。
 ///
-/// 语义：在 XHTML 里找 `id`（或 `name`）等于 [fragment] 的元素，**只保留它之后的内容**
-/// （文档序：锚点子树 → 其后续兄弟 → 逐层向上的后续兄弟）。
-///
-/// 容错：找不到锚点、解析失败、[fragment] 为空 —— 一律**退回整章段落**，
-/// 绝不抛异常也不返回空（脏书里锚点丢失很常见，「显示整章」远好于「报错不给读」）。
+/// 语义：找 `id`（或 `name`）等于 [fragment] 的元素，**只保留它之后的内容**（文档序：
+/// 锚点子树 → 后续兄弟 → 逐层向上的后续兄弟）。容错：找不到锚点 / 解析失败 /
+/// [fragment] 为空一律**退回整章段落**，绝不抛异常也不返回空（脏书锚点丢失常见，
+/// 「显示整章」远好于「报错不给读」）。
 ///
 /// [baseDir]：XHTML 文件所在目录的包内路径，用于 `<img src>` 路径归一化。
 List<String> extractParagraphsFromFragment(

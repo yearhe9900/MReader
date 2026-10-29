@@ -2,8 +2,8 @@
 //
 // 全部是 `test()`，无 `testWidgets`——不涉及 FakeAsync 铁律，可照常 await 真 IO。
 //
-// 2026-09-29 拍板「分组取代文件夹」：类名 / 方法名 / 落盘键名全部改到分组语义，
-// 并新增「旧 `folders` 键兼容」与「按名归组」两组用例。
+// 「分组取代文件夹」后：类名 / 方法名 / 落盘键名全部是分组语义，
+// 另有「旧 `folders` 键兼容」与「按名归组」两组用例。
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';

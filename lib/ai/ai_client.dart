@@ -1,16 +1,15 @@
 // AI 通用客户端底座（PRD `AI-08` 流式 / 可取消 / 可重试 / 并发上限 / 错误分类）。
 //
 // 依赖策略：只用 `dart:io` HttpClient（SSE 自解析），**不加 pubspec 依赖**——
-// 全仓 lib 无既有 HTTP 层，这里是唯一出口，供 T01~T05 六个 AI 功能复用。
+// 全仓 lib 无既有 HTTP 层，这里是唯一出口，六个 AI 功能共用。
 //
-// 职责边界（底座一次做对，功能层不再各写一套）：
-//   · 流式：POST {baseUrl}/chat/completions，stream:true，逐 delta yield 文本；
-//   · 可取消：[AiCall.cancel] → HttpClientRequest.abort() + 关流（`AI-08` ①）；
-//   · 错误分类：[AiErrorKind] 区分 401/404/超时/网络不可达等可读错误（`AI-01` ②）；
-//     [AiException.retryable] 只标「超时 / 网络 / 5xx」——401·404 不可重试，
-//     重试动作由 UI 一键触发，**不自动重试**（避免放大配额消耗）；
-//   · 并发闸：上限 2，超出排队（`AI-08` ③ 快速连点不并发多请求）；
-//   · 超时：连接超时 + 事件间隔超时均取 config.timeoutSeconds（默认 60）。
+// 职责边界（底座一次做对，功能层不再各写一套）：流式（POST
+// {baseUrl}/chat/completions，stream:true，逐 delta yield 文本）；可取消
+// （[AiCall.cancel] → abort + 关流，`AI-08` ①）；错误分类（[AiErrorKind]
+// 区分 401/404/超时/网络不可达等可读错误，`AI-01` ②；[AiException.retryable]
+// 只标「超时 / 网络 / 5xx」，401·404 不可重试，重试由 UI 一键触发、**不自动
+// 重试**以免放大配额消耗）；并发闸上限 2 超出排队（`AI-08` ③ 快速连点不并发
+// 多请求）；连接超时 + 事件间隔超时均取 config.timeoutSeconds（默认 60）。
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';

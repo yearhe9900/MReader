@@ -1,21 +1,15 @@
 // 原子写入通道（PRD `DATA-01`）——本工程所有落盘链路的**唯一入口**。
 //
-// 语义（对齐 `DATA-01`）：
-//   ① 写入 = 写到**同目录**临时文件 → flush 落盘 → 原子替换目标文件，
-//      任何时刻断电都不会留下半截文件；
-//   ② 替换采用**轮转式**：先把现有目标文件轮转为 `.bak` 备份，再把临时文件
-//      rename 成目标文件；因此每次读取失败都能回退到上一份有效副本。
+// 语义（对齐 `DATA-01`）：① 写入 = 写到**同目录**临时文件 → flush 落盘 → 原子替换
+// 目标文件，任何时刻断电都不会留下半截文件；② 替换采用**轮转式**——先把现有目标
+// 轮转为 `.bak` 备份，再把临时文件 rename 成目标，每次读取失败都能回退到上一份有效副本。
 //
-// 平台差异（Windows 关键坑）：
-//   Dart 的 `File.rename` 在 Windows 上**无法覆盖已存在的目标文件**（POSIX 可以）。
-//   若直接执行 `tmp.rename(target)` 且 target 已存在，Windows 会抛
-//   `FileSystemException`。因此这里**不假设 rename 能覆盖**：先删掉旧 `.bak`，
-//   再把 `target` rename 成 `.bak`（此时 target 位置腾空），最后把 `tmp`
-//   rename 成 `target`——两步 rename 的目标位置都不存在，Windows 与 POSIX 行为一致。
+// 平台差异（Windows 关键坑）：Dart 的 `File.rename` 在 Windows 上**无法覆盖已存在的
+// 目标文件**（POSIX 可以），故**不假设 rename 能覆盖**——先删旧 `.bak`，再把 `target`
+// rename 成 `.bak` 腾空目标，最后把 `tmp` rename 成 `target`，两步的目标位置都不存在。
 //
-// 并发：同一进程内对**同一路径**的写入串行化（[_tails] 链式等待），
-//   避免两个写操作交错产生半截文件；**不引入任何锁库**。
-//   跨进程并发不在本层保证范围（单进程应用足够）。
+// 并发：同一进程内对**同一路径**的写入串行化（[_tails] 链式等待），避免交错产生半截
+// 文件，**不引入任何锁库**；跨进程并发不在本层保证范围（单进程应用足够）。
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -42,9 +36,7 @@ class AtomicFile {
   /// 便捷方法：以 UTF-8 原子写入文本。
   Future<void> writeString(String contents) => writeBytes(utf8.encode(contents));
 
-  /// 原子写入字节内容。
-  ///
-  /// 目录不存在时自动创建；同一路径的写入在本进程内串行执行。
+  /// 原子写入字节内容：目录不存在时自动创建；同一路径的写入在本进程内串行执行。
   Future<void> writeBytes(List<int> bytes) {
     return _synchronized(() async {
       final File target = File(path);
@@ -61,10 +53,8 @@ class AtomicFile {
     });
   }
 
-  /// 读取目标文件内容；不存在返回 `null`。
-  ///
-  /// 本方法**不做备份回退**——回退语义在解析层（`JsonStore`）实现，
-  /// 以便区分「文件不存在」（无数据）与「文件损坏 / 替换被中断」（需回退）。
+  /// 读取目标文件内容；不存在返回 `null`。本方法**不做备份回退**——回退语义在解析层
+  /// （`JsonStore`）实现，以便区分「文件不存在」（无数据）与「文件损坏 / 替换被中断」（需回退）。
   Future<List<int>?> readBytes() async {
     final File file = File(path);
     if (!await file.exists()) {
@@ -82,10 +72,8 @@ class AtomicFile {
   /// 备份文件是否存在。
   Future<bool> hasBackup() => File(backupPath).exists();
 
-  /// 把备份文件复制回目标位置（读取层回退后可调用以「自愈」）。
-  ///
-  /// 采用「读取备份 → 写回目标」而非直接 rename，避免破坏 [backupPath]
-  /// 之外的状态；写入同样经串行化，与常规写入互不交错。
+  /// 把备份文件复制回目标位置（读取层回退后可调用以「自愈」）。采用「读取备份 →
+  /// 写回目标」而非直接 rename，避免破坏 [backupPath] 之外的状态；写入同样经串行化。
   Future<void> restoreFromBackup() {
     return _synchronized(() async {
       final File backup = File(backupPath);

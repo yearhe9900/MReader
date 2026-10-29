@@ -5,10 +5,8 @@ import 'dart:typed_data';
 
 import 'chapter.dart';
 
-/// 一本书的结构 + 元数据。
-///
-/// 关键设计：这里**不保存**解析后的正文文本，只保存每章 XHTML 的原始字节。
-/// 正文由 UI 在滚动到附近时按需解析（见 `epub/section_extractor.dart`），
+/// 一本书的结构 + 元数据。关键设计：**不保存**解析后的正文文本，只保存每章 XHTML 的
+/// 原始字节；正文由 UI 滚动到附近时按需解析（见 `epub/section_extractor.dart`），
 /// 避免一次性把整本书的排版结果铺进内存。
 class EpubBook {
   const EpubBook({
@@ -33,24 +31,20 @@ class EpubBook {
   /// 原始文件名。书名缺失时作为兜底显示。
   final String fileName;
 
-  /// 按 spine 顺序排列的章节（非文本资源已剔除）。
-  ///
-  /// `CNT-05`：`linear="no"` 的非主线章节**保留**在此（不再跳过），
-  /// 以 [EpubSection.linear] 标记区分，由章节表标注「（非主线）」展示。
+  /// 按 spine 顺序排列的章节（非文本资源已剔除）。`CNT-05`：`linear="no"` 的非主线
+  /// 章节**保留**在此（不再跳过），以 [EpubSection.linear] 标记区分，章节表标注「（非主线）」。
   final List<EpubSection> sections;
 
-  /// 目录（`RD-01`）：EPUB3 `nav.xhtml` 或 EPUB2 `toc.ncx` 的解析结果。
-  ///
-  /// **空列表表示这本书没有可用目录**，此时调用方应降级为「按 spine 生成平坦目录」。
-  /// 默认空列表，保持对既有调用方的向后兼容。
+  /// 目录（`RD-01`）：EPUB3 `nav.xhtml` 或 EPUB2 `toc.ncx` 的解析结果。**空列表表示
+  /// 这本书没有可用目录**，调用方应降级为「按 spine 生成平坦目录」；默认空列表，
+  /// 保持对既有调用方的向后兼容。
   final List<Chapter> toc;
 
   /// 平坦目录预取标题表（`PERF-01` 残余项）：`章 href -> 章标题`，**仅 toc 为空时填充**。
-  ///
-  /// 无目录书的章节表降级为「按 spine 平坦目录」，标题须取自每章正文的 h1——在解析
-  /// isolate 一次取好，避免 `chapters()` 现场逐章「解压 + HTML 解析」冻结主 isolate。
-  /// 值为空串 = 已预取但该章无标题（消费方补「第 N 章」占位）；**查不到键** = 未预取
-  /// （手造 EpubBook / 有目录书的 linear=no 补入），消费方回退现场解压取标题。
+  /// 无目录书的章节表降级为「按 spine 平坦目录」，标题取自每章正文的 h1——在解析 isolate
+  /// 一次取好，避免 `chapters()` 现场逐章「解压 + HTML 解析」冻结主 isolate。值为空串 =
+  /// 已预取但该章无标题（消费方补「第 N 章」占位）；**查不到键** = 未预取（手造 EpubBook
+  /// / 有目录书的 linear=no 补入），消费方回退现场解压取标题。
   final Map<String, String> flatTitles;
 
   /// 给 UI 用的显示名：书名 -> 文件名 -> 占位。
@@ -70,16 +64,11 @@ class EpubBook {
   }
 }
 
-/// 一个 spine 项（一章）。
-///
-/// 提供两种构造：
-/// * [EpubSection] —— **急切实体**：构造即持有该章 XHTML 的原始字节；
-/// * [EpubSection.lazy] —— **惰性实体**（`PERF-02`）：构造**不**取字节，首次访问
-///   [rawBytes] 时才由 `loadBytes` 回调解码。
-///
-/// 对**消费方而言两者无差别**：一律通过 [rawBytes] getter 读取（类型仍为 [Uint8List]），
-/// 故 `dart_epub_source.dart` / 既有测试**无需改动**。对解析器而言，惰性实体让「正文
-/// 字节只在 `content(i)` 时才读取」成立——结构解析阶段只建章节骨架、不驻留解压结果。
+/// 一个 spine 项（一章），两种构造：[EpubSection] **急切实体**（构造即持有该章 XHTML
+/// 原始字节）；[EpubSection.lazy] **惰性实体**（`PERF-02`，构造**不**取字节，首次访问
+/// [rawBytes] 才由 `loadBytes` 回调解码）。**对消费方两者无差别**（一律经 [rawBytes]
+/// 读取），`dart_epub_source.dart` / 既有测试**无需改动**；惰性实体让「正文字节只在
+/// `content(i)` 时才读取」成立——结构解析阶段只建章节骨架、不驻留解压结果。
 class EpubSection {
   /// 急切实体：直接持有原始字节（构造即解码）。
   EpubSection({
@@ -92,7 +81,6 @@ class EpubSection {
         _loader = null;
 
   /// 惰性实体（`PERF-02`）：构造**不**取字节，首次访问 [rawBytes] 时才调用 [loadBytes]。
-  ///
   /// [loadBytes] 通常闭包捕获包内的 `ArchiveFile`——构造后**不驻留解压结果**
   /// （archive 3.x 的 `ArchiveFile.content` 本身按需解压），非章节资源据此保持压缩态。
   EpubSection.lazy({
@@ -110,38 +98,26 @@ class EpubSection {
   /// 归一化后的包内路径，例如 `OEBPS/text/ch1.xhtml`。
   final String href;
 
-  /// spine 的 `linear` 属性：`linear="no"` 的非主线章节为 `false`（`CNT-05`）。
-  ///
-  /// 与解析层的 `EpubSectionRef.linear` 同义；属性缺省即 `true`（主线阅读内容）。
-  /// 非主线章节保留可读，由章节表标注「（非主线）」。
+  /// spine 的 `linear` 属性：`linear="no"` 的非主线章节为 `false`（`CNT-05`）。与解析层
+  /// 的 `EpubSectionRef.linear` 同义，属性缺省即 `true`（主线阅读内容）；非主线章节
+  /// 保留可读，由章节表标注「（非主线）」。
   final bool linear;
 
-  /// 该章 XHTML 的**解压后字节长度**（zip 中央目录里的 `uncompressedSize`）。
-  ///
-  /// ## 为什么记它（2026-10-08 真机「EPUB 章节加载特别慢」定案）
-  ///
-  /// 它只服务一件事：给「全书进度百分比」提供**章间相对权重**的廉价估算
-  /// （`DartEpubSource.chapterWeightEstimates()`）。改前那条路是
-  /// `chapterCharCounts()`——逐章 `rawBytes` + HTML 解析统计精确字数，
-  /// 真机 1152 章的书实测把主 isolate **独占秒级**，而它换来的只是一个
-  /// 一位小数的百分比。
-  ///
-  /// 本值在 [bindEpubResult] 绑定闭包时**顺手取自中央目录**：zip 解码器已把
-  /// `uncompressedSize` 读进 `ArchiveFile.size`（`archive-3.6.1` 的
-  /// `zip_decoder.dart:43`），**零解压、零额外 IO**。
-  ///
-  /// `0` = 未知（手造 `EpubBook` / 急切实体），消费方须按「无权重」处理。
-  ///
-  /// 口径提醒：XHTML 里含标签，故它**不是**字数——只保证「与章内文本量正相关」。
+  /// 该章 XHTML 的**解压后字节长度**（zip 中央目录里的 `uncompressedSize`）。只服务
+  /// 一件事：给「全书进度百分比」提供**章间相对权重**的廉价估算
+  /// （`DartEpubSource.chapterWeightEstimates()`）——逐章解析统计精确字数实测会把
+  /// 主 isolate 独占秒级，换来的只是小数位百分比。本值在 [bindEpubResult] 绑定闭包时
+  /// **顺手取自中央目录**（zip 解码器已把 `uncompressedSize` 读进 `ArchiveFile.size`），
+  /// **零解压、零额外 IO**。`0` = 未知（手造 `EpubBook` / 急切实体），按「无权重」处理；
+  /// XHTML 含标签，故它**不是**字数——只保证「与章内文本量正相关」。
   final int uncompressedBytes;
 
   final Uint8List? _eagerBytes;
   final Uint8List Function()? _loader;
 
-  /// 该章 XHTML 的原始字节（尚未解码）。
-  ///
-  /// **不缓存**（`PERF-02` ①：稳态内存不得随「读过的章数」线性增长）：惰性实体**每次访问
-  /// 都重新按需解码**——`totalCharCount()` / `search()` 遍历全书后，已读章节的字节会被 GC
-  /// 回收，而非永久驻留。急切实体直接返回构造时持有的字节。
+  /// 该章 XHTML 的原始字节（尚未解码）。**不缓存**（`PERF-02` ①：稳态内存不得随
+  /// 「读过的章数」线性增长）：惰性实体**每次访问都重新按需解码**，`totalCharCount()` /
+  /// `search()` 遍历全书后已读章节的字节会被 GC 回收而非永久驻留；急切实体直接返回
+  /// 构造时持有的字节。
   Uint8List get rawBytes => _eagerBytes ?? _loader!();
 }

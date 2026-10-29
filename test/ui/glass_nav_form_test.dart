@@ -1,27 +1,16 @@
-// `GlassNavBar`（导航层底栏）**触摸反馈口径**的契约测试（2026-09-29 拍板）。
+// `GlassNavBar`（导航层底栏）**触摸反馈口径**的契约测试。
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 背景
-// ══════════════════════════════════════════════════════════════════════════════
-// 负责人「移除导航栏放大特效」。库 `GlassTabBar` 的 `interactionBehavior` 缺省是
-// **`GlassInteractionBehavior.full`**（= 方向光晕 **+** 物理弹簧缩放；doc 自述
-// "the glass **inflates** subtly (bottom-anchored spring) on touch"），而本项目
-// `GlassNavBar` 原先**未透传**该参数 → 点击底栏时整个胶囊会膨胀。这与
-// `showSheet` 未透传 `interactionScale`（§2.49）是**同一类坑**：薄封装没暴露的
-// 库参数会以库默认值静默生效。
+// 背景：库 `GlassTabBar` 的 `interactionBehavior` 缺省是 **`GlassInteractionBehavior.full`**
+// （方向光晕 + 物理弹簧缩放），`GlassNavBar` 原先**未透传**该参数 → 点击底栏整个胶囊会
+// 膨胀。与 `showSheet` 未透传 `interactionScale`（§2.49）是**同一类坑**：薄封装没暴露的
+// 库参数会以库默认值静默生效。现显式传 `glowOnly`（去形变、保留手指位置的柔和高光）。
 //
-// 现显式传 `glowOnly`（去形变、保留手指位置的柔和高光）——库 doc 正是把这个档位
-// 推荐给「flat navigation bars that should remain spatially stable」。
-//
-// ══════════════════════════════════════════════════════════════════════════════
-// 两条测试口径（与 `glass_sheet_form_test.dart` 一致）
-// ══════════════════════════════════════════════════════════════════════════════
-// 1. 断言读的是**玻璃库 widget 自身字段**（`GlassTabBar.interactionBehavior`），
-//    期望值**硬编码字面量**——不引用薄封装暴露的常量，否则就是同义反复、
-//    永远红不了。这样能同时抓「参数没透传」与「透传了错值」两类错。
-// 2. 按 §2.49 的实测结论：**玻璃档不是不能测、是不能用 `pumpAndSettle` 测**。
-//    本文件宿主无入场动画，`pumpWidget` 后直接断言即可（同
-//    `glass_off_fallback_test.dart` 的档位用例）。
+// 两条测试口径（与 `glass_sheet_form_test.dart` 一致）：
+// 1. 断言读**玻璃库 widget 自身字段**（`GlassTabBar.interactionBehavior`），期望值
+//    **硬编码字面量**——不引用薄封装暴露的常量（同义反复、永远红不了），能同时抓
+//    「参数没透传」与「透传了错值」两类错。
+// 2. 按 §2.49 的实测结论：**玻璃档不是不能测、是不能用 `pumpAndSettle` 测**。本文件
+//    宿主无入场动画，`pumpWidget` 后直接断言即可。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -90,7 +79,7 @@ void main() {
   });
 
   // ══════════════════════════════════════════════════════════════════════════
-  // 指示块形变（参考图批 2026-10-12）：切换 tab 时拉宽 + 边缘 pinch + 静置磨砂
+  // 指示块形变：切换 tab 时拉宽 + 边缘 pinch + 静置磨砂
   // ══════════════════════════════════════════════════════════════════════════
   // 断言读玻璃库 widget 的**公开字段**、期望值硬编码字面量（不引用
   // `kNavPinchStrength` / `kNavRestingBlur`，否则同义反复、永远红不了）。
@@ -138,8 +127,8 @@ void main() {
 
       final GlassTabBar bar =
           tester.widget<GlassTabBar>(find.byType(GlassTabBar));
-      // 本组的意义就在这条：加了一整套指示块形变，**不得**把
-      // 「移除放大」（2026-09-29）一起回潮——两套机制本就独立。
+      // 本组的意义就在这条：加了一整套指示块形变，**不得**把「移除放大」一起
+      // 回潮——两套机制本就独立。
       expect(bar.interactionBehavior, GlassInteractionBehavior.glowOnly);
       expect(bar.interactionBehavior.hasScale, isFalse);
       // 指示块本身仍须显式开启（showIndicator 默认 true，防被误关）。

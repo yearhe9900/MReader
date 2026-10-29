@@ -1,11 +1,8 @@
-// `TTS-07` 在线 TTS 配置值对象 / 持久化 / 音频缓存（M3-T09）。
+// `TTS-07` 在线 TTS 配置值对象 / 持久化 / 音频缓存。
 //
-// 验收映射：
-//   · 配置 toJson 最小形态 / fromJson 容错 / validate 中文报错（配置页弹窗文案）；
-//   · 持久化：写盘 → 新实例回读一致（`TTS-07` 重启保留）；
-//   · `DATA-02`：API Key **不进配置 JSON 原文**（走 AiKeyVault 安全存储）；
-//   · 音频缓存：store/find/count/clear + 覆盖写（`TTS-07` ② 的存储层）。
-//
+// 覆盖：配置 toJson 最小形态 / fromJson 容错 / validate 中文报错（配置页弹窗
+// 文案）；持久化写盘 → 新实例回读一致；`DATA-02`：API Key **不进配置 JSON 原文**
+// （走 AiKeyVault 安全存储）；音频缓存 store/find/count/clear + 覆盖写（② 存储层）。
 // 口径：契约期望值**硬编码字面量**。
 import 'dart:io';
 import 'dart:typed_data';

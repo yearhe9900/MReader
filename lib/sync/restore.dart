@@ -1,20 +1,15 @@
-// `M4-T04`：从备份包恢复（`SYNC-04` ②「全新设备恢复后书架与进度与源设备
-// 一致」，PRD §10.3 包内布局的逆向落地）。
+// 从备份包恢复（`SYNC-04` ②「全新设备恢复后书架与进度与源设备一致」，
+// PRD §10.3 包内布局的逆向落地）。
 //
-// 安全闸门（任何写入之前）：
-//   ① zip 必须可解（复用 [tryDecodeZip]——archive 4.x 垃圾字节静默返空的
-//      EOCD 判废坑与 EPUB 链路同款）；
-//   ② `meta.json` 必有且可解析；
-//   ③ `schemaVersion <= [maxSchemaVersion]`——版本过新**零写入**直接失败
-//      （老应用恢复新包只会得到半懂不懂的残缺数据，宁可拒绝）。
+// 安全闸门（任何写入之前）：① zip 必须可解（复用 [tryDecodeZip]——archive
+// 4.x 垃圾字节静默返空的 EOCD 判废坑，同 EPUB 链路）；② `meta.json` 必有且
+// 可解析；③ `schemaVersion <= [maxSchemaVersion]`——版本过新**零写入**直接
+// 失败（老应用恢复新包只会得到残缺数据，宁可拒绝）。
 //
-// 写入纪律：
-//   · **显式白名单分派**——包内条目名不落白名单一律 `skipped++`，路径穿越
-//     （`../`、多级段、非法字符）在分派前就被拒，`_join` 永远拿不到危险输入；
-//   · 重组段（bookshelf / settings / bookmark）经 [JsonStore] 原子写入；
-//     原字节段（progress / stats / aiCache / vocab / tts）经 [AtomicFile]
-//     **保真落盘**；
-//   · 单条目损坏只 `skipped++`，不中断其余条目（与 `LIB-03` 逐条降级同哲学）。
+// 写入纪律：**显式白名单分派**——不落白名单一律 `skipped++`，路径穿越在分派前
+// 被拒；重组段（bookshelf / settings / bookmark）经 [JsonStore] 原子写入，
+// 原字节段（progress / stats / aiCache / vocab / tts）经 [AtomicFile] **保真
+// 落盘**；单条目损坏只 `skipped++` 不中断其余（同 `LIB-03` 逐条降级哲学）。
 //
 // 诚实降级（`NF-C8`）：`note.json` 是占位（笔记存储未落地）→ 合法忽略不计数。
 import 'dart:convert';
@@ -84,7 +79,7 @@ class RestoreOutcome {
       restored.values.fold(0, (int sum, int count) => sum + count);
 }
 
-/// 恢复引擎（进程内共享，显式注入；`M4-T05` 编排「从云端恢复」入口）。
+/// 恢复引擎（进程内共享，显式注入；触发编排「从云端恢复」入口）。
 class RestoreEngine {
   /// 创建引擎（依赖由组合根注入，见 `lib/main.dart`）。
   RestoreEngine({

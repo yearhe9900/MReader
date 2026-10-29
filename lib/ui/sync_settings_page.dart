@@ -1,4 +1,4 @@
-// `M4-T01`：WebDAV 同步设置页（`SYNC-01` 五要素配置 + 测试连接 + `SYNC-07` 失败可见）。
+// WebDAV 同步设置页（`SYNC-01` 五要素配置 + 测试连接 + `SYNC-07` 失败可见）。
 //
 // 形制（`UI-04` 红线）：玻璃顶栏（导航层）+ [OpaqueContentSurface] 不透明内容；
 // 分组卡片与行复用 [SettingsGroupCard] / [SettingsTile]（与设置页 / AI 设置页同口径）。

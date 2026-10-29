@@ -1,6 +1,6 @@
-// `M2b-T07`：玻璃质量档位偏好持久化 + 性能预算降级策略单测（`UI-05` / `UI-06`）。
+// `UI-05` / `UI-06`：玻璃质量档位偏好持久化 + 性能预算降级策略单测。
 //
-// 纯 Dart `test()`、临时目录真异步 IO，**不用** `testWidgets`（FakeAsync 区会挂死
+// ⚠️ 纯 Dart `test()`、临时目录真异步 IO，**禁用** `testWidgets`（FakeAsync 区会挂死
 // 真 IO，口径同 `session_store_test.dart`）。
 //
 // 覆盖：档位解析与视觉强度序、JSON 往返与类型回退、store 持久化 / 监听 / 损坏回退、

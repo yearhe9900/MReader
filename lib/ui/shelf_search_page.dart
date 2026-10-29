@@ -1,14 +1,11 @@
-// 书架搜索页（2026-10-22 上游「页面推入转场」批，`mi_like_ui_demo` b003a87）。
+// 书架搜索页（上游「页面推入转场」形态，独立整页搜索）。
 //
-// ## 为什么是独立页而不是就地搜索态
+// 为什么是独立页而不是就地搜索态：就地展开（搜索栏原地变输入框 + 胶囊行淡出）
+// 做不到参考素材那种**整屏无 App 级导航**（浮动底栏还在）；上游是「整页推入搜索
+// 页」+ 配套转场 [MiCardPageRoute]（新页从右缘滑入带大圆角、下层页左移 0.25 屏宽
+// + 压暗）。故书架点搜索栏 → 卡片式推入本页 → 返回圆钮出栈。
 //
-// 2026-10-20 那批把搜索改成**就地展开**（搜索栏原地变输入框 + 胶囊行淡出）。
-// 上游随后推入改成「整页推入搜索页」，并给了配套转场 [MiCardPageRoute]
-// （新页从右缘滑入带大圆角、下层页左移 0.25 屏宽 + 压暗），参考素材里搜索页
-// 是**整屏无 App 级导航**的——就地展开做不到这一点（浮动底栏还在）。
-// 故本页对齐上游最新形态：书架点搜索栏 → 卡片式推入本页 → 返回圆钮出栈。
-//
-// ## 头部几何（上游度量，1220×2656 素材，s = 1220 / 393 = 3.104 px/dp）
+// 头部几何（上游度量，1220×2656 素材，s = 1220 / 393 = 3.104 px/dp）
 //
 // | 项目                 | 素材 px        | dp          |
 // |----------------------|----------------|-------------|
@@ -25,7 +22,7 @@
 //
 // 正文**不复刻示例内容**（示例是主题卡网格）：这里是宿主自己的搜索结果——
 // 与书架同一套书卡网格（[ShelfGrid]），点结果与点书架书卡走同一个开书管道
-// （2026-09-29 拍板「同一手势一种结果」）。
+// （「同一手势一种结果」）。
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -60,7 +57,7 @@ class ShelfSearchPage extends StatefulWidget {
   /// 点结果（宿主负责关掉本页并开书）。
   final void Function(BookRecord record) onOpenBook;
 
-  /// 长按结果（复用书架的操作单）。
+  /// 长按结果（复用书架的长按弹框 `MiDialog`）。
   final Future<void> Function(BookRecord record) onBookActions;
 
   /// 正在准备打开的书（书卡显示 loading 覆盖层）。
@@ -89,12 +86,11 @@ class _ShelfSearchPageState extends State<ShelfSearchPage> {
   /// 当前查询串（已 trim、已小写；中文不受影响）。
   String _query = '';
 
-  /// 点结果开书后冻结布局（2026-10-23 真机「搜索页进书有点丢帧」定案）：
-  /// 键盘收起动画期间 body 若继续跟随 `viewInsets` 逐帧变高，结果网格会
-  /// 逐帧重排——正是阅读页已修过的「外因改排版区」病灶，只是发生在背景上。
+  /// 点结果开书后冻结布局（实测输入法收起动画与开书转场叠加会丢帧）：
+  /// 键盘收起动画期间 body 若继续跟随 `viewInsets` 逐帧变高，结果网格会逐帧
+  /// 重排——正是阅读页已修过的「外因改排版区」病灶，只是发生在背景上。
   /// **只在点书那一刻冻结**：打字时照常随键盘适配（结果区可见性不变）；
-  /// 冻结瞬间 body 撑回全高的那一次重排发生在键盘下方（可见区无跳变），
-  /// 随后键盘收起全程布局稳定。
+  /// 冻结瞬间 body 撑回全高的那一次重排发生在键盘下方（可见区无跳变）。
   bool _openingFrozen = false;
 
   @override
@@ -211,10 +207,9 @@ class _ShelfSearchPageState extends State<ShelfSearchPage> {
       // 头部行底缘 → 结果列表：上游示例同一档（`MiDimens.spaceXl`）。
       padding: EdgeInsets.fromLTRB(inset, MiDimens.spaceXl, inset, 20),
       onOpenBook: (BookRecord record) {
-        // 点结果先收键盘 + 冻结布局（2026-10-22/23 真机两轮定案）：输入法
-        // 收起动画与开书转场叠在一起会掉帧；阅读页侧已置
-        // `resizeToAvoidBottomInset: false` 免疫键盘，本页在点书这一刻
-        // 冻结布局（见 [_openingFrozen]），键盘收起不再逐帧重排背景。
+        // 点结果先收键盘 + 冻结布局（实测输入法收起动画与开书转场叠加会掉帧；
+        // 阅读页侧已置 `resizeToAvoidBottomInset: false` 免疫键盘）：本页在点书
+        // 这一刻冻结布局（见 [_openingFrozen]），键盘收起不再逐帧重排背景。
         setState(() => _openingFrozen = true);
         FocusScope.of(context).unfocus();
         widget.onOpenBook(record);

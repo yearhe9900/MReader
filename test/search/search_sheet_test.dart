@@ -1,14 +1,12 @@
-// `test/search/search_sheet_test.dart`：全书搜索面板（`CNT-06`，M2b-T04）。
+// `CNT-06`：全书搜索面板（① 命中数与列表行数同源对表 ② 点行跳转 + 关键词高亮
+// ③ 搜索中可取消且 UI 不卡死）。
 //
-// 验收映射（CNT-06）：
-//   ① 命中数与实际出现次数一致 —— 「共命中 N 处」与列表行数同源对表；
-//   ② 点击跳转且关键词高亮 —— 面板侧收口在「点行 → onJump(hit, query)」
-//      （跳转与正文高亮的端到端见 `search_jump_test.dart`；列表片段高亮本文件覆盖）；
-//   ③ 搜索中可取消且 UI 不卡死 —— 进度条 + 实时命中计数 + 「取消」，
-//      取消下传 `CancelToken`（协议级取消，会话层见 `search_session_test.dart`）。
+// 面板侧收口在「点行 → onJump(hit, query)」（跳转与正文高亮端到端见
+// `search_jump_test.dart`，列表片段高亮本文件覆盖）；取消下传 `CancelToken`
+// （协议级取消，会话层见 `search_session_test.dart`）。
 //
-// ⚠️ 假源一律走本 isolate 流式路径（`searchSpec => null` + `localSource`），
-// **禁用后台 isolate**（FakeAsync 不排空 isolate 消息会挂死，见 search_fakes.dart）。
+// ⚠️ 假源一律走本 isolate 流式路径（`searchSpec => null` + `localSource`），**禁用
+// 后台 isolate**（FakeAsync 不排空 isolate 消息会挂死，见 search_fakes.dart）。
 // 预期值人工推演后写死（防假绿）。
 import 'dart:async';
 

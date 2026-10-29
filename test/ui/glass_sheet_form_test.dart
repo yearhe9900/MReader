@@ -1,36 +1,22 @@
-// `GlassOverlays.showSheet` 弹层**形态口径**的契约测试（2026-09-29 拍板）。
+// `GlassOverlays.showSheet` 弹层**形态口径**的契约测试。
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 背景
-// ══════════════════════════════════════════════════════════════════════════════
-// 负责人原话：「去除弹框点击会有放大高亮特效，不需要上划的弹框，去除小横条」。
-// `AskUserQuestion` 两项拍板：①「上划」= **禁止拖拽关闭手势**（底部滑入的入场
-// 动画保留）；② **全部弹层统一生效**（改 `GlassOverlays.showSheet` 一处即
-// 6 处弹层同时生效：设置页选择 ×2、书架长按操作单、详情页分组、阅读页目录 /
-// 书签 / 搜索 / 外观）。
-//
-// 四项症状 ↔ 玻璃库参数（本薄封装原先全吃库默认值，与 `GlassNavScaffold.extendBody`
-// 默认 `true` 一类坑——薄封装没透传的参数会静默生效）：
-//   · 「点击放大」 = `interactionScale`（库默认 **1.01**）
+// 背景：①「上划」= **禁止拖拽关闭手势**（底部滑入入场动画保留）；② **全部弹层统一生效**
+// （改 `GlassOverlays.showSheet` 一处即各处弹层同时生效）。四项症状 ↔ 玻璃库参数（薄封装
+// 不透传的参数会**静默吃库默认值**，与 `GlassNavScaffold.extendBody` 默认 `true` 一类坑）：
+//   · 「点击放大」 = `interactionScale`（库默认 1.01）
 //   · 「点击高亮」 = `enableInteractionGlow` + `enableSaturationGlow`（库默认均 true）
 //   · 「小横条」   = `showDragIndicator`（库默认 true）
 //   · 「上划」     = `enableDrag`（库默认 true）
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 两条测试口径
-// ══════════════════════════════════════════════════════════════════════════════
-// 1. 期望值一律**硬编码字面量**，且断言读的是**玻璃库 widget 自身的公开字段**
-//    （`GlassSheet.showDragIndicator` / `.interactionScale` / `.enableInteractionGlow` /
-//    `.enableSaturationGlow`）——不引用薄封装暴露的任何常量，否则就是同义反复、
-//    永远红不了。这样能同时抓「参数没透传」与「透传了错值」两类错。
-// 2. 本文件**故意**是唯一渲染**玻璃档**弹层的地方（其余弹层用例一律在关档跑，
-//    见 `glass_off_fallback_test.dart` 头注释：玻璃档在 `flutter test` 软件光栅下
-//    每帧数百 ms）。故这里**只用 `pump(Duration)` 推进固定帧数**、不用
-//    `pumpAndSettle`，把开销压在可接受范围。
+// 两条测试口径：
+// 1. 期望值一律**硬编码字面量**，断言读**玻璃库 widget 自身的公开字段**——不引用薄封装
+//    暴露的常量（同义反复、永远红不了），能同时抓「参数没透传」与「透传了错值」两类错。
+// 2. 本文件**故意**是唯一渲染**玻璃档**弹层的地方（其余弹层用例一律关档，见
+//    `glass_off_fallback_test.dart` 头注释：玻璃档软件光栅下每帧数百 ms）——**只用
+//    `pump(Duration)` 推固定帧数、禁 `pumpAndSettle`**。
 //
 // 「关档」（Material `showModalBottomSheet`）的同口径断言在
-// `glass_off_fallback_test.dart` 的「showSheet 退化」用例里（`BottomSheet.enableDrag`
-// 为公开字段，可直接断言），本文件不重复。
+// `glass_off_fallback_test.dart` 的「showSheet 退化」用例里，本文件不重复。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -94,19 +80,18 @@ void main() {
     expect(sheet.enableInteractionGlow, isFalse);
     expect(sheet.enableSaturationGlow, isFalse);
 
-    // 尺寸（2026-09-30「统一配置」批）：两项与库默认**同值**，但从「不传、吃库默认」
-    // 改成「显式传 `OverlayStyle` 的值」——统一源之后，库升级改默认值不会静默
-    // 改掉本项目观感。反向验证：把 `OverlayStyle.sheetTopBorderRadius` /
-    // `.sheetMargin` 改成别的值，本断言即变红（证明它读的确实是那处配置）。
+    // 尺寸：两项与库默认**同值**但显式取 `OverlayStyle` 的值——统一源后，库升级改默认值
+    // 不会静默改掉观感。反向验证：把 `OverlayStyle.sheetTopBorderRadius` / `.sheetMargin`
+    // 改成别的值，本断言即变红（证明它读的确实是那处配置）。
     expect(sheet.topBorderRadius, 32);
     expect(
       sheet.margin,
       const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
     );
 
-    // 「上划」= `enableDrag`。它落在库私有的 `_DismissibleSheetWrapper` 上、
-    // **无公开字段可读**，故用**行为**验证：对弹层做一次下滑手势，
-    // 若仍允许拖拽关闭，弹层会消失（库的阈值 = 弹层高度 25% 或下滑速度 > 500）。
+    // 「上划」= `enableDrag`：它落在库私有的 `_DismissibleSheetWrapper` 上、**无公开字段
+    // 可读**，故用**行为**验证——若仍允许拖拽关闭，下滑手势后弹层会消失（库阈值 = 弹层
+    // 高度 25% 或下滑速度 > 500）。
     await tester.drag(find.byType(GlassSheet), const Offset(0, 300));
     await tester.pump(const Duration(milliseconds: 300));
     expect(
@@ -121,15 +106,10 @@ void main() {
     expect(await future, 'closed');
   });
 
-  // 2026-09-29 追加：遮罩色源契约（修「长按书卡，在操作单出现之前先蒙一层灰」）。
-  //
-  // 病灶：`GlassSheet.show` 的 `barrierColor` 没透传 → 吃库默认
-  // `GlassDefaults.barrierColor = 0x8A000000`（`glass_defaults.dart:154`，α≈0.541）。
-  // 遮罩与弹窗共用 350ms 淡入 / 滑入（`glass_sheet.dart:320-332`），而弹窗从
-  // `Offset(0, 1)`（屏幕外）滑上来 ⇒ 头 ~150ms 是「灰幕到场、弹窗未到」。
-  //
-  // 断言读的是**遮罩自己渲染出来的色**（`AnimatedModalBarrier` 的当前 `Color`），
-  // 不是薄封装常量 —— 与文件头口径 1 一致（引用自己的常量 = 同义反复）。
+  // 遮罩色源契约（弹层出现前不该先蒙一层深灰幕）。病灶：`GlassSheet.show` 的
+  // `barrierColor` 没透传、吃库默认 0x8A000000（α≈0.541），而遮罩与弹窗共用 350ms
+  // 淡入、弹窗从屏幕外滑上来 ⇒ 头一段是「灰幕到场、弹窗未到」。断言读**遮罩自己
+  // 渲染出来的色**（`AnimatedModalBarrier` 的当前 `Color`）而非薄封装常量（同义反复）。
   testWidgets('弹层遮罩：色源已压淡（库默认 0x8A000000 太重，且先于弹窗可见）',
       (WidgetTester tester) async {
     late BuildContext ctx;
@@ -171,22 +151,13 @@ void main() {
     );
   });
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // 2026-09-30 追加：确认框（`showAlert` 玻璃档）的遮罩与宽度也统一
-  // ══════════════════════════════════════════════════════════════════════════
-  // 负责人「玻璃弹框的共有参数，采用统一配置」；`AskUserQuestion` 拍板「四路全统一」
-  // + 「遮罩 + 形态 + 尺寸」全部收口到 `OverlayStyle`。
-  //
-  // 病灶（读库源码核清）：库 `GlassDialog.show` 的 `barrierColor` 是**死参数**——
-  // `glass_dialog.dart:268` 声明了它，但 `:271-283` 直接调
-  // `showCupertinoDialog(context:…, barrierDismissible:…, builder:…)`，**没把它传下去**
-  // ⇒ 实际吃 `kCupertinoModalBarrierColor`（`cupertino/route.dart:53-56`）。
-  // 本测试宿主是**浅色** `MaterialApp`，故旧行为下这里会读到 `0x33000000`（α 51），
-  // 而不是 `0x3D`（α 61）——这就是本用例能变红的原因。
-  //
+  // 确认框（`showAlert` 玻璃档）的遮罩与宽度也统一收口到 `OverlayStyle`。
+  // 病灶：库 `GlassDialog.show` 的 `barrierColor` 是**死参数**（声明了却没传给
+  // `showCupertinoDialog`），实际吃 Cupertino 默认 `0x33000000`（α 51）——浅色宿主下
+  // 与统一色源不同，故本用例能变红。
   // 处置：玻璃档 `showAlert` **绕开** `GlassDialog.show`，自行
-  // `showCupertinoDialog(barrierColor: OverlayStyle.barrier)` +
-  // `GlassDialog(...)`（同一个库 widget，不丢玻璃渲染）。
+  // `showCupertinoDialog(barrierColor: OverlayStyle.barrier)` + `GlassDialog(...)`
+  // （同一个库 widget，不丢玻璃渲染）。
   testWidgets('确认框（玻璃档）：遮罩也统一到同一色源，宽度取自 OverlayStyle',
       (WidgetTester tester) async {
     late BuildContext ctx;

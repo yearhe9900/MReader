@@ -1,24 +1,11 @@
-// `M3-T02`：划词翻译 / 释义结果面板 widget 测试（`AI-02` ②③④ / `AI-03` ② /
-// `AI-08` ①② / `AI-09` ①）。
+// `AI-02` ②③④ / `AI-03` ② / `AI-08` ①② / `AI-09` ①：划词翻译 / 释义结果面板
+// widget 测试（流式完成出「复制」、中途停止转可复制态、失败回显中文原因+重试、
+// 释义存生词本落盘、范围行两态）。
 //
-// 验收映射：
-//   · `AI-02` ② 流式出字到完成 → 出「复制」；翻译模式**不**出「存生词本」；
-//   · `AI-02` ③ 中途「停止」→ 保留已出文字、转可复制态（取消静默无错误文案）；
-//   · `AI-02` ④ / `AI-08` ② 失败回显中文原因（500 → `服务端错误（500）`），
-//     配置 + 密钥齐备才给「重试」，重试再发起可成功；
-//   · 无配置 / 无密钥 → 只给引导文案、**不给**「重试」（缺前提时重试无意义）；
-//   · `AI-03` ② 释义完成 → 「存生词本」→ 条目字段落盘 + 按钮转「已存」+ 轻提示；
-//   · `AI-09` ① 范围行两态：最保守只报选文；关闭后报「选文 + 前后段落」。
-//
-// 三条测试口径：
-//   · 钉「关」档：`GlassScopeProvider` 放 `MaterialApp.builder`（生产 `app.dart`
-//     同形制）——路由也在作用域内，面板内 toast 一并退化纯色，规避玻璃档在
-//     `flutter test` 软件光栅下的每帧数百 ms 开销；
-//   · 真异步 IO（读密钥 / HTTP / 落盘）在 FakeAsync 区不自行推进 → 统一用
-//     [settleReal]（runAsync 让出真实事件循环 + pump 交替）推进；spinner 在场时
-//     **不用** `pumpAndSettle`（会挂死），只有「无配置」同步出错态可用它；
-//   · mock OpenAI 端点复用 `translate_explain_test` 的 `_serve` / `_sse` 形制
-//     （SSE 帧 + `data: [DONE]`，调用方 `close()`）。
+// ⚠️ 测试口径：钉「关」档须把 `GlassScopeProvider` 放 `MaterialApp.builder`
+// （覆盖路由树，否则 route 回落玻璃默认档，软件光栅下每帧数百 ms）；spinner 在场
+// **禁用** `pumpAndSettle`（会挂死），真异步 IO（读密钥 / HTTP / 落盘）一律
+// [settleReal]（runAsync 与 pump 交替）推进。
 import 'dart:convert';
 import 'dart:io';
 
@@ -74,10 +61,8 @@ void _sse(HttpRequest request, List<String> chunks) {
 /// 只发若干帧、**不写 `[DONE]`、不关 response**：连接保持 → 面板停在
 /// 「生成中」（`AI-02` ③ 中途停止用例）。
 Future<void> _sseHold(HttpRequest request, List<String> chunks) async {
-  // dart:io 默认 `bufferOutput=true`：headers 与小数据全攒在
-  // `_HttpOutgoing._buffer`，只有 close→finalize 或缓冲溢出才写 socket
-  // → 不关连接时客户端连响应头都收不到。关缓冲让帧立即落盘（必须在任何
-  // write 之前设，headersWritten 后再设会抛 StateError）。
+  // ⚠️ 必须关 `bufferOutput`（且在任何 write 之前，headersWritten 后设会抛
+  // StateError）：默认缓冲到 close 才落 socket，不关连接时客户端连响应头都收不到。
   request.response.bufferOutput = false;
   request.response.headers.contentType =
       ContentType('text', 'event-stream', charset: 'utf-8');
@@ -113,10 +98,8 @@ void main() {
   );
 
   setUp(() async {
-    // binding 初始化（`capTestTimeout`）会把 `HttpOverrides.global` 换成
-    // 「一律 400」的假客户端（flutter_test 防误联网）——本文件的本地 mock
-    // server 需要真实网络栈，恢复为 null 走 dart:io 默认实现。
-    // isolate 级状态：只影响本测试文件，不外溢。
+    // ⚠️ 必须恢复 `HttpOverrides.global = null`：binding 初始化会换成「一律 400」
+    // 假客户端（防误联网），本地 mock server 需要真实网络栈（isolate 级不外溢）。
     HttpOverrides.global = null;
     GlassRuntime.resetForTest();
     dir = Directory.systemTemp.createTempSync('mreader_sheet_ui_');
@@ -307,9 +290,8 @@ void main() {
       findsNothing, // 取消是静默的，不回显错误
     );
 
-    // held 连接还开着：`abort()` 对已收到响应的请求不生效，`_consumeSse` 的
-    // `await for` + `Stream.timeout(60s)` 定时器会留在 FakeAsync 区判失败。
-    // 手动关 server → 响应流报错退出 → 定时器随之取消。
+    // ⚠️ 必须手动关 server：held 连接下 `abort()` 不生效，`Stream.timeout(60s)`
+    // 定时器留在 FakeAsync 区会判失败；关掉 → 响应流报错退出 → 定时器取消。
     await tester.runAsync(() async {
       final HttpServer? server = active;
       active = null;

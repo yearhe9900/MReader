@@ -1,4 +1,4 @@
-// `M4-T02`：「取更新」冲突判定单测（PRD §10.2 四步 / `SYNC-02` 验收①②③）。
+// §10.2 四步 / `SYNC-02` 验收①②③：「取更新」冲突判定单测。
 //
 // 纯 `test()`、零 IO——`conflict.dart` 是纯函数，不碰网络与磁盘。
 import 'package:flutter_test/flutter_test.dart';

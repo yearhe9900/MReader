@@ -39,13 +39,11 @@ enum ReaderBackground {
   }
 }
 
-/// 翻页方式（`M-PAGE T05-d`：选型拍板①「`pageMode` 模式切换由用户可选」、
-/// 拍板③「slide + cover 先行，scroll/none 跟上，curl 后置 P2」）。
+/// 翻页方式（选型拍板①「`pageMode` 模式切换由用户可选」、拍板③「slide + cover
+/// 先行，scroll/none 跟上，curl 后置 P2」）。
 ///
-/// · [scroll]：纵向滚动（保留的既有行为，拍板①「滚动保留」）；
-/// · [slide]：左右滑动翻页（整页平移）；
-/// · [cover]：覆盖翻页（新页盖在旧页上）；
-/// · [none]：点划即翻、无动画（`PageTurnMode.none`）。
+/// [scroll] 纵向滚动（既有默认）；[slide] 左右滑动整页平移；[cover] 覆盖翻页；
+/// [none] 点划即翻、无动画。
 enum ReaderPageMode {
   scroll,
   slide,
@@ -91,7 +89,7 @@ class ReadingPrefs {
   /// 预设背景色板。
   final ReaderBackground background;
 
-  /// 翻页方式（`M-PAGE T05-d`；默认滚动 = 既有行为）。
+  /// 翻页方式（默认滚动 = 既有行为）。
   final ReaderPageMode pageMode;
 
   /// 生成一份新副本（`null` 表示不改该字段）。

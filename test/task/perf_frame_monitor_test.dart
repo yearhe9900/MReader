@@ -1,4 +1,4 @@
-// `M2b-T07`：帧预算监控单测（`UI-06` 自动降级的帧侧触发器，接线批）。
+// `UI-06` 自动降级的帧侧触发器（接线批）：帧预算监控单测。
 //
 // 纯 Dart `test()`；帧时序经 `@visibleForTesting simulateTimings` 注入
 // （无需真实渲染循环）。[FrameTiming] 用 dart:ui 的**测试工厂**构造（微秒时间戳）：

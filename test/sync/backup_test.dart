@@ -1,7 +1,7 @@
-// `M4-T04`：全量备份测试（`SYNC-04` 验收 ①③ + §10.3 包内布局 + `SYNC-07`）。
+// `SYNC-04` 验收 ①③ + §10.3 包内布局 + `SYNC-07`：全量备份测试。
 //
-// 内存 WebDAV 服务端与临时目录 / 凭据假件在 `sync_support.dart`（`M4-T03` 抽出
-// 共用）：均为纯 `test()`（无 FakeAsync 区），真实 socket 异步可正常排空。
+// 内存 WebDAV 服务端与临时目录 / 凭据假件在 `sync_support.dart`（共用）：
+// 均为纯 `test()`（无 FakeAsync 区），真实 socket 异步可正常排空。
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';

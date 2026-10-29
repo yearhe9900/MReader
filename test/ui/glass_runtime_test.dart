@@ -1,4 +1,4 @@
-// `M2b-T07`：玻璃档位生效链单测（`glass_runtime.dart` 的映射 + `GlassRuntime` 生效态）。
+// 玻璃档位生效链单测（`glass_runtime.dart` 的映射 + `GlassRuntime` 生效态）。
 //
 // 纯 Dart `test()` + 临时目录真异步 IO（口径同 `perf_prefs_store_test.dart`），
 // 不用 `testWidgets`（FakeAsync 区会挂死真 IO）。

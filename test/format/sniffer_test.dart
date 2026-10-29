@@ -1,11 +1,10 @@
-// `FMT-06`（M2b-T03）格式嗅探与魔数纠偏的验收测试。
+// `FMT-06` 格式嗅探与魔数纠偏的验收测试。
 //
-// 夹具真实性（kTinyPng 教训：夹具必须按真实样本结构复刻，不许「号称」）：
-// MOBI 系判据来自 tmp_book 真实《牧神记》.mobi / .azw3 **双样本实测**——两文件
-// 偏移 60..68 均为 `42 4f 4f 4b 4d 4f 42 49`（PalmDB type "BOOK" + creator
-// "MOBI"）；AZW3 头 8 字节为可打印 ASCII（PDB name 实测 `epubor.c`），夹具照
-// 此复刻（可打印 name + NUL 填充 + BOOKMOBI tag），顺带覆盖「头可打印 ≠ 纯文
-// 本」陷阱（AZW3 改名 .txt 不得落 txt）。
+// 夹具真实性（kTinyPng 教训：夹具必须按真实样本结构复刻，不许「号称」）：MOBI 系判据
+// 来自真实 .mobi / .azw3 **双样本实测**——两文件偏移 60..68 均为 `BOOKMOBI`（PalmDB
+// type "BOOK" + creator "MOBI"）；AZW3 头 8 字节为可打印 ASCII（PDB name 字段），
+// 夹具照此复刻（可打印 name + NUL 填充 + BOOKMOBI tag），顺带覆盖「头可打印 ≠ 纯文本」
+// 陷阱（AZW3 改名 .txt 不得落 txt）。
 import 'dart:convert';
 import 'dart:typed_data';
 

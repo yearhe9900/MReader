@@ -1,9 +1,9 @@
-// `M3-T01`：AI Provider 配置模型（PRD §8.2 / `AI-01`）。
+// AI Provider 配置模型（PRD §8.2 / `AI-01`）。
 //
 // OpenAI 兼容四要素 + 可选扩展（自定义 header / 超时 / 生成参数 / 用途）。
 // **`apiKey` 不在本模型内**（`DATA-02`）：配置只描述「连哪里、用什么模型」，
-// 密钥经 `AiKeyVault`（`secure_key_store.dart`）走系统安全存储，**不落本文件的
-// JSON**——备份包 / 配置导出里搜不到 Key（`DATA-02` ① 的结构性保证）。
+// 密钥经 `AiKeyVault` 走系统安全存储，**不落本文件的 JSON**——备份包 / 配置
+// 导出搜不到 Key（`DATA-02` ① 的结构性保证）。
 
 /// 配置用途（PRD §8.2 `useFor`：对话 / 翻译 / 摘要 / 嵌入）。
 enum AiUseCase {

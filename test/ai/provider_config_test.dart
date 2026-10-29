@@ -1,4 +1,4 @@
-// `M3-T01`：AiProviderConfig 序列化 / 校验 / 端点派生测试（`AI-01`、`DATA-02` ①）。
+// `AI-01`、`DATA-02` ①：AiProviderConfig 序列化 / 校验 / 端点派生测试。
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/ai/provider_config.dart';
 

@@ -1,19 +1,16 @@
-// `M4-T02`：阅读进度同步引擎（`SYNC-02`，PRD §10.2「取更新」/ §10.3 目录约定 / F7）。
+// 阅读进度同步引擎（`SYNC-02`，PRD §10.2「取更新」/ §10.3 目录约定 / F7）。
 //
-// 每本书一个远端进度文件，**增量**双向收敛：
-//   · 远端缺失            → 上传本地（两侧都无 → unchanged）；
-//   · 远端 mtime <= 同步时间 → 不下载：本地在上次同步后有新阅读 → 上传
-//     （`SYNC-06` 退出阅读页上报的时机）；否则直接跳过（验收③）；
-//   · 远端更靠后          → 覆盖本地（验收①「后读覆盖先读」）；
-//   · 本地更靠后          → 不回退本地，并把本地推上远端（验收②）；
-//   · 完全相同            → 不写入进度，仅更新同步时间（§10.2 ④）。
+// 每本书一个远端进度文件，**增量**双向收敛：远端缺失 → 上传本地；远端 mtime
+// <= 同步时间 → 不下载（本地有新阅读则上传，否则跳过，验收③）；远端更靠后 →
+// 覆盖本地（验收①「后读覆盖先读」）；本地更靠后 → 不回退并推上远端（验收②）；
+// 完全相同 → 不写进度，仅更新同步时间（§10.2 ④）。
 //
-// 冲突判定是纯函数（`conflict.dart`），本文件只做：读写 `ProgressStore`、
-// 经 `WebdavClient` 传输、维护「本地同步时间」总账 [ProgressSyncState]、
-// 汇总失败清单（`SYNC-07`：单本失败不中断整体，原因可读可重试）。
+// 冲突判定是纯函数（`conflict.dart`），本文件只做读写 `ProgressStore`、传输、
+// 维护同步时间总账 [ProgressSyncState]、汇总失败清单（`SYNC-07`：单本失败不
+// 中断整体）。
 //
-// 跨设备序列化纪律（`RD-04`）：上传**丢弃 localHint**（设备本地版面快照）；
-// 下载落盘同样重建为无 hint 的进度（远端带来的 hint 是别的设备的版面）。
+// 跨设备序列化纪律（`RD-04`）：上传**丢弃 localHint**，下载落盘同样重建为
+// 无 hint 的进度（hint 是设备本地版面快照，不跨设备）。
 import 'dart:convert';
 import 'dart:io';
 
@@ -31,11 +28,8 @@ import 'webdav_client.dart';
 const String progressRemoteDir = 'bookProgress';
 
 /// 单本书的远端进度路径（相对远端根）：`bookProgress/{书名}_{作者}.json`。
-///
-/// 书名 / 作者做文件名净化：路径分隔符与 Windows 非法字符替换为 `_`
-/// （`/` 若不处理会被 `WebdavClient` 拆成多级目录），空白折叠、去首尾；
-/// 净化后为空回退 `未知`。段编码（中文 / 空格 → percent-encoding）由
-/// `WebdavClient` 统一处理，这里只给**已解码**的路径。
+/// 书名 / 作者做文件名净化（非法字符 → `_`，空白折叠，空回退 `未知`——`/`
+/// 不净化会被 `WebdavClient` 拆成多级目录）；段编码由 `WebdavClient` 统一处理。
 String progressRemotePath(BookRecord book) =>
     '$progressRemoteDir/${_safeSegment(book.title)}_${_safeSegment(book.author)}.json';
 
@@ -50,18 +44,15 @@ String _safeSegment(String raw) {
 }
 
 /// 本地「同步时间 / 备份时间」总账——`SYNC-02` 步骤① 闸门的本地事实源，
-/// 兼 `SYNC-06` 「距上次全量备份 N 天」的间隔账（`M4-T05`）。
+/// 兼 `SYNC-06` 「距上次全量备份 N 天」的间隔账。
 ///
-/// 落盘 `<dataDir>/sync_state.json`（形制同 `SyncConfigStore`：
-/// [JsonStore] → [AtomicFile]，`DATA-01` 原子写入），结构：
-/// ```json
-/// { "progress": { "<bookId>": <Unix 毫秒> }, "lastBackupAt": <Unix 毫秒> }
-/// ```
-/// 顶层键并列扩展（`lastBackupAt` 从未备份时不落该键，旧文件读取兼容）。
+/// 落盘 `<dataDir>/sync_state.json`（[JsonStore] → [AtomicFile]，`DATA-01`
+/// 原子写入）：`{ "progress": { "<bookId>": <Unix 毫秒> }, "lastBackupAt": … }`，
+/// 顶层键并列扩展（从未备份不落 `lastBackupAt`，旧文件读取兼容）。
 ///
-/// progress 语义：该 bookId 上次**与远端完成一次同步交互**（上传 / 下载 /
-/// 判同）的时刻；从未同步为 0。跳过（远端更旧）**不更新**——否则闸门会把
-/// 「远端之后的新版本」也一并跳过。
+/// progress 语义：该 bookId 上次完成一次同步交互（上传 / 下载 / 判同）的时刻；
+/// 从未同步为 0；跳过（远端更旧）**不更新**——否则闸门会把远端之后的
+/// 新版本也一并跳过。
 class ProgressSyncState {
   /// 用数据目录构造（组合根注入，见 `lib/main.dart`）。
   ProgressSyncState(Directory dataDir)
@@ -104,9 +95,7 @@ class ProgressSyncState {
   /// 某本书的上次同步时间；从未同步返 `0`。
   int syncedAt(String bookId) => _syncedAt[bookId] ?? 0;
 
-  /// 上次成功全量备份时间（Unix 毫秒）；从未备份返 `0`。
-  ///
-  /// 调用前先 [load]（触发编排在到期判定处统一加载，`M4-T05`）。
+  /// 上次成功全量备份时间（Unix 毫秒）；从未备份返 `0`；调用前先 [load]。
   int get lastBackupAt => _lastBackupAt;
 
   /// 记录 [bookId] 刚完成一次同步（[atMs] = Unix 毫秒）并落盘。
@@ -115,9 +104,8 @@ class ProgressSyncState {
     await _flush();
   }
 
-  /// 记录刚完成一次**成功**的全量备份（[atMs] = Unix 毫秒）并落盘。
-  ///
-  /// 失败的备份**不记账**——下一次触发立即重试（`SYNC-06` ③ 只约束成功间隔）。
+  /// 记录刚完成一次**成功**的全量备份（[atMs] = Unix 毫秒）并落盘；失败
+  /// **不记账**——下次触发立即重试（`SYNC-06` ③ 只约束成功间隔）。
   Future<void> markBackup(int atMs) async {
     _lastBackupAt = atMs;
     await _flush();
@@ -209,7 +197,7 @@ class ProgressSyncReport {
       '失败 ${count(ProgressSyncAction.failed)} 本';
 }
 
-/// 阅读进度同步引擎（进程内共享，显式注入；触发时机由 `M4-T05` 编排）。
+/// 阅读进度同步引擎（进程内共享，显式注入；触发时机由同步触发编排调用）。
 class ProgressSyncEngine {
   /// 创建引擎（四个依赖均由组合根注入，见 `lib/main.dart`）。
   ProgressSyncEngine({
@@ -232,10 +220,8 @@ class ProgressSyncEngine {
   /// 已确认建好的远端目录键（`url|dir`）——同配置只 MKCOL 一次。
   String? _ensuredKey;
 
-  /// 同步一批书（`M4-T05`「启动时拉取」的入口）。
-  ///
-  /// 配置 / 密码缺失 → 全部记为 failed；**单本失败不中断整体**
-  /// （`SYNC-07`：失败项汇总进 [ProgressSyncReport]，可重试）。
+  /// 同步一批书（「启动时拉取」的入口）：配置 / 密码缺失 → 全部记 failed；
+  /// **单本失败不中断整体**（`SYNC-07`：失败汇总进 [ProgressSyncReport]，可重试）。
   Future<ProgressSyncReport> syncAll({
     required List<BookRecord> books,
   }) async {
@@ -264,10 +250,8 @@ class ProgressSyncEngine {
     return ProgressSyncReport(outcomes);
   }
 
-  /// 同步单本书（`M4-T05`「退出阅读页上报」的入口）。
-  ///
-  /// 不抛业务异常：通道 / 配置 / 数据问题一律返回
-  /// [ProgressSyncAction.failed] + 可读 reason（`SYNC-07`）。
+  /// 同步单本书（「退出阅读页上报」的入口）；不抛业务异常：通道 / 配置 /
+  /// 数据问题一律返回 [ProgressSyncAction.failed] + 可读 reason（`SYNC-07`）。
   Future<ProgressSyncOutcome> syncBook(BookRecord book) async {
     final SyncConfig? config = _configStore.config;
     if (config == null) {

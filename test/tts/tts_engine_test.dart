@@ -1,4 +1,4 @@
-// `TTS-01` ③：段落可读性纯函数（M3-T06）。
+// `TTS-01` ③：段落可读性纯函数。
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/tts/tts_engine.dart';
 

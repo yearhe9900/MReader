@@ -1,30 +1,19 @@
-// `GlassNavScaffold` **顶栏避让**回归（2026-09-29）。
+// `GlassNavScaffold` **顶栏避让**回归。
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 这个测试在防什么
-// ══════════════════════════════════════════════════════════════════════════════
-// 真机截图实证的 bug（批次① `06063c8` 引入、批次② `0991c43` 加了筛选栏后显形）：
-// `GlassNavScaffold` 没传 `extendBody`，吃了玻璃库的默认值 `true` →
-// `glass_scaffold.dart:487-489` 走 `Positioned.fill`，**正文铺满整屏、从 y=0 起、
-// 完全不避让顶栏** → 书架筛选栏被顶进状态栏、网格首行封面被顶栏盖住。
+// 防什么：`GlassNavScaffold` 没传 `extendBody`、吃了玻璃库默认值 `true` → 正文铺满
+// 整屏、从 y=0 起、**完全不避让顶栏**（书架筛选栏被顶进状态栏、网格首行封面被顶栏盖住）。
+// 库文档声称会「automatically add a top spacer」，但全文只有文字、**零处实现**——以代码
+// 为准。修法 = 显式传 `extendBody: false`。
 //
-// 库文档 `:153` / `:83` 声称会「automatically add a top spacer」，但 1.7.0 全文
-// grep 只有三处文字、**零处实现**——以代码为准。修法 = 显式传 `extendBody: false`
-// （走 `:491-494` 的 `top: topPad + appBarHeight`）。
-//
-// 断言口径：测试窗口的 `MediaQuery.padding.top` 默认为 0，故正文 top 应 = 顶栏
+// 断言口径：测试窗口 `MediaQuery.padding.top` 默认为 0，故正文 top 应 = 顶栏
 // `toolbarHeight`(44)；用 `>= 44` 而非 `== 44`，容忍宿主注入状态栏内边距的情形。
 //
-// ══════════════════════════════════════════════════════════════════════════════
-// 2026-09-29 追加：`extendBody` 参数化（「全浮动头部」批）
-// ══════════════════════════════════════════════════════════════════════════════
-// 负责人「标题栏也参考图片，内容可以 edge to edge」+ 拍板「全浮动头部」后，
-// `GlassNavScaffold` 把 `extendBody` 暴露为参数（**默认仍 `false`**，即上面
-// 三条契约不变——多数页面的正文继续避让顶栏）；书架页显式传 `true`：
-// 正文铺满全屏、滚动时从浮动玻璃头部下穿过，顶栏下内容透出磨砂模糊
-// （`GlassScrollEdgeStyle.blur` = `UI-02` ② 的正式落地），首行保护改由页面
-// 自己的 `padding.top` 承担（`shelfGridPadding`，见 `shelf_page_test`）。
-// 下面两条锁「传 true 时正文确实从 y=0 起」（玻璃档 + 关档）。
+// `extendBody` 参数化（「全浮动头部」形态）：`GlassNavScaffold` 把 `extendBody` 暴露为
+// 参数（**默认仍 `false`**，即上面契约不变——多数页面的正文继续避让顶栏）；书架页显式
+// 传 `true`：正文铺满全屏、滚动时从浮动玻璃头部下穿过，顶栏下内容透出磨砂模糊
+// （`GlassScrollEdgeStyle.blur` = `UI-02` ② 的正式落地），首行保护改由页面自己的
+// `padding.top` 承担（`shelfGridPadding`，见 `shelf_page_test`）。下面两条锁
+// 「传 true 时正文确实从 y=0 起」（玻璃档 + 关档）。
 // ══════════════════════════════════════════════════════════════════════════════
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

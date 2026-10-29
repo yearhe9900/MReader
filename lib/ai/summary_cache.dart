@@ -1,16 +1,15 @@
-// 摘要缓存（M3-T03：`AI-04` ②「二次进入直接命中缓存」+ `AI-05` 递进续做）。
+// 摘要缓存（`AI-04` ②「二次进入直接命中缓存」+ `AI-05` 递进续做）。
 //
 // 形制与其它 store 同款（勿改）：进程内共享实例 + 监听回调，落盘经
 // [JsonStore] → [AtomicFile]（`DATA-01` 原子写入）；实例在 `main()` 创建注入
 // （目录 = PRD §10.3 `aiCache/`，全量备份按目录整体收）。
 //
-// 两级缓存（PRD §8.3「按 章 id + 内容 hash + 模型」；schedule:222
-// 「缓存键必须能区分生成到第几章」）：
-//   · 章级 [ChapterSummaryEntry]：键 = bookId + chapterHref + 内容 hash +
-//     模型 + 目标长度——全书摘要的**逐章递进**就靠它续做（已生成的章直接跳过，
-//     中断后重跑只补缺的章）；
-//   · 合并级 [BookSummaryEntry]：键 = bookId + 模型 + 类型 + 范围起止章 +
-//     [inputHash]（范围内各章内容 hash 串接再摘要）——正文或范围一变即失效。
+// 两级缓存（PRD §8.3「按 章 id + 内容 hash + 模型」；schedule:222「缓存键必须
+// 能区分生成到第几章」）：章级 [ChapterSummaryEntry] 键 = bookId + chapterHref +
+// 内容 hash + 模型 + 目标长度——全书摘要**逐章递进**靠它续做（已生成章跳过，
+// 中断重跑只补缺章）；合并级 [BookSummaryEntry] 键 = bookId + 模型 + 类型 +
+// 范围起止章 + [inputHash]（范围内各章内容 hash 串接再摘要）——正文或范围
+// 一变即失效。
 import 'dart:convert';
 import 'dart:io';
 
@@ -115,7 +114,7 @@ class BookSummaryEntry {
   final String model;
 
   /// `book` = 全书摘要；`recap` = 前情回顾；`entities` = 人物梳理成品
-  /// （M3-T05，text 存 `encodeEntities` 的 JSON；键同样含范围起止 + inputHash）。
+  /// （text 存 `encodeEntities` 的 JSON；键同样含范围起止 + inputHash）。
   final String kind;
 
   /// 范围起止章（闭区间；全书 = 0..upto，前情回顾 = 近 N 章窗口）。

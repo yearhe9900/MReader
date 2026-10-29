@@ -1,6 +1,4 @@
-// 阅读设置值对象（`TYP-01` ~ `TYP-04`）。
-//
-// 从 `lib/ui/reader_settings_bar.dart` 提取并扩展：字号 / 行距 / 字体 / 主题 / 页边距。
+// 阅读设置值对象（`TYP-01` ~ `TYP-04`）：字号 / 行距 / 字体 / 主题 / 页边距。
 // 纯数据模型：**不依赖 Flutter、不依赖 dart:io**（可进 isolate、可单测）。
 import '../settings/settings_store.dart';
 
@@ -21,9 +19,7 @@ enum PageMargin {
   final double horizontal;
 }
 
-/// 阅读设置（不可变）。
-///
-/// 字号单位是逻辑像素，行距是倍数（Flutter 的 `TextStyle.height`）。
+/// 阅读设置（不可变）。字号单位是逻辑像素，行距是倍数（Flutter 的 `TextStyle.height`）；
 /// 字体可选 `'serif'` / `'sans-serif'` / `null`（系统默认）。
 class ReaderSettings {
   const ReaderSettings({
@@ -49,9 +45,8 @@ class ReaderSettings {
   /// 行距倍数（1.0~2.6）。
   final double lineHeight;
 
-  /// 字体族（`null` = 系统默认；可选 `'serif'` / `'sans-serif'`）。
-  ///
-  /// 不内嵌字体文件（`TYP-07`），由平台自行匹配。
+  /// 字体族（`null` = 系统默认；可选 `'serif'` / `'sans-serif'`）。不内嵌字体文件
+  /// （`TYP-07`），由平台自行匹配。
   final String? fontFamily;
 
   /// 主题模式三态（`TYP-03`）。

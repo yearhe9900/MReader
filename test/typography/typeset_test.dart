@@ -67,9 +67,8 @@ void main() {
     test('未知标签原样显示文本（不吞内容）', () {
       final List<InlineSpan> spans =
           parseInlineStyles('a <unknown>x</unknown> b', base);
-      // <unknown> 不是 <b>/<i>，不应被识别为标签——它会作为纯文本保留。
-      // _inlineTagPattern 只匹配 <b> 和 <i>，所以 <unknown> 不会被解析。
-      // 它会原样出现在文本中。
+      // <unknown> 不是 <b>/<i>（`_inlineTagPattern` 只匹配这两个），不被识别为
+      // 标签，作为纯文本原样保留。
       expect(spans.length, 1);
       expect((spans[0] as TextSpan).text,
           'a <unknown>x</unknown> b');

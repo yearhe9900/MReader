@@ -1,17 +1,10 @@
-// `M3-T05`：人物与设定梳理页 widget 测试（`AI-07` ①②③ / `AI-08` ①② /
-// `AI-09` ①）。
+// `AI-07` ①②③ / `AI-08` ①②③ / `AI-09` ①：人物与设定梳理页 widget 测试
+// （名字原样展示、章节 chip 跳转、「仅已读」范围只发 0..readUpto、缓存命中零请求、
+// 失败重试、中断给「已中断」）。
 //
-// 验收映射：
-//   · `AI-07` ① 成品名字原样展示、② 出场章节 chip 点击回调跳转；
-//   · `AI-07` ③ 范围行与「仅已读」切换：切范围后新请求只发 0..readUpto；
-//   · `AI-08` ① 停止中断（无结果 → 「已中断」+ 重试）、② 失败中文回显 +
-//     重试、结果缓存（二次进入缓存 tag + 零请求）；
-//   · `AI-09` ① 范围行常驻说明本次发什么。
-//
-// 三条测试口径同 `summary_sheet_test`：关档宿主（`MaterialApp.builder`
-// 形制）、真异步 IO 统一 [settleReal] 推进、mock OpenAI 端点本机 HttpServer；
-// 用到服务的用例在**测试体内**关 server + 排事件循环（keep-alive 空闲定时器
-// 15s，teardown 才关会被 `!timersPending` 断言抓到）。
+// 测试口径同 `summary_sheet_test`：关档宿主、真异步 IO 统一 [settleReal] 推进、
+// mock OpenAI 端点本机 HttpServer；⚠️ 用过服务的用例须在**测试体内**关 server +
+// 排事件循环（keep-alive 空闲定时器 15s，teardown 才关会被 `!timersPending` 抓到）。
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -177,10 +170,10 @@ void main() {
     return maxRounds;
   }
 
-  /// 作业已完成：输出在场且「停止」消失。
+  /// 作业完成判据：输出在场且「停止」消失。
   ///
-  /// 输出在流式阶段就出现（`_running` 仍 true），凡是要断言完成态动作 /
-  /// 点范围 chip（running 时禁用）/ pop（dispose 会取消在途）的等待都用它。
+  /// ⚠️ 输出在流式阶段就出现（`_running` 仍 true），断言完成态动作 / 点范围
+  /// chip（running 时禁用）/ pop（dispose 会取消在途）的等待都必须用它。
   bool runSettled() =>
       find.byKey(const Key('entity-output')).evaluate().isNotEmpty &&
       find.byKey(const Key('entity-stop')).evaluate().isEmpty;

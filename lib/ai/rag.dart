@@ -1,21 +1,17 @@
-// 跟书问答（M3-T04：`AI-06` / F5 流程 / `AI-09` 隐私红线的驱动层）。
+// 跟书问答（`AI-06` / F5 流程 / `AI-09` 隐私红线的驱动层）。
 //
-// 验收落点：
-//   · `AI-06` ① 可跳转引用：检索产物是 [RagSnippet]，内含 [SearchHit]
-//     （offset = 段落长度累加 + 段内命中位，与 `CNT-06` 搜索**同一口径**，
-//     阅读页 `_jumpToSearchHit` 整段复用）；
-//   · `AI-06` ②「书中未提及」：system 提示词强制（[kRagSystemPrompt]），
-//     且零片段时**不发请求**、由面板直接展示「书中未提及」；
-//   · `AI-06` ③ 不发全书：只发 [retrieveSnippets] 检索出的 Top-[kRagTopK]
-//     片段，且总字数封顶 [kRagTotalChars]（F5「将发送 K 个片段，共 X 字」
-//     的 X 即此）；
-//   · `AI-08` ① 流式 / 可取消：[RagJob] 照 `SummaryJob`（协作式取消 +
-//     `AiCall.cancel` 中止在途请求）；
-//   · PRD §8.3「向量/关键词索引本地持久化」：[RagIndexStore] 按 bookId
-//     分文件缓存（与 [SummaryCache] 同目录 `aiCache/`），重开零构建；
-//   · M3.5 **阈值 5**（20MB 索引 >10s 或内存 >1.5×原文）基线：构建 / 落盘 /
-//     读盘分别打点 `rag.index.build` / `rag.index.persist` / `rag.index.load`，
-//     内存估算 `rag.index.mem`（只观察，不分支——`PerfLog` 契约）。
+// 验收落点：`AI-06` ① 可跳转引用：检索产物是 [RagSnippet]，内含 [SearchHit]
+// （offset = 段落长度累加 + 段内命中位，与 `CNT-06` 搜索**同一口径**，阅读页
+// `_jumpToSearchHit` 整段复用）；② 「书中未提及」：system 提示词强制
+// （[kRagSystemPrompt]），零片段**不发请求**、面板直接展示「书中未提及」；
+// ③ 不发全书：只发 [retrieveSnippets] 检索出的 Top-[kRagTopK] 片段，总字数
+// 封顶 [kRagTotalChars]（F5「将发送 K 个片段，共 X 字」的 X 即此）；
+// `AI-08` ① 流式 / 可取消（[RagJob] 协作式取消 + [AiCall.cancel]）。
+// PRD §8.3「向量/关键词索引本地持久化」：[RagIndexStore] 按 bookId 分文件
+// 缓存（同 [SummaryCache] 目录 `aiCache/`），重开零构建。
+// 阈值 5（20MB 索引 >10s 或内存 >1.5×原文）基线：构建 / 落盘 / 读盘打点
+// `rag.index.build` / `rag.index.persist` / `rag.index.load`，内存估算
+// `rag.index.mem`（只观察不分支，`PerfLog` 契约）。
 import 'dart:io';
 
 import '../diagnostics/perf_log.dart';
@@ -97,9 +93,8 @@ AiCall ragCall({
 }
 
 /// 检索：章级 BM25 候选 → 候选章内段级重排 → 各章最相关段落 → 预算裁剪。
-///
-/// 返回按相关度降序的 ≤ [topK] 条；零命中返空列表（面板据此直接答
-/// 「书中未提及」，不发请求）。[loadText] 单章取文失败跳过该章，不拖垮检索。
+/// 返回按相关度降序的 ≤ [topK] 条；零命中返空表（面板据此答「书中未提及」，
+/// 不发请求）。[loadText] 单章取文失败跳过该章，不拖垮检索。
 Future<List<RagSnippet>> retrieveSnippets({
   required String question,
   required RagIndex index,
@@ -258,9 +253,8 @@ class RagOutcome {
 }
 
 /// 一次可取消的问答作业（一个面板一个实例；dispose 时必须 [cancel]）。
-///
-/// 形制照 `SummaryJob`：协作式取消——步骤间检查 `_cancelled`，
-/// 在途请求经 [AiCall.cancel] 中止（静默收流，不留半截缓存）。
+/// 形制照 `SummaryJob`：协作式取消——步骤间检查 `_cancelled`，在途请求经
+/// [AiCall.cancel] 中止（静默收流，不留半截缓存）。
 class RagJob {
   RagJob({required this.client, required this.config, required this.apiKey});
 
@@ -280,10 +274,8 @@ class RagJob {
     _call?.cancel();
   }
 
-  /// 发起一次流式问答（[onDelta] 逐字回调）。
-  ///
-  /// 取消时返回**已生成的部分**（面板保留可见文本；问答无结果缓存，
-  /// 半截文本不会被当成成品复用）。
+  /// 发起一次流式问答（[onDelta] 逐字回调）；取消时返回**已生成的部分**
+  /// （面板保留可见文本；问答无结果缓存，半截文本不会被当成品复用）。
   Future<RagOutcome> ask({
     required String question,
     required List<RagSnippet> snippets,
@@ -323,10 +315,9 @@ class RagJob {
 }
 
 /// 跟书问答索引存储（进程内共享，按 bookId 分文件持久化；`aiCache/` 目录）。
-///
-/// 形制仿 [SummaryCache]（JsonStore → AtomicFile，`DATA-01` 原子写入），
-/// 差异是**惰性按书加载**：没有全局 `load()`，首次提问走
-/// [ensure]（内存 → 磁盘 → 构建），构建过程分章 yield 不卡死主 isolate。
+/// 形制仿 [SummaryCache]（JsonStore → AtomicFile，`DATA-01` 原子写入），差异是
+/// **惰性按书加载**：无全局 `load()`，首次提问走 [ensure]（内存 → 磁盘 → 构建），
+/// 构建分章 yield 不卡死主 isolate。
 class RagIndexStore {
   RagIndexStore([Directory? dir])
       : _dir = dir,
@@ -340,10 +331,8 @@ class RagIndexStore {
   /// 在途构建去重（同一本书并发 ensure 只构建一次）。
   final Map<String, Future<RagIndex>> _pending = <String, Future<RagIndex>>{};
 
-  /// 取（或构建）某书的索引。
-  ///
-  /// [titles] 与 [loadText] 只在**需要构建**时消费；磁盘命中直接返回，
-  /// 不触发任何取文（重开零解析，PRD §8.3 缓存策略）。
+  /// 取（或构建）某书的索引；[titles] 与 [loadText] 只在**需要构建**时消费，
+  /// 磁盘命中直接返回不触发取文（重开零解析，PRD §8.3 缓存策略）。
   Future<RagIndex> ensure({
     required String bookId,
     required List<String> titles,

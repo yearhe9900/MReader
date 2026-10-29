@@ -11,10 +11,9 @@ import 'app_paths.dart';
 
 /// 基于 [path_provider] 的默认实现。
 ///
-/// 使用 `getApplicationSupportDirectory()` 作为基准目录：它在各平台都指向
-/// 「应用私有、可持久化、不暴露给用户」的目录
-/// （Android: `files/`；iOS: `Library/Application Support`；桌面: 用户数据目录下的应用子目录），
-/// 适合存放索引 / 进度 / 设置这类内部数据。
+/// 基准目录取 `getApplicationSupportDirectory()`：各平台都指向「应用私有、可持久化、
+/// 不暴露给用户」的目录（Android: `files/`；iOS: `Library/Application Support`；
+/// 桌面: 用户数据目录下的应用子目录），适合放索引 / 进度 / 设置这类内部数据。
 class PathProviderAppPaths implements AppPaths {
   PathProviderAppPaths({String? appFolderName})
       : _appFolderName = appFolderName ?? defaultAppFolderName;

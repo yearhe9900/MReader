@@ -1,10 +1,9 @@
-// 章节摘要 / 全书摘要 / 前情回顾的提示词与流式调用（M3-T03：`AI-04`/`AI-05`）。
+// 章节摘要 / 全书摘要 / 前情回顾的提示词与流式调用（`AI-04`/`AI-05`）。
 //
 // 形制与 [explainSelection] 同款：提示词纯函数 + 复用 [AiClient.chatStream]
-// 底座。三个功能共用一套「梗概」语言约束，差异只在 user 消息的组装：
-//   · 章节摘要（`AI-04`）：单章全文 → ≤maxChars 字梗概；
-//   · 全书摘要（`AI-05` ①）：各章梗概列表 → 合并成全书摘要（分章节递进后合成）；
-//   · 前情回顾（`AI-05` ②）：近 N 章梗概 + 上次读到位置 → 面向「回来继续读」的回顾。
+// 底座。三个功能共用一套「梗概」语言约束，差异只在 user 消息组装：章节摘要
+// （`AI-04`）单章全文 → ≤maxChars 字梗概；全书摘要（`AI-05` ①）各章梗概 →
+// 合并；前情回顾（`AI-05` ②）近 N 章梗概 + 上次读到位置 → 「回来继续读」回顾。
 import 'ai_client.dart';
 import 'provider_config.dart';
 
@@ -32,10 +31,8 @@ const int kSummaryDefaultChars = 200;
 /// 超长章分块阈值（字符数；PRD §8.3「超长则分块递进」）。
 const int kSummaryChunkChars = 6000;
 
-/// 组装章节摘要消息（纯函数）。
-///
-/// [maxChars] 为目标字数（`AI-04`「可指定长度」）；[title] 为章标题（有则带上，
-/// 帮助模型定位，不改变输出格式要求）。
+/// 组装章节摘要消息（纯函数）。[maxChars] 为目标字数（`AI-04`「可指定长度」）；
+/// [title] 为章标题（有则带上帮助模型定位，不改变输出格式要求）。
 List<AiMessage> summarizeMessages({
   required String text,
   int maxChars = kSummaryDefaultChars,
@@ -54,11 +51,9 @@ List<AiMessage> summarizeMessages({
   ];
 }
 
-/// 组装「合并成全书摘要 / 前情回顾」消息（纯函数）。
-///
-/// [parts] 为按章节顺序的梗概片段（每项 "标题：梗概" 或纯梗概）；
-/// [maxChars] 合并后的目标字数；[instruction] 追加的任务说明
-/// （前情回顾传「上次读到第 X 章」等背景，全书摘要传 null）。
+/// 组装「合并成全书摘要 / 前情回顾」消息（纯函数）。[parts] 为按章节顺序的
+/// 梗概片段（每项 "标题：梗概" 或纯梗概）；[maxChars] 合并后目标字数；
+/// [instruction] 追加任务说明（前情回顾传「上次读到第 X 章」背景，全书传 null）。
 List<AiMessage> mergeSummaryMessages({
   required List<String> parts,
   int maxChars = 800,

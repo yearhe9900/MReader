@@ -1,9 +1,8 @@
 // `META-02/03`：EPUB 元数据提取（纯 Dart，架构 §N.4 可进 `compute()`）。
 //
-// 输入是**已解析好的 OPF 视图** [OpfView]（由 `lib/epub/epub_parser.dart` 与 `EpubBook`
-// 同一次解压产出）——**本文件不重复解压**（§N.4 跨任务缝）。
-//
-// ⚠️ 零 Flutter、零 `dart:io`；**永不 import `lib/format/**`**（§N.0 无环）。
+// 输入是**已解析好的 OPF 视图** [OpfView]（`EpubBook` 同一次解压产出）——**本文件
+// 不重复解压**（§N.4 跨任务缝）。⚠️ 零 Flutter、零 `dart:io`；**永不 import
+// `lib/format/**`**（§N.0 无环）。
 import 'dart:typed_data';
 
 import '../epub/epub_parser.dart';
@@ -11,13 +10,11 @@ import '../model/book_meta.dart';
 import 'meta_source.dart';
 import 'txt_meta.dart';
 
-/// 由 OPF 视图产出 EPUB 的 [BookMeta]。
-///
-/// - `META-03` 书名：`dc:title`；缺失 -> 文件名规则链 / 文件名主干 -> 「未命名书籍」。
-/// - `META-03` 作者：`dc:creator` **多值稳定顺序整体保留**（`Q17`）；缺失 -> 文件名解析 -> 「未知作者」。
-/// - `META-01` 简介：`dc:description`；缺失 -> 空串（来源 `none`）。
-/// - `META-02` 封面：[OpfView.coverCandidates] **已按优先级排序**，**命中即停**——首个
-///   「字节非空 + 魔数嗅探为已知图片格式」的候选 -> [PendingCover]；否则 [NoCover]。
+/// 由 OPF 视图产出 EPUB 的 [BookMeta]：`META-03` 书名 `dc:title`、作者 `dc:creator`
+/// **多值稳定顺序整体保留**（`Q17`），缺失依次回落文件名规则链 / 主干 -> 「未命名书籍」
+/// / 「未知作者」；`META-01` 简介 `dc:description` 缺失 -> 空串（来源 `none`）；
+/// `META-02` 封面 [OpfView.coverCandidates] **已按优先级排序**、**命中即停**——首个
+/// 「字节非空 + 魔数嗅探为已知图片格式」的候选 -> [PendingCover]，否则 [NoCover]。
 BookMeta buildEpubMeta({required OpfView opfView, required String fileName}) {
   final String stem = fileStem(fileName);
   final FileNameMeta fromName = parseFileNameStem(stem);
@@ -87,7 +84,7 @@ BookMeta buildEpubMeta({required OpfView opfView, required String fileName}) {
     cover: cover,
     coverOrigin: coverOrigin,
     language: (opfView.language ?? '').trim(),
-    // M1 阶段 auto 恒非空：即解析结果（此时尚无 user 编辑）。
+    // auto = 解析结果（此时尚无 user 编辑，恒非空）。
     auto: BookMetaAuto(title: title, author: author, intro: metaIntro),
   );
 }

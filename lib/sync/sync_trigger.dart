@@ -1,29 +1,23 @@
-// `M4-T05`：自动同步触发编排（`SYNC-06`）+ 失败可见汇总（`SYNC-07`）。
+// `SYNC-06`/`SYNC-07`：自动同步触发编排 + 失败可见汇总。
 //
-// 触发时机（PRD §10.4）：
-//   · App 启动     → 拉取进度（**仅进度**，不拉条目与书籍）；
-//   · 退出阅读页   → 上报当前书进度 + 全量备份到期判定；
-//   · 退出 App     → 上报全部变更（进度 + 索引 / 书签 / 设置 / 统计）+ 备份到期判定；
-//   · 手动（状态页）→ [syncNow] / [backupNow] / [listBackups] + [restoreFrom]、
-//                     [uploadBooks] / [downloadMissingBooks]（`SYNC-05` 手动入口）。
+// 触发时机（PRD §10.4）：App 启动 → **仅拉进度**（不拉条目与书籍）；退出阅读页 →
+// 上报当前书进度 + 备份到期判定；退出 App → 上报全部变更（进度 + 索引 / 书签 /
+// 设置 / 统计）+ 备份到期判定；手动（状态页）→ [syncNow] / [backupNow] /
+// [listBackups] + [restoreFrom]、[uploadBooks] / [downloadMissingBooks]
+// （`SYNC-05` 手动入口）。
 //
-// 全量备份间隔：距上次**成功**备份 ≥ [backupInterval]（默认 1 天，PRD §B.4）
-// 才触发；未到间隔直接跳过（`SYNC-06` ③「未到间隔不重复全量备份」）。间隔账
-// 记在 `sync_state.json` 的 `lastBackupAt`（由 [ProgressSyncState] 持有该文件，
-// 两个顶层键并列读写互不覆盖）；**失败不记账** → 下次触发立即重试。
+// 全量备份间隔：距上次**成功**备份 ≥ [backupInterval]（默认 1 天，PRD §B.4）才触发，
+// 未到间隔直接跳过（`SYNC-06` ③）；间隔账记在 `sync_state.json` 的 `lastBackupAt`
+// （[ProgressSyncState] 持有该文件，两个顶层键并列读写互不覆盖），**失败不记账** →
+// 下次触发立即重试。
 //
-// 失败可见（`SYNC-07`）：各引擎结果汇总进 [SyncRunReport.failures]（条目清单 +
-// 中文可读原因），落 [lastReport] 并通知监听者——状态页据此展示并提供重试。
+// 失败可见（`SYNC-07`）：各引擎结果汇总进 [SyncRunReport.failures]，落 [lastReport]
+// 并通知监听者——状态页据此展示并提供重试。
 //
-// 三条纪律：
-//   · **不抛**：触发多为 fire-and-forget（启动 / 退页 / 退应用都不 await），
-//     异常一律收编进报告；唯一例外 [listBackups] 原样抛 [SyncException]
-//     （可读中文，状态页收编展示）。
-//   · **跳过不覆盖**：未配置 / 上一轮未完成的跳过报告**不落** [lastReport]
-//     （不让一次空转抹掉上一轮的失败现场）。
-//   · **单飞**：同步侧一个 [_running] 闸串行化（启动 / 退页 / 退出可能并发
-//     竞争）；书籍批量传输用独立 [_bookRunning]（大文件传几十分钟，不得挡住
-//     进度上报）。
+// 三条纪律：**不抛**（触发多为 fire-and-forget，异常一律收编进报告；唯一例外
+// [listBackups] 原样抛 [SyncException]）；**跳过不覆盖**（跳过报告**不落**
+// [lastReport]，不让空转抹掉失败现场）；**单飞**（同步侧 [_running] 闸串行化，
+// 书籍批量传输用独立 [_bookRunning]，**不得**挡住进度上报）。
 import 'dart:io';
 
 import '../library/book_record.dart';
@@ -103,10 +97,8 @@ class SyncRunReport {
   /// 兜底异常文案（引擎之外的意外错误；正常路径为 `null`）。
   final String? error;
 
-  /// 是否为跳过报告（未执行——不落 [SyncTrigger.lastReport]）。
-  ///
-  /// 字段名不用 `skipped`：与静态工厂 [skipped] 同名冲突（`Dart` 不允许
-  /// 静态成员与实例成员同名）。
+  /// 是否为跳过报告（未执行——不落 [SyncTrigger.lastReport]）；字段名避让
+  /// 同名静态工厂 [skipped]（Dart 不许静态与实例成员同名）。
   final bool wasSkipped;
 
   /// 跳过原因（[wasSkipped] = true 时非空）。
@@ -149,9 +141,8 @@ class SyncRunReport {
 }
 
 /// 同步触发编排器（进程内共享，组合根注入，见 `lib/main.dart`）。
-///
-/// 页面用法（PRD §15.1 进程内单例 + 监听回调）：状态页 `initState` 订阅
-/// [addListener]、`dispose` 退订、回调内 `setState`。
+/// 页面用法（PRD §15.1 进程内单例 + 监听回调）：状态页订阅 [addListener]、
+/// `dispose` 退订、回调内 `setState`。
 class SyncTrigger {
   /// 创建编排器（依赖由组合根注入）；[clock] 仅测试拨时。
   SyncTrigger({
@@ -245,9 +236,8 @@ class SyncTrigger {
   // 自动触发（`SYNC-06`）
   // ───────────────────────────────────────────────────────────────────────────
 
-  /// App 启动（`SYNC-06` ①）：**仅拉取进度**——不拉条目、不拉书籍。
-  ///
-  /// 未配置 / 上一轮未完成 → 返回跳过报告（不落 [lastReport]）。
+  /// App 启动（`SYNC-06` ①）：**仅拉取进度**——不拉条目、不拉书籍；
+  /// 未配置 / 上一轮未完成 → 跳过报告（不落 [lastReport]）。
   Future<SyncRunReport> onAppStart() async {
     final SyncRunReport? blocked = _blocked(SyncRunReport.scopeStartup);
     if (blocked != null) {
@@ -334,9 +324,8 @@ class SyncTrigger {
   // 手动（状态页；§10.4「立即同步 / 立即备份 / 从云端恢复」）
   // ───────────────────────────────────────────────────────────────────────────
 
-  /// 立即同步：进度 + 条目（不含备份——「立即备份」是独立动作）。
-  ///
-  /// 与自动触发同一套失败汇总；跳过报告同样不落 [lastReport]。
+  /// 立即同步：进度 + 条目（不含备份——「立即备份」是独立动作）；与自动触发
+  /// 同一套失败汇总，跳过报告同样不落 [lastReport]。
   Future<SyncRunReport> syncNow() async {
     final SyncRunReport? blocked = _blocked(SyncRunReport.scopeManual);
     if (blocked != null) {
@@ -363,7 +352,6 @@ class SyncTrigger {
   }
 
   /// 立即备份（**不看间隔**）；成功记 [ProgressSyncState.markBackup] 账。
-  ///
   /// 不抛：失败经 [BackupOutcome.reason] 返回（`SYNC-07`）。
   Future<BackupOutcome> backupNow() async {
     if (_running) {
@@ -383,14 +371,12 @@ class SyncTrigger {
   }
 
   /// 列出云端备份（新 → 旧；空表 = 从未备份）。
-  ///
-  /// **唯一允许抛出的方法**：未配置时引擎原样抛 [SyncException]
-  /// （可读中文），状态页收编为提示。
+  /// **唯一允许抛出的方法**：未配置时原样抛 [SyncException]（可读中文），
+  /// 状态页收编为提示。
   Future<List<BackupEntry>> listBackups() => _backup.listBackups();
 
-  /// 从云端恢复指定备份包（`SYNC-04` 恢复链路的编排入口）。
-  ///
-  /// 不抛：失败经 [RestoreOutcome.reason] 返回。
+  /// 从云端恢复指定备份包（`SYNC-04` 恢复链路的编排入口）；不抛：
+  /// 失败经 [RestoreOutcome.reason] 返回。
   Future<RestoreOutcome> restoreFrom(String remotePath) async {
     if (_running) {
       return const RestoreOutcome(
@@ -413,12 +399,9 @@ class SyncTrigger {
   // ───────────────────────────────────────────────────────────────────────────
 
   /// 上传本机全部书籍到远端 `books/`。
-  ///
-  /// [onFile] 每本开始前回调（1 起的序号 / 总数 / 书名）；[onProgress] 为
-  /// 当前文件字节进度；[control] 取消当前文件后**停止后续书籍**。
-  /// 单本失败不中断其余书籍（`SYNC-07` 汇总）。
-  ///
-  /// 并发进入返回空表（页面以 [isBookRunning] 禁用入口）。
+  /// [onFile] 每本开始前回调（序号 / 总数 / 书名）；[onProgress] 当前文件字节
+  /// 进度；[control] 取消当前文件后**停止后续书籍**，单本失败不中断其余
+  /// （`SYNC-07` 汇总）；并发进入返回空表（页面以 [isBookRunning] 禁用入口）。
   Future<List<BookUploadOutcome>> uploadBooks({
     void Function(int index, int total, String name)? onFile,
     void Function(int sent, int total)? onProgress,
@@ -451,8 +434,7 @@ class SyncTrigger {
     }
   }
 
-  /// 下载补齐本机**缺失**的书籍（新设备场景；已存在的文件不覆盖）。
-  ///
+  /// 下载补齐本机**缺失**的书籍（新设备场景；已存在的文件不覆盖）；
   /// 回调口径同 [uploadBooks]。
   Future<List<BookUploadOutcome>> downloadMissingBooks({
     void Function(int index, int total, String name)? onFile,

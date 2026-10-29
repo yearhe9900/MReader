@@ -29,9 +29,8 @@ Future<Uint8List?> pickCoverBytes() async {
 
 /// 点封面看大图（`META-08 ①`）：`readFull` **现读后展示**（`PERF-02`）。
 ///
-/// 玻璃弹窗（`UI-03`，`M2a-T04` 换 [GlassOverlays.showAlert]）+ `InteractiveViewer`；
-/// barrier 可关（tap 外关闭，与原 `showDialog` 默认一致）。
-/// 非 [StoredCover]（无封面 / 合成封面）与字节缺失时**静默返回**（无可看内容）。
+/// 玻璃弹窗（`UI-03`，[GlassOverlays.showAlert]）+ `InteractiveViewer`；barrier
+/// 可关（tap 外关闭）。非 [StoredCover]（无封面 / 合成封面）与字节缺失时**静默返回**。
 Future<void> showCoverFullScreen(
   BuildContext context,
   CoverStore coverStore,

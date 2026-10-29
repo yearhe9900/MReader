@@ -1,24 +1,18 @@
 // pdfrx 2.6.5 适配器 —— **全仓唯一**直接 `import 'package:pdfrx/...'` 的文件
 // （`Q4 ①` 验收①：渲染能力经注入式接口接入，`META-10` ③）。
 //
-// ## 职责（只做三件事）
+// 职责（只做三件事）：1. 惰性初始化 pdfrx（`pdfrxFlutterInitialize`）；2. 把 pdfrx 的
+// 异常**收敛**成 [PdfEngineOpenException]（加密 / 不可读两类），不让第三方异常类型
+// 泄漏到格式层（格式层再映射成 `FormatErrorCode`，`RD-05`）；3. 把 `PdfImage`
+// （BGRA8888）编成 PNG 字节并**当场 dispose**（`PERF-02` 非驻留）。
 //
-//   1. 惰性初始化 pdfrx（`pdfrxFlutterInitialize`）；
-//   2. 把 pdfrx 的异常**收敛**成 [PdfEngineOpenException]（加密 / 不可读两类），
-//      不让第三方异常类型泄漏到格式层（格式层再映射成 `FormatErrorCode`，`RD-05`）；
-//   3. 把 `PdfImage`（BGRA8888）编成 PNG 字节并**当场 dispose**（`PERF-02` 非驻留）。
-//
-// ## 与 pdfrx 交互的关键事实（均读自 pdfrx 2.6.5 / pdfrx_engine 0.6.1 真实源码）
-//
-//   · `PdfDocument.openData(bytes, …)`：**不传** `passwordProvider` 时，需要密码的
-//     PDF 抛 `PdfPasswordException`（`pdfrx_pdfium.dart:849` 实证）——正是 `Q4 ④`
-//     「不走输密码链路」的落点；
-//   · `PdfPage.render({fullWidth, fullHeight, …})`：**两个必须成对传**。只传
-//     `fullWidth` 时 `fullHeight` 会回落到页面 72dpi 高度（源码
-//     `fullHeight ??= this.height`），渲染出的位图长宽比是错的；
-//   · `PdfImage.pixels` 是 BGRA8888（`pdf_image.dart` 里 `createFromBgraData` 的
-//     同一格式），`width/height` 是实际像素尺寸，`dispose()` 必须调；
-//   · `PdfPageRawText.fullText` 是整页纯文本（`pdf_text.dart:14`），无文本层时为 null。
+// 与 pdfrx 交互的关键事实（读自 pdfrx 2.6.5 / pdfrx_engine 0.6.1 源码）：
+//   · `PdfDocument.openData` **不传** `passwordProvider` 时，需要密码的 PDF 抛
+//     `PdfPasswordException`——正是 `Q4 ④`「不走输密码链路」的落点；
+//   · `PdfPage.render({fullWidth, fullHeight, …})` **两个必须成对传**：只传
+//     `fullWidth` 时 `fullHeight` 回落到页面 72dpi 高度，位图长宽比是错的；
+//   · `PdfImage.pixels` 是 BGRA8888，`width/height` 是实际像素尺寸，`dispose()`
+//     必须调；`PdfPageRawText.fullText` 是整页纯文本，无文本层时为 null。
 import 'dart:typed_data';
 
 import 'package:pdfrx/pdfrx.dart' as pdfrx;
@@ -62,11 +56,9 @@ class PdfrxPdfEngine implements PdfEngine {
       throw PdfEngineOpenException(PdfOpenFailure.unreadable, detail: '$e');
     }
 
-    // 空密码即可打开的「所有者加密」PDF（只限制打印 / 复制）也算加密文档：
-    // 按 `Q4 ④`「加密 PDF 明确拒绝」的保守口径一并拒绝。
-    //
-    // 边界声明：若将来负责人要求放开这类「能直接打开、只带权限限制」的 PDF，
-    // 删掉本段即可——格式层与 UI 零改动（这就是注入缝的意义）。
+    // 空密码即可打开的「所有者加密」PDF（只限制打印 / 复制）也算加密文档：按
+    // `Q4 ④`「加密 PDF 明确拒绝」的保守口径一并拒绝。若将来放开这类「能直接打开、
+    // 只带权限限制」的 PDF，删掉本段即可——格式层与 UI 零改动（注入缝的意义）。
     if (document.isEncrypted) {
       await document.dispose();
       throw const PdfEngineOpenException(

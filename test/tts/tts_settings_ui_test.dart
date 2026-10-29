@@ -1,17 +1,13 @@
-// `TTS-04`/`TTS-05` 朗读设置面板与引擎应用接线 widget 测试（M3-T08）。
+// `TTS-04`/`TTS-05` 朗读设置面板与引擎应用接线 widget 测试。
 //
-// 验收映射：
-//   A（`TTS-04` ①② 开读路径）：开读前应用存储的语速 / 音色——假引擎收到
-//      `setRate(1.0)` 与 `setVoice(zh-fake)`；
-//   B（`TTS-04` ①②面板路径 + `TTS-05`）：面板打开出滑块 / 音色 / 定时三区；
-//      拖语速 → store 与引擎同步变化；切音色 chip → 引擎收到对应 voice；
-//      开「跟随系统语速」→ 引擎回默认 0.5 且滑块禁用；定时 30 分钟落盘，
-//      新 store 实例回读一致（`TTS-05` ② 重启保留）。
+// 覆盖：A（`TTS-04` ①② 开读路径）开读前应用存储的语速 / 音色——假引擎收到
+// `setRate(1.0)` 与 `setVoice(zh-fake)`；B（①② 面板路径 + `TTS-05`）面板滑块 /
+// 音色 / 定时三区，拖语速与切音色同步引擎，「跟随系统语速」开关回默认并禁用
+// 滑块，定时 30 分钟落盘、新实例回读一致（② 重启保留）。
 //
-// 口径：装具复用 `test/reader/reader_harness`（FakeBookSource / settle /
-// 假仓库）；玻璃钉「关」档；引擎注入 [FakeTtsEngine]；弹层开合用
-// `pumpAndSettle`（无无限动画）；**本文件不触发定时计时**（面板测试不朗读、
-// A 测试不设定时 → 不遗留 pending Timer）。
+// 口径：装具复用 `test/reader/reader_harness`；玻璃钉「关」档；引擎注入
+// [FakeTtsEngine]；弹层开合用 `pumpAndSettle`（无无限动画）；⚠️ **本文件不触发
+// 定时计时**（面板测试不朗读、A 测试不设定时 → 不遗留 pending Timer）。
 import 'dart:io';
 
 import 'package:flutter/material.dart';

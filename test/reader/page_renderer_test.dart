@@ -1,11 +1,11 @@
 // 页内容渲染器（T05-c R2）契约：页框几何、平移量、段落拼装、渲染-测量同源支点。
 // 期望值一律硬编码。夹具同 `pagination_measure_test`：fontSize 18 / height 1.6、
 // pageWidth 180（10 字/行）、行高 29.0、段间距 8。
-// ## 契约变更（2026-10-06）：页框高 = **本页内容自然高**（`PageSlice.height`）
+// 契约：页框高 = **本页内容自然高**（`PageSlice.height`）。
 //
-// 原断言页框 = `config.pageHeight`（200）。那与调用方 [PagedScroller] 的
-// `Positioned(height: e.height)` 不一致 ⇒ 真机分页模式下（`pageHeight` = 视口高、
-// 末页内容远不足一屏）超出部分被外层裁掉 ⇒ **负责人截图「文字丢失上一半」**。
+// 原断言页框 = `config.pageHeight`。那与调用方 [PagedScroller] 的
+// `Positioned(height: e.height)` 不一致 ⇒ 分页模式下（`pageHeight` = 视口高、
+// 末页内容远不足一屏）超出部分被外层裁掉 ⇒ 「文字丢失上一半」。
 // 现页框 = `PageSlice.height`（本页实际内容高），内外盒一致、**不裁任何一行**。
 //
 // 夹具 A（页高 200，两段各 100 字）：22 行 → 4 页 lineCount 6/5/6/5——
@@ -197,7 +197,7 @@ void main() {
       )),
     );
 
-    // 空页 `height: 0` ⇒ 页框 0（改前错误地回落 `pageHeight`=200）。
+    // 空页 `height: 0` ⇒ 页框 0（不得回落 `pageHeight`）。
     expect(tester.getSize(find.byType(PageContent)), const Size(180, 0));
     expect(find.byType(InlineParagraph), findsNothing);
     expect(find.byType(Transform), findsNothing);

@@ -1,13 +1,9 @@
 // `TYP-02` 位置锚定：字号 / 行距变化后，把当前章保持在视口同一相对位置。
 //
-// 设计：
-//   1. 设置变更前：用 GlobalKey + RenderBox 定位「当前章块顶」与「视口顶」的像素差，
-//      换算出「视口顶落在当前章的相对位置」（0.0 = 章顶，1.0 = 章底）；
-//   2. 设置变更后（`setState` → 列表重建 → 新布局）：用同一个章块的 GlobalKey
-//      重新测量，算出要 `jumpTo` 的 delta，使「同一相对位置」仍对齐视口顶。
-//
-// 本文件只做**纯数值计算**（不依赖 Flutter widget 树），便于 `test/typography/` 里
-// 用纯 Dart `test()` 直接断言（本项目已两次实证 `testWidgets` + 真异步 IO 挂死）。
+// 设计：变更前用 GlobalKey + RenderBox 快照「视口顶落在当前章的相对位置」
+// （0.0 = 章顶，1.0 = 章底）；重建后重测同一章块，算出 `jumpTo` delta 使同一
+// 相对位置仍对齐视口顶。本文件只做**纯数值计算**（不依赖 widget 树），便于纯
+// Dart `test()` 直接断言（实证 `testWidgets` + 真异步 IO 会挂死）。
 import 'package:flutter/material.dart';
 
 /// 设置变更前的位置锚点（不可变快照）。
@@ -51,11 +47,8 @@ class ScrollAnchor {
   }
 
   /// 重建后，算出使「同一相对位置仍对齐视口顶」所需的滚动 delta。
-  ///
-  /// [newViewportTop] / [newChapterTop]：重建后的新全局 y 坐标（逻辑像素）。
-  /// [newChapterHeight]：重建后章块的新高度。
-  ///
-  /// 返回 `null` 表示偏移 ≤ 1px，无需校正。
+  /// [newViewportTop] / [newChapterTop]：重建后的新全局 y 坐标（逻辑像素）；
+  /// [newChapterHeight]：新章块高。偏移 ≤ 1px 返回 `null`（无需校正）。
   double? correctionFromRaw({
     required double newViewportTop,
     required double newChapterTop,

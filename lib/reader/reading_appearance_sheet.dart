@@ -112,7 +112,7 @@ class _ReadingAppearanceSheetState extends State<ReadingAppearanceSheet> {
             const SizedBox(height: 16),
             Text('翻页方式', style: theme.textTheme.labelLarge),
             const SizedBox(height: 8),
-            // `M-PAGE T05-d`：模式切换由用户可选（选型拍板①③）。
+            // 模式切换由用户可选（选型拍板①③）。
             Wrap(
               spacing: 8,
               children: <Widget>[

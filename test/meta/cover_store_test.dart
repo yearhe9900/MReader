@@ -72,7 +72,6 @@ void main() {
     );
     expect(await _names(covers), <String>['bk1.cover.png', 'bk1.thumb.png']);
 
-    // readFull = 源字节；readThumb 非空。
     expect(await store.readFull(stored), kTinyPng);
     expect(await store.readThumb(stored), isNotNull);
   });
@@ -146,7 +145,6 @@ void main() {
         <String>['a.cover.png', 'a.cover.png.bak', 'a.thumb.png']);
     expect(await outside.exists(), isTrue, reason: 'covers/ 之外永不触碰');
 
-    // 幂等：再跑一次删 0。
     expect(
       await store.purgeOrphans(referencedFileNames: <String>{'a.cover.png'}),
       0,

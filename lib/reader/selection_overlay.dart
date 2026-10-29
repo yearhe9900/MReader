@@ -1,12 +1,10 @@
-// 划词选区设施（M3-T02：`AI-02` 翻译 / `AI-03` 释义的选区底座）。
-//
-// **同时是 `TTS-02` 朗读高亮跟随的前置**（任务书明确要求按可复用写）：
-// 段落 key 定位（[paragraphKey] / [findParagraphAt]）与选区值对象
+// 划词选区设施（`AI-02` 翻译 / `AI-03` 释义的选区底座），同时是 `TTS-02` 朗读
+// 高亮跟随的前置：段落 key 定位（[paragraphKey] / [findParagraphAt]）与选区值对象
 // （[ParaSelection]，渲染文本空间 UTF-16 偏移）对 TTS 高亮同样适用。
 //
 // 为什么自建而不用 `SelectionArea`：分页模式同一段落在相邻页**两处实例化**
-// （ClipRect 各自裁切），原生选区无法跨实例；选区高亮走 `InlineParagraph`
-// 的 span 内着色（随页 Transform 动画天然同步），本文件只负责「命中 → 值」。
+// （ClipRect 各自裁切），原生选区无法跨实例；选区高亮走 `InlineParagraph` 的
+// span 内着色（随页 Transform 动画天然同步），本文件只负责「命中 → 值」。
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -85,11 +83,9 @@ class ParagraphHit {
 
 /// 从 [root] 子树里找「全局坐标 [globalPosition] 落在其绘制范围内」的段落。
 ///
-/// 语义：递归优先深度优先，遇到带段落 key 且几何包含命中的元素即返回。
-/// 分页模式同段双实例的两份几何对齐（渲染契约保证），命中任一份算出的
-/// TextPosition 相同，故「第一个命中」即正确答案。
-///
-/// 找不到（点在标题 / 图片 / 空白上）返回 null——由调用方清选区。
+/// 深度优先，遇到带段落 key 且几何包含命中的元素即返回。分页模式同段双实例的
+/// 两份几何对齐（渲染契约保证），命中任一份算出的 TextPosition 相同，故「第一个
+/// 命中」即正确答案。找不到（点在标题 / 图片 / 空白上）返回 null（调用方清选区）。
 ParagraphHit? findParagraphAt(BuildContext root, Offset globalPosition) {
   if (root is! Element) return null;
   return _searchParagraph(root, globalPosition);
@@ -121,12 +117,10 @@ ParagraphHit? _searchParagraph(Element element, Offset global) {
 
 /// 从 [root] 子树里按段落 key 精确找渲染盒（`TTS-02` 可视性判定用）。
 ///
-/// 与 [findParagraphAt] 同款 DFS，但按 key 匹配而非几何命中——「段落 X 现在
-/// 渲染在哪」是跟随滚动要回答的问题（几何探测需要先知道点在哪，拿不到）。
-/// 未构建（懒构建列表滚出窗外）→ null（调用方按不可见处理）；`Offstage`
-/// 下仍照常 layout（RenderOffstage 只不绘制），翻页态照样可测。
-/// 分页同段双实例取**先命中**的一份——两份几何对齐（渲染契约），任一份
-/// 都能给出正确的可见性结论。
+/// 与 [findParagraphAt] 同款 DFS，但按 key 匹配而非几何命中（「段落 X 现在渲染在
+/// 哪」是跟随滚动要回答的问题）。未构建 → null（调用方按不可见处理）；`Offstage`
+/// 下仍照常 layout（只不绘制），翻页态照样可测。同段双实例取**先命中**的一份
+/// ——两份几何对齐，任一份都能给出正确结论。
 RenderBox? findParagraphBox(
   BuildContext root,
   String chapterHref,

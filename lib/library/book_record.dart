@@ -1,14 +1,11 @@
-// `LIB-02`：书库索引的**持久化记录**（纯 Dart，无 Flutter / `dart:io`）。
-//
-// 本类是书库的最小可持久化单元——一本在库书籍的全部元数据快照。
-// 序列化 / 反序列化经 [encodeCoverRef] / [decodeCoverRef]（`META-06 ⑤` 唯一出口），
-// JSON 中**不含** `PendingCover`（持久化不变式，由调用方在落盘前物化为 [StoredCover]）。
+// `LIB-02`：书库索引的**持久化记录**（纯 Dart，无 Flutter / `dart:io`）——
+// 一本在库书籍的全部元数据快照。序列化 / 反序列化经 [encodeCoverRef] / [decodeCoverRef]
+// （`META-06 ⑤` 唯一出口），JSON 中**不含** `PendingCover`（持久化不变式，由调用方
+// 在落盘前物化为 [StoredCover]）。
 import '../meta/cover_ref_codec.dart';
 import '../model/book_meta.dart';
 
-/// 一本在库书籍的持久化记录。
-///
-/// 纯 Dart（只 import `model` / `meta`）；不 import Flutter / `dart:io`。
+/// 一本在库书籍的持久化记录；纯 Dart（只 import `model` / `meta`，禁 Flutter / `dart:io`）。
 class BookRecord {
   const BookRecord({
     required this.bookId,
@@ -31,7 +28,7 @@ class BookRecord {
   /// 内容摘要（SHA-256 hex 前 16 位）；`LIB-05` 判重键。
   final String bookId;
 
-  /// 原始文件名（展示用，如 `三体.epub`）。
+  /// 原始文件名（展示用，如 `book.epub`）。
   final String fileName;
 
   /// App 私有目录内的副本**文件名**（相对路径，如 `<bookId>.epub`）。
@@ -52,21 +49,18 @@ class BookRecord {
   /// 导入时间戳（Unix 毫秒）。
   final int importedAt;
 
-  /// 最后阅读时间（Unix 毫秒；M1-T04 填充，当前为 `null`）。
+  /// 最后阅读时间（Unix 毫秒；可空）。
   final int? lastReadAt;
 
-  /// 已读百分比 `0.0 ~ 1.0`（M1-T04 填充，当前为 `null`）。
+  /// 已读百分比 `0.0 ~ 1.0`（可空）。
   final double? readProgress;
 
-  /// 简介（来自 [BookMeta.intro]；`META-08` 详情页展示）。
-  ///
-  /// 旧索引条目缺失此字段 → `''`（向后兼容）。
+  /// 简介（来自 [BookMeta.intro]；`META-08` 详情页展示）。旧索引条目缺失 → `''`（向后兼容）。
   final String intro;
 
-  /// 书名 / 作者 / 简介 / 封面的**来源标记**（`META-01` 闭合四值）。
-  ///
-  /// 旧索引条目缺失 → `MetaOrigin.none`（语义即「来源未知」）；
-  /// `user` 表示用户手动编辑过，**不被后续重新解析覆盖**（`META-09 ④`）。
+  /// 书名 / 作者 / 简介 / 封面的**来源标记**（`META-01` 闭合四值）。旧索引条目缺失 →
+  /// `MetaOrigin.none`（即「来源未知」）；`user` = 用户手动编辑过，**不被后续重新
+  /// 解析覆盖**（`META-09 ④`）。
   final MetaOrigin titleOrigin;
   final MetaOrigin authorOrigin;
   final MetaOrigin introOrigin;
@@ -138,7 +132,7 @@ class BookRecord {
     return MetaOrigin.values.asNameMap()[value] ?? MetaOrigin.none;
   }
 
-  /// 生成一份新副本（M2a 的 `META-09` 换封面、M1-T04 进度更新时使用）。
+  /// 生成一份新副本（`META-09` 换封面、进度更新时使用）。
   BookRecord copyWith({
     String? title,
     String? author,

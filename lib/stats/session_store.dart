@@ -1,24 +1,22 @@
-// `M2b-T08`：阅读会话持久化（`STAT-02`）——**按月分片 JSON + 原子写入**，
-// 不引入任何第三方持久化库（`STAT-02` ⑤ / §15.4 / `Q11`）。
+// 阅读会话持久化（`STAT-02`）——**按月分片 JSON + 原子写入**，不引入任何
+// 第三方持久化库（`STAT-02` ⑤ / §15.4 / `Q11`）。
 //
-// 落点：`<dataDir>/stats/sessions-YYYY-MM.json`（分片键 = 记录 `startedAt`
-// 的**本地**年月；跨 0 点拆出的续条随其 `startedAt` 落入对应月份）。
-// ⚠️ 命名口径：PRD `STAT-02` 写作 `stats/session-{yyyy-MM}.json`，本实现按任务书
-// 用 `sessions-`（复数）；如需对齐 PRD 只改 [SessionStore.filePrefix] 一处常量。
+// 落点：`<dataDir>/stats/sessions-YYYY-MM.json`（分片键 = 记录 `startedAt` 的
+// **本地**年月；跨 0 点拆出的续条随其 `startedAt` 落对应月份）。⚠️ 命名口径：
+// PRD `STAT-02` 写作 `session-{yyyy-MM}`，本实现用 `sessions-`（复数）；对齐
+// PRD 只改 [SessionStore.filePrefix] 一处常量。
 //
 // 落盘一律经 [JsonStore] → [AtomicFile]（`DATA-01` 原子写入 + 备份回退）：
-// 写入中强杀进程，当月分片仍是一份完整可解析文件（`STAT-02` ③）；单本分片损坏
-// （`JsonStore` 隔离为 `.corrupt`）不影响其它月份。
+// 写入中强杀进程当月分片仍是完整可解析文件（`STAT-02` ③）；单本分片损坏
+// （隔离为 `.corrupt`）不影响其它月份。
 //
 // 合并规则（`STAT-08`）：按记录 `id` **并集**——新 id 追加、同 id 取**较大
-// `duration`**；**幂等**（同一批反复合并结果不变，且无变化不重写文件）。
-// **禁止写入 `duration <= 0` 的记录**（`STAT-02` ②），合并入口统一过滤。
+// `duration`**；**幂等**（反复合并结果不变，无变化不重写文件）；**禁止写入
+// `duration <= 0`**（`STAT-02` ②），合并入口统一过滤。
 //
-// 聚合：[loadIndex] 一次性加载全部分片并建立 `day_key` / `book_id` 两组内存
-// 索引（[StatsIndex]，单遍扫描）——4 万条量级下毫秒级，实测见 `tool/stats_bench.dart`。
-//
-// `M4-T06`：[shardKeyOf] / [isShardName] / [byStart] 为公开静态——统计同步
-// （`stats/stats_sync.dart`）复用同一套分片命名与排序口径（单一事实源）。
+// 聚合：[loadIndex] 一次性加载全部分片并建 `day_key` / `book_id` 内存索引
+// （[StatsIndex] 单遍扫描）。[shardKeyOf] / [isShardName] / [byStart] 为公开
+// 静态——统计同步复用同一套分片命名与排序口径（单一事实源）。
 import 'dart:io';
 
 import '../platform/app_paths.dart';
@@ -45,14 +43,11 @@ class SessionStore {
   /// / `.tmp` 兄弟文件与无关文件）。
   static final RegExp _shardName = RegExp(r'^sessions-\d{4}-\d{2}\.json$');
 
-  /// [name] 是否为合法分片文件名（`M4-T06` 远端 `stats/` 列举过滤复用——
-  /// 本地与远端同一条白名单）。
+  /// [name] 是否为合法分片文件名（远端 `stats/` 列举过滤复用同一白名单）。
   static bool isShardName(String name) => _shardName.hasMatch(name);
 
-  /// 合并写入（按 id 并集、幂等，`STAT-08`）。
-  ///
-  /// `duration <= 0` 的记录**直接丢弃**（`STAT-02` ② 禁止落盘）；
-  /// 只重写**涉及月份**的分片；无实际变化的分片不重写（反复合并不产生写放大）。
+  /// 合并写入（按 id 并集、幂等，`STAT-08`）：`duration <= 0` **直接丢弃**
+  /// （`STAT-02` ②）；只重写**涉及月份**分片，无变化不重写（无写放大）。
   Future<void> merge(Iterable<ReadingSession> sessions) async {
     final Map<String, List<ReadingSession>> byShard = <String, List<ReadingSession>>{};
     for (final ReadingSession s in sessions) {
@@ -90,12 +85,10 @@ class SessionStore {
   /// 加载全部分片并建立 `day_key` / `book_id` 双索引（`STAT-02` 聚合入口）。
   Future<StatsIndex> loadIndex() async => StatsIndex.of(await loadAll());
 
-  /// 清空全部会话分片（`STAT-03` ④「清空统计数据」的存储侧）。
-  ///
-  /// 删除所有 `sessions-` 前缀文件（主文件 + `.bak` / `.corrupt` / `.tmp` 兄弟）；
-  /// **不动**同目录其它文件（如起始日期配置 `stats-config.json`），也**不涉及**
-  /// 书架 / 进度 / 书签 / 笔记（那些各有其存储与清理链）。单文件删除失败静默
-  /// （清理语义，best-effort）。
+  /// 清空全部会话分片（`STAT-03` ④「清空统计数据」的存储侧）：删除所有
+  /// `sessions-` 前缀文件（含 `.bak` / `.corrupt` / `.tmp` 兄弟）；**不动**
+  /// 同目录其它文件（如 `stats-config.json`），**不涉及**书架 / 进度 / 书签 /
+  /// 笔记；单文件删除失败静默（清理语义，best-effort）。
   Future<void> clearAll() async {
     final Directory dir = await _paths.subDir(dirName);
     await for (final FileSystemEntity entity in dir.list()) {
@@ -163,8 +156,7 @@ class SessionStore {
     return out;
   }
 
-  /// 分片键：`startedAt` 的本地 `YYYY-MM`（`M4-T06` 统计同步按同一键
-  /// 分组本地记录、拼远端路径）。
+  /// 分片键：`startedAt` 的本地 `YYYY-MM`（统计同步按同一键分组、拼远端路径）。
   static String shardKeyOf(int startedAtMs) {
     final DateTime d = DateTime.fromMillisecondsSinceEpoch(startedAtMs);
     return '${d.year.toString().padLeft(4, '0')}-'
@@ -179,8 +171,8 @@ class SessionStore {
     ));
   }
 
-  /// 会话排序（`startedAt` 升序、同刻按 `id`；`M4-T06` 上传分片对齐本地
-  /// 落盘序——同内容恒同字节）。
+  /// 会话排序（`startedAt` 升序、同刻按 `id`；上传分片对齐本地落盘序——
+  /// 同内容恒同字节）。
   static int byStart(ReadingSession a, ReadingSession b) {
     final int byTime = a.startedAt.compareTo(b.startedAt);
     return byTime != 0 ? byTime : a.id.compareTo(b.id);

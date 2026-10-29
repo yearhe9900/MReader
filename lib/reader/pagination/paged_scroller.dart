@@ -1,28 +1,23 @@
-// 分页滚动容器（T05-c c2）：三章窗口页拼接 + 惯性 + 停手防抖采样 +
-// charOffset 一次落位。
+// 分页滚动容器（选型 §2.3 ①）：页纵向拼接成连续长卷 + 惯性 + 停手防抖采样（§2.3 ④）
+// + charOffset 一次落位。
 //
-// 滚动模式（选型 §2.3 ①）：页纵向拼接成连续长卷——布局表（章顶 / 章内页顶 /
-// 扁平页序 / 总高）一次算清；滚动只改**可见区间**（前后各扩
-// `config.pageHeight` 的 overscan 缓冲），Stack 里只挂可见页。页框 =
-// `PageSlice.height`（内容自然高，非 `config.pageHeight`——否则页间留白缝）。
+// 布局表（章顶 / 章内页顶 / 扁平页序 / 总高）一次算清；滚动只改**可见区间**（前后各
+// 扩 `config.pageHeight` 的 overscan），Stack 里只挂可见页。页框 = `PageSlice.height`
+// （内容自然高，**非** `config.pageHeight`——否则页间留白缝）。
 //
-// 跨页段间距：切页口径「页内加、跨页不加」（`page_breaker.dart`），滚动拼接
-// 必须补——相邻页分属不同段时补 `paragraphSpacing`，否则跨页两段黏连；
-// 同段续页不补（正文连续）。章间不加额外间距（标题 widget 自带留白）。
-// 标题占位与页同窗口：按**章几何与可见带相交**判定（有页章 = 章顶到下章
-// 顶；无页占位章 = headingHeight 块）——标题区进入缓冲带即挂载，无页
-// 占位章（页表未就绪）的「载入中」标题也能上屏。
+// 跨页段间距：切页口径「页内加、跨页不加」（`page_breaker.dart`），滚动拼接**必须补**——
+// 相邻页分属不同段时补 `paragraphSpacing`，否则跨页两段黏连；同段续页不补。章间不加
+// 额外间距（标题 widget 自带留白）。标题占位与页同窗口：按**章几何与可见带相交**判定
+// （有页章 = 章顶到下章顶；无页占位章 = headingHeight 块）。
 //
-// 采样（选型 §2.3 ④「停手 200ms 防抖」）：ScrollUpdate / ScrollEnd 不断重置
-// 计时器——滚动期不采，静默 [kScrollSampleDebounce] 后取**视口顶**所在行的
-// 行首字符（[_charStartAtY]，与落位 [offsetFor] 同一行表口径、成不动点，
-// 重开书不漂移 §2.84；标题区 → 页 0 页首）。
+// 采样：ScrollUpdate / ScrollEnd 不断重置计时器——滚动期不采，静默 [kScrollSampleDebounce]
+// 后取**视口顶**所在行的行首字符（[_charStartAtY]，与落位 [offsetFor] 同一行表口径、
+// 成不动点，重开书不漂移 §2.84；标题区 → 页 0 页首）。
 //
-// 落位（保证④）：`offsetForCharOffset` = 找章（不在窗口 / 页表未覆盖 →
-// `null`，占位语义）→ `findPageByCharOffset` 二分 → **页顶 + 目标行行顶**
-// （按行对齐，理由见 `offsetFor` 的「为什么按行顶」注释）；
-// [PagedScrollerState.jumpToCharOffset] 单次 `jumpTo`（clamp 上界）——**一次
-// 落位、无校正环**（≤8 帧校正环 / `detectChapterAt` / 章高模型随 c3 退役）。
+// 落位（保证④）：`offsetForCharOffset` = 找章（不在窗口 / 页表未覆盖 → `null`，占位
+// 语义）→ `findPageByCharOffset` 二分 → **页顶 + 目标行行顶**（理由见 `offsetFor` 注）；
+// [PagedScrollerState.jumpToCharOffset] 单次 `jumpTo`（clamp 上界）——**一次落位、
+// 无校正环**。
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -347,11 +342,10 @@ class PagedScroller extends StatefulWidget {
   PagedScrollerState createState() => PagedScrollerState();
 }
 
-/// [PagedScroller] 状态（public：测试经 `tester.state<PagedScrollerState>()`
-/// 直取采样 / 落位口）。
+/// [PagedScroller] 状态（public：测试直取采样 / 落位口）。
 ///
-/// 调用约束：[jumpToCharOffset] 须在**首帧后**的事件 / 帧回调中调用
-/// （不在 build / didUpdateWidget 内——落位会同步 setState）。
+/// 调用约束：[jumpToCharOffset] 须在**首帧后**的事件 / 帧回调中调用（**不在**
+/// build / didUpdateWidget 内——落位会同步 setState）。
 class PagedScrollerState extends State<PagedScroller> {
   late ScrollController _scroll;
   bool _ownsScroll = false;
@@ -433,10 +427,9 @@ class PagedScrollerState extends State<PagedScroller> {
   ScrollController get scrollController => _scroll;
 
   /// 立即采样：视口顶所在章 / 页 → 章内字符偏移（防抖到点也走这里）。
-  /// 视口顶落在标题区 → 页 0 页首；空章列表 / 空页表 → null。
-  /// 字符换算走**行表口径**（视口顶所在行的行首，[_charStartAtY]），
-  /// 与 [offsetFor] 严格对偶成不动点——「采样→落位→采样」不跨行、不复利，
-  /// 重开书不漂移（§2.84）。
+  /// 视口顶在标题区 → 页 0 页首；空章列表 / 空页表 → null。字符换算走**行表口径**
+  /// （[_charStartAtY]），与 [offsetFor] 严格对偶成不动点（§2.84）：「采样→落位→
+  /// 采样」不跨行、不复利，重开书不漂移。
   ScrollSample? sampleNow() {
     if (widget.chapters.isEmpty) return null;
     final double y = offset;
@@ -474,24 +467,15 @@ class PagedScrollerState extends State<PagedScroller> {
   }
 
   /// 字符偏移 → 滚动偏移（**页顶 + 目标行行顶**；静态版）。
-  /// 章不在 [chapters] / 页表未覆盖（`charOffset >` 末页页尾）→ null（占位
-  /// 语义）。c3 跳转流用它对**预计算新布局**先算偏移再 jump（单帧无闪）。
+  /// 章不在 [chapters] / 页表未覆盖（`charOffset >` 末页页尾）→ null（占位语义）。
   ///
-  /// ## ⚠️ 为什么按「行顶」而不是「页内比例」（2026-10-08）
+  /// ⚠️ **为什么按「行顶」而不是「页内比例」（§2.70）**：按比例落位会让视口顶落在
+  /// 某一行的中间，该行只露下半截，开书恢复 / 跳章 / 跳书签 / 跳目录每次都复现
+  /// 「文字丢上一半」。按行顶对齐后目标行整行可见，语义即「从这一行开始读」；
+  /// 卷轴坐标越界由 [jumpToCharOffset] 的 clamp 兜住。
   ///
-  /// 改前 = `页顶 + (页内字符比例) × 页高`。比例落在页中间时，视口顶就落在
-  /// **某一行的中间**：该行只露出下半截（上半被卷轴裁掉），用户看到的就是
-  /// 「字没显示全 / 文字丢失上一半」。开书恢复、跳章、跳书签、跳目录**每次都
-  /// 走这条路径**，所以是稳定复现、不是偶发——真机连续两张截图的首行都被切
-  /// 掉约 45%（见 §2.70）。
-  ///
-  /// 按行顶对齐后：目标字符所在行的**整行**都在视口内（该行贴视口顶），页内
-  /// 其余内容紧随其后，语义上就是「从这一行开始读」。卷轴坐标若因此小于
-  /// `pageTop`（目标行是页首行）或大于页尾，由 [jumpToCharOffset] 的 clamp 兜住。
-  ///
-  /// 段间距必须计入：页内跨段处渲染侧有 `paragraphSpacing`（与
-  /// [PageSlice.height] / `PageBreaker._heightOf` 同源），漏掉会把行顶算低，
-  /// 等于**重新把视口顶切回行中间**——本修复就白做了。
+  /// 段间距**必须**计入（与 [PageSlice.height] / `PageBreaker._heightOf` 同源）：
+  /// 漏掉会把行顶算低，等于把视口顶切回行中间——本修复就白做了。
   static double? offsetFor(
     PagedLayout layout,
     List<PagedChapterView> chapters,
@@ -512,13 +496,10 @@ class PagedScrollerState extends State<PagedScroller> {
 
   /// 目标字符所在行在**页窗口**内的 y（页首行 = 0）。
   ///
-  /// 页窗口 = `PageContent` 里 `ClipRect` 显示的那一段 Column：从页首行贴页顶
-  /// 起算，所以「页首行 y = 0」。逐行累加行高（行表是章内**连续无空档**的字符
-  /// 区间划分，故「第一个 `end > charOffset` 的行」就是目标行），跨段处再加一次
-  /// [paragraphSpacing]——与渲染侧 `PageContent` 在段间插 `SizedBox` 的位置一致。
-  ///
-  /// 越界宽容：`charOffset` 恰在页尾、或页为 0 行占位页 → 返回 0 / 页内累计高，
-  /// 由调用方 clamp。
+  /// 页窗口 = `PageContent` 里 `ClipRect` 显示的 Column，从页首行贴页顶起算。逐行
+  /// 累加行高（行表连续无空档，「第一个 `end > charOffset` 的行」即目标行），跨段处
+  /// 再加 [paragraphSpacing]——与渲染侧插 `SizedBox` 的位置一致。越界宽容：`charOffset`
+  /// 恰在页尾、或 0 行占位页 → 返回 0 / 页内累计高，由调用方 clamp。
   static double _lineTopInPage(
     PagedChapterView chapter,
     PageSlice page,
@@ -544,13 +525,10 @@ class PagedScrollerState extends State<PagedScroller> {
   /// 视口顶（页内 y）→ 该处**行的行首字符**（[_lineTopInPage] 的逆映射）。
   ///
   /// 行块口径与 [_lineTopInPage] 严格对偶：行 i 的像素块 = `[top_i, top_i+height_i)`，
-  /// `top_i` 含跨段 [paragraphSpacing]（段间距归**下一行**的块顶——视口顶落在
-  /// 段间距空白时，语义上「从下一行开始读」，重开书只前移 ≤ 一段间距）。
-  /// y 落在页内容之外（页尾 / 跨页空白）→ [PageSlice.end] = 下一页页首行首。
-  ///
-  /// 不动点（§2.84）：对任意字符 c，
-  /// `_charStartAtY(_lineTopInPage(c))` = c 所在行行首 ⇒ 「采样→落位→采样」
-  /// 不跨行、幂等；程序化落位（行顶）后重采恒为原值，误差不复利。
+  /// `top_i` 含跨段 [paragraphSpacing]（段间距归**下一行**的块顶——视口顶落在段间距
+  /// 空白时语义上「从下一行开始读」）。y 落在页内容之外 → [PageSlice.end]。
+  /// 不动点（§2.84）：`_charStartAtY(_lineTopInPage(c))` = c 所在行行首 ⇒「采样→落位→
+  /// 采样」不跨行、幂等，误差不复利。
   static int _charStartAtY(
     PagedChapterView chapter,
     PageSlice page,

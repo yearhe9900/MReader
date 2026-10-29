@@ -1,16 +1,13 @@
-// M3-T10：统计聚合（`STAT-03` 总览三指标；**纯函数**，无状态无 IO）。
+// 统计聚合（`STAT-03` 总览三指标；**纯函数**，无状态无 IO）。
 //
-// 输入是会话明细（`STAT-02` 落盘模型），输出是页面消费的聚合值——后续
-// `M3-T11`（柱状图）/ `T12`（热力图）/ `T13`（排行 + 连续天数）的周期聚合
-// 也在本文件落地，共用同一套过滤口径：
-//   · **`duration <= 0` 一律跳过**（与 `StatsIndex.of` / 落盘禁写同源，
-//     `STAT-03` ②「与全部 duration > 0 记录求和逐秒一致」）；
-//   · **起始日期过滤**：`dayKey >= sinceDay`（两者同形 `YYYY-MM-DD`，
-//     字典序即日期序；`sinceDay == null` = 不限，统计全部）。
+// 输入是会话明细（`STAT-02` 落盘模型），输出是页面消费的聚合值——柱状图 /
+// 热力图 / 排行 + 连续天数的周期聚合也在本文件落地，共用同一套过滤口径：
+// **`duration <= 0` 一律跳过**（与 `StatsIndex.of` / 落盘禁写同源，`STAT-03`
+// ②「与全部 duration > 0 记录求和逐秒一致」）；**起始日期过滤** `dayKey >=
+// sinceDay`（`YYYY-MM-DD` 字典序即日期序；`null` = 不限）。
 import 'reading_session.dart';
 
-/// 起始日期过滤（`STAT-03` ③）：保留 `dayKey >= sinceDay` 的记录。
-///
+/// 起始日期过滤（`STAT-03` ③）：保留 `dayKey >= sinceDay` 的记录；
 /// [sinceDay] 为 `null` / 空串时原样返回（不限）。入参不改动。
 List<ReadingSession> filterSince(
   Iterable<ReadingSession> sessions,
@@ -79,9 +76,8 @@ OverviewStats aggregateOverview(
 }
 
 /// 人类可读时长（统计页展示用；秒 → 「X 小时 Y 分」/「X 分钟」）。
-///
-/// 取整口径：整秒向下取整到分（不足 1 分显示「不足 1 分钟」，不虚报 0 分钟
-/// 也不虚报 1 分钟）。聚合值仍以 [OverviewStats.totalSeconds] 逐秒精确为准。
+/// 取整口径：整秒向下取整到分（不足 1 分显示「不足 1 分钟」，不虚报 0 也不
+/// 虚报 1 分钟）；聚合值仍以 [OverviewStats.totalSeconds] 逐秒精确为准。
 String formatReadingDuration(int seconds) {
   if (seconds <= 0) {
     return '0 分钟';
@@ -102,14 +98,13 @@ String formatReadingDuration(int seconds) {
 }
 
 // ------------------------------------------------------------------
-// M3-T11：周期柱状图聚合（`STAT-04`）
+// 周期柱状图聚合（`STAT-04`）
 // ------------------------------------------------------------------
 
 /// 柱状图周期分段（`STAT-04`：周 / 月 / 年三段切换）。
 enum StatsPeriod { week, month, year }
 
 /// 周期视图的一根柱（纯数据；`STAT-04`）。
-///
 /// [startDay] / [endDay] 为柱覆盖的自然日区间（`YYYY-MM-DD`，含两端）——
 /// 下钻明细用 [sessionsInRange] 按同一区间过滤，**「下钻求和 = 柱高」由此保证**。
 class PeriodBar {
@@ -159,11 +154,9 @@ List<ReadingSession> sessionsInRange(
 }
 
 /// 聚合出 [period] 视图的柱序列（`STAT-04` ①②；纯函数、单遍）。
-///
-/// 周期口径（本地时区自然周期，[now] 定锚）：
-///   · 周 = 本周**周一 ~ 周日**，恒 7 根（标签 一…日）；
-///   · 月 = 当月 1 日 ~ 月末，柱数 = 当月天数（标签 日号）；
-///   · 年 = 当年 1~12 月，恒 12 根（标签 `N月`）。
+/// 周期口径（本地时区自然周期，[now] 定锚）：周 = 本周**周一 ~ 周日**恒 7 根
+/// （标签 一…日）；月 = 当月 1 日 ~ 月末（柱数 = 当月天数，标签 日号）；
+/// 年 = 当年 1~12 月恒 12 根（标签 `N月`）。
 List<PeriodBar> aggregateBars(
   Iterable<ReadingSession> sessions, {
   required StatsPeriod period,
@@ -239,7 +232,7 @@ String _dayKey(DateTime d) =>
     '${d.day.toString().padLeft(2, '0')}';
 
 // ------------------------------------------------------------------
-// M3-T12：热力图分档（`STAT-05`）
+// 热力图分档（`STAT-05`）
 // ------------------------------------------------------------------
 
 /// dayKey → 当天有效阅读秒数（`duration > 0` 求和 + 起始日期过滤，
@@ -259,9 +252,8 @@ Map<String, int> daySeconds(
 }
 
 /// 热力图分档阈值（秒）：≤1 分钟 / ≤30 分钟 / ≤1 小时 / >1 小时 = 档 1~4。
-///
-/// PRD `STAT-05` ① 只约束「读 1 分钟进最低档、加深单调」，未定具体数值——
-/// 本阈值为实现口径（1 分钟恰在档 1 上界）。
+/// PRD `STAT-05` ① 只约束「读 1 分钟进最低档、加深单调」未定数值——本阈值为
+/// 实现口径（1 分钟恰在档 1 上界）。
 const List<int> heatBucketSeconds = <int>[60, 1800, 3600];
 
 /// 当天有效秒数 → 热力档位（`STAT-05`）：0 = 无记录空白格，1..4 由浅到深。
@@ -278,7 +270,7 @@ int heatLevel(int seconds) {
 }
 
 // ------------------------------------------------------------------
-// M3-T13：按书排行（`STAT-06`）
+// 按书排行（`STAT-06`）
 // ------------------------------------------------------------------
 
 /// 排行周期（`STAT-06`：日 / 周 / 月 / 年 / 全部；窗口 = [now] 定锚的自然周期）。
@@ -321,7 +313,7 @@ class RankResult {
 }
 
 /// 排行周期窗口（含两端 `YYYY-MM-DD`；[RankPeriod.all] 用哨兵区间表「不限」，
-/// 起始日期过滤仍由 [sinceDay] 承担）。排行与单书统计**共用**此窗口。
+/// 起始日期过滤仍由 [sinceDay] 承担）；排行与单书统计**共用**此窗口。
 (String, String) rankWindow(RankPeriod period, DateTime now) {
   return switch (period) {
     RankPeriod.day => (_dayKey(now), _dayKey(now)),

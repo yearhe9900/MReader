@@ -1,4 +1,4 @@
-// M3-T10：统计页外壳 + 总览（`STAT-03`）。
+// 统计页外壳 + 总览（`STAT-03`）。
 //
 // 形制（`UI-04` 红线）：玻璃顶栏（导航层）+ [OpaqueContentSurface] 承载正文，
 // 总览卡片与设置行**一律不透明**——统计图表 / 卡片 / 列表行绝不进玻璃
@@ -9,8 +9,8 @@
 // 首次进入异步 [StatsService.load]，载入完成回调里 setState 一次。
 //
 // 页面排布（`STAT-03`/`STAT-04`）：总览卡片（累计总时长「X 至今」/ 活跃天数 /
-// 书籍数）→ 周期柱状图（点柱下钻明细）→ 统计设置（起始日期 / 清空统计数据，
-// 形制同设置页分组卡片）。后续 M3-T12~T13 的热力图 / 排行依次插在其后。
+// 书籍数）→ 周期柱状图（点柱下钻明细）→ 热力图 → 排行 → 统计设置（起始日期 /
+// 清空统计数据，形制同设置页分组卡片）。
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -84,8 +84,7 @@ class _StatsPageState extends State<StatsPage> {
     return GlassNavScaffold(
       appBar: GlassTopBar(
         title: const Text('统计'),
-        // 2026-10-15 统计移出底栏后，本页只经「我的」页 push 打开 ⇒
-        // `canPop` 时显示返回键（底栏 tab 时代无处可回、不显示）。
+        // 本页只经「我的」页 push 打开 ⇒ `canPop` 时显示返回键（否则不显示）。
         leading: Navigator.of(context).canPop()
             ? IconButton(
                 icon: const Icon(Icons.arrow_back),

@@ -1,15 +1,13 @@
 // `RD-04`：阅读进度值对象（纯 Dart，**不 import Flutter、不 import dart:io**）。
 //
-// 进度的**稳定身份是 [chapterHref]**（`Chapter.href`）——章节在书内的稳定定位串；
-// [chapterIndex] 只是**加速提示**：恢复时先按 href 匹配章节，匹配不到再退回 index
-// 并 clamp。这样即使书源重排 / 目录微调，仍尽量落回同一章，而不是「跳错章」。
+// 进度的**稳定身份是 [chapterHref]**；[chapterIndex] 只是 href 匹配不到时的回退提示
+// （书源重排 / 目录微调时仍尽量落回同一章，而不是跳错章）。
 //
 // **语义字段**（`bookId` / `chapterHref` / `chapterIndex` / `chapterPos` / `updatedAt`）
-// 是可**跨设备同步**的（`SYNC-02` 会用），故其中不含任何像素值。
-// 另有一个 [localHint]：**设备本地版面快照**，仅用于本机精确恢复；
-// **跨设备同步时必须丢弃**（它绑定当前字号 / 行距 / 视口尺寸 / 滚动偏移）。
+// 可**跨设备同步**（`SYNC-02` 会用），不含任何像素值；[localHint] 是**设备本地版面
+// 快照**，仅用于本机精确恢复，**跨设备同步时必须丢弃**（绑定当前字号 / 行距 / 视口）。
 //
-// 本文件是纯数据模型：可在 isolate 与单测中直接使用。落盘经 `ProgressStore`。
+// 纯数据模型：可在 isolate 与单测中直接使用。落盘经 `ProgressStore`。
 
 /// 设备本地版面快照（**不参与跨设备同步**）。
 ///
@@ -140,14 +138,10 @@ class ReadingProgress {
 
   /// 章内进度 `0.0 ~ 1.0`（构造时自动 clamp）。
   ///
-  /// **真值语义 = 字符偏移比例**（`M-PAGE` §0 定义，选型 §6 拍板②）：
-  /// `chapterPos = charOffset / totalChars`，其中 charOffset 是章内字符偏移
-  /// （`ExtractedSection.paragraphs` 各段原文无分隔符拼接后的 UTF-16 偏移）。
-  ///
-  /// **旧几何比例值宽容读取**：`fromJson` 不做来源标记——旧版滚动视图写的
-  /// 几何比例（像素位置折算）与新语义数值同型同域，一律按比例直接采用
-  /// （首帧估算落位足够接近，随后由分页视图按 charOffset 采样回归一），
-  /// **写回时统一为字符偏移比例**（字段与 JSON 格式不变，`SYNC-02` 不动）。
+  /// **真值语义 = 字符偏移比例**（§0 定义，选型 §6 拍板②）：`chapterPos =
+  /// charOffset / totalChars`。**旧几何比例值宽容读取**：`fromJson` 不做来源标记，
+  /// 新旧数值同型同域一律直接采用（首帧估算够接近，随后由分页视图按 charOffset
+  /// 采样回归一）；**写回时统一为字符偏移比例**（JSON 格式不变，`SYNC-02` 不动）。
   final double chapterPos;
 
   /// 更新时间戳（Unix 毫秒）。
@@ -285,19 +279,17 @@ class ChapterBlockSnapshot {
 ///
 /// 返回值语义（调用方契约，`RC3` / `RC4`）：
 ///   · `null` —— 一个章块都没布局，**完全无法确定**；
-///   · `chapterPos == null` —— 章可知，但**章内位置不可采样**（该章仍是估算占位高，
-///     分母是估的，采样会把垃圾值写进 `chapterPos`，`RC3`）；
+///   · `chapterPos == null` —— 章可知但**章内位置不可采样**（估算占位高章的分母是
+///     估的，采样会把垃圾值写进 `chapterPos`，`RC3`）；
 ///   · `chapterPos` 为数值 —— 完整采样成功。
 ///
-/// 前两种情况下调用方**必须保持 `chapterPos` 原值、且不得写盘**（`RC3`/`RC4`：
-/// 探不到就静默沿用旧章并继续保存，正是「多次进出后偏离原章节」的来源）。
+/// 前两种情况调用方**必须保持 `chapterPos` 原值、且不得写盘**（`RC3`/`RC4`：探不到就
+/// 静默沿用旧章并继续保存，正是「多次进出后偏离原章节」的来源）。
 ///
-/// 命中规则：取**真正覆盖视口顶**（`top ≤ 0.5 < bottom`）的那一块——而不是
-/// 「顶在视口顶之上」里最靠下的那一块。后者在真章落进探测范围之外时会误判成
-/// 窗口边缘章（`RC4`）；章块在列表里互不重叠，故覆盖者唯一。
-/// 视口顶落在列表顶 / 底内边距（无任何章块覆盖）时，回落到**离视口顶最近**的
-/// **已真实加载**章块，章内位置取 `clamp(-top / height, 0, 1)`
-/// （顶内边距 → 0.0，底内边距 → 1.0）。
+/// 命中规则：取**真正覆盖视口顶**（`top ≤ 0.5 < bottom`）的那一块（章块互不重叠、覆盖者
+/// 唯一）——不用「顶在视口顶之上里最靠下的」，那会在真章落进探测范围之外时误判成窗口
+/// 边缘章（`RC4`）。无覆盖（列表顶 / 底内边距）时回落到**离视口顶最近的已真实加载**章块，
+/// 章内位置取 `clamp(-top / height, 0, 1)`。
 ({int chapterIndex, double? chapterPos})? detectChapterAt(
   Iterable<ChapterBlockSnapshot> blocks,
 ) {
@@ -346,7 +338,7 @@ class ChapterBlockSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// M-PAGE T03：字符偏移比例换算 + 全书进度加权（纯函数，§0 / §6 拍板②）
+// 字符偏移比例换算 + 全书进度加权（纯函数，§0 / §6 拍板②）
 // ---------------------------------------------------------------------------
 
 /// 章内字符偏移 → `chapterPos` 比例（§0：`charOffset / totalChars`，clamp 0..1）。
@@ -367,17 +359,15 @@ int charOffsetOfChapterPos(double chapterPos, int totalChars) {
   return offset.clamp(0, totalChars);
 }
 
-/// 全书阅读进度（`0.0 ~ 1.0`）：**字数加权**（选型 §6 拍板②；图片页 / PDF
-/// 伪章退化为页数加权——即调用方不传 [chapterWeights] 时的等权形态）。
+/// 全书阅读进度（`0.0 ~ 1.0`）：**字数加权**（选型 §6 拍板②；不传 [chapterWeights]
+/// 时退化为页数等权）。
 ///
-/// - [chapterWeights] 提供且长度 == [chapterCount] 且 `Σ > 0` →
+/// - [chapterWeights] 有效（长度 == [chapterCount] 且 `Σ > 0`）→
 ///   `(Σ 前章字数 + chapterPos × 本章字数) / Σ 全书字数`；
-/// - 否则（`null` / 长度不匹配 / 全 0，含 PDF 等不支持字数统计的源）→
-///   退化章节等权 `(chapterIndex + chapterPos) / chapterCount`——与迁移前
-///   `_overallProgress` 公式逐位一致，保证旧进度数值不突变。
+/// - 否则（PDF 等不支持字数统计的源）→ 章节等权 `(chapterIndex + chapterPos) /
+///   chapterCount`——与迁移前公式逐位一致，保证旧进度数值不突变。
 ///
-/// 参数越界一律 clamp：`chapterIndex` 到 `[0, chapterCount-1]`、
-/// `chapterPos` 到 `[0,1]`、结果到 `[0,1]`；`chapterCount ≤ 0` 返回 `0.0`。
+/// 参数越界一律 clamp；`chapterCount ≤ 0` 返回 `0.0`。
 double overallReadingProgress({
   required int chapterIndex,
   required double chapterPos,

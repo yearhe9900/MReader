@@ -1,19 +1,17 @@
-// 在线 TTS 引擎（`TTS-07`，M3-T09）：URL 模板 / OpenAI 兼容 `audio/speech`
-// 双模式取音频 → 本地缓存 → 文件播放。
+// 在线 TTS 引擎（`TTS-07`）：URL 模板 / OpenAI 兼容 `audio/speech` 双模式取音频
+// → 本地缓存 → 文件播放。
 //
-// 验收映射（PRD `TTS-07`）：
-//   ① 配置后能播放：[OnlineTts.speak] 取到音频（缓存或网络）后交
-//      [TtsAudioPlayer] 播放，播完回 `done` 让 controller 推进下一段；
-//   ② 同一段文本二次朗读命中音频缓存：[buildCacheKey] 请求指纹 →
-//      [TtsAudioCache] 文件命中即不再发请求；
-//   ③ 失败重试有限次后自动暂停并提示：可重试错误（超时 / 断连 / 5xx /
-//      429）最多 [maxAttempts] 次，仍失败回 `error` → controller
-//      `pauseOnError` 挂起会话（留位当前段）+ UI toast（`tts_controller.dart`）。
+// 验收映射（PRD `TTS-07`）：① 配置后能播放（[OnlineTts.speak] 取到音频（缓存或
+// 网络）后交 [TtsAudioPlayer] 播放，播完回 `done` 让 controller 推进下一段）；
+// ② 同一段文本二次朗读命中音频缓存（[buildCacheKey] 请求指纹 → [TtsAudioCache]
+// 文件命中即不再发请求）；③ 失败重试有限次后自动暂停并提示（可重试错误最多
+// [maxAttempts] 次，仍失败回 `error` → controller `pauseOnError` 挂起会话
+// （留位当前段）+ UI toast）。
 //
 // 依赖策略：HTTP 走 `dart:io` HttpClient（同 `ai_client.dart`，不加网络依赖）；
-// 播放加 `audioplayers`（PRD §15.4「音频播放插件」，官方自带 Windows / Linux
-// 实现）。**「流式播放」口径**：先整段下载入缓存、再从本地文件播放（验收
-// ①② 的最短路径）；边下边播属增强项，未实现——不宣称支持。
+// 播放加 `audioplayers`（PRD §15.4「音频播放插件」）。**「流式播放」口径**：先整段
+// 下载入缓存、再从本地文件播放（验收 ①② 的最短路径）；边下边播属增强项，未实现
+// ——不宣称支持。
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -76,8 +74,8 @@ enum OnlineTtsEncoding {
 
 /// 文本按 [encoding] 转字节后做百分号编码（只保留 RFC 3986 unreserved）。
 ///
-/// GBK 不可映射字符（如 emoji）由 `charset` 编码器给替换单字节；真正抛
-/// 异常的极端输入回退 UTF-8——**绝不抛异常**（一个字符不炸整段朗读）。
+/// GBK 不可映射字符（如 emoji）由 `charset` 编码器给替换单字节；真正抛异常的极端
+/// 输入回退 UTF-8——**绝不抛异常**（一个字符不炸整段朗读）。
 String percentEncodeText(String text, OnlineTtsEncoding encoding) {
   List<int> bytes;
   if (encoding == OnlineTtsEncoding.gbk) {
@@ -107,9 +105,8 @@ String percentEncodeText(String text, OnlineTtsEncoding encoding) {
   return out.toString();
 }
 
-/// 解析多行「名称: 值」请求头文本（设置页输入形态）。
-///
-/// 空文本 = 空头；任一行缺冒号或名称为空 → [error] 给面向用户的中文提示。
+/// 解析多行「名称: 值」请求头文本（设置页输入形态）。空文本 = 空头；任一行缺冒号
+/// 或名称为空 → [error] 给面向用户的中文提示。
 ({Map<String, String> headers, String? error}) parseHeaderLines(String raw) {
   final Map<String, String> headers = <String, String>{};
   for (final String line in raw.split('\n')) {
@@ -374,8 +371,8 @@ class OnlineTtsConfig {
 /// 在线 TTS 配置持久化 + 音频缓存门面（进程内共享，显式注入）。
 ///
 /// 与 [TtsSettingsStore] 同一形制（`JsonStore` → `AtomicFile` + 监听回调）；
-/// **apiKey 不进配置 JSON**（`DATA-02`）：经 [AiKeyVault]（SecureStore）按固定
-/// id 挂靠，落盘文件里搜不到密钥。
+/// **apiKey 不进配置 JSON**（`DATA-02`）：经 [AiKeyVault]（SecureStore）按固定 id
+/// 挂靠，落盘文件里搜不到密钥。
 class OnlineTtsStore {
   /// 创建存储（`dataDir` 通常来自 `AppPaths.dataDir()`）。
   OnlineTtsStore(Directory dataDir)
@@ -509,8 +506,8 @@ class AudioplayersAudioPlayer implements TtsAudioPlayer {
 /// 在线 TTS：HTTP 取音频（带缓存与有限重试）→ 本地文件播放。
 ///
 /// [TtsEngine] 契约内的结局映射：播完 `done`；[stop] 或换段作废 `cancelled`；
-/// 重试耗尽 / 配置无效 / 非可重试 HTTP 状态 `error`（controller 据
-/// `pauseOnError` 自动暂停并提示，`TTS-07` ③）。
+/// 重试耗尽 / 配置无效 / 非可重试 HTTP 状态 `error`（controller 据 `pauseOnError`
+/// 自动暂停并提示，`TTS-07` ③）。
 class OnlineTts implements TtsEngine {
   /// 用配置存储构造；[player] / [client] 可注入（测试用假播放器）。
   OnlineTts(this.store, {TtsAudioPlayer? player, HttpClient? client})
@@ -595,7 +592,6 @@ class OnlineTts implements TtsEngine {
   }
 
   /// 按 [_rate] 当前值 + 配置指纹 + 文本 生成缓存键（sha256 hex）。
-  ///
   /// apiKey **不进指纹**（同一服务同一文本的音频与密钥无关）。
   static String buildCacheKey(
     OnlineTtsConfig config, {
@@ -634,7 +630,6 @@ class OnlineTts implements TtsEngine {
   }
 
   /// 取音频：缓存命中直接回；未命中带重试请求并落缓存。
-  ///
   /// 返回 `null` = 重试耗尽或非可重试失败（调用方回 `error` 结局）。
   Future<File?> _fetch(String text) async {
     final OnlineTtsConfig config = store.value;
@@ -706,7 +701,6 @@ class OnlineTts implements TtsEngine {
 /// 默认语速常量（0.5 = 正常速，与 `TtsSettings.defaultRate` 同值；
 /// 独立声明避免引擎层反向依赖设置存储）。
 abstract final class TtsDefaults {
-  /// 正常速（flutter_tts 口径）。
   static const double normalRate = 0.5;
 }
 

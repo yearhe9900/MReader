@@ -117,7 +117,7 @@ void main() {
       job.step(Duration.zero);
       expect(job.pages.length, 2);
       // 判别点（统一方案 Phase 1 §6.3）：2 页即就绪——「先 5 页」口径下此处
-      // 必须 false（4 页 < 5），本断言在旧实现上判红。
+      // 必须 false（4 页 < 5）。
       expect(job.initialReady, isTrue);
       expect(job.backgroundGoalReached, isFalse); // 2 页 < 5
       job.step(Duration.zero);

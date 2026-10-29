@@ -1,11 +1,10 @@
-// `M3-T01`：AI API Key 门面（PRD `DATA-02`）。
+// AI API Key 门面（PRD `DATA-02`）。
 //
 // 底层是 `platform/secure_store.dart` 的 [SecureStore]（当前实现
-// `FileSecureStore` = 应用私有目录明文；M4 接系统密钥库后自动升级）。
-// 本门面只负责三件事：
-//   ① 每套配置一把 Key，按稳定 `configId` 挂靠（前缀 `ai.key.`）；
-//   ② **Key 永不出现在配置 JSON / 日志**——读写只经本类；
-//   ③ 把「是否真安全」与中文说明透传给 UI（`DATA-02` ③ 明文标注）。
+// `FileSecureStore` = 应用私有目录明文；M4 接系统密钥库后自动升级）。本门面
+// 只负责三件事：① 每套配置一把 Key，按稳定 `configId` 挂靠（前缀 `ai.key.`）；
+// ② **Key 永不出现在配置 JSON / 日志**——读写只经本类；③ 把「是否真安全」与
+// 中文说明透传给 UI（`DATA-02` ③ 明文标注）。
 import '../platform/secure_store.dart';
 
 /// AI 密钥读写门面。

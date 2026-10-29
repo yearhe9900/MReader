@@ -2,9 +2,8 @@
 //
 // ⚠️ 契约：这些假源的 `searchSpec` 恒为 `null`（继承 `FakeBookSource` 的默认实现），
 // 搜索一律走 `SearchSession` 的**本 isolate 流式路径**——widget 测试**禁用后台
-// isolate 路径**：`testWidgets` 的 FakeAsync 区不排空 isolate 消息（真异步 IO
-// 挂死坑，见 reader_harness 头注），spawn 真后台 isolate 的用例只存在于纯 `test()`
-// 的 `search_session_test.dart`。
+// isolate 路径**（`testWidgets` 的 FakeAsync 区不排空 isolate 消息会挂死）；
+// spawn 真后台 isolate 的用例只存在于纯 `test()` 的 `search_session_test.dart`。
 import 'dart:async';
 
 import 'package:mreader/format/book_source.dart';

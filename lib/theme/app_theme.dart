@@ -69,35 +69,22 @@ String appThemeModeLabel(AppThemeMode mode) {
   }
 }
 
-/// 应用页面转场（2026-09-29 拍板：**关掉 Android 手势返回的缩放动画**）。
+/// 应用页面转场（**关掉 Android 手势返回的缩放动画**）。
 ///
-/// ══════════════════════════════════════════════════════════════════════════════
-/// 根因（读 Flutter 3.47 源码 + 清单 + 设备三方交叉）
-/// ══════════════════════════════════════════════════════════════════════════════
-/// `targetSdk = 36`（Flutter 3.47 默认，`FlutterExtension.kt:34`）且设备为 Android 16 时，
-/// **系统预测性返回默认开启**（清单未声明 `enableOnBackInvokedCallback`）；而 Flutter 给
-/// Android 的默认转场是 [PredictiveBackPageTransitionsBuilder]（`page_transitions_theme.dart:766`），
-/// 它在手势进行中（`route.popGestureInProgress`）走 shared-element 转场，内部就是
-/// **`Transform.scale` 缩到 0.90**（`_kMinScale`）外加设备圆角 `ClipRRect` 与淡出
-/// （`predictive_back_page_transitions_builder.dart:350/385/520-540`）——即
-/// 「手指还没松开，页面就先缩小成一张圆角卡片」。负责人要求关闭该效果。
+/// 根因：`targetSdk = 36`（Flutter 3.47 默认）且设备为 Android 16 时**系统预测性
+/// 返回默认开启**，而 Flutter 给 Android 的默认转场是
+/// [PredictiveBackPageTransitionsBuilder]，手势进行中走 shared-element 转场、把页面
+/// **`Transform.scale` 缩到 0.90** 外加设备圆角与淡出（「手指还没松开，页面就先缩小
+/// 成一张圆角卡片」）。按负责人要求关闭该效果。
 ///
-/// ══════════════════════════════════════════════════════════════════════════════
-/// 处置与代价
-/// ══════════════════════════════════════════════════════════════════════════════
-/// Android 改 [FadeForwardsPageTransitionsBuilder]（Android 16 原生 M3 风格：
-/// 横向位移 + 淡出，**无缩放、无圆角**；`transitionDuration` 与预测返回同为 450ms，
-/// 故**时长不变、只有观感变**）。
+/// 处置与代价：Android 改 [FadeForwardsPageTransitionsBuilder]（Android 16 原生
+/// M3 风格：横向位移 + 淡出，**无缩放、无圆角**；时长不变、只有观感变）。该 builder
+/// **不含**预测返回手势探测器，系统手势不被 App 接管，框架回落普通 `handlePopRoute()`
+/// ——**返回功能不受影响**，代价仅是拖动过程不再有跟手预览（松手后播完整转场）。
 ///
-/// 该 builder **不含** `_PredictiveBackGestureDetector`，故系统手势不再被 App 接管。
-/// 框架对此有明确回落：无人处理预测性返回时，提交即走普通 `handlePopRoute()`
-/// （`widgets/binding.dart:1196-1205`）——**返回功能不受影响**，
-/// 代价仅是拖动过程不再有跟手预览（无 preview，松手后播完整转场）。
-///
-/// **其余四个平台逐字保持框架默认**，这里必须写**全量**映射：
-/// `_PageTransitionsThemeTransitionsState.build:881-890` 的缺省回退是
-/// 「iOS → Cupertino，其余（**含 macOS**）→ Zoom」，只传 `{android: …}`
-/// 会让 macOS 从 Cupertino 悄悄退化成 Zoom（即把缩放又引回来）。
+/// ⚠️ **其余四个平台逐字保持框架默认，且必须写全量映射**：缺省回退是「iOS →
+/// Cupertino，其余（**含 macOS**）→ Zoom」，只传 `{android: …}` 会让 macOS 从
+/// Cupertino 悄悄退化成 Zoom（即把缩放又引回来）。
 ///
 /// **未动（待负责人定，未擅自扩大范围）**：Windows / Linux 仍是
 /// [ZoomPageTransitionsBuilder]（框架默认）——按返回键时同样是缩小式转场，

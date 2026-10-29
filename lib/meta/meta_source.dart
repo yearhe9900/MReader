@@ -1,9 +1,8 @@
 // 元数据装配的**纯 Dart**公共部件（架构 §N.4：可进 `compute()`）。
 //
-// 职责：
-//   · 来源标记装配所需的**统一兜底**（「未知作者」/「未命名书籍」，`META-01`）；
-//   · 封面**魔数嗅探** `sniffCoverFormat`（只看前几字节、**不解码**，`META-05`）；
-//   · 文件名去目录 / 去扩展名 `fileStem`（EPUB / TXT 共用）。
+// 职责：来源标记装配的**统一兜底**（「未知作者」/「未命名书籍」，`META-01`）；
+// 封面**魔数嗅探** `sniffCoverFormat`（只看前几字节、**不解码**，`META-05`）；
+// 文件名去目录 / 去扩展名 `fileStem`（EPUB / TXT 共用）。
 //
 // ⚠️ 本文件**零 Flutter、零 `dart:io`**（`PERF-01` 硬前提），且**永不 import `lib/format/**`**（§N.0 无环）。
 import 'dart:typed_data';
@@ -16,16 +15,10 @@ const String kUnknownAuthor = '未知作者';
 /// 书名缺失时的**统一兜底文案**（`META-01`）。
 const String kUntitledBook = '未命名书籍';
 
-/// 魔数嗅探封面格式（**不看扩展名**，`META-05` / §N.6）。
-///
-/// 只看前几个字节，**不解码**——这是让「嗅探（纯 Dart、可进 isolate）」与
-/// 「解码（`dart:ui`、须 Flutter）」拆开的关键。
-/// - JPEG：`FF D8 FF`
-/// - PNG：`89 50 4E 47 0D 0A 1A 0A`
-/// - WebP：`RIFF`????`WEBP`
-/// - GIF：`GIF8`
-/// - BMP：`BM`
-/// - 都不匹配 → [CoverFormat.unknown]
+/// 魔数嗅探封面格式（**不看扩展名**，`META-05` / §N.6）：只看前几字节、**不解码**——
+/// 让「嗅探（纯 Dart、可进 isolate）」与「解码（`dart:ui`、须 Flutter）」拆开的关键。
+/// JPEG `FF D8 FF`；PNG `89 50 4E 47 0D 0A 1A 0A`；WebP `RIFF????WEBP`；GIF `GIF8`；
+/// BMP `BM`；都不匹配 → [CoverFormat.unknown]。
 CoverFormat sniffCoverFormat(Uint8List bytes) {
   final int n = bytes.length;
 
@@ -84,10 +77,9 @@ String fallbackTitle(String raw, String fallback) {
   return alt.isNotEmpty ? alt : kUntitledBook;
 }
 
-/// 文件名去目录、去扩展名（不含 `dart:io`；兼容 Windows 的 `\`）。
-///
-/// 口径：`红楼梦.txt` → `红楼梦`；`noext` → `noext`；`.txt`（只有扩展名、无书名）→ 空串；
-/// `a.b.txt` → `a.b`（只去最后一段）。与 M1-T02B 的既有口径一致。
+/// 文件名去目录、去扩展名（不含 `dart:io`；兼容 Windows 的 `\`）。口径：`name.txt`
+/// → `name`；`noext` → `noext`；`.txt`（只有扩展名、无书名）→ 空串；
+/// `a.b.txt` → `a.b`（只去最后一段）。
 String fileStem(String fileName) {
   final String name = fileName.replaceAll('\\', '/');
   final int slash = name.lastIndexOf('/');

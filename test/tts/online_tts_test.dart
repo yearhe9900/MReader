@@ -1,19 +1,15 @@
-// `TTS-07` 在线 TTS 引擎行为（M3-T09）：本地 HttpServer 打桩，不依赖外网。
+// `TTS-07` 在线 TTS 引擎行为：本地 HttpServer 打桩，不依赖外网。
 //
-// 验收映射（PRD `TTS-07`）：
-//   ① 配置后能播放：模板模式取到音频 → 假播放器播放 → 回 `done`；
-//   ② 同一段文本二次朗读命中音频缓存：服务器命中数仍为 1；
-//   ③ 失败重试有限次：5xx 最多 3 次仍失败 → `error`；4xx 不重试立即 `error`；
-//   附加：stop 中途打断 → `cancelled` 不播放；换段作废旧 speak；
-//   OpenAI 兼容模式的 POST 路径 / Authorization / 请求体；GBK 编码；
-//   自定义请求头透传；`{text}` 百分号编码与缓存键指纹。
+// 覆盖：① 配置后能播放（模板取音频 → 假播放器 → 回 `done`）② 同一段文本二次
+// 朗读命中音频缓存（服务器命中数仍为 1）③ 失败重试有限次（5xx 最多 3 次仍失败
+// → `error`；4xx 不重试立即 `error`）、stop 中途打断 / 换段作废旧 speak、
+// OpenAI 兼容模式的 POST 路径 / Authorization / 请求体、GBK 编码、自定义请求头
+// 透传、`{text}` 百分号编码与缓存键指纹。
 //
-// 口径：契约期望值**硬编码字面量**；播放器 / 配置存储全部注入，不碰
-// audioplayers 平台通道；真网络 IO 走 loopback（本文件为纯 `test()`）。
-//
-// **不初始化 `TestWidgetsFlutterBinding`**：该 binding 会装 HttpOverrides，
-// 把所有 HttpClient 请求改成 400 假响应（flutter_test 内建行为），loopback
-// 打桩会全军覆没；本文件不碰 widget / 平台通道，故一律裸跑。
+// 口径：契约期望值**硬编码字面量**；播放器 / 配置存储全部注入，不碰 audioplayers
+// 平台通道；真网络 IO 走 loopback（纯 `test()`）。⚠️ **不初始化
+// `TestWidgetsFlutterBinding`**——它会装 `HttpOverrides` 把所有 HttpClient 请求
+// 改成 400 假响应，loopback 打桩会全军覆没；本文件不碰 widget / 平台通道，裸跑。
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';

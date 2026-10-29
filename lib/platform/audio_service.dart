@@ -1,18 +1,16 @@
-// 后台播放与系统集成后端（`TTS-03`，M3-T07）。
+// 后台播放与系统集成后端（`TTS-03`）。
 //
-// 分层：本文件 = **平台适配层**（audio_service + audio_session 的唯一引用点，
-// 同 `pdf_engine.dart` 的注入缝纪律）；生命周期 / 焦点语义的编排在
-// `lib/tts/audio_session.dart`（纯 Dart，可注入假后端单测）。
-//
-// 平台支持矩阵（PRD §15.3，v2.6 负责人拍板）：
-//   · Android / iOS → 全功能（通知栏 / 锁屏 / 耳机媒体键 / 音频焦点）；
-//   · Linux / macOS / Windows → **降级「仅前台朗读」**（[createSystemAudioBackend]
-//     直接返回 [UnsupportedSystemAudioBackend]，不触碰任何平台通道）。
+// 分层：本文件 = **平台适配层**（audio_service + audio_session 的唯一引用点，同
+// `pdf_engine.dart` 的注入缝纪律）；生命周期 / 焦点语义的编排在
+// `lib/tts/audio_session.dart`（纯 Dart，可注入假后端单测）。平台支持矩阵
+// （PRD §15.3 拍板）：Android / iOS → 全功能（通知栏 / 锁屏 / 耳机媒体键 / 音频
+// 焦点）；Linux / macOS / Windows → **降级「仅前台朗读」**（[createSystemAudioBackend]
+// 直接返回 [UnsupportedSystemAudioBackend]，不触碰任何平台通道）。
 //
 // 失败契约（不可重试）：[MobileSystemAudioBackend.open] 首次失败即永久降级——
-// `AudioService.init` 半途抛错会污染其静态态（`_cacheManager` 先置后抛），
-// 再次 init 必撞 `assert(_cacheManager == null)`，故失败缓存为终态。
-// 任何失败都只影响「后台能力」，朗读本身照常（仅前台）——不弹错、不崩溃。
+// `AudioService.init` 半途抛错会污染其静态态（`_cacheManager` 先置后抛），再次 init
+// 必撞 `assert(_cacheManager == null)`，故失败缓存为终态。任何失败都只影响「后台
+// 能力」，朗读本身照常（仅前台）——不弹错、不崩溃。
 import 'dart:async';
 import 'dart:io';
 
@@ -109,15 +107,14 @@ class UnsupportedSystemAudioBackend implements SystemAudioBackend {
   Future<void> close() async {}
 }
 
-/// 真机实现（Android / iOS）：
-///   · [asvc.AudioService] → 前台服务 / 通知栏 / 锁屏 / 媒体键
-///     （Android 宿主须按包 README 声明清单并让 Activity 继承
-///     `AudioServiceActivity`——已落 `MainActivity.kt` / `AndroidManifest.xml`）；
-///   · [AudioSession] → 音频焦点（`speech()` 配方）与 `becomingNoisy`。
+/// 真机实现（Android / iOS）：[asvc.AudioService] → 前台服务 / 通知栏 / 锁屏 /
+/// 媒体键（Android 宿主须按包 README 声明清单并让 Activity 继承
+/// `AudioServiceActivity`——已落 `MainActivity.kt` / `AndroidManifest.xml`）；
+/// [AudioSession] → 音频焦点（`speech()` 配方）与 `becomingNoisy`。
 ///
-/// **插件句柄是进程级静态**（`AudioService.init` 自带
-/// `assert(_cacheManager == null)`，一进程只许 init 一次）：多次开书各自
-/// new 后端实例也共享同一 handler / 事件总线；[open] / [close] 可多轮交替。
+/// **插件句柄是进程级静态**（`AudioService.init` 自带 `assert(_cacheManager == null)`，
+/// 一进程只许 init 一次）：多次开书各自 new 后端实例也共享同一 handler / 事件总线；
+/// [open] / [close] 可多轮交替。
 class MobileSystemAudioBackend implements SystemAudioBackend {
   static final StreamController<SystemAudioEvent> _events =
       StreamController<SystemAudioEvent>.broadcast();
@@ -221,8 +218,8 @@ class MobileSystemAudioBackend implements SystemAudioBackend {
     final _ReaderAudioHandler? handler = _handler;
     if (handler == null || _failed) return;
     try {
-      // 直接发 idle（等价 `stop()` 的效果但不回流 stop 事件给编排层——
-      // 结束由 close 调用方发起，避免二次 stop）：撤通知、停前台服务。
+      // 直接发 idle（等价 `stop()` 的效果但不回流 stop 事件给编排层——结束由 close
+      // 调用方发起，避免二次 stop）：撤通知、停前台服务。
       handler.playbackState.add(asvc.PlaybackState(
         processingState: asvc.AudioProcessingState.idle,
         playing: false,

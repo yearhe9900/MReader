@@ -13,10 +13,8 @@ const int kDefaultImageCacheMaxBytes = 50 * 1024 * 1024;
 
 /// 有界 LRU 字节缓存（`CNT-01`）。
 ///
-/// 用法：
-///   1. `ImageCache` 由 `ReaderPage` 持有（构造时创建，dispose 时释放）；
-///   2. `readResource(href)` 的结果经本缓存后返回——命中即复用，未命中即加载并入库；
-///   3. 超限自动淘汰最久未使用的条目。
+/// 用法：`ImageCache` 由 `ReaderPage` 持有；`readResource(href)` 的结果经本缓存后
+/// 返回（命中复用、未命中加载入库）；超限自动淘汰最久未使用的条目。
 class ImageCacheLRU {
   ImageCacheLRU({int maxBytes = kDefaultImageCacheMaxBytes})
       // ignore: prefer_initializing_formals

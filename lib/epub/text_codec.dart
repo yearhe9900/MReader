@@ -15,15 +15,13 @@ import 'package:charset/charset.dart';
 /// 4. GBK（中文老书常见）—— 允许畸形字节，用替换符兜底；
 /// 5. latin1 兜底 —— 保证**一定**返回字符串，绝不抛异常。
 ///
-/// 注意：**本函数承诺对任何输入都返回字符串，绝不抛异常**。
-/// 现实里「声明与实际不符」非常常见（声明 utf-8 实为 GBK、声明 gbk 却混入非法字节），
-/// 因此声明分支只能当作「优先猜测」：一旦失败必须能安全回落，而不是把异常抛给调用方。
+/// **本函数承诺对任何输入都返回字符串，绝不抛异常**：「声明与实际不符」非常常见
+/// （声明 utf-8 实为 GBK、声明 gbk 却混入非法字节），声明分支只能当「优先猜测」，
+/// 失败必须安全回落而不是把异常抛给调用方。
 ///
-/// **重构说明（M1-T02B）**：本函数的「判定」与「解码」已拆开——
-/// 判定结果即 [detectEncodingName] 返回的**生效编码名**，本函数等价于
-/// 「[detectEncodingName] 取名字 + `_decodeByName` 按名字解码」。
-/// 外部行为（输入 -> 输出字符串）逐字节不变，由 `test/epub/epub_fixtures_test.dart`
-/// 的 fx04 / fx09 / fx10 / fx11 与 9 本 fixture 基线共同护栏。
+/// 「判定」与「解码」已拆开：本函数 = [detectEncodingName] 取生效编码名 +
+/// `_decodeByName` 按名解码，外部行为（输入 -> 输出字符串）逐字节不变
+/// （`fx04` / `fx09` / `fx10` / `fx11` 与 fixture 基线共同护栏）。
 String decodeText(Uint8List bytes) =>
     _decodeByName(detectEncodingName(bytes), bytes);
 
@@ -70,8 +68,7 @@ String detectEncodingName(Uint8List bytes) {
 
 /// 按**生效编码名**解码；保证绝不抛异常。
 ///
-/// 与旧实现的分支一一对应：
-/// - `'utf-8'`：带 UTF-8 BOM 时先剥 3 字节（旧实现如此），否则整体解码；
+/// - `'utf-8'`：带 UTF-8 BOM 时先剥 3 字节，否则整体解码；
 /// - `'utf-16le'` / `'utf-16be'`：`utf16.decode` 按 BOM 自选端序并剥离 BOM，无 BOM 默认大端；
 /// - `'gbk'`：允许畸形字节，失败再退 latin1；
 /// - `'latin1'`：永不失败。
@@ -97,8 +94,7 @@ String _decodeByName(String name, Uint8List bytes) {
 
 /// 声明编码名 -> **生效**编码名；声明不可信（解码失败）时返回 null。
 ///
-/// 这是旧实现 `_decodeByEncodingName` 的「判定」投影：返回值非 null 表示
-/// [decodeText] 会采用该声明分支，且生效的编码名即此值。
+/// 返回值非 null 表示 [decodeText] 会采用该声明分支，且生效的编码名即此值。
 String? _effectiveNameForDeclaration(String name, Uint8List bytes) {
   switch (name) {
     case 'utf-8':

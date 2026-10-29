@@ -1,6 +1,6 @@
 // `TYP-09`：沉浸全屏与细粒度进度指示 widget 测试。
 //
-// ## 口径变更（2026-10-08，负责人拍板）
+// 口径：
 // ① 默认即沉浸全屏：`_fullscreen` 初值 `true`，顶栏与底部控制条**默认不在树上**；
 //    顶栏「进入全屏」按钮（`reader-fullscreen-enter`）与全屏时右上角「退出全屏」
 //    浮层按钮（`reader-fullscreen-exit`）**均已移除**——切换唯一入口是点正文
@@ -8,7 +8,7 @@
 // ② 底部读数格式从「第 N/M 章 · X%」改为**左章节标题 + 右「页/总页 百分比」**
 //    （百分比一位小数）：`第一章` / `1/2 0.0%`。
 //
-// 验收映射（PRD `TYP-09`，2026-10-08 改口径后的三条）：
+// 验收映射（PRD `TYP-09`）：
 //   ① 进阅读页即全屏且全屏切换按钮不存在；点正文可唤出与收起顶栏 / 控制条
 //      ——默认态无 `AppBar`、无 `ReaderControlBar`、两个全屏按钮 key 皆 `findsNothing`，
 //      点 `reader-chrome-toggle` 出现顶栏 + 书名 + 控制条，再点收回；
@@ -142,11 +142,9 @@ void main() {
       expect(initial.percent, 0.0);
 
       // ⚠️ 手势的**第一次** `moveBy` 只用来「确立拖动原点」，实测**不产生任何滚动**
-      // （探针实证：首移 150px 后 offset 仍为 43 不变，第二次同量移动才真的滚 150px
-      // ——`DragGestureRecognizer` 接受手势时把原点记在首移后的位置上）。
-      // 所以先做一次热身移动，再取基线：否则「进度是否随滚动变化」根本没被检验
-      // （改前那条 `percent1 > 0` 就是被初始落位 offset=43 自己撑起来的，拖动
-      // 一步都没生效——**形式上在测实时更新，实际测的是初始值非零**）。
+      // （`DragGestureRecognizer` 接受手势时把原点记在首移后的位置上），第二次同量
+      // 移动才真的滚。故先做一次热身移动再取基线，否则「进度是否随滚动变化」根本
+      // 没被检验（那条 `percent1 > 0` 会被初始落位自己撑起来，实际测的是初始值非零）。
       final TestGesture gesture = await tester
           .startGesture(tester.getCenter(find.byType(PagedScroller)));
       await gesture.moveBy(const Offset(0, -150));

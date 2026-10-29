@@ -1,6 +1,5 @@
-// 分页切页内核（纯 Dart：**不 import Flutter、不 import dart:io**）。
-// 职责：把已测量的行按页高切页，给出「页 ↔ 字符偏移」互查；测量（`TextPainter`）
-// 在 `page_paginator.dart`（`dart:ui` 只能 root isolate）。
+// 分页切页内核（纯 Dart：**不 import Flutter、不 import dart:io**）。把已测量的行按
+// 页高切页，给出「页 ↔ 字符偏移」互查；测量（`TextPainter`）在 `page_paginator.dart`。
 //
 // 切页规则（选型 §3 / 里程碑 §2.4）：
 //   1. 页 = 连续整行，切点必在行边界；
@@ -10,15 +9,14 @@
 //      （直译 legado `_findBestBreakPoint`，回拉粒度由「字符」改「行」）。
 //
 // 字符偏移空间（全里程碑共享）：各段**原文**（含 `\x00` 标记与 `<b>/<i>` 标签）
-// **无分隔符**顺序拼接。刻意与 `totalCharCount()` 的 `paragraph.length` 累加
+// **无分隔符**顺序拼接。**刻意**与 `totalCharCount()` 的 `paragraph.length` 累加
 // 口径一致，全书字数加权进度才天然连续（用 `\n` 拼接每章会多 n-1 漂移）。
 
 /// 行尾断点质量（供「断句回拉」判优先级）。
 ///
-/// 类别表直译 legado_flutter `_findBestBreakPoint` 的优先级
-/// （换行 > `。！？；` > `，、` > 空格/全角空格），并补两处：
-/// ① 段落结束等价于「换行」（原文段落间本就无 `\n` 字符）；
-/// ② `…` `!` `?` `;` 与中文标点同档（半角标点在中文正文里同义）。
+/// 直译 legado_flutter `_findBestBreakPoint` 的优先级（换行 > `。！？；` > `，、` >
+/// 空格），补两处：① 段落结束等价于「换行」（原文段落间本就无 `\n`）；
+/// ② `…!?;` 与中文标点同档。
 enum LineBreakQuality {
   /// 段末（最强断点，等价 legado 的 `\n`）。
   paragraphEnd,
@@ -112,11 +110,10 @@ abstract final class PageBreaker {
 
   /// 把 [lines] 按 [pageHeight] 切成页。
   ///
-  /// [paragraphSpacing]：页内相邻段之间的间距（跨页不加）。
-  /// [firstPageHeight]：**页 0 独有的预算**（= 页高 − 章标题高，里程碑 §2
-  /// 决策「标题高预留、字符不进空间」）；其余页恒用 [pageHeight]。
-  /// 空行表（空章）返回**一个空页** `[0, 0)`——保证「每章至少一页」，
-  /// 免得上层到处判空页。
+  /// [paragraphSpacing]：页内相邻段之间的间距（跨页不加）。[firstPageHeight]：
+  /// **页 0 独有的预算**（= 页高 − 章标题高，里程碑 §2 决策「标题高预留、字符不进
+  /// 空间」），其余页恒用 [pageHeight]。空行表（空章）返回**一个空页**——保证
+  /// 「每章至少一页」，免得上层到处判空页。
   static List<PageSlice> paginate(
     List<MeasuredLine> lines, {
     required double pageHeight,

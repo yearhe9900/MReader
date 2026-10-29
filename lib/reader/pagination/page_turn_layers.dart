@@ -1,4 +1,4 @@
-// 页即图层（T04，选型 §2.3）：翻页动画 = 已排版页图层的 `Transform`/
+// 页即图层（选型 §2.3）：翻页动画 = 已排版页图层的 `Transform`/
 // `ClipRect` 位移与裁切——**动画期零排版、页子树零 rebuild**。
 // 结构契约（保证③）：每页 = `RepaintBoundary` 静态层；`Transform` 在
 // `RepaintBoundary` **外侧**（动画只改合成层矩阵，页栅格缓存复用）；

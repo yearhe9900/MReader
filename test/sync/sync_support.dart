@@ -1,5 +1,4 @@
-// `M4-T03`：`test/sync/` 共用测试基建（自 M4-T02 `progress_sync_test` 抽出，
-// 各测试文件 import 使用，**勿再复制一份**）。
+// `test/sync/` 共用测试基建（各测试文件 import 使用，**勿再复制一份**）。
 //
 // - [TestAppPaths]：临时目录实现 `AppPaths`（与 `test/reader/progress_store_test.dart`
 //   同款）；

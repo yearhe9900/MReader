@@ -1,37 +1,23 @@
 // 开书 / 滚动链路的**耗时日志**（零依赖、纯 Dart、可进 isolate）。
 //
-// ## 用途（2026-09-28 真机「打开大书（如绍宋）到深章节非常慢」诊断）
+// 用途：把「书架点击 → 读文件 → 解析 → 定位目标章 → 首帧 → 恢复校正 → 后台补齐」
+// 全链路逐段打点，真机跑一遍 `adb logcat` 即可看出秒级耗时花在哪一步。埋点前缀即
+// 链路段：`open.*` 开书准备；`reader.*` 阅读页 `_open`；`restore.*` 程序化滚动校正；
+// `autofill.*` 后台补齐；`layout.*` 布局突变重锚与占位高刷新；`nav.*` 目录 / 跳转；
+// `txt.*` / `epub.*` 解析源内部阶段（含后台 isolate 内的打印）。
 //
-// 把「书架点击 → 读文件 → 解析 → 定位目标章 → 首帧 → 恢复校正 → 后台补齐」
-// 全链路逐段打点，真机跑一遍 `adb logcat` 即可看出秒级耗时具体花在哪一步。
-// 埋点分布（前缀即链路段）：
-//   · `open.*`    书架开书准备（读字节 / 嗅探）；
-//   · `reader.*`  阅读页 `_open`（load / chapters / stores / firstBatch / ready / content / seed）；
-//   · `restore.*` 程序化滚动校正（begin / step / end，含估算跳与落点收敛）；
-//   · `autofill.*` 后台补齐批次；
-//   · `layout.*`  布局突变重锚与占位高刷新；
-//   · `nav.*`     目录 / 上下章跳转；
-//   · `txt.*` / `epub.*` 解析源内部阶段（含后台 isolate 内的打印）。
+// 输出通道：`print` → stdout → Android logcat 的 `I/flutter` 行（`adb logcat -s flutter`），
+// 同时留内存 [PerfLog.records]（环形上限，供测试断言）；isolate 内的 `print` 同样落
+// stdout，混排在同一条时间线上。
 //
-// ## 输出通道
+// 读数口径（重要）：行格式 `[perf] <名字> <毫秒>ms  k=v k=v …`，瞬时事件（[PerfLog.mark]）
+// 无毫秒段；首行 `[perf] session product=…` 标**构建形态**——`product=false` 是
+// debug/profile（JIT + 断言，普遍比 release AOT 慢数倍），**读任何数字前先看这一行**，
+// 否则会把 debug 档的慢当成产品问题；计时用 [Stopwatch]（墙上时钟），不受 FakeAsync
+// 测试区影响，测试可照常跑。
 //
-// `print` → stdout → Android logcat 的 `I/flutter` 行，`adb logcat -s flutter` 即可读；
-// 同时留内存 [PerfLog.records]（环形上限，供测试断言 / 未来导出诊断用）。
-// isolate 内的 `print`（如 `txt.prepare`）同样落 stdout，混排在同一条时间线上。
-//
-// ## 读数口径（重要）
-//
-//   · 行格式：`[perf] <名字> <毫秒>ms  k=v k=v …`；瞬时事件（[PerfLog.mark]）：
-//     `[perf] <名字>  k=v k=v …`；
-//   · 首行 `[perf] session product=…` 标**构建形态**：`product=false` 是 debug/profile
-//     （JIT + 断言，普遍比 release AOT 慢数倍），`product=true` 才是发布档——
-//     读任何数字前先看这一行，否则会把 debug 档的慢当成产品问题；
-//   · 计时用 [Stopwatch]（墙上时钟），不受 FakeAsync 测试区影响，测试可照常跑。
-//
-// ## 开关
-//
-// 默认开；`--dart-define=MREADER_PERF_LOG=false` 可整体静音。
-// 本组件**不得**被产品逻辑依赖（只许观察，不许分支）。
+// 开关：默认开，`--dart-define=MREADER_PERF_LOG=false` 可整体静音。本组件**不得**被
+// 产品逻辑依赖（只许观察，不许分支）。
 class PerfLog {
   PerfLog._();
 
