@@ -223,6 +223,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crunchy"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
+
+[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -362,6 +368,12 @@ dependencies = [
  "log",
  "regex",
 ]
+
+[[package]]
+name = "fax"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caf1079563223d5d59d83c85886a56e586cfd5c1a26292e971a0fa266531ac5a"
 
 [[package]]
 name = "fdeflate"
@@ -555,6 +567,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
+name = "half"
+version = "2.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
+dependencies = [
+ "cfg-if",
+ "crunchy",
+ "zerocopy",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -592,6 +615,7 @@ dependencies = [
  "moxcms",
  "num-traits",
  "png 0.18.1",
+ "tiff",
  "zune-core",
  "zune-jpeg",
 ]
@@ -894,14 +918,14 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rrk-cache"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "rrk-model",
 ]
 
 [[package]]
 name = "rrk-cbz"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "image",
  "rrk-format",
@@ -912,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "rrk-epub"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "rrk-format",
  "rrk-markup",
@@ -922,14 +946,14 @@ dependencies = [
 
 [[package]]
 name = "rrk-format"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "rrk-model",
 ]
 
 [[package]]
 name = "rrk-image"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "image",
@@ -938,7 +962,7 @@ dependencies = [
 
 [[package]]
 name = "rrk-kernel"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "rrk-cache",
  "rrk-cbz",
@@ -953,14 +977,14 @@ dependencies = [
 
 [[package]]
 name = "rrk-markup"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "rrk-model",
 ]
 
 [[package]]
 name = "rrk-mobi"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "encoding_rs",
  "rrk-format",
@@ -971,11 +995,11 @@ dependencies = [
 
 [[package]]
 name = "rrk-model"
-version = "0.1.2"
+version = "0.3.0"
 
 [[package]]
 name = "rrk-pdf"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "image",
@@ -987,15 +1011,16 @@ dependencies = [
 
 [[package]]
 name = "rrk-search"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "rrk-format",
  "rrk-model",
+ "rrk-txt",
 ]
 
 [[package]]
 name = "rrk-txt"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -1005,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "rrk-zip"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -1171,6 +1196,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tiff"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63feaf3343d35b6ca4d50483f94843803b0f51634937cc2ec519fc32232bc52"
+dependencies = [
+ "fax",
+ "flate2",
+ "half",
+ "quick-error",
+ "weezl",
+ "zune-jpeg",
+]
+
+[[package]]
 name = "tiny-skia"
 version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1312,6 +1351,26 @@ name = "zeno"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6df3dc4292935e51816d896edcd52aa30bc297907c26167fec31e2b0c6a32524"
+
+[[package]]
+name = "zerocopy"
+version = "0.8.63"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5fe1f8f1b06191a00962174c61aa5005e0bb391a6d80d07e24d115c01a92ed8"
+dependencies = [
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.63"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "863ad3ac83293fb4d740aedbfdc9240dd8d1a50c1099acd76ce80ce7c7230c7f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "zlib-rs"

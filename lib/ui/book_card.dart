@@ -38,8 +38,15 @@ import '../library/book_record.dart';
 import '../meta/cover_store.dart';
 import '../model/book_meta.dart';
 import 'default_book_cover.dart';
-// Mi 卡片排版 token（标题样式 / 墨色 / 明暗模式）；几何常量仍走 `shelf_geometry.dart`。
-import 'mi_like_ui/mi_like_ui.dart' show MiColors, MiThemeMode, MiTypography;
+// Mi 卡片排版 token（标题样式 / 墨色 / 明暗模式）+ Squircle 裁形 / 投影画笔；
+// 几何常量仍走 `shelf_geometry.dart`。
+import 'mi_like_ui/mi_like_ui.dart'
+    show
+        MiColors,
+        MiSquircleClipper,
+        MiSquircleShadowPainter,
+        MiThemeMode,
+        MiTypography;
 import 'shelf_geometry.dart';
 
 /// **浅色主题**下的封面投影（= anx 原样；深色见 [bookCoverShadowOf]）：
@@ -95,9 +102,10 @@ const Duration kBookLiftShadowDuration = Duration(milliseconds: 250);
 /// 抬起时浮现的阴影（出处见上方总注），与静止态投影（[bookCoverShadowOf]）
 /// **叠加**（anx 也是两层同时在场）。`0x33000000` = `Colors.black.withOpacity(0.2)`。
 ///
-/// ⚠️ **画在封面外框上、形状取封面圆角**（`_buildCoverSurface` 的 `AnimatedContainer`）：
-/// `BoxShadow` 是**填充形状**，画在整张卡外面而卡片又没有底板（`Card` 透明、
-/// 信息区透明）时，看到的会是一张**方角灰板**——既盖住封面圆角、又让长按时整卡变暗。
+/// ⚠️ **画在封面外框上、形状取封面 Squircle**（`_buildCoverSurface` 的
+/// `AnimatedOpacity` 层）：投影是**填充形状**，画在整张卡外面而卡片又没有
+/// 底板（`Card` 透明、信息区透明）时，看到的会是一张**方角灰板**——既盖住
+/// 封面圆角、又让长按时整卡变暗。
 ///
 /// **不随主题**（anx 原样）：深色下这颗黑投影与深色背景几乎同值，抬起时主要靠
 /// **放大 1.05** 传达反馈、阴影那半贡献很小——如实登记，**不去补**「深色下也
@@ -109,7 +117,8 @@ const BoxShadow kBookLiftShadow = BoxShadow(
   offset: Offset(0, 3),
 );
 
-/// 封面外框的定位键（契约测试读它的渲染对象取圆角与投影）。
+/// 封面外框的定位键（契约测试读它的 `clipper` 取 Squircle 圆角、同层
+/// `CustomPaint` 取投影画笔）。
 const ValueKey<String> kBookCoverSurfaceKey = ValueKey<String>(
   'book-cover-surface',
 );
@@ -117,7 +126,7 @@ const ValueKey<String> kBookCoverSurfaceKey = ValueKey<String>(
 /// 抬起容器的定位键（契约测试读它的 `AnimatedScale` / `AnimatedContainer`）。
 const ValueKey<String> kBookLiftKey = ValueKey<String>('book-card-lift');
 
-/// 抬起阴影容器的定位键。
+/// 抬起投影层的定位键（契约测试读它的 `AnimatedOpacity` 与内部画笔）。
 const ValueKey<String> kBookLiftShadowKey = ValueKey<String>(
   'book-card-lift-shadow',
 );
@@ -276,40 +285,51 @@ class _BookCardState extends State<BookCard> {
     );
   }
 
-  /// 封面外框：**两层投影 + 圆角裁剪**。层次（自外向内）：
-  /// ① [kBookLiftShadowKey] 的 `AnimatedContainer`——长按抬起时浮现的暗影，形状
-  ///    **取封面的圆角**（不是卡片外框的方角）。画在整张卡外面时，因卡片没有底板
-  ///    （`Card` 透明、信息区透明）而 `BoxShadow` 又是**填充形状**，长按会看到
-  ///    一张**方角灰板**：既盖住封面圆角、又让整卡变暗。
-  /// ② [kBookCoverSurfaceKey] 的 `DecoratedBox`——静止态投影（见 [bookCoverShadowOf]）。
-  ///    画在封面内容**之下**，故封面内容必须是**子树内**不透明绘制（见 `_buildCover`），
-  ///    否则这颗填充阴影会盖在封面上把它染暗。
-  /// ③ `ClipRRect`——裁掉封面内容（含自带裁切的 `DefaultBookCover`）保证圆角生效；
-  ///    角标与加载蒙层都放在它**内**，随圆角一起裁。
+  /// 封面外框：**两层投影 + Squircle 裁剪**（上游 Squircle 批 `78588a8`
+  /// 同款做法）。层次（自外向内，`Stack` + `Clip.none` 让投影画到封面外）：
+  /// ① 静止投影：`MiSquircleShadowPainter` 垫在最底（`ShapeDecoration` 不带
+  ///    boxShadow，投影画笔垫底层是上游统一做法），色源随主题
+  ///    （[bookCoverShadowOf]）。画在封面内容**之下**，故封面内容必须是
+  ///    **子树内**不透明绘制（见 `_buildCover`），否则会被投影染暗。
+  /// ② [kBookLiftShadowKey] 的 `AnimatedOpacity`——长按抬起时 250ms 淡入、
+  ///    复位淡出的暗影（与静止投影**叠加**，anx 同为两层）；形状同为封面
+  ///    Squircle（不是卡片外框的方角，否则长按会看到一张方角灰板）。
+  ///    纯画笔层无内容，Opacity 无 saveLayer 副作用。
+  /// ③ [kBookCoverSurfaceKey] 的 `ClipPath(MiSquircleClipper)`——G2 连续圆角
+  ///    裁切（半径 [kBookCoverRadius]，含自带裁切的 `DefaultBookCover`）；
+  ///    角标与加载蒙层放在它**内**，随圆角一起裁。
   Widget _buildCoverSurface(ThemeData theme) {
-    return AnimatedContainer(
-      key: kBookLiftShadowKey,
-      duration: kBookLiftShadowDuration,
-      curve: Curves.linear,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(kBookCoverRadius),
-        // 抬起时新增、与静止投影**叠加**（anx 同为两层：灰投影 + 拖拽反馈黑投影）。
-        boxShadow: _lifted
-            ? const <BoxShadow>[kBookLiftShadow]
-            : const <BoxShadow>[],
-      ),
-      child: DecoratedBox(
-        key: kBookCoverSurfaceKey,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(kBookCoverRadius),
-          // 投影让封面「浮」在渐变背景上——本版视觉的主要层次来源；
-          // 色源**随主题**（见 [bookCoverShadowOf]）。
-          boxShadow: <BoxShadow>[bookCoverShadowOf(theme)],
+    final double radius = kBookCoverRadius;
+    return Stack(
+      // 投影要画到封面外（与旧 DecoratedBox 行为一致）。
+      clipBehavior: Clip.none,
+      fit: StackFit.expand,
+      children: <Widget>[
+        // ① 静止投影（色源随主题，见 [bookCoverShadowOf]）。
+        CustomPaint(
+          painter: MiSquircleShadowPainter(
+            radius: radius,
+            shadows: <BoxShadow>[bookCoverShadowOf(theme)],
+          ),
         ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(kBookCoverRadius),
-          // 格式标签角标（PRD US-06 / LIB-01）与加载蒙层都放在 ClipRRect **内**，
-          // 随封面圆角一起裁切，不会溢出圆角。
+        // ② 抬起投影：只对这层做不透明度动画（纯画笔，无内容）；
+        //    与静止投影**叠加**（anx 同为两层：灰投影 + 拖拽反馈黑投影）。
+        AnimatedOpacity(
+          key: kBookLiftShadowKey,
+          duration: kBookLiftShadowDuration,
+          curve: Curves.linear,
+          opacity: _lifted ? 1.0 : 0.0,
+          child: CustomPaint(
+            painter: MiSquircleShadowPainter(
+              radius: radius,
+              shadows: const <BoxShadow>[kBookLiftShadow],
+            ),
+          ),
+        ),
+        // ③ 内容裁形（角标与加载蒙层在 ClipPath 内，随之裁切不溢出）。
+        ClipPath(
+          key: kBookCoverSurfaceKey,
+          clipper: MiSquircleClipper(radius),
           child: Stack(
             fit: StackFit.expand,
             children: <Widget>[
@@ -331,7 +351,7 @@ class _BookCardState extends State<BookCard> {
             ],
           ),
         ),
-      ),
+      ],
     );
   }
 

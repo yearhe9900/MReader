@@ -4,6 +4,7 @@ import '../../../theme/button_tokens.dart';
 import '../../../theme/dimens.dart';
 import '../../../theme/theme_mode.dart';
 import '../../../theme/typography.dart';
+import '../../../utils/squircle.dart';
 import 'button_metrics.dart';
 
 /// 按钮形态。
@@ -70,9 +71,9 @@ class MiButton extends StatelessWidget {
           padding: const EdgeInsets.symmetric(
             horizontal: MiButtonMetrics.horizontalPadding,
           ),
-          decoration: BoxDecoration(
+          decoration: ShapeDecoration(
             color: fill,
-            borderRadius: BorderRadius.circular(MiDimens.radiusPill),
+            shape: const MiSquircleBorder(MiDimens.radiusPill),
           ),
           // 宽度随内容收缩：Center 带 widthFactor 才不会在有界父级
           //（Center/Column）里被拉满宽 —— 实测按钮是内容自适应的胶囊。

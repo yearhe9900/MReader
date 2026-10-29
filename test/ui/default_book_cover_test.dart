@@ -1,24 +1,20 @@
-// 默认封面（无封面书籍）的形态契约
-// （2026-09-29 拍板「采用 anx 无封面书籍的默认封面」：① 只改占位控件、② 完全照抄 anx 取色）。
+// 默认封面（无封面书籍）的形态契约（采用 anx 无封面书的默认封面：只改占位控件、照抄 anx 取色）。
 //
-// 视觉口径逐条对映 anx `widgets/bookshelf/book_cover.dart` 的默认封面分支
-// （代码侧出处见 `lib/ui/default_book_cover.dart` 头注），本测试把可判定的部分钉死：
+// 视觉口径逐条对映 anx `widgets/bookshelf/book_cover.dart` 的默认封面分支（代码侧出处
+// 见 `lib/ui/default_book_cover.dart` 头注），本测试把可判定的部分钉死：
 //   ① 底色 = `Colors.primaries[书名.hashCode % 18].shade200`；
 //   ② 文字色按底色亮度自适应（浅底黑字 / 深底白字）；
 //   ③ 四个尺寸与**封面宽度**成比例（0.12 / 0.08 / 0.8 / 0.08）；
 //   ④ 右下角旋转 15° 的书本水印（文字色 10% 透明），故意探出封面后被裁；
 //   ⑤ 长书名 3 行内省略、不溢出（`META-07` 验收 ②）；
-//   ⑥ 底色画在**子树内**（`ColoredBox`），**不用 `Ink`**——`Ink` 是墨迹特性、
-//      由上层 Material 绘制 ⇒ 会被外框 `ClipRRect` 漏裁（方角）并被投影填充染色
-//      （变暗）；也不依赖 `Material` 祖先。
+//   ⑥ 底色画在**子树内**（`ColoredBox`），**不用 `Ink`**——`Ink` 是墨迹特性、由上层
+//      Material 绘制 ⇒ 会被外框 `ClipPath` 漏裁（方角）并被投影画笔染色（变暗）。
 //
-// ⚠️ 期望值一律硬编码字面量。其中「书名 → 具体颜色」两条是**按当前 SDK 的
-// `String.hashCode` 实测**钉的（`三体` → 下标 4、`活着` → 下标 0）；SDK 升版若换了
-// hashCode 算法，这两条会红，届时**按实测改字面量**即可——「公式」那条断言不受
-// 影响，故能区分「SDK 漂移」与「取色口径被改」。
+// ⚠️ 期望值一律硬编码字面量。「书名 → 具体颜色」两条是**按当前 SDK 的 `String.hashCode`
+// 实测**钉的（`三体` → 下标 4、`活着` → 下标 0）；SDK 升版若换 hashCode 算法这两条会红，
+// 届时**按实测改字面量**——「公式」那条断言不受影响，故能区分「SDK 漂移」与「取色口径被改」。
 //
-// ⚠️ 尺寸断言一律用 `closeTo`：这些值来自 `宽 × 0.12` 之类的浮点乘法
-// （`120 * 0.12 = 14.400000000000002`），与字面量做 `==` 会假红。
+// ⚠️ 尺寸断言一律用 `closeTo`：值来自 `宽 × 0.12` 之类的浮点乘法，与字面量 `==` 会假红。
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -29,6 +25,7 @@ import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/model/book_meta.dart';
 import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/default_book_cover.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart' show MiSquircleClipper;
 import 'package:mreader/ui/shelf_grid.dart';
 
 import '../test_config.dart';
@@ -206,12 +203,10 @@ void main() {
           math.atan2(m.storage[1], m.storage[0]) * 180 / math.pi;
       expect(degrees, closeTo(15, 1e-9), reason: '水印须旋转 15°');
 
-      // ⚠️ `tester.getRect` 对**旋转过**的 widget **不给轴对齐外接框**：它取的是
-      // 「变换后的左上角」与「变换后的右下角」之间的矩形（即对角线的两端），
-      // 实测 96 宽 / 15° 时只有 **67.88**（= 96 × (cos15° − sin15°)），而真外接框
-      // 是 117.58 —— 直接断言宽度会让人误判成「角度不对」。故只用它取
-      // **变换不变的中心**（两角点对称于中心，中点即中心），再按
-      // 「中心 ± 半个对角线的投影」自算真·外接框。
+      // ⚠️ `tester.getRect` 对**旋转过**的 widget **不给轴对齐外接框**（取的是变换后
+      // 两角点之间的矩形，96 宽 / 15° 时只有 67.88，真外接框 117.58——直接断言宽度会
+      // 误判成「角度不对」）。故只用它取**变换不变的中心**，再按「中心 ± 半个对角线的
+      // 投影」自算真·外接框。
       final Offset center = tester.getRect(find.byIcon(Icons.book)).center;
       const double rad = 15 * math.pi / 180;
       final double halfSide = 96 / 2 * (math.cos(rad) + math.sin(rad));
@@ -233,22 +228,23 @@ void main() {
       expect(position.right, closeTo(-7.68, 1e-9));
       expect(position.bottom, closeTo(-4.8, 1e-9));
 
-      // 「压不住的半本书」：真·外接框越过封面右/下缘，由组件自带的 `ClipRRect` 裁掉。
+      // 「压不住的半本书」：真·外接框越过封面右/下缘，由组件自带的 `ClipPath` 裁掉。
       final Rect cover = tester.getRect(find.byType(DefaultBookCover));
       expect(bounds.right, greaterThan(cover.right));
       expect(bounds.bottom, greaterThan(cover.bottom));
 
-      // 裁切圆角 = 传入的 radius（组件自带裁切，调用方不必再包一层）。
+      // 裁切半径 = 传入的 radius（组件自带 squircle 裁切，调用方不必再包一层）。
+      final ClipPath coverClip = tester.widget<ClipPath>(
+        find.descendant(
+          of: find.byType(DefaultBookCover),
+          matching: find.byType(ClipPath),
+        ),
+      );
+      expect(coverClip.clipper, isA<MiSquircleClipper>());
       expect(
-        tester
-            .widget<ClipRRect>(
-              find.descendant(
-                of: find.byType(DefaultBookCover),
-                matching: find.byType(ClipRRect),
-              ),
-            )
-            .borderRadius,
-        BorderRadius.circular(8),
+        (coverClip.clipper as MiSquircleClipper).radius,
+        8,
+        reason: '裁切半径 = 传入的 radius（Squircle 画法，与书卡外框同源）',
       );
     });
 
@@ -289,10 +285,9 @@ void main() {
             .color,
         defaultBookCoverColor(_kTitle),
       );
-      // **反向断言**：`Ink` 是**墨迹特性**、由上层 `Material` 绘制（`material.dart:621-634`
-      // 先画 ink 特性再画子树），于是 ① **逃逸本组件的 `ClipRRect`** ⇒ 封面方角；
-      // ② 落在封面外框投影的**填充**之下 ⇒ 整张封面被染上一层 α0.39 的色（「太暗」）。
-      // 两条都是 2026-09-29 的像素级实证（见 §2.54），回潮即红。
+      // **反向断言**：`Ink` 是墨迹特性、由上层 `Material` 绘制 ⇒ ① **逃逸本组件的
+      // `ClipPath`** 成方角；② 落在外框投影画笔的**底下**整张封面被染暗。两条都是
+      // 像素级实证（§2.54），回潮即红。
       expect(
         find.descendant(
           of: find.byType(DefaultBookCover),
@@ -306,8 +301,8 @@ void main() {
     testWidgets('无 Material 祖先也照常渲染（不再依赖 Material）', (
       WidgetTester tester,
     ) async {
-      // 玻璃库页面没有 `Material` 祖先（PRD §11.4）。此前靠 `Material.maybeOf` 分支
-      // 退化成 `ColoredBox`，现在**只剩这一条路**，故这里证明它不需要 Material。
+      // 玻璃库页面没有 `Material` 祖先（PRD §11.4），组件**只剩 `ColoredBox` 一条路**，
+      // 故这里证明它不需要 Material。
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -365,7 +360,7 @@ void main() {
       ),
     );
 
-    // 书卡封面走的是新默认封面（不再是「主题色底 + 书名首字」）。
+    // 书卡封面走默认封面。
     expect(
       find.descendant(
         of: find.byType(BookCard),

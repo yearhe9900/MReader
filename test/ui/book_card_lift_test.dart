@@ -21,6 +21,8 @@ import 'package:mreader/library/book_record.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/model/book_meta.dart';
 import 'package:mreader/ui/book_card.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart'
+    show MiSquircleShadowPainter;
 
 import '../test_config.dart';
 
@@ -149,11 +151,21 @@ void main() {
       reason: '曲线照抄包内兜底值 `Curves.linear`（不是刻意选的缓动）',
     );
 
-    final AnimatedContainer shadow = tester.widget<AnimatedContainer>(
+    final AnimatedOpacity shadow = tester.widget<AnimatedOpacity>(
       find.byKey(kBookLiftShadowKey),
     );
     expect(shadow.duration, const Duration(milliseconds: 250));
-    expect((shadow.decoration! as BoxDecoration).boxShadow, const <BoxShadow>[
+    expect(shadow.curve, Curves.linear);
+    expect(shadow.opacity, 1.0, reason: '长按抬起态：投影已淡入到位');
+    final MiSquircleShadowPainter liftPainter = tester
+        .widget<CustomPaint>(
+          find.descendant(
+            of: find.byKey(kBookLiftShadowKey),
+            matching: find.byType(CustomPaint),
+          ),
+        )
+        .painter! as MiSquircleShadowPainter;
+    expect(liftPainter.shadows, const <BoxShadow>[
       // 0x33000000 = `Colors.black.withOpacity(0.2)`（0x33 = 51 = 0.2 × 255）。
       BoxShadow(
         color: Color(0x33000000),
@@ -161,23 +173,21 @@ void main() {
         blurRadius: 6,
         offset: Offset(0, 3),
       ),
-    ], reason: '抬起阴影须为包内 `_defaultBoxDecoration` 的四参数');
-    // ⚠️ 形状必须是**封面的圆角**，不是卡片外框的方角：`BoxShadow` 是填充形状，画在
-    // 整张卡外面（卡片无底板、信息区透明）会变成一张**方角灰板**——盖住封面圆角、
-    // 长按时整卡变暗。故这颗 `AnimatedContainer` 挂在**封面外框**上
-    // （`kBookCoverSurfaceKey` 的祖先），并带 20 圆角（Mi 预览图圆角）。
+    ], reason: '抬起阴影须为默认四参数（Squircle 投影画笔垫底）');
+    // ⚠️ 形状必须是**封面的 Squircle**，不是卡片外框的方角/普通圆角：
+    // 投影是填充形状，画在整张卡外面（卡片无底板、信息区透明）会变成一张
+    // **方角灰板**——盖住封面圆角、长按时整卡变暗。半径 = 12.9（主题卡预览
+    // 圆角实机修订）。
     expect(
-      (shadow.decoration! as BoxDecoration).borderRadius,
-      BorderRadius.circular(20),
-      reason: '抬起阴影的形状须跟封面圆角一致（20），否则长按时出现方角灰板',
+      liftPainter.radius,
+      12.9,
+      reason: '抬起阴影的形状须跟封面 Squircle 一致（12.9），否则长按时出现方角灰板',
     );
+    // 抬起投影层与内容裁形层必须**同框**（都铺满封面区、投影垫在内容之下）。
     expect(
-      find.ancestor(
-        of: find.byKey(kBookCoverSurfaceKey),
-        matching: find.byKey(kBookLiftShadowKey),
-      ),
-      findsOneWidget,
-      reason: '抬起阴影须画在封面外框这一层，不能像原先那样包整张卡',
+      tester.getRect(find.byKey(kBookLiftShadowKey)),
+      tester.getRect(find.byKey(kBookCoverSurfaceKey)),
+      reason: '抬起投影层与封面外框同尺寸同位（投影垫在封面正下方）',
     );
 
     // ③ 长按弹框关闭 → 卡片落回原位。
@@ -194,13 +204,9 @@ void main() {
       reason: '复位后缩放目标须回到 1.0',
     );
     expect(
-      (tester
-                  .widget<AnimatedContainer>(find.byKey(kBookLiftShadowKey))
-                  .decoration!
-              as BoxDecoration)
-          .boxShadow,
-      isEmpty,
-      reason: '复位后抬起阴影须撤掉（静止态的封面投影仍在，那是另一个 DecoratedBox）',
+      tester.widget<AnimatedOpacity>(find.byKey(kBookLiftShadowKey)).opacity,
+      0.0,
+      reason: '复位后抬起阴影须淡出到 0（静止态投影仍由另一个画笔常驻）',
     );
   });
 

@@ -42,6 +42,7 @@ import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart'
         ForwardChevronIconPainter,
         MiDialog,
         MiGradientBlur,
+        MiSquircleBorder,
         MiTopBar,
         MiTopBarMetrics;
 import 'package:mreader/ui/settings_kit.dart';
@@ -367,7 +368,7 @@ void main() {
             .first,
       );
       expect(card.color, const Color(0xFFFFFFFF));
-      expect(card.borderRadius, BorderRadius.circular(20));
+      expect(card.shape, const MiSquircleBorder(20), reason: '卡片外形 = Squircle 连续圆角（上游全库批）',);
     });
 
     testWidgets('行几何与排版：无副标题行 56 高、图标块 38×38 r10、主文案 16/w400、值 14、前进箭头', (

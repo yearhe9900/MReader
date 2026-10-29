@@ -136,7 +136,16 @@ impl<'a> Parser<'a> {
                     if self.peek().is_none() {
                         break;
                     }
-                    arr.push(self.parse_object()?);
+                    // 防御：子对象解析若未推进游标（如非法分隔符处容错返回
+                    // Null），跳过该字节——否则循环无限压入，Vec 无限增长
+                    // （fuzz pdf_open OOM 实锤：230 字节输入诱导 24GiB realloc）
+                    let before = self.pos;
+                    let o = self.parse_object()?;
+                    if self.pos == before {
+                        self.pos = (self.pos + 1).min(self.data.len());
+                        continue;
+                    }
+                    arr.push(o);
                 }
                 Ok(Object::Arr(arr))
             }
@@ -174,7 +183,14 @@ impl<'a> Parser<'a> {
                     b"true" => Object::Bool(true),
                     b"false" => Object::Bool(false),
                     b"null" => Object::Null,
-                    _ => Object::Null,
+                    _ => {
+                        // 防御：空词（游标停在非法分隔符上）必须前进，
+                        // 否则上层循环（数组/dict）会原地空转；钳到末尾防越界
+                        if word.is_empty() {
+                            self.pos = (self.pos + 1).min(self.data.len());
+                        }
+                        Object::Null
+                    }
                 })
             }
         }
@@ -311,28 +327,40 @@ impl<'a> Parser<'a> {
         let mut dict: Dict = BTreeMap::new();
         loop {
             self.skip_ws();
-            if self.data[self.pos..].starts_with(b">>") {
+            if self.data.get(self.pos..).is_some_and(|s| s.starts_with(b">>")) {
                 self.pos += 2;
                 break;
             }
             if self.peek().is_none() {
                 break;
             }
+            // 防御：解析未推进游标时强制前进一字节（与数组分支同理，
+            // 防止 key/value 卡在非法分隔符上原地空转）
+            let kb = self.pos;
             let key = match self.parse_object()? {
                 Object::Name(n) => n,
-                _ => continue,
+                _ => {
+                    if self.pos == kb {
+                        self.pos = (self.pos + 1).min(self.data.len());
+                    }
+                    continue;
+                }
             };
+            let vb = self.pos;
             let value = self.parse_object()?;
+            if self.pos == vb {
+                self.pos = (self.pos + 1).min(self.data.len());
+            }
             dict.insert(key, value);
         }
         // stream？
         let save = self.pos;
         self.skip_ws();
-        if self.data[self.pos..].starts_with(b"stream") {
+        if self.data.get(self.pos..).is_some_and(|s| s.starts_with(b"stream")) {
             self.pos += 6;
-            if self.data[self.pos..].starts_with(b"\r\n") {
+            if self.data.get(self.pos..).is_some_and(|s| s.starts_with(b"\r\n")) {
                 self.pos += 2;
-            } else if self.data[self.pos..].starts_with(b"\n") {
+            } else if self.data.get(self.pos..).is_some_and(|s| s.starts_with(b"\n")) {
                 self.pos += 1;
             }
             let data_start = self.pos;
@@ -565,6 +593,9 @@ pub struct PdfDocument {
     virtuals: std::sync::Mutex<HashMap<u32, Object>>,
     /// 光栅字体缓存（raster 层填充：FontFile 解压/ToUnicode 解析跨页复用）。
     pub(crate) font_cache: std::sync::Mutex<HashMap<u32, Arc<crate::raster::RasterFont>>>,
+    /// 图像 XObject 解码缓存（raster 层填充：同一图像跨页/跨 Do 只 inflate+解码
+    /// 一次；有字节上限，超限整表清空重填）。
+    pub(crate) image_cache: std::sync::Mutex<crate::raster::RasterImageCache>,
 }
 
 impl PdfDocument {
@@ -598,6 +629,7 @@ impl PdfDocument {
             cache: std::sync::Mutex::new(HashMap::new()),
             virtuals: std::sync::Mutex::new(HashMap::new()),
             font_cache: std::sync::Mutex::new(HashMap::new()),
+            image_cache: std::sync::Mutex::new(crate::raster::RasterImageCache::default()),
         })
     }
 

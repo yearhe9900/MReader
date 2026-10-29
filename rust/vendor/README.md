@@ -20,8 +20,13 @@
 | `rrk-pdf` | PDF：L1 文本抽取/重排 + L2 光栅 |
 | `rrk-kernel` | 会话编排（句柄表 + 格式注册 + 生命周期；`BookKind` 分流重排/页级） |
 
-**同步点**：上游 `rust_reader_kernel@f88d589`（v0.1.2，内核 ABI 8，含 issue
+**同步点**：上游 `rust_reader_kernel@4856780`（v0.3.0，内核 ABI 10，含 issue
+#13 无 TOC 书章标题回填 + 章标题块轻量出口、fuzz 五轮实锤加固（PDF 页面树/
+OOM/zip 解压炸弹）、rrk-image thumbnail 转运行期解码（`image` 补 tiff feature，
+与上游 workspace 白名单同源））。前一同步点：`f88d589`（v0.1.2，ABI 8，含 issue
 #8 图像 / #9 检索 / #10 CBZ 页表 / #11 稳定错误码 / #12 内容级缓存）。
+上游 `rrk-ffi` / `rrk-layout` / `rrk-inspect` 三 crate 不在 vendored 集合
+（宿主走 FRB 不走 C ABI；layout / inspect 无宿主消费方），随同步跳过。
 随同步一并带入 `rust/fixtures/`（上游 crate 内测试用的 `sample.{txt,epub,cbz,pdf}`，
 路径按 `vendor/rrk-*/../../fixtures/` 解析）。
 

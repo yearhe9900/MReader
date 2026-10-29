@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../theme/transparency_tokens.dart';
+import '../../../utils/squircle.dart';
 import 'card_page_route_metrics.dart';
 
 /// 卡片式页面推入转场：新页从右缘滑入、前缘带大圆角，下层页左移视差并压暗。
@@ -147,8 +148,8 @@ class _MiPushIncoming extends StatelessWidget {
             Positioned.fill(
               child: FractionalTranslation(
                 translation: Offset(1 - visual, 0),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(cornerRadius),
+                child: ClipPath(
+                  clipper: MiSquircleClipper(cornerRadius),
                   child: page,
                 ),
               ),
@@ -183,11 +184,9 @@ class _MiPushParallax extends StatelessWidget {
         final progress = animation.value.clamp(0.0, 1.0);
         if (progress <= 0) return page!;
         final visual = motion.transform(progress).clamp(0.0, 1.0);
-        return LayoutBuilder(
-          builder: (context, constraints) => Transform.translate(
-            offset: Offset(-fraction * constraints.maxWidth * visual, 0),
-            child: page,
-          ),
+        return FractionalTranslation(
+          translation: Offset(-fraction * visual, 0),
+          child: page,
         );
       },
     );

@@ -12,8 +12,9 @@ members = ["vendor/*"]
 
 [workspace.package]
 # 与上游 rust_reader_kernel 的 workspace.package.version 同步（vendored crate 用
-# `version.workspace = true` 解析到此处；上游 0.1.2 = ABI 8，含 issue #8/#9/#10/#11/#12）。
-version = "0.1.2"
+# `version.workspace = true` 解析到此处；上游 0.3.0 = 内核 ABI 10，含 issue #13
+# 无 TOC 章标题回填 / fuzz 五轮加固 / PDF 页面树防线）。
+version = "0.3.0"
 edition = "2021"
 # 与内核上游一致：MIT OR Apache-2.0（vendored 代码的许可）。
 license = "MIT OR Apache-2.0"
@@ -37,7 +38,7 @@ rrk-kernel = { path = "vendor/rrk-kernel" }
 encoding_rs = "0.8"      # 编码转换（Firefox 同源，纯 Rust）
 chardetng = "0.1"        # 编码检测（纯 Rust）
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] } # inflate（miniz_oxide 纯 Rust）
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] } # CBZ/PDF 图像
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp", "tiff"] } # CBZ/PDF 图像（tiff 随上游同步加入，rrk-image thumbnail 运行期解码）
 
 [lib]
 crate-type = ["cdylib", "staticlib"]

@@ -15,15 +15,18 @@
 // 三处刻意的本工程处理：
 //   · **10% 透明的水印不是「半透明内容层」**：它叠在**不透明**底色之上，`UI-04`
 //     约束的是容器 / 背景，不是前景笔画，故红线不破；
-//   · **自带裁切**：anx 的水印故意画出封面之外，本组件用 `ClipRRect` 兜住，
+//   · **自带裁切**：anx 的水印故意画出封面之外，本组件用 `ClipPath`
+//     （[MiSquircleClipper]，与书卡外框同一 Squircle 裁形）兜住，
 //     调用方不必再管；圆角由 [radius] 传入；
 //   · **底色画在子树内（`ColoredBox`），不用 `Ink`**：`Ink` 是墨迹特性、由更上层
-//     的 `Material` 绘制——会**逃逸本组件的 `ClipRRect`**（封面变方角），且位于
-//     外层 `DecoratedBox` 的**投影填充之下**被染暗（「太暗了」）。代价：`InkWell`
+//     的 `Material` 绘制——会**逃逸本组件的 `ClipPath`**（封面变方角），且位于
+//     外层投影画笔的**底下**被染暗（「太暗了」）。代价：`InkWell`
 //     水波纹不再压在封面之上、只在透明信息区可见（同 anx 的非墨迹层形态）。
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
+import 'mi_like_ui/mi_like_ui.dart' show MiSquircleClipper;
 
 /// 某本书的默认封面底色（anx `book_cover.dart:57-59`）。
 ///
@@ -129,8 +132,10 @@ class DefaultBookCover extends StatelessWidget {
     // 底色画在**子树内**（`ColoredBox`，不用 `Ink`）：理由见文件头注第 ③ 条
     // ——`Ink` 会被外层 `ClipRRect` 漏裁（方角）且被外框投影填充染色（变暗）。
     // 不依赖 `Material` 祖先，故书架书卡与详情页都可直接用。
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
+    return ClipPath(
+      // Squircle 裁形（与书卡外框 `kBookCoverRadius` 同半径同画法，
+      // 缩略图异步到位前后不跳变；水印故意探出封面的部分由此兜住）。
+      clipper: MiSquircleClipper(radius),
       child: ColoredBox(color: background, child: content),
     );
   }

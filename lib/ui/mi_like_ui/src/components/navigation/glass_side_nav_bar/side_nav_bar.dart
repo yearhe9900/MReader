@@ -10,6 +10,7 @@ import '../../../theme/transparency_tokens.dart';
 import '../../../theme/typography.dart';
 import '../../../utils/cell_grid.dart';
 import '../../../utils/filter_cache.dart';
+import '../../../utils/squircle.dart';
 import '../glass_nav_bar/glass_nav_bar.dart' show MiGlassNavFab, MiGlassNavItem;
 import '../glass_nav_bar/glass_nav_bar_metrics.dart';
 import 'side_nav_bar_metrics.dart';
@@ -306,8 +307,8 @@ class _MiGlassSideNavBarState extends State<MiGlassSideNavBar>
     const railW = MiGlassSideNavMetrics.railWidth;
 
     // 整条栏只糊一次：胶囊透镜与遮罩都画在这一层之上（同底部栏）。
-    Widget glass = ClipRRect(
-      borderRadius: BorderRadius.circular(MiGlassSideNavMetrics.railRadius),
+    Widget glass = ClipPath(
+      clipper: const MiSquircleClipper(MiGlassSideNavMetrics.railRadius),
       child: BackdropFilter(
         // σ 固定 → 复用缓存的 native filter
         filter: MiFilterCache.blur(MiTransparencyTokens.blurSigma),
@@ -431,10 +432,10 @@ class _MiGlassSideNavBarState extends State<MiGlassSideNavBar>
 
     // 浅色配方带投影（深色为空 → 不包额外层，像素零变化）。
     if (palette.elevationShadow.isNotEmpty) {
-      glass = DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(MiGlassSideNavMetrics.railRadius),
-          boxShadow: palette.elevationShadow,
+      glass = CustomPaint(
+        painter: MiSquircleShadowPainter(
+          radius: MiGlassSideNavMetrics.railRadius,
+          shadows: palette.elevationShadow,
         ),
         child: glass,
       );

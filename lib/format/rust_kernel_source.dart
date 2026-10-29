@@ -2,7 +2,7 @@
 //
 // ## 定位
 //
-// 解析全程走 vendored `rrk-*` 内核（`rust/vendor/`，上游 v0.1.1 / ABI v5，经 FRB 桥
+// 解析全程走 vendored `rrk-*` 内核（`rust/vendor/`，上游 v0.3.0 / 内核 ABI 10，经 FRB 桥
 // `lib/src/rust/api/kernel.dart`）：EPUB / TXT / MOBI-AZW3 的打开、分章、正文抽取、
 // 资源读取都在 Rust 侧完成；CBZ 页表 / 图片页资源同样走内核，但**页过滤、自然序与
 // 文件名元数据口径在宿主侧补齐**（与 `CbzSource` 逐条对齐，见 [buildCbzPageList] /

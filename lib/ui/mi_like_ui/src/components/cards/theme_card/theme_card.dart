@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../../theme/colors.dart';
-import '../../../theme/dimens.dart';
 import '../../../theme/theme_mode.dart';
 import '../../../theme/typography.dart';
+import '../../../utils/squircle.dart';
 import 'theme_card_metrics.dart';
 
 /// 小米主题商店风格的竖向预览卡片（深/浅色双模式）。
@@ -12,8 +12,8 @@ import 'theme_card_metrics.dart';
 /// [MiThemeCardMetrics]，标题样式见 [MiTypography.cardTitle]）：
 ///  * [preview] 按 [MiThemeCardMetrics.imageAspectRatio]（实测 259:472）
 ///    定比铺满图区 —— 宽随父级（放进 Expanded / SizedBox 等**有界**容器，
-///    两侧皆无界会抛 AspectRatio 约束错误），圆角取 [MiDimens.radiusLg]
-///    （外缘拟合 R=44px ≈ 19.6dp）；
+///    两侧皆无界会抛 AspectRatio 约束错误），圆角 [MiThemeCardMetrics.previewRadius]
+///    （12.9，实机修订值，见其注记）；
 ///  * 标题单行省略，相对图左缘内缩 [MiThemeCardMetrics.titleIndent]
 ///    （实测 19~20px，三张卡一致、非居中 —— 内缩后恰与区块标题同列
 ///    起排），与图间距 [MiThemeCardMetrics.titleTopGap]；
@@ -59,8 +59,9 @@ class MiThemeCard extends StatelessWidget {
         // 是任意内容，不能像纯色填充那样借 Decoration 自带圆角）。
         AspectRatio(
           aspectRatio: MiThemeCardMetrics.imageAspectRatio,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(MiDimens.radiusLg),
+          child: ClipPath(
+            clipper:
+                const MiSquircleClipper(MiThemeCardMetrics.previewRadius),
             child: preview,
           ),
         ),

@@ -169,11 +169,13 @@ EdgeInsets shelfGridPadding(
 /// 卡片整体矮 ~15%（392 宽三列：封面 209.2 → 172.2 高）。
 const double kBookCoverAspectRatio = 2 / 3;
 
-/// 封面圆角 = Mi 卡预览图圆角 [MiDimens.radiusLg]（外缘拟合 R≈19.6 → 20；
-/// anx 旧值 8）。书卡封面与「无封面」占位色块**共用同一个圆角**（同一处
-/// `ClipRRect`），故缩略图异步到位前后不会跳变；`DefaultBookCover` 的 `radius`
-/// 也由调用方传本常量（其组件默认值 8 是详情页等处的既有口径，与书架无关）。
-const double kBookCoverRadius = MiDimens.radiusLg;
+/// 封面圆角 = **12.9dp**（= [MiThemeCardMetrics.previewRadius]，主题卡预览
+/// 圆角实机修订值，上游 `561d64b`；旧值 20 = `MiDimens.radiusLg` 的圆弧拟合
+/// 外推，拍板「书卡定位就是 Mi 首页卡片，跟实测修订」2026-10-28）。画法为
+/// **Squircle 连续圆角**（`MiSquircleClipper`，上游 78588a8 全库批）——
+/// 书卡封面与「无封面」占位色块**共用同一个裁形**（同一处 `ClipPath` +
+/// [DefaultBookCover] 同名裁形），故缩略图异步到位前后不会跳变。
+const double kBookCoverRadius = MiThemeCardMetrics.previewRadius;
 
 /// 封面与信息区之间的间距 = Mi 卡「图底 → 标题行盒」实测 8
 /// （`MiThemeCardMetrics.titleTopGap`；anx 旧值 5）。

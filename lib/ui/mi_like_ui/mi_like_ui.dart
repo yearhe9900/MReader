@@ -63,3 +63,4 @@ export 'src/icons/nav_icons.dart';
 export 'src/utils/cell_grid.dart';
 export 'src/utils/glass_rim.dart';
 export 'src/utils/responsive.dart';
+export 'src/utils/squircle.dart';

@@ -14,8 +14,10 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-// `RenderDecoratedBox`：真·渲染对象断言用（material 不导出 rendering）。
-import 'package:flutter/rendering.dart';
+// `MiSquircleClipper` / `MiSquircleShadowPainter`：Squircle 批后圆角与投影
+// 分别读 clipper 与画笔（material 不导出 rendering，也不再有 DecoratedBox）。。
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart'
+    show MiSquircleClipper, MiSquircleShadowPainter;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/library/book_record.dart';
 import 'package:mreader/meta/cover_store.dart';
@@ -189,8 +191,8 @@ void main() {
       expect(kBookCoverToInfoGap, 8);
       // 信息区固定高 30 = 13.85（cardTitle）+ 2 + 13（作者行）≤ 30（见事实源推导）。
       expect(kBookInfoHeight, 30);
-      // 封面圆角 = Mi 圆角 token（`MiDimens.radiusLg`；anx 旧值 8）。
-      expect(kBookCoverRadius, 20);
+      // 封面圆角 = 主题卡预览圆角实机修订值（上游 561d64b：20 → 12.9）。
+      expect(kBookCoverRadius, 12.9);
       // 书名左内缩 = Mi 卡标题内缩（`MiThemeCardMetrics.titleIndent`；anx 旧值 2）。
       expect(kBookInfoIndent, 8.8);
       // 本项目自有值（Mi 与 anx 该处均无此物，见事实源注释）。
@@ -304,25 +306,47 @@ void main() {
           reason: '角标贴封面底，其下方还有信息区');
     });
 
-    testWidgets('封面圆角 20、投影 = anx 四参数（**浅色主题**；读渲染对象，不是读常量）', (
+    testWidgets('封面 Squircle 圆角 12.9、投影 = anx 四参数（**浅色主题**）', (
       WidgetTester tester,
     ) async {
       await _pumpGrid(tester, width: 392, bookCount: 1);
 
-      // 圆角与投影都在封面外框（`_buildCoverSurface` 的 `DecoratedBox`）上：
-      // `RenderDecoratedBox.decoration` 就是实际参与绘制的那份 decoration，
-      // 故这里断言的是渲染管线里的真值，不是回来引用常量。
-      final RenderDecoratedBox surface = tester.renderObject<RenderDecoratedBox>(
+      // 圆角在封面外框的裁形上（`_buildCoverSurface` 的 `ClipPath(MiSquircleClipper)`）：
+      // Squircle 批（上游 78588a8）后没有 DecoratedBox，读 clipper 就是绘制用的真值。
+      final ClipPath surface = tester.widget<ClipPath>(
         find.byKey(kBookCoverSurfaceKey),
       );
-      final BoxDecoration decoration = surface.decoration as BoxDecoration;
+      expect(surface.clipper, isA<MiSquircleClipper>());
       expect(
-        decoration.borderRadius,
-        BorderRadius.circular(20),
-        reason: '封面圆角须为 20（Mi 预览图圆角 `MiDimens.radiusLg`）',
+        (surface.clipper as MiSquircleClipper).radius,
+        12.9,
+        reason: '封面圆角须为 12.9（主题卡预览圆角实机修订，上游 561d64b）',
+      );
+
+      // 静止投影 = 垫底的 `MiSquircleShadowPainter`（ShapeDecoration 不带
+      // boxShadow，画笔垫底是上游统一做法）——断言的是画笔里的 [BoxShadow] 真值。
+      final Iterable<MiSquircleShadowPainter> painters = tester
+          .widgetList<CustomPaint>(
+            find.descendant(
+              of: find.byType(BookCard),
+              matching: find.byType(CustomPaint),
+            ),
+          )
+          .map((CustomPaint p) => p.painter)
+          .whereType<MiSquircleShadowPainter>();
+      final MiSquircleShadowPainter staticShadow = painters.firstWhere(
+        (MiSquircleShadowPainter p) =>
+            p.shadows.single.color == const Color(0x649E9E9E),
+        orElse: () =>
+            throw TestFailure('浅色静止投影画笔缺失（回潮 BoxDecoration 即红）'),
       );
       expect(
-        decoration.boxShadow,
+        staticShadow.radius,
+        12.9,
+        reason: '投影画笔半径 = 封面 Squircle 半径',
+      );
+      expect(
+        staticShadow.shadows,
         const <BoxShadow>[
           // 0x649E9E9E = `Colors.grey.withAlpha(100)`（0x64 = 100）。
           BoxShadow(
@@ -336,19 +360,18 @@ void main() {
             '（深色主题换色源，见下一条用例）',
       );
 
-      // 裁切用的 `ClipRRect` 必须用**同一个**圆角，否则投影会从裁切角落露出来。
-      // ⚠️ 断言的是**全部**下层 `ClipRRect`、不是「那一个」：无封面书卡的占位
-      // [DefaultBookCover] 自带一层同圆角裁切，外框下会有两层——逐层验收反而更强，
-      // 任一层圆角不一致即红。
-      final Iterable<ClipRRect> clips = tester.widgetList<ClipRRect>(
+      // 裁切必须**同一半径**的 squircle，否则外框与占位封面在角上错层。
+      // ⚠️ 断言的是**全部下层 `ClipPath`**：无封面书卡的 [DefaultBookCover] 自带
+      // 一层同半径裁切，外框下会有两层——逐层验收反而更强，任一层不一致即红。
+      final Iterable<ClipPath> clips = tester.widgetList<ClipPath>(
         find.descendant(
           of: find.byKey(kBookCoverSurfaceKey),
-          matching: find.byType(ClipRRect),
+          matching: find.byType(ClipPath),
         ),
       );
       expect(clips, isNotEmpty, reason: '封面外框内至少要有一层裁切框');
-      for (final ClipRRect clip in clips) {
-        expect(clip.borderRadius, BorderRadius.circular(20));
+      for (final ClipPath clip in clips) {
+        expect((clip.clipper as MiSquircleClipper).radius, 12.9);
       }
     });
 
@@ -364,11 +387,22 @@ void main() {
         theme: AppTheme.dark(),
       );
 
-      final RenderDecoratedBox surface = tester.renderObject<RenderDecoratedBox>(
-        find.byKey(kBookCoverSurfaceKey),
+      final Iterable<MiSquircleShadowPainter> painters = tester
+          .widgetList<CustomPaint>(
+            find.descendant(
+              of: find.byType(BookCard),
+              matching: find.byType(CustomPaint),
+            ),
+          )
+          .map((CustomPaint p) => p.painter)
+          .whereType<MiSquircleShadowPainter>();
+      final MiSquircleShadowPainter staticShadow = painters.firstWhere(
+        (MiSquircleShadowPainter p) =>
+            p.shadows.single.color == const Color(0x64000000),
+        orElse: () =>
+            throw TestFailure('深色静止投影画笔缺失（回潮 BoxDecoration 即红）'),
       );
-      final BoxShadow shadow =
-          (surface.decoration as BoxDecoration).boxShadow!.single;
+      final BoxShadow shadow = staticShadow.shadows.single;
 
       // 色源 = `colorScheme.shadow`（M3 下恒为不透明黑）；透明度与几何照抄 anx
       // 不动 —— `0x64000000` 的 0x64 = 100 = anx 的 `withAlpha(100)`。
@@ -389,10 +423,7 @@ void main() {
         reason: '固定灰在深色背景上比背景亮 → 一圈浅色描边（负责人反馈「太强烈」）',
       );
       // 圆角与浅色一致（换的是色源，不是几何）。
-      expect(
-        (surface.decoration as BoxDecoration).borderRadius,
-        BorderRadius.circular(20),
-      );
+      expect(staticShadow.radius, 12.9);
     });
   });
 }

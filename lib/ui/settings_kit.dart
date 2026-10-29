@@ -27,7 +27,13 @@
 import 'package:flutter/material.dart';
 
 import 'mi_like_ui/mi_like_ui.dart'
-    show ForwardChevronIconPainter, MiDialog, MiDialogItem, MiDialogLayout, MiThemeMode;
+    show
+        ForwardChevronIconPainter,
+        MiDialog,
+        MiDialogItem,
+        MiDialogLayout,
+        MiSquircleBorder,
+        MiThemeMode;
 
 /// 行图标的装饰色板（**上游「我的」页取色**；**无语义**，勿当状态色用）。
 abstract final class SettingsAccents {
@@ -126,7 +132,10 @@ class SettingsGroupCard extends StatelessWidget {
         Material(
           // 卡片填充随明暗（上游 #FFFFFF / #1E1E1E，见 [SettingsKitMetrics.cardFor]）。
           color: SettingsKitMetrics.cardFor(theme.brightness),
-          borderRadius: BorderRadius.circular(SettingsKitMetrics.cardRadius),
+          // Squircle 连续圆角（上游全库批 `78588a8`）：`Material.shape` 走
+          // squircle，裁切（Clip.antiAlias）与外形同源，ListTile/Switch 等
+          // 仍拿到 Material 祖先。半径不变（分组卡仍 20）。
+          shape: const MiSquircleBorder(SettingsKitMetrics.cardRadius),
           clipBehavior: Clip.antiAlias,
           child: Column(
             mainAxisSize: MainAxisSize.min,
