@@ -8,8 +8,11 @@
 
 ### 变更
 
+- 开书转场提速与防掉帧：纸张滑入 460 → 320ms（返回 320 → 240ms），滑入动画期暂停后台排版与章节预热（打开图书过程不再掉帧）
+
 - 发布 v0.0.1 安卓 Release（GitHub Release 首个 APK：arm64-v8a / armeabi-v7a / x86_64，debug 签名）`69cace8`
 - 图书解析内核同步上游 `rust_reader_kernel@d0684b2`：章级/页级缓存持久化——open 索引（EPUB entries/toc_raw、MOBI spans/章表、CBZ 页表/尺寸表、PDF 页面表/章表、TXT 章表）按内容 key 落盘，重开命中免重建（ABI 10 不变）
+- 图书解析内核同步上游 `rust_reader_kernel@fa4b4cf`：单章搜索的完成语义修复（issue #14：真正扫完为 true、命中被上限截断为 false）——结果完整性从此可判，桥面与契约测试同步钉住
 - 解析内核 FRB 桥补齐 ABI 8/9/10 新出口并接线内核书源能力面：章标题块轻量出口、单章搜索、进度/定位互转、UTF-16 偏移映射、选区取文、图片缩略图（能力就绪，产品接线随需求启用）
 
 ## 2026-10-28

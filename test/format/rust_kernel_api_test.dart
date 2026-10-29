@@ -174,6 +174,7 @@ void main() {
       );
       expect(page.scanned, 1, reason: '单章同步扫完');
       expect(page.total, 1);
+      expect(page.done, isTrue, reason: 'issue #14 语义：未截断即扫完');
       expect(page.hits, hasLength(2)); // 「正文一。」「正文二😀。」
       final rk.RkSearchHit first = page.hits.first;
       final String hit = await rk.kernelSliceText(
@@ -194,6 +195,7 @@ void main() {
         maxHits: 1,
       );
       expect(one.hits, hasLength(1));
+      expect(one.done, isFalse, reason: 'issue #14 语义：截断 = 结果不完整');
 
       final rk.RkSearchPage none = await rk.kernelSearchChapter(
         handle: h,
@@ -204,6 +206,7 @@ void main() {
         maxHits: 0,
       );
       expect(none.hits, isEmpty);
+      expect(none.done, isTrue, reason: 'issue #14 语义：无命中同样扫完');
       await rk.kernelClose(handle: h);
     });
 

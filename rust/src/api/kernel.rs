@@ -172,15 +172,15 @@ pub struct RkSearchHit {
     pub snippet_offset: u32,
 }
 
-/// 单章搜索结果页（同步扫完即全量；字段与全书会话批次同形）。
+/// 单章搜索结果页（字段与全书会话批次同形）。
 pub struct RkSearchPage {
     pub hits: Vec<RkSearchHit>,
     /// 已扫完的章数（单章搜索恒 ≤ 1）。
     pub scanned: u32,
     /// 全书章数。
     pub total: u32,
-    /// 是否已扫完（拉模式批次结构同形字段）。单章搜索是一次性同步调用，
-    /// 结果即本批全量（`max_hits` 截断归上限语义），此字段不作判据。
+    /// 是否已扫完（issue #14 语义）：真正扫完为 `true`（含无命中）；命中被
+    /// `max_hits` 截断时为 `false`（结果不完整，可增大上限重调）。
     pub done: bool,
 }
 
