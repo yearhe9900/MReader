@@ -24,8 +24,8 @@
 // `NoSplash`）：ink 特性画在子树**之下**，而卡片上只有「信息区」与「封面圆角缺口」
 // 是透明的 ⇒ 任何墨迹都只会以「文字与圆角被糊一层灰」的形态露出。见 §2.56。
 //
-// 打开准备中（[BookCard.loading]）：**封面区**蒙层 + 转圈，让用户看得见「在响应」；
-// 蒙层只盖封面、随封面圆角裁切、**不盖信息区**（书名/作者/进度保持可读）。见 §2.55。
+// 打开准备中的封面 loading 覆盖层已随「点击即开书」移除（§2.55 封存）：
+// 点卡后书立即以骨架屏进阅读页（`ReaderPage.sourceFuture`），书架侧无准备期。
 //
 // 长按抬起反馈：长按成立即**放大 1.05 + 浮起阴影**（数值出处见 [kBookLiftScale]），
 // 长按弹框（书架 `MiDialog`）关闭后复位；与 anx 的唯一差别是**不跟手**——anx 的跟手来自拖拽反馈
@@ -147,7 +147,6 @@ class BookCard extends StatefulWidget {
     required this.coverStore,
     required this.onTap,
     this.onLongPress,
-    this.loading = false,
   });
 
   /// 书目记录。
@@ -165,10 +164,6 @@ class BookCard extends StatefulWidget {
   /// 即完成、不等选定动作走完，否则用户点「继续阅读」后卡片会一直悬着。
   /// 为 `null` 时**既不响应长按也不抬起**。
   final Future<void> Function()? onLongPress;
-
-  /// 「打开准备中」：在**封面区**显示蒙层 + 转圈（只盖封面、随封面圆角裁切，
-  /// **不盖信息区**，书名/作者/进度照常可读）。
-  final bool loading;
 
   @override
   State<BookCard> createState() => _BookCardState();
@@ -339,15 +334,9 @@ class _BookCardState extends State<BookCard> {
                 bottom: kBookFormatBadgeInset,
                 child: _FormatTag(format: widget.record.format),
               ),
-              // 打开准备中：**只蒙封面**（见类头注「打开准备中」与 [BookCard.loading]）。
-              if (widget.loading)
-                ColoredBox(
-                  key: const ValueKey<String>('book-opening-overlay'),
-                  color: theme.colorScheme.surface.withValues(alpha: 0.6),
-                  child: const Center(
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
+              // 「打开准备中」的封面 loading 覆盖层已随「点击即开书」移除：
+              // 点卡后书立即以骨架屏进阅读页（`ReaderPage.sourceFuture`），
+              // 书架侧不再有准备期。
             ],
           ),
         ),

@@ -138,7 +138,8 @@ const Duration kReprimeBurstBudget = Duration(milliseconds: 48);
 class ReaderPage extends StatefulWidget {
   const ReaderPage({
     super.key,
-    required this.source,
+    this.source,
+    this.sourceFuture,
     required this.record,
     required this.progressStore,
     required this.repository,
@@ -156,10 +157,19 @@ class ReaderPage extends StatefulWidget {
     this.syncTrigger,
     this.openTrace,
     this.initialJump,
-  });
+  }) : assert(source != null || sourceFuture != null,
+            'ReaderPage 必须拿到书源：直供 source 或延迟 sourceFuture 二选一');
 
   /// 书籍内容来源（`BookSource` 抽象，EPUB / TXT 通用）。由本页持有，dispose 时释放。
-  final BookSource source;
+  ///
+  /// 与 [sourceFuture] **二选一**：已就绪的书源（深链 / 详情页 / 生词本路径）
+  /// 直供；书架「点击即开书」只传 [sourceFuture]、此处为 `null`。
+  final BookSource? source;
+
+  /// 延迟书源（书架「点击即开书」管道）：push 阅读页**不等**读字节 / 建源，
+  /// 准备过程在本页骨架屏（[_OpenSkeleton]）期间进行，就绪后并入既有开书链路
+  /// （见 [_open]）。`null` = [source] 直供（既有路径，行为不变）。
+  final Future<BookSource>? sourceFuture;
 
   /// 本书在库记录（标题 / bookId）。
   final BookRecord record;
@@ -242,6 +252,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 增量加载驱动器（首帧批次 + 后台补齐）。
   ChapterAutoLoader? _loader;
+
+  /// 书源就绪 Future（构造期即定）：[ReaderPage.sourceFuture]（骨架屏期间准备），
+  /// 或直供 [ReaderPage.source] 包成的立即 Future。
+  late final Future<BookSource> _sourceReady;
+
+  /// 骨架屏期间解析到手的书源（[_open] 写入；dispose 时归还仓库复用池）。
+  BookSource? _resolvedSource;
+
+  /// 已就绪的书源（直供或延迟解析后）。所有消费点都在 `_chapters != null` 之后，
+  /// 即书源必已到手（骨架屏只盖住「未到手」窗口）。
+  BookSource get _source => _resolvedSource ?? widget.source!;
 
   /// 首帧批次已就绪（可以进入连续滚动列表）。
   bool _ready = false;
@@ -564,6 +585,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // 链路点「页面构造」：路由已入栈、本页 State 建立。此点到 `ready` 之间是
     // 纯数据解析段，与渲染段（ready→firstFrame）分开记，避免把两者混为一谈。
     widget.openTrace?.mark('routeInit');
+    // 书源就绪口径统一成 Future：直供路径一个微任务即到；延迟路径 = 骨架屏
+    // 期间的读字节 / 建源（书架「点击即开书」，见 [ReaderPage.sourceFuture]）。
+    _sourceReady =
+        widget.sourceFuture ?? Future<BookSource>.value(widget.source);
     WidgetsBinding.instance.addObserver(this);
     if (widget.statsService != null) {
       _tracker = SessionTracker(bookId: widget.record.bookId);
@@ -611,8 +636,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _imageCache.dispose();
     _controller?.dispose();
     // 书源不直接销毁：交回仓库**复用池**（§2.108）——同书再开零读盘零解析。
-    // 池内按字节上限淘汰即 dispose，此路径恒不泄漏。
-    unawaited(widget.repository.recycleBookSource(widget.record, widget.source));
+    // 池内按字节上限淘汰即 dispose，此路径恒不泄漏。骨架屏期间仍在准备的
+    // 延迟书源：到手即还；准备失败（无源可还）静默——错误已由 [_open] 落到错误态。
+    unawaited(_sourceReady.then(
+      (BookSource source) =>
+          widget.repository.recycleBookSource(widget.record, source),
+      onError: (Object _) {},
+    ));
     super.dispose();
   }
 
@@ -670,6 +700,27 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   Future<void> _open() async {
     final Stopwatch openClock = Stopwatch()..start();
     try {
+      // ## 「点击即开书」（书架延迟书源管道）：骨架屏首帧上屏即放行纸张滑入——
+      // 读字节 / 建源 / 章节表的等待全程发生在滑入后的阅读页里，而不是把转场
+      // 按在书架侧等就绪（那样点击后书架上毫无反馈地白等）。放行走帧回调
+      // （与 [_signalOpenReady] 同纪律：此刻帧还没绘制）。
+      //
+      // **只在延迟路径生效**：直供书源（深链 / 详情页 / 生词本）保留「精确落位
+      // 收敛才放行」的既有门闸——那条路径本来就没有「点击后无反馈」的问题。
+      if (widget.sourceFuture != null) {
+        WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+          // 首帧时正文恰已就绪（快路径）→ 跳过：走下面的正常放行（带落位门闸）。
+          if (!mounted || _disposed || _chapters != null) return;
+          _releaseOpenGate();
+        });
+        WidgetsBinding.instance.scheduleFrame();
+      }
+      // 书源就绪（直供路径一个微任务即到）；失败落到错误态（骨架屏换可读提示）。
+      final PerfWatch sourceWatch = PerfLog.watch('reader.source');
+      final BookSource source = await _sourceReady;
+      _resolvedSource = source;
+      sourceWatch.done('impl=${source.implId}');
+      if (!mounted) return;
       // ## 开书关键路径：三份 store 与书源解析**并发起跑**（§2.107），只 await
       // 首帧要用的（`progress` 定恢复位置、`prefs` 定排版）；`bookmarks` 首帧用不到，
       // 后到再 setState 补进（读取失败降级为空表、不拖垮开书）。
@@ -685,7 +736,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 元数据（含封面 inflate，§2.107）**不在首帧关键路径上**：首帧只等章节表，
       // `load()` 延后到 [_loadMetaAfterReady]。
       final PerfWatch chaptersWatch = PerfLog.watch('reader.chapters');
-      final List<Chapter> chapters = await widget.source.chapters();
+      final List<Chapter> chapters = await source.chapters();
       chaptersWatch.done('count=${chapters.length}');
       // `reader.stores` 量的是关键路径上的**净等待**（取值趋 0 = 已不在关键路径上）。
       final ReadingProgress? progress = await progressF;
@@ -817,8 +868,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     unawaited(() async {
       try {
         final PerfWatch watch = PerfLog.watch('reader.load');
-        final BookMeta meta = await widget.source.load();
-        watch.done('deferred impl=${widget.source.implId}');
+        final BookMeta meta = await _source.load();
+        watch.done('deferred impl=${_source.implId}');
         if (!mounted || _disposed) return;
         setState(() => _meta = meta);
       } catch (_) {
@@ -1009,7 +1060,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (_disposed) return ChapterContent.paragraphs(const <String>[]);
     final PerfWatch watch = PerfLog.watch('reader.content');
     try {
-      final ChapterContent content = await widget.source.content(index);
+      final ChapterContent content = await _source.content(index);
       watch.done('index=$index paras=${content.paragraphList.length}');
       return content;
     } catch (error) {
@@ -1028,7 +1079,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       return cached;
     }
     if (_disposed) return null;
-    final Uint8List? bytes = await widget.source.readResource(href);
+    final Uint8List? bytes = await _source.readResource(href);
     if (bytes != null && !_disposed) {
       _imageCache.put(href, bytes);
       _noteImageSize(href, bytes);
@@ -3516,7 +3567,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// `null`（源不支持）保持等权；dispose / 竞态静默放弃，不写状态。
   Future<void> _loadChapterWeights() async {
     try {
-      final List<int>? weights = await widget.source.chapterWeightEstimates();
+      final List<int>? weights = await _source.chapterWeightEstimates();
       if (!mounted || _disposed || weights == null) return;
       final List<Chapter>? chapters = _chapters;
       if (chapters == null || weights.length != chapters.length) return;
@@ -3678,8 +3729,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// `searchSpec`（EPUB / TXT）进后台 isolate；句柄源（PDF）本 isolate 流式。
   SearchSession _startSearch(String query) => SearchSession.start(
         query: query,
-        spec: widget.source.searchSpec,
-        localSource: widget.source,
+        spec: _source.searchSpec,
+        localSource: _source,
       );
 
   /// 跳到搜索命中位置（`CNT-06` 验收②）：章内字符偏移 → 段落下标换算
@@ -5058,7 +5109,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
     final List<Chapter>? chapters = _chapters;
     if (chapters == null) {
-      return const Center(child: CircularProgressIndicator());
+      // 书源 / 章节表未就绪（书架「点击即开书」的骨架屏阶段）：铺一张
+      // 「像这一页书」的占位版面，纸张滑入时上面就是它（见 [_OpenSkeleton]）。
+      return _OpenSkeleton(
+        theme: theme,
+        systemPadding: systemPadding,
+        pageMarginH: _settings.pageMargin.horizontal,
+      );
     }
     if (chapters.isEmpty) {
       // 解析成功但没有任何章节：必须显式告知，否则就是一片空白。
@@ -5076,8 +5133,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       );
     }
     if (!_ready) {
-      // 首帧批次尚未就绪（只等目标章，很快）。
-      return const Center(child: CircularProgressIndicator());
+      // 首帧批次尚未就绪（只等目标章，很快）：同骨架屏，观感与上一阶段连续。
+      return _OpenSkeleton(
+        theme: theme,
+        systemPadding: systemPadding,
+        pageMarginH: _settings.pageMargin.horizontal,
+      );
     }
 
     // `TYP-07`：字体族（系统默认 / 衬线 / 无衬线）+ 跨平台回退链（中文无豆腐块）；
@@ -5561,4 +5622,100 @@ class _ImageZoomPage extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 开书骨架屏：书源 / 章节表未就绪期间铺一张「像这一页书」的占位版面。
+///
+/// 「点击即开书」（书架延迟书源管道，见 [ReaderPage.sourceFuture]）的视觉主体：
+/// 纸张（[ReaderOpenRoute]）滑入时上面就是它——用户点下即见书页成型，而不是
+/// 在书架上对着转圈等待。极轻的呼吸动画（0.55…1.0，1.2s 往返）示意「正在加载」，
+/// 不抢戏。
+class _OpenSkeleton extends StatefulWidget {
+  const _OpenSkeleton({
+    required this.theme,
+    required this.systemPadding,
+    required this.pageMarginH,
+  });
+
+  final ThemeData theme;
+
+  /// 系统内边距（与正文同一来源：Scaffold 外层 MediaQuery，[ReaderPage._buildBody]）。
+  final EdgeInsets systemPadding;
+
+  /// 页边距（与正文同一来源：`_settings.pageMargin.horizontal`）。
+  final double pageMarginH;
+
+  @override
+  State<_OpenSkeleton> createState() => _OpenSkeletonState();
+}
+
+class _OpenSkeletonState extends State<_OpenSkeleton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat(reverse: true);
+
+  /// 各行相对宽度：模拟真实版面的参差行宽。
+  static const List<double> _kLineWidths =
+      <double>[0.98, 0.94, 0.99, 0.9, 0.97, 1.0, 0.86, 0.96];
+
+  /// 骨架行几何（26 = 14 行高 + 12 行距）：行数按视口高度算，**永不溢出**
+  /// （溢出一条黄黑条就够破坏「点击即开书」的观感，测试也判红）。
+  static const double _kBarHeight = 14;
+  static const double _kBarPitch = 26;
+  static const double _kTitleBlock = 48; // 标题条 + 与正文的间隔
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bar =
+        widget.theme.colorScheme.onSurface.withValues(alpha: 0.08);
+    return Padding(
+      key: const ValueKey<String>('reader-skeleton'),
+      padding: EdgeInsets.only(
+        top: widget.systemPadding.top + 20,
+        bottom: widget.systemPadding.bottom + _kProgressIndicatorReserve,
+        left: widget.pageMarginH,
+        right: widget.pageMarginH,
+      ),
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final int lines = math.max(
+              4, ((constraints.maxHeight - _kTitleBlock) / _kBarPitch).floor());
+          return AnimatedBuilder(
+            animation: _pulse,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                _bar(bar, 0.42, height: 20), // 章标题占位：短粗条
+                const SizedBox(height: 24),
+                for (int i = 0; i < lines; i++)
+                  _bar(bar, _kLineWidths[i % _kLineWidths.length]),
+              ],
+            ),
+            builder: (BuildContext context, Widget? child) =>
+                Opacity(opacity: 0.55 + 0.45 * _pulse.value, child: child),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _bar(Color color, double widthFactor, {double height = _kBarHeight}) =>
+      FractionallySizedBox(
+        widthFactor: widthFactor,
+        child: Container(
+          height: height,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(height / 2),
+          ),
+        ),
+      );
 }

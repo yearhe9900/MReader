@@ -351,7 +351,6 @@ void main() {
             child: ShelfGrid(
               books: <BookRecord>[book],
               coverStore: _FakeCoverStore(),
-              openingBookId: null,
               onOpenBook: (_) {},
               onBookActions: (_) async {},
             ),

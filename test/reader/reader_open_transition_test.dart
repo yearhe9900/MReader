@@ -22,10 +22,12 @@
 // 测量纪律：`paperLeft` 量的是 `localToGlobal` 结果（会叠加 `Transform` 的位移），
 // 即「屏幕上纸在哪」，而不是读某个 widget 参数——后者会把「参数对了但渲染没应用」
 // 的缺陷放过去（§2.71 探针自建的教训）。
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mreader/format/book_source.dart';
 import 'package:mreader/reader/pagination/paged_scroller.dart';
 import 'package:mreader/reader/pagination/page_paginator.dart';
 import 'package:mreader/reader/pagination/pagination_scheduler.dart';
@@ -508,6 +510,69 @@ void main() {
       expect(tester.getTopLeft(find.byType(ReaderPage)).dx,
           moreOrLessEquals(0, epsilon: 0.01),
           reason: '放行之后纸张应正常落位');
+
+      await closeBook(tester);
+    });
+
+    testWidgets('延迟书源（点击即开书）：骨架屏首帧即放行，书源到手后换真正文',
+        (WidgetTester tester) async {
+      // 书架「点击即开书」管道：push 时不等建源（`sourceFuture` 挂闸），阅读页
+      // 先铺骨架屏并首帧放行纸张滑入；闸门释放后才进既有开书链路、换真正文。
+      final ProgressStore progressStore = ProgressStore(paths);
+      final Completer<BookSource> gate = Completer<BookSource>();
+      await tester.pumpWidget(_realHost(() => ReaderPage(
+            sourceFuture: gate.future,
+            record: fakeRecord(),
+            progressStore: progressStore,
+            repository: fakeRepository(paths),
+          )));
+      await tester.tap(find.byKey(_kOpenKey));
+      // 推几帧（不给 runAsync）：书源闸未放，正文区应是骨架屏。
+      await settle(tester, rounds: 4);
+      expect(
+        find.byKey(const ValueKey<String>('reader-skeleton')),
+        findsOneWidget,
+        reason: '书源未就绪时正文区应铺骨架屏（点击即开书的视觉主体）',
+      );
+      // 骨架首帧即放行：转场不该按到 3s 兜底，此刻已不在等待。
+      expect(ReaderOpenTransition.isActive, isFalse,
+          reason: '骨架屏首帧上屏即应放行纸张滑入（不再等正文就绪）');
+
+      // 放开书源闸 → 既有开书链路接管 → 骨架屏换真正文。
+      gate.complete(FakeBookSource());
+      final bool shown = await pumpUntil(
+          tester, () => find.textContaining('第1章正文').evaluate().isNotEmpty);
+      expect(shown, isTrue, reason: '书源到手后应照常渲染正文');
+      expect(find.byKey(const ValueKey<String>('reader-skeleton')),
+          findsNothing,
+          reason: '正文就绪后骨架屏必须退场');
+
+      await closeBook(tester);
+    });
+
+    testWidgets('延迟书源失败：骨架屏换错误提示（而非白屏 / 转圈）',
+        (WidgetTester tester) async {
+      final ProgressStore progressStore = ProgressStore(paths);
+      final Completer<BookSource> gate = Completer<BookSource>();
+      await tester.pumpWidget(_realHost(() => ReaderPage(
+            sourceFuture: gate.future,
+            record: fakeRecord(),
+            progressStore: progressStore,
+            repository: fakeRepository(paths),
+          )));
+      await tester.tap(find.byKey(_kOpenKey));
+      await settle(tester, rounds: 4);
+      expect(find.byKey(const ValueKey<String>('reader-skeleton')),
+          findsOneWidget);
+
+      gate.completeError(const MReaderFormatException(FormatErrorCode.fileMissing));
+      final bool errored = await pumpUntil(tester,
+          () => find.textContaining('文件已丢失').evaluate().isNotEmpty);
+      expect(errored, isTrue,
+          reason: '准备失败应落到阅读页错误态（用户可见中文提示）');
+      expect(find.byKey(const ValueKey<String>('reader-skeleton')),
+          findsNothing,
+          reason: '错误态不得残留骨架屏');
 
       await closeBook(tester);
     });

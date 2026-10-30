@@ -11,8 +11,9 @@
 //   · 点击书卡 = **直接进阅读页**；长按「书籍详情」是详情页**唯一**入口（`META-08`）；
 //     详情页「继续阅读」经**注入的** `_openBook` 开书（**不复制**开书管道），pop 后
 //     刷新列表（编辑 / 移出 / 分组 / 进度靠这次刷新同步）；
-//   · 开书守卫 `_opening` **只覆盖 push 前的准备阶段**、路由入栈即释放——覆盖整个
-//     会话会让关书后首点被静默吞掉；准备期被点卡片显示 loading。
+//   · 「点击即开书」：点卡**立即** push 阅读页（骨架屏先上屏），读字节 / 建源的
+//     准备改在阅读页骨架屏期间进行（[ReaderPage.sourceFuture]）；开书守卫
+//     `_opening` 覆盖 push → 关书（防连点叠页，关书即释放）。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 拍板：筛选项由「阅读状态」改为「分组」、移除拖拽归类
@@ -159,13 +160,9 @@ class ShelfPageState extends State<ShelfPage> {
   bool _importing = false;
   List<String> _importErrors = <String>[];
 
-  /// 防重复开书：**只覆盖 push 前的准备阶段**（readBookBytes + openBook），路由一
-  /// 入栈立即释放——阅读会话期间绝不占用（否则关书后首点被静默吞掉，表现为
-  /// 「首点无响应、必须再点一次」）。
+  /// 防重复开书：覆盖 **push → 关书**（`route.popped` 即释放）——防连点叠两个
+  /// 阅读页；关书即释放，之后首点不被吞。
   bool _opening = false;
-
-  /// 正在准备打开的书（bookId）：对应卡片显示 loading 覆盖层；`null` = 无。
-  String? _openingBookId;
 
   /// 网格滚动控制器：位移换算成头部零件的内缘亮边进度（见 [_headerRim]）。
   final ScrollController _gridScrollController = ScrollController();
@@ -197,7 +194,6 @@ class ShelfPageState extends State<ShelfPage> {
           books: _books,
           coverStore: widget.coverStore,
           themeMode: mode,
-          openingBookId: _openingBookId,
           onOpenBook: (BookRecord record) {
             // 关搜索页再开书：阅读页压在书架之上，返回时不该回到搜索页。
             //
@@ -604,17 +600,18 @@ class ShelfPageState extends State<ShelfPage> {
     if (mounted) unawaited(_loadBooks());
   }
 
-  /// 打开一本书：准备（读字节 + 建源）→ push 阅读页。
+  /// 打开一本书：**立即** push 阅读页（骨架屏先上屏），读字节 / 建源的准备改在
+  /// 阅读页骨架屏期间进行（[ReaderPage.sourceFuture]）——点下即见纸张滑入，
+  /// 不再在书卡上转圈等准备（「点击即开书」）。
   ///
-  /// 守卫 [_opening] **只覆盖 push 前的准备阶段**（防准备期连点重复 push），
-  /// 路由一入栈立即释放——阅读会话期间绝不占用，否则关书后首点被静默吞掉；
-  /// 准备期被点的卡片显示 loading 覆盖层（[BookCard.loading]）。
+  /// 守卫 [_opening] 覆盖 **push → 关书**（`route.popped` 即释放）：防连点叠两个
+  /// 阅读页；关书即释放，之后首点不被吞。
   /// [onPushed]：阅读页路由一入栈即回调（供调用方安排「覆盖后移除下层路由」）。
   Future<void> _openBook(
     BookRecord record, {
     void Function(PageRoute<void> route)? onPushed,
   }) async {
-    if (_opening) return; // 准备期防双击重复开书
+    if (_opening) return; // 防连点重复开书（覆盖到关书为止）
     _opening = true;
     // 「用户按下书卡」是整条链路的计时原点——必须**先于任何 await**打点，
     // 否则读字节 / 嗅探的耗时会算不进「点下→看到书」的总账里。
@@ -622,118 +619,106 @@ class ShelfPageState extends State<ShelfPage> {
       bookId: record.bookId,
       title: record.title,
     );
-    setState(() => _openingBookId = record.bookId); // 该卡显示 loading 覆盖层
-    // 已就绪待交接的书源。**所有权只有两个合法去向**：交给 `ReaderPage`，或在
-    // 本方法内归还仓库（`recycleBookSource` 会按字节上限决定驻留/销毁）；早退、
-    // 异常、`!mounted` 都必须走后者，否则整本字节泄漏。
-    BookSource? pending;
+    // 准备流水线（读字节 + 建源）即刻起跑，但**不等它**：push 与骨架屏先行，
+    // 书源所有权随 Future 交给阅读页（它 dispose 时归还仓库复用池）。
+    // `ignore()`：push 到阅读页首帧之间若流水线先报错，错误由阅读页 `_open`
+    // 的 catch 接住落到错误态；此处只防「暂无监听器」的 unhandled async error。
+    final Future<BookSource> sourceFuture = _prepareSource(record, trace);
+    sourceFuture.ignore();
+    // 开书转场：用 [ReaderOpenRoute] 替掉裸 [MaterialPageRoute]——阅读页作为
+    // **一整张纸从右侧滑入**铺满，书架静止在后被压暗（320ms / easeOutCubic /
+    // 70dp 圆角）。延迟路径下骨架屏首帧即放行（见 `ReaderPage._open`），
+    // 用户点下即见纸张推进，而非在书架上等待。
+    final ReaderOpenRoute route = ReaderOpenRoute(
+      // 退场起步即释放守卫：纸张滑出的 240ms 里书架已可点，守卫晚放到
+      // `popped`（反向动画落定）会吞掉关书后的首击。
+      onPopStarted: () => _opening = false,
+      builder: (_) => ReaderPage(
+        sourceFuture: sourceFuture,
+        record: record,
+        progressStore: widget.progressStore,
+        repository: widget.repository,
+        statsService: widget.statsService,
+        aiStore: widget.aiStore,
+        aiClient: widget.aiClient,
+        vocabStore: widget.vocabStore,
+        summaryCache: widget.summaryCache,
+        ragStore: widget.ragStore,
+        ttsSettings: widget.ttsSettings,
+        onlineTts: widget.onlineTts,
+        bookmarkStore: widget.bookmarkStore,
+        readingPrefsStore: widget.readingPrefsStore,
+        syncTrigger: widget.syncTrigger,
+        openTrace: trace,
+      ),
+    );
     try {
-      final PerfWatch readWatch = PerfLog.watch('open.readBytes');
-      // ## 先查**复用池**（§2.108）：命中就完全跳过「读字节 + 建源」。
-      //
-      // 池里有 ① 导入即入池的那份、② 上次关书还回来的那份，都自带原始字节 +
-      // 已解析结构 + 章节表缓存 ⇒ 这一步成本只剩一次 `stat`（判据校验）。判据与
-      // 磁盘缓存同口径（`bookId + mtime + size`）：文件被替换过 → 池条目自动作废
-      // 并销毁、走下面的冷路径，绝不会让旧字节冒充新文件。
-      final PerfWatch statsWatch = PerfLog.watch('open.stat');
-      final BookInstanceKey? cacheKey =
-          await widget.repository.bookInstanceKey(record);
-      statsWatch.done('hit=${cacheKey == null ? 0 : 1}');
-
-      final BookSource? pooled =
-          widget.repository.takePooledSource(record, cacheKey);
-      if (pooled != null) {
-        pending = pooled;
-        trace.step('poolHit', statsWatch.elapsedMs,
-            'impl=${pooled.implId} sizeKB=${(cacheKey?.size ?? 0) ~/ 1024}');
-        PerfLog.step('open.pool', statsWatch.elapsedMs,
-            'hit=1 impl=${pooled.implId}');
-      } else {
-        final Uint8List? bytes = await widget.repository.readBookBytes(record);
-        readWatch.done(
-            'book=${record.title} sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
-        trace.step('readBytes', readWatch.elapsedMs,
-            'sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
-        if (bytes == null || bytes.isEmpty) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('文件已丢失：${record.fileName}')),
-            );
-          }
-          return;
-        }
-
-        final PerfWatch sniffWatch = PerfLog.watch('open.sniff');
-        pending = await openBook(
-          fileName: record.fileName,
-          bytes: bytes,
-        );
-        sniffWatch.done('impl=${pending.implId}');
-        trace.step('sniff', sniffWatch.elapsedMs, 'impl=${pending.implId}');
-        PerfLog.step('open.pool', 0, 'hit=0 impl=${pending.implId}');
-      }
-      // 不在导航前 eager 解析：全量 load() 在主 isolate 同步执行会冻结 UI，
-      // 导致首击「无响应」、用户补点第二次（PERF）。解析与 loading 交给
-      // ReaderPage._open() 承担（其自带 spinner + 错误态，RD-05 仍满足）。
-
-      if (!mounted) return;
-      final BookSource source = pending;
-      // 开书转场：用 [ReaderOpenRoute] 替掉裸 [MaterialPageRoute]——阅读页作为
-      // **一整张纸从右侧滑入**铺满，书架静止在后被压暗（320ms / easeOutCubic /
-      // 70dp 圆角）。
-      //
-      // 动因（实测见 §2.69 附一~附七）：点书卡到正文上屏的等待里，首帧框架任务
-      // 插队占大头（探针已证**不是**解析）。这段等待属引擎侧首触（字体 / 图片
-      // 解码器 / Skia 管线），**无法消除**，但可以被滑入动作盖住——用户点下即见
-      // 纸张推进，而非白屏。
-      final ReaderOpenRoute route = ReaderOpenRoute(
-        builder: (_) => ReaderPage(
-          source: source,
-          record: record,
-          progressStore: widget.progressStore,
-          repository: widget.repository,
-          statsService: widget.statsService,
-          aiStore: widget.aiStore,
-          aiClient: widget.aiClient,
-          vocabStore: widget.vocabStore,
-          summaryCache: widget.summaryCache,
-          ragStore: widget.ragStore,
-          ttsSettings: widget.ttsSettings,
-          onlineTts: widget.onlineTts,
-          bookmarkStore: widget.bookmarkStore,
-          readingPrefsStore: widget.readingPrefsStore,
-          syncTrigger: widget.syncTrigger,
-          openTrace: trace,
-        ),
-      );
       // 不 await push 的 Future（它要等路由 pop 才返回）——push 一发起（路由已
-      // 入栈）就往下走，finally 立即释放守卫。关书刷新走 route.popped，不占守卫。
+      // 入栈）就往下走，守卫交由 route.popped 释放。
       unawaited(Navigator.of(context).push(route));
-      trace.mark('pushed');
-      onPushed?.call(route);
-      pending = null; // 所有权已交给阅读页（它关书时归还仓库）
-      unawaited(route.popped.then((_) {
-        // 阅读页关闭后刷新（lastReadAt / readProgress）。
-        if (mounted) unawaited(_loadBooks());
-      }));
     } catch (_) {
-      // 建源 / 入栈失败：把手里的书源还回去（池会按上限决定驻留或销毁），
-      // 再原样抛出——错误提示沿用既有上层处理。
-      final BookSource? leftover = pending;
-      pending = null;
-      if (leftover != null) {
-        unawaited(widget.repository.recycleBookSource(record, leftover));
-      }
-      rethrow;
-    } finally {
-      // 兜底：`!mounted` 早退等路径走这里（所有权没交出去 = 必须归还）。
-      final BookSource? leftover = pending;
-      if (leftover != null) {
-        unawaited(widget.repository.recycleBookSource(record, leftover));
-      }
+      // push 失败（上下文失效等）：无人消费 → 到手的源归还仓库，守卫就地释放。
       _opening = false;
-      if (mounted) setState(() => _openingBookId = null);
+      unawaited(sourceFuture.then(
+        (BookSource source) =>
+            widget.repository.recycleBookSource(record, source),
+        onError: (Object _) {},
+      ));
+      rethrow;
     }
+    trace.mark('pushed');
+    onPushed?.call(route);
+    unawaited(route.popped.then((_) {
+      _opening = false; // 兜底（正常路径已在 didPop 释放；幂等）
+      // 阅读页关闭后刷新（lastReadAt / readProgress）。
+      if (mounted) unawaited(_loadBooks());
+    }));
+  }
+
+  /// 书源准备流水线：先查**复用池**（§2.108，命中就完全跳过「读字节 + 建源」），
+  /// 未命中读字节 + 嗅探建源。文件丢失抛 [MReaderFormatException]（阅读页骨架屏
+  /// 换错误态直接展示）。
+  ///
+  /// 池里有 ① 导入即入池的那份、② 上次关书还回来的那份，都自带原始字节 +
+  /// 已解析结构 + 章节表缓存 ⇒ 命中时成本只剩一次 `stat`（判据校验）。判据与
+  /// 磁盘缓存同口径（`bookId + mtime + size`）：文件被替换过 → 池条目自动作废
+  /// 并销毁、走下面的冷路径，绝不会让旧字节冒充新文件。
+  Future<BookSource> _prepareSource(BookRecord record, OpenTrace trace) async {
+    final PerfWatch statsWatch = PerfLog.watch('open.stat');
+    final BookInstanceKey? cacheKey =
+        await widget.repository.bookInstanceKey(record);
+    statsWatch.done('hit=${cacheKey == null ? 0 : 1}');
+
+    final BookSource? pooled =
+        widget.repository.takePooledSource(record, cacheKey);
+    if (pooled != null) {
+      trace.step('poolHit', statsWatch.elapsedMs,
+          'impl=${pooled.implId} sizeKB=${(cacheKey?.size ?? 0) ~/ 1024}');
+      PerfLog.step('open.pool', statsWatch.elapsedMs,
+          'hit=1 impl=${pooled.implId}');
+      return pooled;
+    }
+
+    final PerfWatch readWatch = PerfLog.watch('open.readBytes');
+    final Uint8List? bytes = await widget.repository.readBookBytes(record);
+    readWatch.done(
+        'book=${record.title} sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
+    trace.step('readBytes', readWatch.elapsedMs,
+        'sizeKB=${(bytes?.length ?? 0) ~/ 1024}');
+    if (bytes == null || bytes.isEmpty) {
+      throw MReaderFormatException(
+        FormatErrorCode.fileMissing,
+        detail: record.fileName,
+      );
+    }
+
+    final PerfWatch sniffWatch = PerfLog.watch('open.sniff');
+    final BookSource source =
+        await openBook(fileName: record.fileName, bytes: bytes);
+    sniffWatch.done('impl=${source.implId}');
+    trace.step('sniff', sniffWatch.elapsedMs, 'impl=${source.implId}');
+    PerfLog.step('open.pool', 0, 'hit=0 impl=${source.implId}');
+    return source;
   }
 
   // 拖拽 / 文件夹相关方法已随「归类改走详情页『分组』行」的拍板整体移除：
@@ -1050,7 +1035,6 @@ class ShelfPageState extends State<ShelfPage> {
         ShelfGrid(
           books: books ?? _visibleBooks,
           coverStore: widget.coverStore,
-          openingBookId: _openingBookId,
           padding: shelfGridPadding(topInset, headerHeight: headerHeight),
           // 滚动位移 → 头部亮边进度（`_syncHeaderRim` → `_headerRim`）。
           controller: _gridScrollController,

@@ -127,7 +127,6 @@ Future<Uint8List> _solidPng(Color color) async {
 Future<int Function(double, double)> _pumpAndSample(
   WidgetTester tester,
   Brightness brightness, {
-  bool loading = false,
   Uint8List? imageBytes,
 }) async {
   tester.view.devicePixelRatio = 1;
@@ -163,7 +162,6 @@ Future<int Function(double, double)> _pumpAndSample(
                     ? _FakeCoverStore()
                     : _ImageCoverStore(imageBytes),
                 onTap: () {},
-                loading: loading,
               ),
             ),
           ),
@@ -245,54 +243,8 @@ void main() {
     });
   }
 
-  // 开书准备蒙层**只蒙封面**（曾在 `ClipRRect` 外铺满整卡 ⇒ 方角 + 连信息区一起压暗）。
-  // 用真实像素钉死：蒙层在场时封面确实被压暗、但信息区一个字都不受影响。
-  for (final Brightness brightness in Brightness.values) {
-    testWidgets('$brightness：打开准备中——蒙层只盖封面，不碰信息区', (WidgetTester tester) async {
-      // 同一个读像素器（封面坐标原点）分别在「静止」与「蒙层」两态各取一遍。
-      final int Function(double, double) idle = await _pumpAndSample(
-        tester,
-        brightness,
-      );
-      final int Function(double, double) overlay = await _pumpAndSample(
-        tester,
-        brightness,
-        loading: true,
-      );
-
-      // ① 蒙层在场时，封面中部**必须不再是**封面底色（被 `surface` α0.6 压过）。
-      //    期望值不硬编码具体混色（它随主题 `surface` 变），只钉「确实变了」。
-      final int idleInside = idle(12, _kCoverHeight * 0.55);
-      final int loadingInside = overlay(12, _kCoverHeight * 0.55);
-      expect(idleInside, coverColor, reason: '静止态封面内部须仍为底色（自检：确认读的确实是封面）');
-      expect(
-        loadingInside,
-        isNot(coverColor),
-        reason:
-            '「打开准备中」时封面须被蒙层压暗（实测 ${_hex(loadingInside)}）'
-            '——若仍等于底色 ${_hex(coverColor)}，说明蒙层没盖到封面',
-      );
-
-      // ② **圆角仍然生效**：蒙层若画在 `ClipRRect` 之外，弧外会被蒙成一整块方角——
-      //    断言弧外**不是**被蒙过的封面色（即蒙层确实被裁进圆角内）。
-      expect(
-        overlay(2, 2),
-        isNot(loadingInside),
-        reason: '圆角外不该出现「被蒙过的封面色」——蒙层逃逸了圆角裁切',
-      );
-
-      // ③ **信息区完全不受影响**：书名行（封面下缘再往下 20px，仍在 13.85 高的
-      //    书名行盒内）两态必须**逐位相等**（整卡蒙层的老毛病会把它一起压暗）。
-      final double infoY = _kCoverHeight + 20;
-      expect(
-        overlay(12, infoY),
-        idle(12, infoY),
-        reason:
-            '信息区（书名行）不该被蒙层压暗（静止 ${_hex(idle(12, infoY))} '
-            'vs 蒙层 ${_hex(overlay(12, infoY))}）——蒙层铺满整卡的老毛病又回来了',
-      );
-    });
-  }
+  // 「打开准备中」的封面蒙层已随「点击即开书」移除（点卡即进阅读页骨架屏，
+  // 书架侧无准备期）——原蒙层用例（只盖封面 / 圆角裁切 / 不碰信息区）随实现下线。
 
   // **真图封面**（`StoredCover` → `Image.memory`）的圆角契约。为什么单列：默认封面
   // [DefaultBookCover] **自带** `ClipRRect`，外层裁切失效它也会圆；真图封面**完全依赖**

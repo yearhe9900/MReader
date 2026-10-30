@@ -27,6 +27,7 @@ enum FormatErrorCode {
   mobiUnsupported,
   mobiHuffCdicUnsupported,
   noImagePages,
+  fileMissing,
 }
 
 /// 格式层统一异常。
@@ -69,4 +70,6 @@ const Map<FormatErrorCode, String> kFormatErrorMessages =
   FormatErrorCode.mobiHuffCdicUnsupported: '这本 MOBI/AZW3 使用了 HUFF/CDIC 压缩，'
       '当前版本暂不支持打开（未压缩与 PalmDOC 压缩的 MOBI/AZW3 可正常打开）。',
   FormatErrorCode.noImagePages: '压缩包里没有找到任何图片页。',
+  // 书架「点击即开书」的延迟准备路径：记录还在、文件已不在（移动 / 删除）。
+  FormatErrorCode.fileMissing: '文件已丢失，无法打开。',
 };

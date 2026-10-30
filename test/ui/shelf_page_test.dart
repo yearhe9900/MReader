@@ -622,7 +622,7 @@ void main() {
       expect(_readerPages(), findsOneWidget);
     });
 
-    testWidgets('回归①b：连点卡片只 push 一个阅读页（准备期守卫吞第二击）',
+    testWidgets('回归①b：连点卡片只 push 一个阅读页（开书守卫吞第二击）',
         (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
@@ -631,8 +631,8 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 两击落在同一帧（中间无 pump）：第一击在首个 await **之前**同步置
-      // `_opening = true`，故第二击落在准备期 → 被守卫吞掉，不得叠两个阅读页。
+      // 两击落在同一帧（中间无 pump）：开书守卫 `_opening` 从点下那一刻起
+      // 覆盖到关书（`route.popped`）——第二击被吞，不得叠两个阅读页。
       final Finder card = find.byType(BookCard);
       await tester.tap(card);
       await tester.tap(card);
@@ -708,7 +708,7 @@ void main() {
       expect(_readerPages(), findsNothing);
     });
 
-    testWidgets('回归④：点卡开书准备期有可见反馈，未即刻导航',
+    testWidgets('回归④：点卡即进阅读页（骨架屏先上屏，书卡不再有 loading 覆盖层）',
         (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _utf8TxtBytes('甲书正文。'), fileName: '甲书.txt'),
@@ -717,23 +717,30 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 点卡即开书 → 只推一帧、不给 runAsync → 仍在准备期。
+      // 点卡 → 只推一帧、不给 runAsync：阅读页已入栈（点击即开书），
+      // 书源 / 章节表还没就绪 ⇒ 正文区是骨架屏。
       await tester.tap(find.byType(BookCard));
       await tester.pump();
 
-      // 被点卡片出现 loading 覆盖层（`_opening` 准备期反馈，用户可见）。
+      expect(_readerPages(), findsOneWidget, reason: '点卡应立即 push 阅读页（准备改在页内骨架屏期间）');
       expect(
-        find.descendant(
-          of: find.byType(BookCard),
-          matching: find.byKey(const ValueKey<String>('book-opening-overlay')),
-        ),
+        find.byKey(const ValueKey<String>('reader-skeleton')),
         findsOneWidget,
+        reason: '书源未就绪时正文区应铺骨架屏（而非转圈 / 空白）',
       );
-      expect(_readerPages(), findsNothing); // 尚未导航
+      // 书卡不再有「打开准备中」蒙层（旧形态：书架上转圈等准备）。
+      expect(
+        find.byKey(const ValueKey<String>('book-opening-overlay')),
+        findsNothing,
+      );
 
-      // 准备完成后正常进入阅读页（覆盖层随准备完成消失）。
+      // 准备完成后骨架屏换真正文。
       await _settle(tester);
       expect(_readerPages(), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('reader-skeleton')),
+        findsNothing,
+      );
     });
 
     // ── 分组（`P2-02`） ──

@@ -41,7 +41,6 @@ class ShelfSearchPage extends StatefulWidget {
     required this.themeMode,
     required this.onOpenBook,
     required this.onBookActions,
-    this.openingBookId,
     this.hint = '搜索书名、作者',
   });
 
@@ -59,9 +58,6 @@ class ShelfSearchPage extends StatefulWidget {
 
   /// 长按结果（复用书架的长按弹框 `MiDialog`）。
   final Future<void> Function(BookRecord record) onBookActions;
-
-  /// 正在准备打开的书（书卡显示 loading 覆盖层）。
-  final String? openingBookId;
 
   /// 输入框占位文案（与书架搜索胶囊同文案）。
   final String hint;
@@ -203,7 +199,6 @@ class _ShelfSearchPageState extends State<ShelfSearchPage> {
     return ShelfGrid(
       books: results,
       coverStore: widget.coverStore,
-      openingBookId: widget.openingBookId,
       // 头部行底缘 → 结果列表：上游示例同一档（`MiDimens.spaceXl`）。
       padding: EdgeInsets.fromLTRB(inset, MiDimens.spaceXl, inset, 20),
       onOpenBook: (BookRecord record) {

@@ -16,6 +16,11 @@
 // 转场的基础）。就绪信号由 `ReaderPage` 在**正文那一帧的帧后回调**里发出（不是
 // `_ready` 的 `setState` 那一刻）；另有 [kReaderOpenHoldTimeout] 兜底防漏报卡死。
 //
+// 「点击即开书」路径（书架延迟书源 [ReaderPage.sourceFuture]）：阅读页先铺骨架屏
+// （`_OpenSkeleton`），**骨架首帧上屏即放行**——纸不透明（骨架即画），等待全程
+// 在滑入后的阅读页里进行，门闸不再按到正文就绪。直供书源（深链 / 详情页 /
+// 生词本）仍走「精确落位收敛才放行」的旧口径，本文件的按住语义对它不变。
+//
 // 路由仍是 [Navigator.push] + [PageRoute]，返回手势 / 预测性返回行为**完全不变**；
 // 阅读页内部逻辑**零改动**，本转场只在**上层**加位移与遮罩。
 
@@ -90,12 +95,24 @@ abstract final class ReaderOpenTransition {
 /// 屏幕右侧之外、也不压暗书架；阅读页首帧上屏后由 [release] 放行才播滑入。
 class ReaderOpenRoute extends PageRoute<void> {
   /// 创建开书转场。
-  ReaderOpenRoute({required this.builder});
+  ReaderOpenRoute({required this.builder, this.onPopStarted});
 
   /// 阅读页构造器。
   final WidgetBuilder builder;
 
+  /// 返回手势 / 系统返回**发起**那一刻的回调（`didPop`，动画起步即调）。
+  ///
+  /// 书架开书守卫用它在退场**开始**就释放（而非等 `popped` 要等的反向动画落定）：
+  /// 纸张滑出期间书架已可点，守卫晚放 = 关书后首点被吞（见 `shelf_page._openBook`）。
+  final VoidCallback? onPopStarted;
+
   AnimationController? _controller;
+
+  @override
+  bool didPop(void result) {
+    onPopStarted?.call();
+    return super.didPop(result);
+  }
 
   @override
   AnimationController createAnimationController() {

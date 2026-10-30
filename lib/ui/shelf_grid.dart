@@ -61,7 +61,6 @@ class ShelfGrid extends StatelessWidget {
     super.key,
     required this.books,
     required this.coverStore,
-    required this.openingBookId,
     required this.onOpenBook,
     required this.onBookActions,
     this.padding = kShelfGridPadding,
@@ -73,9 +72,6 @@ class ShelfGrid extends StatelessWidget {
 
   /// 封面存储（书卡取缩略图）。
   final CoverStore coverStore;
-
-  /// 正在准备打开的书（bookId）：对应卡显示 loading 覆盖层。
-  final String? openingBookId;
 
   /// 点书卡（**直接进阅读页**）。
   final void Function(BookRecord record) onOpenBook;
@@ -144,7 +140,6 @@ class ShelfGrid extends StatelessWidget {
               key: ValueKey<String>('book-${record.bookId}'),
               record: record,
               coverStore: coverStore,
-              loading: openingBookId == record.bookId,
               onTap: () => onOpenBook(record),
               // 透传即可：`BookCard` 会 `await` 这个 Future 来做长按抬起 / 复位
               // （见 `ShelfGrid.onBookActions` 的返回值语义）。

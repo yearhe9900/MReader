@@ -98,7 +98,6 @@ Future<void> _pumpGrid(
           child: ShelfGrid(
             books: books,
             coverStore: _FakeCoverStore(),
-            openingBookId: null,
             onOpenBook: (_) {},
             // 异步回调：书卡会 `await` 它拿「长按抬起」的复位时机。
             onBookActions: (_) async {},
