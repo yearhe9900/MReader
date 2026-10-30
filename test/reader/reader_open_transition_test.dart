@@ -1,27 +1,28 @@
-// 开书转场「先按住、就绪后再滑」（`ReaderOpenRoute`）的 widget 测试。
+// 开书转场「先按住、就绪后再翻」（`ReaderOpenRoute`，书页翻开形态）的 widget 测试。
 //
 // 形态来源：参考动效的逐帧量化见 §2.77；「打开书闪一下」的诊断与修法
 // （**点书后按住、等阅读页就绪再放行**）见 §2.78。放行门闸（路线 A §7③
 // 「排到目标页才上屏」，见 路线 A §7）：分页模式的「就绪」= **目标语义坐标
 // 精确落位收敛**，不是「首帧上屏」——估算落位只是过渡帧，`_pendingLand` 二次
-// 精确落位完成前转场必须继续按住（否则滑入中视口大跳 =「开书闪动」主链）。
+// 精确落位完成前转场必须继续按住（否则翻页中视口大跳 =「开书闪动」主链）。
 // §7②「占位换血出视口」：放行时刻视口必须是**真身**——可见区间内**不许**残留
 // 「载入中…」占位带（`pages.isEmpty` 的 96dp 带），否则邻章「占位→真」换血的
-// 高度突变发生在纸张滑入中（开书闪动链②）。
+// 高度突变发生在翻页中（开书闪动链②）。
 // §2.110 补第三条「锚点布局定稿」：视口顶之前的前序章页表未定稿不放行——
 // 上方高度再涨会触发超域补跳的「1 帧滑移」（落位后闪一下别的正文 = 闪屏）。
 // 本文件钉住六件事：
-//   ① **等待期绝对静止**：就绪信号到达之前，纸张恒停在屏幕右侧之外、暗化恒为 0、
-//      书架锚点一个像素都不动（这就是「闪一下」的修法本身）；
-//   ② **就绪之后才动**：信号一到，纸张立刻起滑——两者有先后，不能混在同时；
-//   ③ **纸张在动、书架不动**：滑入各时点纸张左边缘从屏宽递减到 0，书架坐标不变；
+//   ① **等待期绝对静止**：就绪信号到达之前，页恒立在书脊上（投影宽 0 = 一像素
+//      不露）、暗化恒为 0、书架锚点一个像素都不动（这就是「闪一下」的修法本身）；
+//   ② **就绪之后才动**：信号一到，页立刻起翻——两者有先后，不能混在同时；
+//   ③ **页在动、书架不动**：翻页各时点页右缘投影从 0 递增到屏宽，书架坐标不变；
 //   ④ **圆角口径**：全程保持 70dp，只在落位那一下收到 0（禁「随进度线性收角」）；
-//   ⑤ **暗化口径**：背景黑色遮罩随滑入进度涨到 54%；
-//   ⑥ **漏报就绪不卡死**：超时兜底无条件放行；按住期间返回也不能把纸反着滑进来。
+//   ⑤ **暗化口径**：背景黑色遮罩随翻页进度涨到 54%；
+//   ⑥ **漏报就绪不卡死**：超时兜底无条件放行；按住期间返回也不能把页反着翻出来。
 //
-// 测量纪律：`paperLeft` 量的是 `localToGlobal` 结果（会叠加 `Transform` 的位移），
-// 即「屏幕上纸在哪」，而不是读某个 widget 参数——后者会把「参数对了但渲染没应用」
-// 的缺陷放过去（§2.71 探针自建的教训）。
+// 测量纪律：`paperEdge` 量的是 `localToGlobal` 结果（会叠加 `Transform` 的旋转 +
+// 透视除法），即「屏幕上页的右缘在哪」，而不是读某个 widget 参数——后者会把
+//「参数对了但渲染没应用」的缺陷放过去（§2.71 探针自建的教训）。翻页形态下
+// 左缘（书脊）恒贴屏幕左缘，**右缘投影**才是翻开进度的直接读数。
 import 'dart:async';
 import 'dart:io';
 
@@ -145,18 +146,14 @@ class _PaperState extends State<_Paper> {
   }
 }
 
-/// 纸张左边缘的**屏幕**坐标（含 `Transform` 位移）。
-double paperLeft(WidgetTester tester) =>
-    tester.getTopLeft(find.byKey(_kPaperKey)).dx;
+/// 纸张右缘的**屏幕**投影 x（含 `Transform` 透视除法）：翻页形态下左缘恒在
+/// 书脊（x = 0），**右缘投影**才是翻开进度的直接读数——0 = 页立书脊（投影宽
+/// 0 = 视觉不可见），屏宽 = 平铺满屏。
+double paperEdge(WidgetTester tester) =>
+    tester.getTopRight(find.byKey(_kPaperKey)).dx;
 
-/// 「纸张完全停在屏幕右侧之外」的判据：左边缘正好在**一整张纸宽**（= 屏宽）处。
-///
-/// 用纸自身宽度做基准而不是 `MediaQuery`：纸是 `StackFit.expand` 铺满的一屏，
-/// 两个口径应当相等，这里顺带把「纸没铺满」这类问题也钉住。
-Matcher offscreenRight(WidgetTester tester) => moreOrLessEquals(
-      tester.getSize(find.byKey(_kPaperKey)).width,
-      epsilon: 0.01,
-    );
+/// 「页立书脊」的判据：右缘投影正好为 0（一像素都不露）。
+Matcher edgeOnSpine(WidgetTester tester) => moreOrLessEquals(0, epsilon: 0.5);
 
 /// 书架锚点的屏幕坐标。
 Offset shelfAt(WidgetTester tester) => tester.getTopLeft(find.byKey(_kShelfKey));
@@ -192,11 +189,11 @@ Future<void> pumpFrames(WidgetTester tester, int frames) async {
   }
 }
 
-/// 点开书，并推进到**滑入开始的那一帧**。
+/// 点开书，并推进到**翻页开始的那一帧**。
 ///
 /// 帧序（`readyFrames = r`）两个坑：**点书后第 1 帧纸张还没进树**（`Navigator.push`
 /// 只是让 `Overlay` 重排，转场层与纸张要到下一帧才建）；第 r+2 帧的**帧后回调**
-/// 才报就绪 ⇒ 放行。故共推 `r + 2` 帧；此刻再 `pump(时长)` 才能量到位移。
+/// 才报就绪 ⇒ 放行。故共推 `r + 2` 帧；此刻再 `pump(时长)` 才能量到翻开进度。
 Future<void> openAndStart(WidgetTester tester, {int readyFrames = 0}) async {
   await tester.tap(find.byKey(_kOpenKey));
   await pumpFrames(tester, readyFrames + 2);
@@ -262,8 +259,8 @@ List<Rect> loadingBandsInViewport(WidgetTester tester) {
 void main() {
   capTestTimeout();
 
-  group('开书转场「先按住、就绪后再滑」', () {
-    testWidgets('未就绪就一动不动：纸停在屏幕右侧之外、一点不压暗书架',
+  group('开书转场「先按住、就绪后再翻」', () {
+    testWidgets('未就绪就一动不动：页立书脊（投影宽 0）、一点不压暗书架',
         (WidgetTester tester) async {
       // 保留路由引用：下面要直接问 `opaque`（见循环末的断言）。
       final ReaderOpenRoute route = ReaderOpenRoute(
@@ -274,12 +271,13 @@ void main() {
 
       await tester.tap(find.byKey(_kOpenKey));
       await tester.pump(); // 帧 1：纸张建立 ⇒ 被按住
-      // 再推 40 帧（≈ 640ms，**刻意超过 320ms 的滑入时长**）：按住期间一帧都不能动。
+      // 再推 40 帧（≈ 640ms，**刻意超过 320ms 的翻页时长**）：按住期间一帧都不能动。
       // 超过时长是有意的——若 `hold()` 没真的冻住进度，控制器会在这一窗口里跑完。
       for (int i = 1; i <= 40; i++) {
         await tester.pump(const Duration(milliseconds: 16));
-        expect(paperLeft(tester), offscreenRight(tester),
-            reason: '第 $i 帧纸张不在屏幕右侧之外了——按住期间它必须一动不动');
+        expect(paperEdge(tester), edgeOnSpine(tester),
+            reason: '第 $i 帧页立书脊的投影宽不再为 0（右缘 ${paperEdge(tester)}）'
+                '——按住期间它必须一动不动、一像素不露');
         expect(scrimAlpha(tester), 0,
             reason: '第 $i 帧书架已被压暗——等待期必须先看到书架原样（这就是「闪一下」的成因）');
         expect(shelfAt(tester), shelf, reason: '第 $i 帧书架被动过');
@@ -293,7 +291,7 @@ void main() {
       expect(find.byKey(_kPaperKey), findsOneWidget);
     });
 
-    testWidgets('先按住、就绪后才滑：信号之前纸不动，信号一到立刻起滑',
+    testWidgets('先按住、就绪后才翻：信号之前页不动，信号一到立刻起翻',
         (WidgetTester tester) async {
       await tester.pumpWidget(const _Host(readyFrames: 2));
       await tester.tap(find.byKey(_kOpenKey));
@@ -302,41 +300,42 @@ void main() {
       // 帧 2~4 = 纸张的第 1~3 帧：第 3 帧的**帧后**才报就绪 ⇒ 之前一帧都不许动。
       for (int i = 1; i <= 3; i++) {
         await tester.pump();
-        expect(paperLeft(tester), offscreenRight(tester),
+        expect(paperEdge(tester), edgeOnSpine(tester),
             reason: '纸张第 $i 帧就动了？就绪信号只能在自己那一帧的帧后才发');
       }
 
-      // 就绪信号已到 ⇒ 下一帧起真的在滑。
+      // 就绪信号已到 ⇒ 下一帧起真的在翻。
       final double width = screenWidth(tester);
       await tester.pump(const Duration(milliseconds: 120));
-      expect(paperLeft(tester), lessThan(width - 50),
-          reason: '就绪信号之后纸张必须动起来');
+      expect(paperEdge(tester), greaterThan(width * 0.3),
+          reason: '就绪信号之后页必须翻开（右缘投影应明显离开书脊）');
       expect(scrimAlpha(tester), greaterThan(0),
-          reason: '滑入开始后书架才被压暗');
+          reason: '翻页开始后书架才被压暗');
     });
 
-    testWidgets('推入中：纸张从右侧进来、书架纹丝不动、背景被压暗、圆角还是满值',
+    testWidgets('翻页中：页从书脊展开、书架纹丝不动、背景被压暗、圆角还是满值',
         (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       final double shelfX0 = shelfAt(tester).dx;
 
       await openAndStart(tester);
-      await tester.pump(const Duration(milliseconds: 120)); // 滑入中段
+      await tester.pump(const Duration(milliseconds: 120)); // 翻页中段
 
-      final double paper = paperLeft(tester);
-      expect(paper, greaterThan(0), reason: '中段纸张还没铺满');
-      expect(paper, lessThan(screenWidth(tester)), reason: '中段纸张应已进入屏幕');
+      final double edge = paperEdge(tester);
+      expect(edge, greaterThan(0), reason: '中段页还没铺满（右缘应离开书脊）');
+      expect(edge, lessThan(screenWidth(tester)),
+          reason: '中段页还没平铺（右缘应未达右屏缘）');
 
       expect(shelfAt(tester).dx, shelfX0,
-          reason: '书架应纹丝不动——动的是纸，不是书架（参考动效里书架静止被压暗）');
+          reason: '书架应纹丝不动——动的是页，不是书架（参考动效里书架静止被压暗）');
       expect(scrimAlpha(tester), greaterThan(0));
       expect(scrimAlpha(tester), lessThan(kReaderOpenScrimAlpha),
-          reason: '暗化随滑入进度推进，中段还没到终值');
+          reason: '暗化随翻页进度推进，中段还没到终值');
       expect(paperRadius(tester), kReaderPaperRadius,
-          reason: '圆角中段应保持满值——参考动效里圆角一直 70px 直到平移到位');
+          reason: '圆角中段应保持满值——圆角一直 70px 直到平铺到位');
     });
 
-    testWidgets('书架全程静止：滑入各时点锚点坐标零位移', (WidgetTester tester) async {
+    testWidgets('书架全程静止：翻页各时点锚点坐标零位移', (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       final Offset base = shelfAt(tester);
 
@@ -352,30 +351,35 @@ void main() {
       }
     });
 
-    testWidgets('位移曲线前快后慢：半程已走掉绝大部分位移（easeOutCubic）',
+    testWidgets('翻开曲线前快后慢：半程已走掉绝大部分进度（easeOutCubic）',
         (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       await openAndStart(tester);
       await tester.pump(const Duration(milliseconds: 160)); // 320ms 的一半
 
       final double width = screenWidth(tester);
-      final double moved = width - paperLeft(tester);
+      final double progress = paperEdge(tester) / width;
       // easeOutCubic 半程走 87.5%；线性只有 50%，easeIn 只有 12.5%。
-      expect(moved / width, greaterThan(0.7),
-          reason: '前半程必须走掉大部分位移（线性 / easeIn 曲线会判红）');
+      // 透视会把中段右缘往书脊方向压一点，故阈值取 0.55（正交口径下应≈0.85+）。
+      expect(progress, greaterThan(0.55),
+          reason: '前半程必须走掉大部分进度（线性 / easeIn 曲线会判红，实测 $progress）');
     });
 
-    testWidgets('落位：纸张铺满、圆角收回 0、暗化达终值', (WidgetTester tester) async {
+    testWidgets('落位：页平铺满屏、左缘贴书脊、圆角收回 0、暗化达终值',
+        (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       await openAndStart(tester);
       await tester.pumpAndSettle();
 
-      expect(paperLeft(tester), moreOrLessEquals(0, epsilon: 0.01));
+      expect(paperEdge(tester), moreOrLessEquals(screenWidth(tester), epsilon: 0.5),
+          reason: '平铺后页右缘应铺到右屏缘');
+      expect(tester.getTopLeft(find.byKey(_kPaperKey)).dx,
+          moreOrLessEquals(0, epsilon: 0.01),
+          reason: '左缘（书脊）应恒贴屏幕左缘——翻页不平移');
       expect(tester.getTopLeft(find.byKey(_kPaperKey)).dy,
           moreOrLessEquals(0, epsilon: 0.01));
-      expect(tester.getSize(find.byKey(_kPaperKey)).width, screenWidth(tester));
       expect(paperRadius(tester), 0,
-          reason: '落位后圆角必须收掉——否则屏幕角上会缺一块（参考动效第 66 帧为 0）');
+          reason: '落位后圆角必须收掉——否则屏幕角上会缺一块');
       expect(scrimAlpha(tester), closeTo(kReaderOpenScrimAlpha, 0.001));
       expect(find.text('正文已上屏'), findsOneWidget);
     });
@@ -385,13 +389,14 @@ void main() {
       await tester.tap(find.byKey(_kOpenKey));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      expect(paperLeft(tester), offscreenRight(tester),
-          reason: '300ms 时还没到超时，纸仍应停在屏幕外');
+      expect(paperEdge(tester), edgeOnSpine(tester),
+          reason: '300ms 时还没到超时，页仍应立在书脊（投影宽 0）');
 
       await tester.pump(kReaderOpenHoldTimeout); // 闹钟到点
       await tester.pumpAndSettle();
 
-      expect(paperLeft(tester), moreOrLessEquals(0, epsilon: 0.01),
+      expect(paperEdge(tester),
+          moreOrLessEquals(screenWidth(tester), epsilon: 0.5),
           reason: '超时必须无条件放行——否则漏报就绪 = 书永远打不开');
       expect(paperRadius(tester), 0);
       expect(scrimAlpha(tester), closeTo(kReaderOpenScrimAlpha, 0.001));
@@ -403,30 +408,34 @@ void main() {
       await tester.tap(find.byKey(_kOpenKey));
       await tester.pump(); // 帧 1：纸张建立 + 被按住
       await tester.pump(); // 帧 2：`find` 从这一帧起能看到纸
-      expect(paperLeft(tester), offscreenRight(tester));
+      expect(paperEdge(tester), edgeOnSpine(tester));
 
       tester.state<NavigatorState>(find.byType(Navigator)).pop();
       await tester.pumpAndSettle();
 
       // 进度一直停在 0 ⇒ `reverse()` 的剩余比例是 0 ⇒ 零时长返回（`dismissed` 当场
-      // 命中）⇒ 纸随路由一起退场，不该出现「纸从右侧滑出去」。卡住则是状态没到
+      // 命中）⇒ 纸随路由一起退场，不该出现「页合回去」的动画。卡住则是状态没到
       // `dismissed`、路由永远不被 finalize。
       expect(find.byKey(_kPaperKey), findsNothing, reason: '返回后纸张应随路由退场');
       expect(ReaderOpenTransition.isActive, isFalse,
           reason: '返回后门闸必须撤销——否则超时闹钟会替一个已经不存在的转场放行');
     });
 
-    testWidgets('返回：纸张向右滑出（反向用同一转场）', (WidgetTester tester) async {
+    testWidgets('返回：页合回书脊（反向用同一转场）', (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       await openAndStart(tester);
       await tester.pumpAndSettle();
-      expect(paperLeft(tester), moreOrLessEquals(0, epsilon: 0.01));
+      expect(paperEdge(tester),
+          moreOrLessEquals(screenWidth(tester), epsilon: 0.5));
 
       tester.state<NavigatorState>(find.byType(Navigator)).pop();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 120)); // 反向 240ms 的一半
 
-      expect(paperLeft(tester), greaterThan(0), reason: '返回时纸张应向右滑出');
+      expect(paperEdge(tester), lessThan(screenWidth(tester) - 50),
+          reason: '返回时页应合回书脊（右缘投影回缩）');
+      expect(paperEdge(tester), greaterThan(0),
+          reason: '反向还没播完，页不应已完全立回书脊');
     });
 
     testWidgets('时长口径 = 320ms（§2.109：参考动效 460ms 实测观感偏慢，提速）',
@@ -634,13 +643,20 @@ void main() {
           findsOneWidget);
 
       gate.completeError(const MReaderFormatException(FormatErrorCode.fileMissing));
-      final bool errored = await pumpUntil(tester,
-          () => find.textContaining('文件已丢失').evaluate().isNotEmpty);
-      expect(errored, isTrue,
+      // `find` 不管可见性（幕布只是绘制层）——盯**骨架退场**（揭幕闩撤除）才是
+      //「错误提示真的可见」的判据；顺带积累前提：错误文本确已进树。
+      bool sawErrorText = false;
+      final bool revealed = await pumpUntil(tester, () {
+        if (find.textContaining('文件已丢失').evaluate().isNotEmpty) {
+          sawErrorText = true;
+        }
+        return sawErrorText &&
+            find.byKey(const ValueKey<String>('reader-skeleton')).evaluate().isEmpty;
+      });
+      expect(sawErrorText, isTrue,
           reason: '准备失败应落到阅读页错误态（用户可见中文提示）');
-      expect(find.byKey(const ValueKey<String>('reader-skeleton')),
-          findsNothing,
-          reason: '错误态不得残留骨架屏');
+      expect(revealed, isTrue,
+          reason: '错误态不得残留骨架屏（揭幕闩须在错误路径上也撤除）');
 
       await closeBook(tester);
     });

@@ -4198,7 +4198,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final EdgeInsets systemPadding = MediaQuery.paddingOf(context);
     final TextScaler systemTextScaler = MediaQuery.textScalerOf(context);
 
-    return Scaffold(
+    final Widget page = Scaffold(
       backgroundColor: _pageColor(theme),
       // `TYP-09` 契约：**唤出 / 收起 chrome 不得改变正文排版区高度**。
       //
@@ -4329,34 +4329,35 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               child: const Icon(Icons.arrow_back),
             )
           : null,
-      body: _buildBodyWithSkeletonCover(theme, systemPadding, systemTextScaler),
+      body: _buildBody(theme, systemPadding, systemTextScaler),
     );
+    // **揭幕闩**（延迟路径）：`_skeletonCover` 期间骨架作为**不透明幕布**盖在
+    // **整页**之上——不只正文，还包括底部读数层（进度条 / 章节 / 百分比）：
+    // 落位收敛前 `_liveIndex` / `_livePercent` 还在逐帧变，盖住才能做到
+    //「揭幕即定稿」（只盖正文会露出跳动的读数，同样是闪屏）。
+    return _applySkeletonCover(page, theme, systemPadding);
   }
 
-  /// 正文 + **揭幕闩**（延迟路径）：`_skeletonCover` 期间骨架作为**不透明幕布**
-  /// 盖在正文之上。
+  /// 把骨架幕布盖到整页之上（`_skeletonCover` 期间；否则原样返回）。
   ///
-  /// 关键：正文**照常构建 / 布局 / 落位**（幕布只是绘制层，不进正文子树）——
-  /// 「估算→精确」大跳、占位带换血的收敛机械照跑，只是全程发生在幕布之下，
-  /// 用户看不到；门闸通过（[_releaseOpenGate] → [_revealSkeleton]）才揭幕，
-  /// 揭幕那一刻正文已停在目标位 = 零跳变。
+  /// 关键：被盖的页（含正文与读数）**照常构建 / 布局 / 落位**（幕布只是绘制层，
+  /// 不进页子树）——「估算→精确」大跳、占位带换血、读数刷新的收敛机械照跑，
+  /// 只是全程发生在幕布之下，用户看不到；门闸通过（[_releaseOpenGate] →
+  /// [_revealSkeleton]）才揭幕，揭幕那一刻正文与读数都已停在目标值 = 零跳变。
   ///
   /// 幕布吞掉手势（同 [_restoreMask] 口径）：揭幕前的滚动 / 点击落在未定稿的
   /// 正文上只会制造新的跳变。直供书源路径 `_skeletonCover` 恒 false，本方法
-  /// 原样返回正文。
-  Widget _buildBodyWithSkeletonCover(
-    ThemeData theme,
-    EdgeInsets systemPadding,
-    TextScaler systemTextScaler,
-  ) {
-    final Widget body = _buildBody(theme, systemPadding, systemTextScaler);
-    // `_ready` 之前正文区本身就是骨架屏（`_buildBody` 的早退分支）或错误态，
-    // 无幕可盖——只在正文**真身**会入屏的那一刻起幕，避免双层骨架。
-    if (!_skeletonCover || !_ready) return body;
+  /// 原样返回页面。`_ready` 之前页面本身就是骨架屏或错误态，无幕可盖——只在
+  /// 正文**真身**会入屏的那一刻起幕，避免双层骨架。
+  Widget _applySkeletonCover(Widget page, ThemeData theme, EdgeInsets systemPadding) {
+    // `_skeletonCover` 期间恒盖（含 `_ready` 之前）：底部读数的「载入中…」
+    // 也属未定稿状态，一并遮住才「揭幕即定稿」。正文侧的骨架分支此时让位
+    // （返回空盒），避免双层骨架叠画。
+    if (!_skeletonCover) return page;
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
-        body,
+        page,
         Positioned.fill(
           child: GestureDetector(
             key: const ValueKey<String>('reader-skeleton-cover'),
@@ -5205,12 +5206,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null) {
       // 书源 / 章节表未就绪（书架「点击即开书」的骨架屏阶段）：铺一张
-      // 「像这一页书」的占位版面，纸张滑入时上面就是它（见 [_OpenSkeleton]）。
-      return _OpenSkeleton(
-        theme: theme,
-        systemPadding: systemPadding,
-        pageMarginH: _settings.pageMargin.horizontal,
-      );
+      // 「像这一页书」的占位版面，纸张翻开时上面就是它（见 [_OpenSkeleton]）。
+      // 幕布在场时让位（幕布自带骨架，避免双层叠画）。
+      return _skeletonCover
+          ? const SizedBox.shrink()
+          : _OpenSkeleton(
+              theme: theme,
+              systemPadding: systemPadding,
+              pageMarginH: _settings.pageMargin.horizontal,
+            );
     }
     if (chapters.isEmpty) {
       // 解析成功但没有任何章节：必须显式告知，否则就是一片空白。
@@ -5229,11 +5233,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     if (!_ready) {
       // 首帧批次尚未就绪（只等目标章，很快）：同骨架屏，观感与上一阶段连续。
-      return _OpenSkeleton(
-        theme: theme,
-        systemPadding: systemPadding,
-        pageMarginH: _settings.pageMargin.horizontal,
-      );
+      // 幕布在场时让位（幕布自带骨架，避免双层叠画）。
+      return _skeletonCover
+          ? const SizedBox.shrink()
+          : _OpenSkeleton(
+              theme: theme,
+              systemPadding: systemPadding,
+              pageMarginH: _settings.pageMargin.horizontal,
+            );
     }
 
     // `TYP-07`：字体族（系统默认 / 衬线 / 无衬线）+ 跨平台回退链（中文无豆腐块）；
