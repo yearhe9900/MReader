@@ -20,9 +20,11 @@
 | `rrk-pdf` | PDF：L1 文本抽取/重排 + L2 光栅 |
 | `rrk-kernel` | 会话编排（句柄表 + 格式注册 + 生命周期；`BookKind` 分流重排/页级） |
 
-**同步点**：上游 `rust_reader_kernel@fa4b4cf`（issue #14：`search_chapter` 的
-`done` 语义修复——真正扫完为 true、命中被 `max_hits` 截断为 false）。
-前一同步点：`d0684b2`（章级/页级缓存持久化：IndexCache
+**同步点**：上游 `rust_reader_kernel@46a3010`（畸形输入加固第一批：MOBI record0
+短头越界 panic 改 `opt32` 缺省读取 + 封面偏移饱和、HUFF/CDIC 偏移表夹紧、解压
+炸弹三道闸（单次 32MB / 词典深度 64 层 / 全书 256MB）、PDF 流解码限长（`decode_stream_limited`）+ ObjStm 负 `/N` 夹紧防挂死、MOBI 书名尾 NUL 剔除）。
+前一同步点：`fa4b4cf`（issue #14：`search_chapter` 的 `done` 语义修复——真正扫完
+为 true、命中被 `max_hits` 截断为 false）。再前一同步点：`d0684b2`（章级/页级缓存持久化：IndexCache
 下沉 adapter + 五格式 open 索引落盘，ABI 10 不变、`ContentCacheStats` 增
 `open_hits/open_misses`）。再前一同步点：`4856780`（v0.3.0，内核 ABI 10，含 issue
 #13 无 TOC 书章标题回填 + 章标题块轻量出口、fuzz 五轮实锤加固（PDF 页面树/
