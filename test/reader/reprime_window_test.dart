@@ -106,7 +106,10 @@ void main() {
       }
 
       // 快速缩小字体：连点 5 次「字号 −」（20 → 15），每步只 pump 一帧。
+      // 字号钮已迁入设置面板（菜单简化后）：先唤出菜单 → 开设置面板。
       await showChrome(tester);
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
       for (int i = 0; i < 5; i++) {
         await tester.tap(find.byKey(const Key('reader-setting-font-dec')));
         await tester.pump();
@@ -196,6 +199,8 @@ void main() {
       PerfLog.records.clear();
 
       await showChrome(tester);
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
       for (int tap = 0; tap < 3; tap++) {
         await tester.tap(find.byKey(const Key('reader-setting-font-dec')));
         for (int f = 0; f < 4; f++) {

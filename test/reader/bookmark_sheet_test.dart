@@ -122,9 +122,9 @@ void main() {
       await tester.pumpWidget(buildApp());
       await settle(tester);
 
-      // 去第 3 章，在那里加书签。
+      // 去第 3 章，在那里加书签（目录入口在底部菜单，图标 menu_book）。
       await showChrome(tester);
-      await tester.tap(find.byIcon(Icons.list));
+      await tester.tap(find.byIcon(Icons.menu_book_outlined));
       await tester.pumpAndSettle();
       await tester.tap(find.text('第三章'));
       await tester.pumpAndSettle();
@@ -150,7 +150,7 @@ void main() {
       Navigator.of(tester.element(find.byType(BookmarkSheet))).pop();
       await tester.pumpAndSettle();
       await showChrome(tester);
-      await tester.tap(find.byIcon(Icons.list));
+      await tester.tap(find.byKey(const Key('reader-toc')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('第一章'));
       await tester.pumpAndSettle();

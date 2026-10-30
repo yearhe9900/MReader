@@ -1,51 +1,63 @@
-// `RD-04` / `NAV-01`：阅读页底部控制条。
+// 阅读页底部菜单（`RD-04` / `NAV-01`；mi_like_ui 风格）。
 //
-// 组成：上/下一章 + 全书进度 + 排版设置（复用 [ReaderSettingsBar]）。目录入口**统一
-// 放在 AppBar**（`NAV-01` 明确要求「AppBar 目录按钮」），本控制条**不再重复放目录按钮**。
+// 形态（对齐参考截图，替换旧版「章节 / 朗读与 AI / 排版」三分组控制条）：
+//   第一行：上一章 —— 进度滑条（MiSlider，按章吸附）—— 下一章
+//   第二行：目录 / 夜间 / 设置 / 更多（图标 + 文字，等分四格）
 //
-// 分组收纳：按「同一用途归一组」排为三个带标题的分组盒（`章节` / `朗读与 AI` /
-// `排版`），组间留白 + 竖分隔线，尺寸统一到 [kReaderControlButton]。
+// 收纳去向（功能一个不丢，只换入口）：
+//   · 朗读开关 = 菜单上方右侧的悬浮圆钮（[ReaderControlBar.floating]，由
+//     `reader_page` 注入「听」钮）；
+//   · 字号 / 行距 / 页边距 / 主题 = 「设置」面板（`reading_appearance_sheet.dart`
+//     新增排版区）；
+//   · AI 助手 / AI 摘要 / 朗读设置 = 「更多」操作列表（MiDialog 纵向列表形态）；
+//   · 搜索 / 书签留顶栏（`NAV-01` 顶栏口径不变）。
+//
+// 尺寸契约：第一行 44（滑条命中高 32 + 上下 6）、第二行 56 ⇒ 菜单高 100
+// （`test/ui/reader_chrome_layout_test.dart` 钉住上限）。菜单是覆盖层
+// （`extendBody*`），高度不参与正文预算，但不得显著长高。
 import 'package:flutter/material.dart';
 
-import '../typography/reader_settings.dart';
-import '../ui/reader_control_chrome.dart';
-import '../ui/reader_settings_bar.dart';
+import '../ui/mi_like_ui/mi_like_ui.dart';
 
-/// 阅读页底部控制条。
-class ReaderControlBar extends StatelessWidget {
+/// 菜单第一行（章节导航 + 进度滑条）行高（dp）。
+const double kReaderMenuNavRowHeight = 44;
+
+/// 菜单第二行（目录 / 夜间 / 设置 / 更多）行高（dp）。
+const double kReaderMenuActionRowHeight = 56;
+
+/// 菜单总高（两行之和，不含 SafeArea）。
+const double kReaderMenuHeight =
+    kReaderMenuNavRowHeight + kReaderMenuActionRowHeight;
+
+/// 悬浮「听」钮与菜单上缘的间隙（dp；参考截图的悬浮圆钮位置）。
+const double kReaderMenuFloatingGap = 12;
+
+/// 阅读页底部菜单。
+class ReaderControlBar extends StatefulWidget {
   const ReaderControlBar({
     super.key,
-    required this.settings,
-    required this.onSettingsChanged,
-    required this.chapterNumber,
+    required this.chapterIndex,
     required this.chapterCount,
-    required this.percent,
     required this.canGoPrev,
     required this.canGoNext,
     required this.onPrevChapter,
     required this.onNextChapter,
-    this.onAi,
-    this.onTts,
-    this.ttsActive = false,
-    this.onTtsSettings,
+    required this.onSeek,
+    required this.onToc,
+    required this.onNight,
+    required this.nightActive,
+    required this.onSettings,
+    required this.onMore,
+    this.floating,
   });
 
-  /// 当前排版设置（字号 / 行距）。
-  final ReaderSettings settings;
+  /// 当前章下标（0 基；进度滑条的受控值）。
+  final int chapterIndex;
 
-  /// 排版设置变更回调。
-  final ValueChanged<ReaderSettings> onSettingsChanged;
-
-  /// 当前章序号（1 基）。
-  final int chapterNumber;
-
-  /// 总章数。
+  /// 总章数（滑条按章吸附的档数）。
   final int chapterCount;
 
-  /// 全书进度百分比（整数，0~100）。
-  final int percent;
-
-  /// 是否可回上一章（首章时为 false）。
+  /// 是否可回上一章（首章时为 false → 按钮降禁用态，不消失）。
   final bool canGoPrev;
 
   /// 是否可去下一章（末章时为 false）。
@@ -57,153 +69,290 @@ class ReaderControlBar extends StatelessWidget {
   /// 去下一章。
   final VoidCallback onNextChapter;
 
-  /// AI 摘要入口（`TYP-05` 控制条含 AI 入口；`AI-04`/`AI-05`）。
+  /// 进度滑条落点跳章（拖拽逐帧上抛**吸附后的章下标**；防抖由调用方负责）。
+  final ValueChanged<int> onSeek;
+
+  /// 目录入口。
+  final VoidCallback onToc;
+
+  /// 夜间模式开关。
+  final VoidCallback onNight;
+
+  /// 夜间模式是否已开（图标与高亮态）。
+  final bool nightActive;
+
+  /// 设置面板入口（字号 / 行距 / 页边距 / 主题）。
+  final VoidCallback onSettings;
+
+  /// 更多操作列表入口；`null` = 无任何可收纳项 → 该格不渲染。
+  final VoidCallback? onMore;
+
+  /// 悬浮圆钮（「听」= 朗读开关）；`null` = 不渲染。
   ///
-  /// `null` = 摘要未启用（依赖未齐 / 全局开关关）→ 按钮不渲染。
-  final VoidCallback? onAi;
+  /// 放在本组件内是为了**不给菜单长高**：按钮绝对定位在菜单上方
+  /// （`bottom: kReaderMenuHeight + gap`，`Clip.none` 出圈），行高契约不变。
+  final Widget? floating;
 
-  /// 朗读开关（`TTS-01`）：点一次从当前段开读，再点停止。
-  final VoidCallback? onTts;
+  @override
+  State<ReaderControlBar> createState() => _ReaderControlBarState();
+}
 
-  /// 朗读进行中（按钮显示「停止」形态）。
-  final bool ttsActive;
-
-  /// 朗读设置入口（`TTS-04`/`TTS-05`：语速音色 / 定时停止）。
+class _ReaderControlBarState extends State<ReaderControlBar> {
+  /// 拖拽中的滑条预览值（0..1 归一化）；`null` = 跟随 [widget.chapterIndex]。
   ///
-  /// `null` = 朗读设置未注入 → 按钮不渲染（同 [onAi] 降级口径）。
-  final VoidCallback? onTtsSettings;
+  /// 滑条是受控组件，而落点跳章经 [_ReaderControlBarState] 外的防抖异步执行
+  /// ——拖拽期间必须本地预览，否则拇指被旧章数弹回、跟不了手。外部
+  /// [chapterIndex] 变化（跳章落地）即清空，显示权交还实时值。
+  double? _drag;
+
+  void _onSlide(double t) {
+    final int count = widget.chapterCount;
+    setState(() => _drag = t);
+    final int target = (t * (count - 1)).round();
+    if (target != widget.chapterIndex) widget.onSeek(target);
+  }
+
+  @override
+  void didUpdateWidget(covariant ReaderControlBar old) {
+    super.didUpdateWidget(old);
+    // 跳章已落地（实时章下标动了）→ 清预览；拖拽途中实时值不动、预览保留。
+    if (old.chapterIndex != widget.chapterIndex) _drag = null;
+  }
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final MiThemeMode mode = theme.brightness == Brightness.dark
+        ? MiThemeMode.dark
+        : MiThemeMode.light;
+    final int count = widget.chapterCount;
+    final double t = _drag ??
+        (count > 1
+            ? widget.chapterIndex.clamp(0, count - 1) / (count - 1)
+            : 0);
 
-    return Material(
-      elevation: 8,
-      color: theme.colorScheme.surface,
-      child: SafeArea(
-        top: false,
-        // 用 LayoutBuilder 按**实际可用宽度**决定是否显示文字组标题：窄屏优先保证
-        // 「层级清晰 + 内容不重叠」，标题让位给按钮与读数（阈值见
-        // [kReaderControlLabelMinWidth] 的实测依据）。
-        child: LayoutBuilder(
-          builder: (BuildContext context, BoxConstraints constraints) {
-            final bool showLabels =
-                constraints.maxWidth >= kReaderControlLabelMinWidth;
-            // 极窄屏让进度读数让位（阈值见 [kReaderControlProgressMinWidth]）：
-            // 同一串文字仍由控制条正上方的 ReaderProgressIndicator 常驻显示。
-            final bool showProgress =
-                constraints.maxWidth >= kReaderControlProgressMinWidth;
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                // ── 第一行：章节组 + 朗读与 AI 组 ──
-                // 两组各自成盒、互不贴死；进度读数进「章节」组成为该组的读数。
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    12,
-                    kReaderControlRowPadding,
-                    12,
-                    kReaderControlRowPadding,
-                  ),
-                  child: Row(
-                    children: <Widget>[
-                      Flexible(
-                        child: ReaderControlGroup(
-                          label: showLabels ? '章节' : null,
-                          children: <Widget>[
-                            ReaderControlIconButton(
-                              key: const Key('reader-control-prev'),
-                              tooltip: '上一章',
-                              icon: Icons.skip_previous,
-                              onPressed: canGoPrev ? onPrevChapter : null,
-                            ),
-                            ReaderControlIconButton(
-                              key: const Key('reader-control-next'),
-                              tooltip: '下一章',
-                              icon: Icons.skip_next,
-                              onPressed: canGoNext ? onNextChapter : null,
-                            ),
-                            // 读数用 Flexible + ellipsis：章节数越长（如 1152）
-                            // 文本越宽，须能优雅截断而不是把整组撑爆。
-                            if (showProgress)
-                              Flexible(
-                                child: Padding(
-                                  padding:
-                                      const EdgeInsets.only(left: 8, right: 4),
-                                  child: Text(
-                                    '第 $chapterNumber/$chapterCount 章 · $percent%',
-                                    key: const Key('reader-control-progress'),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: theme.textTheme.bodySmall,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      if (_hasAssistEntry) ...<Widget>[
-                        const SizedBox(width: 8),
-                        // 极窄屏（< kReaderControlProgressMinWidth）下第二组
-                        // **不参与 flex**：两个 `Flexible` 互相挤会溢出。此时让它
-                        // 保持自身宽度并换行独占，空间全给「章节」组。
-                        if (showProgress)
-                          Flexible(child: _buildAssistGroup(showLabels))
-                        else
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: _buildAssistGroup(showLabels),
-                          ),
-                      ],
-                    ],
-                  ),
+    return SizedBox(
+      // 听钮区（透明）计入总高：`Stack` 的命中测试只认自身 bounds，
+      // 钮子画在 bounds 外时事件会穿透到正文（tap 告警「would not hit
+      // test」）。这里把钮区并进盒高，钮落在盒内即可点；钮区本身不放
+      // 任何吸命中的子件，背后正文照旧可点（真悬浮语义）。
+      height: kReaderMenuHeight +
+          (widget.floating == null
+              ? 0
+              : 48 + kReaderMenuFloatingGap),
+      child: Stack(
+        // 悬浮「听」钮在菜单上方，出圈不裁剪。
+        clipBehavior: Clip.none,
+        children: <Widget>[
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: Material(
+              color: theme.colorScheme.surface,
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    _navRow(context, mode, t),
+                    _actionRow(context, mode),
+                  ],
                 ),
-                const ReaderControlHDivider(),
-                // ── 第二行：排版组（字号 / 行距 / 页边距 / 主题）──
-                ReaderSettingsBar(
-                  settings: settings,
-                  onChanged: onSettingsChanged,
-                  showLabel: showLabels,
+              ),
+            ),
+          ),
+          if (widget.floating != null)
+            Positioned(
+              right: 16,
+              bottom: kReaderMenuHeight + kReaderMenuFloatingGap,
+              child: widget.floating!,
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 第一行：上一章 —— 进度滑条 —— 下一章。
+  Widget _navRow(BuildContext context, MiThemeMode mode, double t) {
+    final int count = widget.chapterCount;
+    return SizedBox(
+      height: kReaderMenuNavRowHeight,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          children: <Widget>[
+            _navButton(
+              context: context,
+              mode: mode,
+              label: '上一章',
+              key: const Key('reader-control-prev'),
+              enabled: widget.canGoPrev,
+              onTap: widget.onPrevChapter,
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: MiSlider(
+                  key: const Key('reader-control-progress'),
+                  value: t,
+                  min: 0,
+                  max: 1,
+                  // 按章吸附：一格一章；单章书退化为禁用（无处可跳）。
+                  divisions: count > 1 ? count - 1 : null,
+                  onChanged: count > 1 ? _onSlide : null,
+                  themeMode: mode,
                 ),
-              ],
-            );
-          },
+              ),
+            ),
+            _navButton(
+              context: context,
+              mode: mode,
+              label: '下一章',
+              key: const Key('reader-control-next'),
+              enabled: widget.canGoNext,
+              onTap: widget.onNextChapter,
+            ),
+          ],
         ),
       ),
     );
   }
 
-  /// 是否有「朗读与 AI」组的可用能力（三入口任一非 null）。
-  bool get _hasAssistEntry =>
-      onAi != null || onTts != null || onTtsSettings != null;
+  /// 章节文字钮（上 / 下一章）：按压淡出 + 禁用降透明，不缩放不变色。
+  Widget _navButton({
+    required BuildContext context,
+    required MiThemeMode mode,
+    required String label,
+    required Key key,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      child: MiPressable(
+        key: key,
+        onPressed: enabled ? onTap : null,
+        mode: mode,
+        borderRadius: BorderRadius.circular(12),
+        pressBuilder: (BuildContext context, bool pressed, Widget child) =>
+            Opacity(
+          opacity: enabled ? (pressed ? 0.55 : 1.0) : 0.38,
+          child: child,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Text(
+            label,
+            style: MiTypography.buttonLabel.copyWith(
+              fontSize: 14,
+              color: MiColors.foregroundFor(mode),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
-  /// 「朗读与 AI」分组盒（AI 摘要 / 朗读 / 朗读设置，按可用性出）。
-  Widget _buildAssistGroup(bool showLabels) {
-    return ReaderControlGroup(
-      label: showLabels ? '朗读与 AI' : null,
-      children: <Widget>[
-        if (onAi != null)
-          ReaderControlIconButton(
-            key: const Key('reader-control-ai'),
-            tooltip: 'AI 摘要',
-            icon: Icons.auto_awesome,
-            onPressed: onAi,
+  /// 第二行：目录 / 夜间 / 设置 / 更多（图标 + 文字，等分四格）。
+  ///
+  /// 「图标 + 文字」纵向菜单条目在 mi_like_ui 里**没有对应组件**（已向上游
+  /// 提 issue），暂以 MiPressable + 导航标签排版自拼；上游组件入库后换装。
+  Widget _actionRow(BuildContext context, MiThemeMode mode) {
+    return SizedBox(
+      height: kReaderMenuActionRowHeight,
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: _MenuEntry(
+              key: const Key('reader-toc'),
+              icon: Icons.menu_book_outlined,
+              label: '目录',
+              mode: mode,
+              onPressed: widget.onToc,
+            ),
           ),
-        if (onTts != null)
-          ReaderControlIconButton(
-            key: const Key('reader-control-tts'),
-            tooltip: ttsActive ? '停止朗读' : '朗读',
-            icon: ttsActive ? Icons.stop : Icons.play_arrow,
-            onPressed: onTts,
+          Expanded(
+            child: _MenuEntry(
+              key: const Key('reader-night'),
+              icon: widget.nightActive
+                  ? Icons.light_mode_outlined
+                  : Icons.dark_mode_outlined,
+              label: '夜间',
+              active: widget.nightActive,
+              mode: mode,
+              onPressed: widget.onNight,
+            ),
           ),
-        if (onTtsSettings != null)
-          ReaderControlIconButton(
-            key: const Key('reader-control-tts-settings'),
-            tooltip: '朗读设置',
-            icon: Icons.settings_voice,
-            onPressed: onTtsSettings,
+          Expanded(
+            child: _MenuEntry(
+              key: const Key('reader-appearance'),
+              icon: Icons.tune,
+              label: '设置',
+              mode: mode,
+              onPressed: widget.onSettings,
+            ),
           ),
-      ],
+          if (widget.onMore != null)
+            Expanded(
+              child: _MenuEntry(
+                key: const Key('reader-more'),
+                icon: Icons.more_horiz,
+                label: '更多',
+                mode: mode,
+                onPressed: widget.onMore,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 底部菜单的一格「图标 + 文字」条目。
+class _MenuEntry extends StatelessWidget {
+  const _MenuEntry({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.mode,
+    required this.onPressed,
+    this.active = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final MiThemeMode mode;
+  final VoidCallback? onPressed;
+
+  /// 高亮态（夜间已开）：图标与文字走强调色。
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color ink = active ? MiColors.accent : MiColors.foregroundFor(mode);
+    return Semantics(
+      button: true,
+      enabled: onPressed != null,
+      child: MiPressable(
+        onPressed: onPressed,
+        mode: mode,
+        borderRadius: BorderRadius.circular(12),
+        pressBuilder: (BuildContext context, bool pressed, Widget child) =>
+            Opacity(opacity: pressed ? 0.55 : 1.0, child: child),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, size: 22, color: ink),
+            const SizedBox(height: 3),
+            Text(
+              label,
+              style: MiTypography.navLabelFor(mode).copyWith(color: ink),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

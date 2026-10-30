@@ -258,7 +258,7 @@ void main() {
 
       // 打开目录
       await showChrome(tester);
-      await tester.tap(find.byIcon(Icons.list));
+      await tester.tap(find.byKey(const Key('reader-toc')));
       await tester.pumpAndSettle();
 
       expect(find.byType(ListTile), findsNWidgets(3));
@@ -335,7 +335,7 @@ void main() {
       await _settle(tester);
 
       await showChrome(tester);
-      await tester.tap(find.byIcon(Icons.list));
+      await tester.tap(find.byKey(const Key('reader-toc')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('第三章'));
       await tester.pumpAndSettle();

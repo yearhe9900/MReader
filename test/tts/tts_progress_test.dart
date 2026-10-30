@@ -76,6 +76,7 @@ void main() {
       await settle(tester);
 
       // 开读（起点 = 视口中心命中段；先记下起点段供期望值计算）。
+      await showChrome(tester); // 听钮在底部菜单上方
       await tester.tap(find.byKey(const Key('reader-control-tts')));
       await settle(tester);
       expect(engine.spoken, hasLength(1));

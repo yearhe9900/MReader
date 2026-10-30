@@ -80,6 +80,7 @@ void main() {
       final FakeTtsEngine engine = FakeTtsEngine();
       await tester.pumpWidget(buildApp(engine));
       await settle(tester);
+      await showChrome(tester); // 听钮在底部菜单上方，需先唤出菜单
 
       await tester.tap(find.byKey(const Key('reader-control-tts')));
       await settle(tester);
@@ -100,8 +101,12 @@ void main() {
       await tester.pumpWidget(buildApp(engine));
       await settle(tester);
 
-      // 打开朗读设置面板（懒建控制器取音色 → 弹层）。
-      await tester.tap(find.byKey(const Key('reader-control-tts-settings')));
+      // 朗读设置已收进菜单「更多」列表：先唤出菜单 → 开更多 → 选「朗读设置」
+      // （懒建控制器取音色 → 弹层）。
+      await showChrome(tester);
+      await tester.tap(find.byKey(const Key('reader-more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('朗读设置'));
       await tester.pumpAndSettle();
 
       expect(find.text('朗读设置'), findsOneWidget);

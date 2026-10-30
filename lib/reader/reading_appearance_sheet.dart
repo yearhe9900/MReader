@@ -1,4 +1,9 @@
-// `TYP-07` / `TYP-08`：阅读外观面板——字体族选择 + 应用内亮度遮罩 + 预设背景色。
+// `TYP-07` / `TYP-08` + 排版快捷区：阅读设置面板——字体族 + 字号 / 行距 /
+// 页边距 + 应用内亮度遮罩 + 预设背景色。
+//
+// 排版三件（字号 / 行距 / 页边距）原在底部控制条的「排版」分组；菜单按截图
+// 形态简化后（`control_bar.dart`），它们整体迁入本面板的「排版」区，
+// 快捷入口换成菜单「设置」格。
 //
 // 验收映射：
 //   · `TYP-07` ①「可切换并立即生效」——点字体族 chip 即 [onChanged] 全量回传
@@ -11,6 +16,7 @@
 import 'package:flutter/material.dart';
 
 import '../typography/reader_settings.dart';
+import '../ui/mi_like_ui/mi_like_ui.dart';
 import 'reading_background.dart';
 import 'reading_prefs.dart';
 
@@ -47,14 +53,26 @@ class _ReadingAppearanceSheetState extends State<ReadingAppearanceSheet> {
 
   /// 生成一份排版设置（显式构造而非 `copyWith`——[ReaderSettings.copyWith] 的
   /// 「fontFamily 传 null = 重置」语义会把未传入的字体族清掉，这里必须全字段可控）。
-  ReaderSettings _settingsWith({required String? fontFamily}) {
+  ///
+  /// [fontFamily] 省略 = **保持当前字体族**（_unset 哨兵）；显式传 `null` 才是
+  /// 重置为系统默认——排版三件（字号 / 行距 / 页边距）不该碰字体族。
+  static const Object _unset = Object();
+
+  ReaderSettings _settingsWith({
+    Object? fontFamily = _unset,
+    double? fontSize,
+    double? lineHeight,
+    PageMargin? pageMargin,
+  }) {
     final ReaderSettings current = _prefs.settings;
     return ReaderSettings(
-      fontSize: current.fontSize,
-      lineHeight: current.lineHeight,
-      fontFamily: fontFamily,
+      fontSize: fontSize ?? current.fontSize,
+      lineHeight: lineHeight ?? current.lineHeight,
+      fontFamily: identical(fontFamily, _unset)
+          ? current.fontFamily
+          : fontFamily as String?,
       themeMode: current.themeMode,
-      pageMargin: current.pageMargin,
+      pageMargin: pageMargin ?? current.pageMargin,
     );
   }
 
@@ -62,6 +80,133 @@ class _ReadingAppearanceSheetState extends State<ReadingAppearanceSheet> {
   void _emit(ReadingPrefs next) {
     setState(() => _prefs = next);
     widget.onChanged(next);
+  }
+
+  /// 排版区：字号 − / 值 / + ＋ 行距滑条 ＋ 页边距三档（原控制条「排版」组）。
+  ///
+  /// Key 沿用原控制条（`reader-setting-*`），查找口径不变。行距滑条用
+  /// mi_like_ui [MiSlider]（分档 16，与原 Material Slider 同档数）。
+  Widget _buildTypographySection(BuildContext context, ThemeData theme) {
+    final ReaderSettings current = _prefs.settings;
+    final bool canShrink = current.fontSize > ReaderSettings.minFontSize;
+    final bool canGrow = current.fontSize < ReaderSettings.maxFontSize;
+    final MiThemeMode mode = theme.brightness == Brightness.dark
+        ? MiThemeMode.dark
+        : MiThemeMode.light;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            IconButton(
+              key: const Key('reader-setting-font-dec'),
+              tooltip: '减小字号',
+              icon: const Icon(Icons.text_decrease),
+              onPressed: canShrink
+                  ? () => _emit(_prefs.copyWith(
+                        settings: _settingsWith(
+                          fontSize:
+                              (current.fontSize - ReaderSettings.fontStep)
+                                  .clamp(
+                                    ReaderSettings.minFontSize,
+                                    ReaderSettings.maxFontSize,
+                                  ),
+                        ),
+                      ))
+                  : null,
+            ),
+            SizedBox(
+              width: 34,
+              child: Text(
+                current.fontSize.toStringAsFixed(0),
+                key: const Key('reader-setting-font-value'),
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium,
+              ),
+            ),
+            IconButton(
+              key: const Key('reader-setting-font-inc'),
+              tooltip: '增大字号',
+              icon: const Icon(Icons.text_increase),
+              onPressed: canGrow
+                  ? () => _emit(_prefs.copyWith(
+                        settings: _settingsWith(
+                          fontSize:
+                              (current.fontSize + ReaderSettings.fontStep)
+                                  .clamp(
+                                    ReaderSettings.minFontSize,
+                                    ReaderSettings.maxFontSize,
+                                  ),
+                        ),
+                      ))
+                  : null,
+            ),
+            const SizedBox(width: 8),
+            const Icon(Icons.format_line_spacing, size: 20),
+            Expanded(
+              child: MiSlider(
+                key: const Key('reader-setting-line-height'),
+                value: current.lineHeight.clamp(
+                  ReaderSettings.minLineHeight,
+                  ReaderSettings.maxLineHeight,
+                ),
+                min: ReaderSettings.minLineHeight,
+                max: ReaderSettings.maxLineHeight,
+                divisions: 16,
+                themeMode: mode,
+                onChanged: (double value) => _emit(_prefs.copyWith(
+                  settings: _settingsWith(lineHeight: value),
+                )),
+              ),
+            ),
+          ],
+        ),
+        Row(
+          children: <Widget>[
+            const SizedBox(width: 12),
+            Text('页边距', style: theme.textTheme.bodySmall),
+            const SizedBox(width: 4),
+            _buildMarginToggle(current),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// 页边距三档：narrow → normal → wide → narrow …（沿用原控制条行为）。
+  Widget _buildMarginToggle(ReaderSettings current) {
+    final IconData icon;
+    final String tooltip;
+    switch (current.pageMargin) {
+      case PageMargin.narrow:
+        icon = Icons.format_align_left;
+        tooltip = '窄边距（点击切换）';
+      case PageMargin.normal:
+        icon = Icons.format_align_center;
+        tooltip = '正常边距（点击切换）';
+      case PageMargin.wide:
+        icon = Icons.format_align_right;
+        tooltip = '宽边距（点击切换）';
+    }
+    return IconButton(
+      key: const Key('reader-setting-margin'),
+      tooltip: tooltip,
+      icon: Icon(icon),
+      onPressed: () {
+        final PageMargin next;
+        switch (current.pageMargin) {
+          case PageMargin.narrow:
+            next = PageMargin.normal;
+          case PageMargin.normal:
+            next = PageMargin.wide;
+          case PageMargin.wide:
+            next = PageMargin.narrow;
+        }
+        _emit(_prefs.copyWith(
+          settings: _settingsWith(pageMargin: next),
+        ));
+      },
+    );
   }
 
   @override
@@ -109,6 +254,10 @@ class _ReadingAppearanceSheetState extends State<ReadingAppearanceSheet> {
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+            Text('排版', style: theme.textTheme.labelLarge),
+            const SizedBox(height: 4),
+            _buildTypographySection(context, theme),
             const SizedBox(height: 16),
             Text('翻页方式', style: theme.textTheme.labelLarge),
             const SizedBox(height: 8),

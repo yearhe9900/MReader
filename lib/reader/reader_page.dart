@@ -38,6 +38,7 @@ import '../diagnostics/perf_log.dart';
 import '../format/book_source.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
+import '../settings/settings_store.dart';
 import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
 import '../sync/sync_trigger.dart';
@@ -56,6 +57,7 @@ import '../typography/typeset.dart';
 import '../ui/ask_panel.dart';
 import '../ui/entity_page.dart';
 import '../ui/glass_kit.dart';
+import '../ui/mi_like_ui/mi_like_ui.dart';
 import '../ui/reader_control_chrome.dart';
 import '../ui/search_sheet.dart';
 import 'bookmark.dart';
@@ -3712,7 +3714,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     await _jumpToLink(chapterIndex, paraIndex);
   }
 
-  /// 打开外观面板（`TYP-07` 字体族 / `TYP-08` 亮度与背景色）。
+  /// 打开设置面板（菜单「设置」格；原控制条排版组已并入面板，见
+  /// `reading_appearance_sheet.dart` 的排版区）。
   void _openAppearance() {
     GlassOverlays.showSheet<void>(
       context: context,
@@ -3725,6 +3728,118 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             pageMode: _pageTurnMode,
           ),
           onChanged: _onPrefsChanged,
+        ),
+      ),
+    );
+  }
+
+  /// 菜单「更多」里可收纳项是否非空（AI 摘要 / 朗读设置任一可用）。
+  ///
+  /// 全不可用时更多入口**不渲染**（`control_bar.dart` 的 `onMore: null`
+  /// 降级口径）——不留一个点开是空壳的格子。
+  bool get _hasMoreEntries =>
+      _summaryEnabled || widget.ttsSettings != null;
+
+  /// 菜单「更多」操作列表（MiDialog 纵向列表形态）：
+  ///
+  /// AI 摘要与朗读设置是**低频入口**，从旧控制条收进本列表（截图形态
+  /// 第二行只有四个格子）。选中后先关弹层再执行，与书架长按弹框同款。
+  void _openMoreMenu() {
+    showDialog<void>(
+      context: context,
+      // 路由遮罩透明：遮罩由 MiDialog 自绘（与书架长按弹框同口径）。
+      barrierColor: Colors.transparent,
+      builder: (BuildContext dialogContext) => MiDialog(
+        layout: MiDialogLayout.list,
+        title: '更多',
+        themeMode: Theme.of(context).brightness == Brightness.dark
+            ? MiThemeMode.dark
+            : MiThemeMode.light,
+        items: <MiDialogItem>[
+          if (_summaryEnabled)
+            MiDialogItem(
+              label: 'AI 摘要',
+              icon: const Icon(Icons.auto_awesome, size: 22),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _openSummarySheet(SummaryMode.chapter);
+              },
+            ),
+          if (widget.ttsSettings != null)
+            MiDialogItem(
+              label: '朗读设置',
+              icon: const Icon(Icons.settings_voice, size: 22),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                unawaited(_openTtsSettings());
+              },
+            ),
+        ],
+        onScrimTap: () => Navigator.of(dialogContext).pop(),
+      ),
+    );
+  }
+
+  /// 菜单「夜间」格：dark ↔ 之前档位的开光（只动 themeMode，排版其余不动）。
+  ///
+  /// 从 dark 切回时回落 **system**（而不是记住前值）：面板里也可选三态，
+  /// 这里是快捷开光，语义取「关掉夜间 = 回到跟随系统」。
+  void _toggleNight() {
+    final AppThemeMode next = _settings.themeMode == AppThemeMode.dark
+        ? AppThemeMode.system
+        : AppThemeMode.dark;
+    _onSettingsChanged(_settings.copyWith(themeMode: next));
+  }
+
+  /// 进度滑条落点跳章（拖拽逐帧上抛，**防抖**：停手 200ms 才真跳）。
+  ///
+  /// 滑条按章吸附，拖过全书会逐章回调；每次 [_goToChapter] 都要载入 + 落位，
+  /// 逐帧直跳会把加载队列打满。预览拇指跟手由控制条本地态负责
+  /// （`control_bar._drag`），这里只管落点。
+  Timer? _seekDebounce;
+
+  void _seekToChapter(int index) {
+    _seekDebounce?.cancel();
+    _seekDebounce = Timer(const Duration(milliseconds: 200), () {
+      _seekDebounce = null;
+      if (!mounted || _disposed) return;
+      unawaited(_goToChapter(index));
+    });
+  }
+
+  /// 悬浮「听」钮（菜单上方右侧，截图同位）：开读 / 停止。
+  ///
+  /// Key / tooltip 沿用旧控制条朗读按钮（`reader-control-tts` / 「朗读」/
+  /// 「停止朗读」），查找口径不变。
+  Widget _buildTtsFab(ThemeData theme) {
+    final bool running = _tts?.isRunning ?? false;
+    return Tooltip(
+      message: running ? '停止朗读' : '朗读',
+      child: Semantics(
+        button: true,
+        label: running ? '停止朗读' : '朗读',
+        child: Material(
+          color: theme.colorScheme.surfaceContainerHighest,
+          shape: const CircleBorder(),
+          child: InkWell(
+            key: const Key('reader-control-tts'),
+            customBorder: const CircleBorder(),
+            onTap: _toggleTts,
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: Center(
+                child: running
+                    ? const Icon(Icons.stop, size: 26)
+                    : Text(
+                        '听',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -4052,25 +4167,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                       ),
                     ],
                   ),
-                // 分组③ 外观与视图：外观面板（`TYP-03`/`TYP-07`/`TYP-08`）、
-                // 目录（`NAV-01` 要求 AppBar 目录按钮）。全屏切换按钮已移除：
-                // 默认即全屏、切换改走点正文，详见 `_fullscreen` 字段注释。
-                ReaderAppBarGroup(
-                  children: <Widget>[
-                    IconButton(
-                      key: const Key('reader-appearance'),
-                      tooltip: '外观',
-                      icon: const Icon(Icons.tune),
-                      onPressed: ready ? _openAppearance : null,
-                    ),
-                    IconButton(
-                      key: const Key('reader-toc'),
-                      tooltip: '目录',
-                      icon: const Icon(Icons.list),
-                      onPressed: ready ? _openToc : null,
-                    ),
-                  ],
-                ),
+                // 外观 / 目录入口已迁至**底部菜单**（点正文唤出；`control_bar.dart`
+                // 的「设置」「目录」格），顶栏不再重复。
               ],
             ),
       // 底部层 = 常驻读数（恒在）+ 控制条（chrome 唤出时）。
@@ -4104,23 +4202,19 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           ),
           if (ready && !_fullscreen)
             ReaderControlBar(
-              settings: _settings,
-              onSettingsChanged: _onSettingsChanged,
-              chapterNumber: _liveIndex + 1,
+              chapterIndex: _liveIndex,
               chapterCount: chapters.length,
-              percent: _livePercent,
               canGoPrev: _currentIndex > 0,
               canGoNext: _currentIndex < chapters.length - 1,
               onPrevChapter: () => unawaited(_goToChapter(_currentIndex - 1)),
               onNextChapter: () => unawaited(_goToChapter(_currentIndex + 1)),
-              onAi: _summaryEnabled
-                  ? () => _openSummarySheet(SummaryMode.chapter)
-                  : null,
-              onTts: _toggleTts,
-              ttsActive: _tts?.isRunning ?? false,
-              onTtsSettings: widget.ttsSettings == null
-                  ? null
-                  : () => unawaited(_openTtsSettings()),
+              onSeek: _seekToChapter,
+              onToc: _openToc,
+              onNight: _toggleNight,
+              nightActive: _settings.themeMode == AppThemeMode.dark,
+              onSettings: _openAppearance,
+              onMore: _hasMoreEntries ? _openMoreMenu : null,
+              floating: _buildTtsFab(theme),
             ),
         ],
       ),

@@ -72,7 +72,8 @@ void main() {
       await tester.pumpWidget(buildApp(engine));
       await settle(tester);
 
-      // 未开读：无朗读高亮，按钮为「朗读」。
+      // 未开读：无朗读高亮，按钮为「朗读」（听钮在底部菜单上方，需先唤出）。
+      await showChrome(tester);
       expect(_activeHighlight(), findsNothing);
       expect(find.byTooltip('朗读'), findsOneWidget);
 
@@ -100,6 +101,7 @@ void main() {
       final FakeTtsEngine engine = FakeTtsEngine()..initResult = false;
       await tester.pumpWidget(buildApp(engine));
       await settle(tester);
+      await showChrome(tester);
 
       await tester.tap(find.byKey(const Key('reader-control-tts')));
       await settle(tester, rounds: 20);
@@ -116,6 +118,7 @@ void main() {
       final FakeTtsEngine engine = FakeTtsEngine();
       await tester.pumpWidget(buildApp(engine));
       await settle(tester);
+      await showChrome(tester);
 
       await tester.tap(find.byKey(const Key('reader-control-tts')));
       await settle(tester);
@@ -146,6 +149,7 @@ void main() {
       final FakeTtsEngine engine = FakeTtsEngine();
       await tester.pumpWidget(buildApp(engine));
       await settle(tester);
+      await showChrome(tester);
 
       await tester.tap(find.byKey(const Key('reader-control-tts')));
       await settle(tester);

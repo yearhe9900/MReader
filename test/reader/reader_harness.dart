@@ -183,8 +183,9 @@ LibraryRepository fakeRepository(AppPaths paths) =>
 /// （`_fullscreen = true`），顶栏与底部控制条只在**点正文**时出现；顶栏里的
 /// 「进入全屏」按钮与全屏时右上角的「退出全屏」浮层按钮均已移除。
 ///
-/// 因此凡是要点顶栏按钮（搜索 `reader-search` / 书签 `reader-bookmarks` /
-/// 外观 `reader-appearance` / 目录 `reader-toc` / AI `reader-ai-panel`）的用例，
+/// 因此凡是要点 chrome 上的按钮（搜索 `reader-search` / 书签 `reader-bookmarks` /
+/// AI `reader-ai-panel` 在顶栏；设置 `reader-appearance` / 目录 `reader-toc` /
+/// 更多 `reader-more` / 听钮 `reader-control-tts` 在底部菜单）的用例，
 /// **必须先调本函数**，否则按钮不在树上。
 ///
 /// 走**常驻状态行**（`reader-chrome-toggle-status`）而不是点正文：图片页（CBZ/PDF）

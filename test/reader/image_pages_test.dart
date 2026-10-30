@@ -215,9 +215,9 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 目录跳到第 3 页。
+      // 目录跳到第 3 页（目录入口在底部菜单，key reader-toc）。
       await showChrome(tester);
-      await tester.tap(find.byIcon(Icons.list));
+      await tester.tap(find.byKey(const Key('reader-toc')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('第 3 页'));
       await tester.pumpAndSettle();
