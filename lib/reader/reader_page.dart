@@ -538,6 +538,20 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// [_checkOpenGate] 的复查回调已挂上（postFrame 单飞：防回调堆积）。
   bool _openGateCheckScheduled = false;
 
+  /// 「点击即开书」延迟路径的**揭幕闩**：纸张已带着骨架屏滑入（点击即开书的
+  /// 体感），但正文仍被不透明骨架**盖住**，直到落位门闸通过（精确落位收敛 +
+  /// 视口真身 + 锚点布局定稿，见 [_checkOpenGate]）才揭幕。
+  ///
+  /// 动因：「估算→精确」大跳、占位带换血这些开书闪动链路原本被转场门闸挡在
+  /// 屏幕外；骨架首帧就放行转场后，它们会发生在可见纸面上 = 闪屏。揭幕闩把
+  /// 「纸张滑入」与「正文上屏」解耦：滑入照旧立即（体感保留），跳变全程发生在
+  /// 骨架之下。直供书源路径恒 false（转场本身就等到落位才滑）。
+  bool _skeletonCover = false;
+
+  /// 骨架屏揭幕闩的兜底闹钟（[kReaderOpenHoldTimeout]）：门闸漏报时强制揭幕，
+  /// 否则骨架永远盖着正文 = 书打不开。
+  Timer? _skeletonRevealTimeout;
+
   /// 程序化跳转中（`jumpTo` 同步派发的通知基于陈旧布局 → 处理器抑制）。
   bool _inPagedOp = false;
 
@@ -589,6 +603,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // 期间的读字节 / 建源（书架「点击即开书」，见 [ReaderPage.sourceFuture]）。
     _sourceReady =
         widget.sourceFuture ?? Future<BookSource>.value(widget.source);
+    // 延迟路径开揭幕闩：纸张带着骨架屏滑入后，正文仍被骨架盖住，
+    // 落位门闸通过才揭（见 [_skeletonCover]）。
+    _skeletonCover = widget.sourceFuture != null;
     WidgetsBinding.instance.addObserver(this);
     if (widget.statsService != null) {
       _tracker = SessionTracker(bookId: widget.record.bookId);
@@ -635,6 +652,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     _imageCache.dispose();
     _controller?.dispose();
+    _skeletonRevealTimeout?.cancel();
+    _skeletonRevealTimeout = null;
     // 书源不直接销毁：交回仓库**复用池**（§2.108）——同书再开零读盘零解析。
     // 池内按字节上限淘汰即 dispose，此路径恒不泄漏。骨架屏期间仍在准备的
     // 延迟书源：到手即还；准备失败（无源可还）静默——错误已由 [_open] 落到错误态。
@@ -700,18 +719,22 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   Future<void> _open() async {
     final Stopwatch openClock = Stopwatch()..start();
     try {
-      // ## 「点击即开书」（书架延迟书源管道）：骨架屏首帧上屏即放行纸张滑入——
-      // 读字节 / 建源 / 章节表的等待全程发生在滑入后的阅读页里，而不是把转场
+      // ## 「点击即开书」（书架延迟书源管道）：骨架屏首帧上屏即放行**纸张滑入**
+      // ——读字节 / 建源 / 章节表的等待全程发生在滑入后的阅读页里，而不是把转场
       // 按在书架侧等就绪（那样点击后书架上毫无反馈地白等）。放行走帧回调
       // （与 [_signalOpenReady] 同纪律：此刻帧还没绘制）。
       //
+      // ⚠️ 只放滑入、**不揭幕**：正文仍被骨架盖住（[_skeletonCover]），
+      // 「估算→精确」大跳 / 占位带换血这些开书闪动链路全程发生在骨架之下，
+      // 落位门闸通过（[_releaseOpenGate]）才揭——否则跳变发生在可见纸面上 = 闪屏。
+      //
       // **只在延迟路径生效**：直供书源（深链 / 详情页 / 生词本）保留「精确落位
-      // 收敛才放行」的既有门闸——那条路径本来就没有「点击后无反馈」的问题。
+      // 收敛才放行」的既有门闸（滑入与揭幕本就是同一时刻）。
       if (widget.sourceFuture != null) {
         WidgetsBinding.instance.addPostFrameCallback((Duration _) {
           // 首帧时正文恰已就绪（快路径）→ 跳过：走下面的正常放行（带落位门闸）。
           if (!mounted || _disposed || _chapters != null) return;
-          _releaseOpenGate();
+          _releasePaperSlide();
         });
         WidgetsBinding.instance.scheduleFrame();
       }
@@ -803,7 +826,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         // 章块 key **不预分配**（§2.107）：按需懒建（[_chapterKeyAt]，putIfAbsent
         // 保证同 index 同 key，Element 复用语义与预分配版一致）。
       });
-      if (chapters.isEmpty) return;
+      if (chapters.isEmpty) {
+        // 空章：骨架没东西可盖，立即揭幕（否则要等 3s 兑底闹钟才看到提示）。
+        _revealSkeleton();
+        return;
+      }
       _noteReading(); // 定位完成：补记一次带真实坐标的活跃（起表在 initState）
 
       // 字数权重不阻塞首帧：fire-and-forget，取到前等权显示、取到后切加权。
@@ -886,7 +913,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// [requireLanded]：分页模式的「就绪」= 精确落位收敛 + **视口真身**（路线 A
   /// 纪律②）+ **锚点布局定稿**（[_anchorLayoutFinal]，防落位后闪屏）；未满足挂
   /// [_openGatePending] 等 [_checkOpenGate] 复查；3s 兜底
-  /// （`kReaderOpenHoldTimeout`）保证「漏报就绪不卡死」。
+  /// （[kReaderOpenHoldTimeout]）保证「漏报就绪不卡死」。
   void _signalOpenReady({bool requireLanded = false}) {
     if (requireLanded && (!_positionConverged || !_anchorLayoutFinal())) {
       _openGatePending = true;
@@ -899,6 +926,27 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // 帧回调要等**下一帧**才跑；收敛点可能在帧外（postFrame 阶段 / 微任务）
     // 触发，不补调度帧回调会饿死到 3s 兜底（[_startPagedFrames] 同款处理）。
     WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// 延迟路径的**只放滑入**（不揭幕）：骨架屏首帧上屏时调用。
+  ///
+  /// 纸张带着骨架屏滑入（点击即开书的体感），正文仍被骨架盖住（[_skeletonCover]）；
+  /// 落位门闸通过（[_releaseOpenGate]）才揭。同时武装揭幕兜底闹钟
+  /// （[kReaderOpenHoldTimeout]）：门闸漏报时强制揭幕，否则骨架永远盖着正文。
+  void _releasePaperSlide() {
+    ReaderOpenTransition.signalReady();
+    _enterOpenSlideWindow();
+    _skeletonRevealTimeout ??=
+        Timer(kReaderOpenHoldTimeout, _revealSkeleton);
+  }
+
+  /// 揭开骨架幕（幂等）：正文真正上屏；取消兜底闹钟。
+  void _revealSkeleton() {
+    _skeletonRevealTimeout?.cancel();
+    _skeletonRevealTimeout = null;
+    if (!_skeletonCover) return;
+    _skeletonCover = false;
+    if (mounted && !_disposed) setState(() {});
   }
 
   /// 开书门闸补报：[_openGatePending] 期间每次收敛 / 换视图都来戳一下，**postFrame
@@ -923,10 +971,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.scheduleFrame();
   }
 
-  /// 报「就绪」放行纸张滑入，并同帧进入**开书滑入窗**（动画期零排版，见 [_openSliding]）。
+  /// 报「就绪」：揭幕 + 放行纸张滑入 + 同帧进入**开书滑入窗**（动画期零排版，见 [_openSliding]）。
   ///
   /// 放行与冻结必须同拍：`signalReady` 同步起跑滑入动画，晚一帧冻结就晚一帧零排版。
+  /// 延迟路径下滑入早已在骨架首帧放行（[_releasePaperSlide]），此处的职责只剩
+  /// **揭幕**（落位已收敛，跳变不会再被看见）。
   void _releaseOpenGate() {
+    _revealSkeleton();
     ReaderOpenTransition.signalReady();
     _enterOpenSlideWindow();
   }
@@ -4278,7 +4329,51 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               child: const Icon(Icons.arrow_back),
             )
           : null,
-      body: _buildBody(theme, systemPadding, systemTextScaler),
+      body: _buildBodyWithSkeletonCover(theme, systemPadding, systemTextScaler),
+    );
+  }
+
+  /// 正文 + **揭幕闩**（延迟路径）：`_skeletonCover` 期间骨架作为**不透明幕布**
+  /// 盖在正文之上。
+  ///
+  /// 关键：正文**照常构建 / 布局 / 落位**（幕布只是绘制层，不进正文子树）——
+  /// 「估算→精确」大跳、占位带换血的收敛机械照跑，只是全程发生在幕布之下，
+  /// 用户看不到；门闸通过（[_releaseOpenGate] → [_revealSkeleton]）才揭幕，
+  /// 揭幕那一刻正文已停在目标位 = 零跳变。
+  ///
+  /// 幕布吞掉手势（同 [_restoreMask] 口径）：揭幕前的滚动 / 点击落在未定稿的
+  /// 正文上只会制造新的跳变。直供书源路径 `_skeletonCover` 恒 false，本方法
+  /// 原样返回正文。
+  Widget _buildBodyWithSkeletonCover(
+    ThemeData theme,
+    EdgeInsets systemPadding,
+    TextScaler systemTextScaler,
+  ) {
+    final Widget body = _buildBody(theme, systemPadding, systemTextScaler);
+    // `_ready` 之前正文区本身就是骨架屏（`_buildBody` 的早退分支）或错误态，
+    // 无幕可盖——只在正文**真身**会入屏的那一刻起幕，避免双层骨架。
+    if (!_skeletonCover || !_ready) return body;
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        body,
+        Positioned.fill(
+          child: GestureDetector(
+            key: const ValueKey<String>('reader-skeleton-cover'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () {},
+            child: ColoredBox(
+              // 底色跟页面底色——夜间 / 纯黑背景时不得闪白。
+              color: _pageColor(theme),
+              child: _OpenSkeleton(
+                theme: theme,
+                systemPadding: systemPadding,
+                pageMarginH: _settings.pageMargin.horizontal,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

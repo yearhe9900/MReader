@@ -8,7 +8,7 @@
 
 ### 变更
 
-- 书架「点击即开书」：点书卡立即进阅读页（纸张滑入时上面即骨架屏），读字节 / 建源改在骨架屏期间进行；书卡封面的「打开准备中」loading 覆盖层退场
+- 书架「点击即开书」：点书卡立即进阅读页（纸张滑入时上面即骨架屏），读字节 / 建源改在骨架屏期间进行；书卡封面的「打开准备中」loading 覆盖层退场。骨架屏盖到落位收敛才揭幕（估算→精确大跳 / 占位带换血全程发生在骨架之下，不闪屏）
 - 图书解析内核同步上游 `rust_reader_kernel@d40f59f`：PDF 体验冲刺两批——书签树递归/命名 Dest 解析（不再「直接无目录」）、`/Encrypt` 加密书明确报不支持、`/Differences` 解中文乱码、Form XObject 递归（页眉页脚不再整段缺失）；EPUB 目录只取 toc 型 nav；HTML 清洗修未闭合 `<meta>` 丢整章/行间空格/ruby 注音；内核并发加固（锁中毒自恢复、句柄 generation 防 ABA）；上游 ABI v10→v11 增量在 `rrk-ffi`/`rrk-layout`（不在 vendored 集合，宿主桥面不变），`cargo test --workspace` 全绿
 - 图书解析内核同步上游 `rust_reader_kernel@46a3010`：畸形输入加固第一批——MOBI 短 record0 越界 panic（改缺省读取）与封面偏移饱和、HUFF/CDIC 偏移表越界夹紧、解压炸弹三道闸（单次 32MB / 词典深度 64 层 / 全书 256MB）、PDF 流解码限长与 ObjStm 负长度挂死防护、MOBI 书名尾部 NUL 剔除；ABI 10 不变，`cargo test --workspace` 全绿
 

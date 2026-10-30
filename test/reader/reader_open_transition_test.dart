@@ -514,10 +514,11 @@ void main() {
       await closeBook(tester);
     });
 
-    testWidgets('延迟书源（点击即开书）：骨架屏首帧即放行，书源到手后换真正文',
+    testWidgets('延迟书源（点击即开书）：骨架首帧放行滑入，落位收敛后才揭幕',
         (WidgetTester tester) async {
       // 书架「点击即开书」管道：push 时不等建源（`sourceFuture` 挂闸），阅读页
-      // 先铺骨架屏并首帧放行纸张滑入；闸门释放后才进既有开书链路、换真正文。
+      // 先铺骨架屏、首帧放行纸张滑入；但正文仍被骨架**盖住**（揭幕闩），
+      // 落位门闸通过才揭——否则「估算→精确」大跳发生在可见纸面上 = 闪屏。
       final ProgressStore progressStore = ProgressStore(paths);
       final Completer<BookSource> gate = Completer<BookSource>();
       await tester.pumpWidget(_realHost(() => ReaderPage(
@@ -534,18 +535,85 @@ void main() {
         findsOneWidget,
         reason: '书源未就绪时正文区应铺骨架屏（点击即开书的视觉主体）',
       );
-      // 骨架首帧即放行：转场不该按到 3s 兜底，此刻已不在等待。
+      // 骨架首帧即放行滑入：转场不该按到 3s 兜底，此刻已不在等待。
       expect(ReaderOpenTransition.isActive, isFalse,
           reason: '骨架屏首帧上屏即应放行纸张滑入（不再等正文就绪）');
 
-      // 放开书源闸 → 既有开书链路接管 → 骨架屏换真正文。
+      // 放开书源闸 → 既有开书链路接管；正文在骨架**之下**构建、落位，
+      // 收敛揭幕后骨架退场。
       gate.complete(FakeBookSource());
-      final bool shown = await pumpUntil(
-          tester, () => find.textContaining('第1章正文').evaluate().isNotEmpty);
-      expect(shown, isTrue, reason: '书源到手后应照常渲染正文');
-      expect(find.byKey(const ValueKey<String>('reader-skeleton')),
-          findsNothing,
-          reason: '正文就绪后骨架屏必须退场');
+      final bool revealed = await pumpUntil(tester,
+          () => find.byKey(const ValueKey<String>('reader-skeleton')).evaluate().isEmpty &&
+              find.textContaining('第1章正文').evaluate().isNotEmpty);
+      expect(revealed, isTrue,
+          reason: '书源到手 + 落位收敛后应揭幕（骨架退场、正文可见）');
+
+      await closeBook(tester);
+    });
+
+    testWidgets('延迟书源揭幕闩：正文首现于骨架之下（估算落位大跳不发生在可见纸面）',
+        (WidgetTester tester) async {
+      // 「点击即开书」的闪屏回归防线：长章 + 恢复到 90% ⇒ 二次精确落位必然晚于
+      // 正文首现。揭幕闩必须在这段窗口里**仍然盖着**——正文 widget 已在树上
+      // （构建 / 落位照跑），但骨架幕布不得撤。
+      final ProgressStore progressStore = ProgressStore(paths);
+      await tester.runAsync(
+        () => progressStore.save(
+          ReadingProgress(
+            bookId: 'testbook01',
+            chapterHref: 'h1',
+            chapterIndex: 0,
+            chapterPos: 0.9,
+            updatedAt: 1,
+          ),
+        ),
+      );
+      final Completer<BookSource> gate = Completer<BookSource>();
+      await tester.pumpWidget(_realHost(() => ReaderPage(
+            sourceFuture: gate.future,
+            record: fakeRecord(),
+            progressStore: progressStore,
+            repository: fakeRepository(paths),
+          )));
+      await tester.tap(find.byKey(_kOpenKey));
+      await settle(tester, rounds: 2);
+      expect(ReaderOpenTransition.isActive, isFalse, reason: '骨架首帧已放行滑入');
+
+      gate.complete(FakeBookSource(paragraphCounts: const <int>[3000]));
+      // 逐轮推进，盯「正文 widget 首次进树」那一刻：幕布必须仍在。
+      // ⚠️ 先等幕布**出现**（书源就绪 → `_ready` 才起幕）再等它撤——直接盯
+      // 「幕布已撤」会在起幕前的空窗里误判为真、用例空转绿。
+      bool sawCoveredContent = false;
+      final bool covered = await pumpUntil(tester,
+          () => find
+              .byKey(const ValueKey<String>('reader-skeleton-cover'))
+              .evaluate()
+              .isNotEmpty,
+          maxRounds: 100);
+      expect(covered, isTrue, reason: '书源就绪后应起骨架幕布（前提）');
+      final bool revealed = await pumpUntil(tester, () {
+        if (!sawCoveredContent &&
+            find.textContaining('第1章正文').evaluate().isNotEmpty) {
+          sawCoveredContent = true;
+        }
+        return find
+            .byKey(const ValueKey<String>('reader-skeleton-cover'))
+            .evaluate()
+            .isEmpty;
+      }, maxRounds: 300);
+      expect(sawCoveredContent, isTrue,
+          reason: '正文应在骨架幕布**之下**首现（否则本用例什么都没测到）');
+      expect(revealed, isTrue,
+          reason: '落位收敛后幕布必须撤（拖到 3s 兑底才揭会判红）');
+      // 揭幕后视口已稳：再推几轮不再跳。
+      final PagedScrollerState scroller =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+      final double landed = scroller.offset;
+      await settle(tester, rounds: 10);
+      final PagedScrollerState after =
+          tester.state<PagedScrollerState>(find.byType(PagedScroller));
+      expect(after.offset, moreOrLessEquals(landed, epsilon: 0.5),
+          reason: '揭幕后视口不允许再跳——二次精确落位必须发生在揭幕之前');
 
       await closeBook(tester);
     });
