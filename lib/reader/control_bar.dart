@@ -22,8 +22,10 @@ import '../ui/mi_like_ui/mi_like_ui.dart';
 /// 菜单第一行（章节导航 + 进度滑条）行高（dp）。
 const double kReaderMenuNavRowHeight = 44;
 
-/// 菜单第二行（目录 / 夜间 / 设置 / 更多）行高（dp）。
-const double kReaderMenuActionRowHeight = 56;
+  /// 菜单第二行（目录 / 夜间 / 设置 / 更多）行高（dp）。
+  ///
+  /// 与上游度量同源：直接引用 [MiActionEntryMetrics.rowHeight]，避免两处漂移。
+const double kReaderMenuActionRowHeight = MiActionEntryMetrics.rowHeight;
 
 /// 菜单总高（两行之和，不含 SafeArea）。
 const double kReaderMenuHeight =
@@ -257,102 +259,46 @@ class _ReaderControlBarState extends State<ReaderControlBar> {
 
   /// 第二行：目录 / 夜间 / 设置 / 更多（图标 + 文字，等分四格）。
   ///
-  /// 「图标 + 文字」纵向菜单条目在 mi_like_ui 里**没有对应组件**（已向上游
-  /// 提 issue），暂以 MiPressable + 导航标签排版自拼；上游组件入库后换装。
+  /// 条目直接用上游 [MiActionEntry]（issue #5 组件），等分行走
+  /// [MiActionEntryRow]；按压淡出 / 禁用降透明 / 高亮强调色 / 键盘可达性
+  /// 全部由组件承担，本层只传入语义回调与 key。
   Widget _actionRow(BuildContext context, MiThemeMode mode) {
-    return SizedBox(
+    return MiActionEntryRow(
       height: kReaderMenuActionRowHeight,
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: _MenuEntry(
-              key: const Key('reader-toc'),
-              icon: Icons.menu_book_outlined,
-              label: '目录',
-              mode: mode,
-              onPressed: widget.onToc,
-            ),
-          ),
-          Expanded(
-            child: _MenuEntry(
-              key: const Key('reader-night'),
-              icon: widget.nightActive
-                  ? Icons.light_mode_outlined
-                  : Icons.dark_mode_outlined,
-              label: '夜间',
-              active: widget.nightActive,
-              mode: mode,
-              onPressed: widget.onNight,
-            ),
-          ),
-          Expanded(
-            child: _MenuEntry(
-              key: const Key('reader-appearance'),
-              icon: Icons.tune,
-              label: '设置',
-              mode: mode,
-              onPressed: widget.onSettings,
-            ),
-          ),
-          if (widget.onMore != null)
-            Expanded(
-              child: _MenuEntry(
-                key: const Key('reader-more'),
-                icon: Icons.more_horiz,
-                label: '更多',
-                mode: mode,
-                onPressed: widget.onMore,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 底部菜单的一格「图标 + 文字」条目。
-class _MenuEntry extends StatelessWidget {
-  const _MenuEntry({
-    super.key,
-    required this.icon,
-    required this.label,
-    required this.mode,
-    required this.onPressed,
-    this.active = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final MiThemeMode mode;
-  final VoidCallback? onPressed;
-
-  /// 高亮态（夜间已开）：图标与文字走强调色。
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    final Color ink = active ? MiColors.accent : MiColors.foregroundFor(mode);
-    return Semantics(
-      button: true,
-      enabled: onPressed != null,
-      child: MiPressable(
-        onPressed: onPressed,
-        mode: mode,
-        borderRadius: BorderRadius.circular(12),
-        pressBuilder: (BuildContext context, bool pressed, Widget child) =>
-            Opacity(opacity: pressed ? 0.55 : 1.0, child: child),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Icon(icon, size: 22, color: ink),
-            const SizedBox(height: 3),
-            Text(
-              label,
-              style: MiTypography.navLabelFor(mode).copyWith(color: ink),
-            ),
-          ],
+      entries: <MiActionEntry>[
+        MiActionEntry(
+          key: const Key('reader-toc'),
+          icon: Icons.menu_book_outlined,
+          label: '目录',
+          themeMode: mode,
+          onPressed: widget.onToc,
         ),
-      ),
+        MiActionEntry(
+          key: const Key('reader-night'),
+          icon: widget.nightActive
+              ? Icons.light_mode_outlined
+              : Icons.dark_mode_outlined,
+          label: '夜间',
+          active: widget.nightActive,
+          themeMode: mode,
+          onPressed: widget.onNight,
+        ),
+        MiActionEntry(
+          key: const Key('reader-appearance'),
+          icon: Icons.tune,
+          label: '设置',
+          themeMode: mode,
+          onPressed: widget.onSettings,
+        ),
+        if (widget.onMore != null)
+          MiActionEntry(
+            key: const Key('reader-more'),
+            icon: Icons.more_horiz,
+            label: '更多',
+            themeMode: mode,
+            onPressed: widget.onMore,
+          ),
+      ],
     );
   }
 }
