@@ -36,6 +36,7 @@ import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_open_transition.dart';
 import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_progress.dart';
+import 'package:mreader/ui/default_book_cover.dart';
 
 import '../test_config.dart';
 import 'reader_harness.dart';
@@ -543,6 +544,17 @@ void main() {
         find.byKey(const ValueKey<String>('reader-skeleton')),
         findsOneWidget,
         reason: '书源未就绪时正文区应铺骨架屏（点击即开书的视觉主体）',
+      );
+      // 幕布内容 = 本书封面：无封面书用占位封面（书名哈希取色，零 IO 首帧即出）。
+      expect(find.byType(DefaultBookCover), findsOneWidget,
+          reason: '骨架幕布应显示图书封面（无封面书用占位封面）');
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey<String>('reader-skeleton')),
+          matching: find.text(fakeRecord().title),
+        ),
+        findsOneWidget,
+        reason: '占位封面上应有本书书名（点击即开书第一眼：这是哪本书）',
       );
       // 骨架首帧即放行滑入：转场不该按到 3s 兜底，此刻已不在等待。
       expect(ReaderOpenTransition.isActive, isFalse,

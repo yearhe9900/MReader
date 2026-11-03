@@ -650,6 +650,7 @@ class ShelfPageState extends State<ShelfPage> {
         readingPrefsStore: widget.readingPrefsStore,
         syncTrigger: widget.syncTrigger,
         openTrace: trace,
+        coverStore: widget.coverStore, // 骨架幕布显示本书封面（`_CoverSkeleton`）
       ),
     );
     try {

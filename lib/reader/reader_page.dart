@@ -38,6 +38,7 @@ import '../diagnostics/perf_log.dart';
 import '../format/book_source.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
+import '../meta/cover_store.dart';
 import '../settings/settings_store.dart';
 import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
@@ -55,6 +56,7 @@ import '../typography/reader_settings.dart';
 import '../typography/text_style_resolver.dart';
 import '../typography/typeset.dart';
 import '../ui/ask_panel.dart';
+import '../ui/default_book_cover.dart';
 import '../ui/entity_page.dart';
 import '../ui/glass_kit.dart';
 import '../ui/mi_like_ui/mi_like_ui.dart';
@@ -157,6 +159,7 @@ class ReaderPage extends StatefulWidget {
     this.syncTrigger,
     this.openTrace,
     this.initialJump,
+    this.coverStore,
   }) : assert(source != null || sourceFuture != null,
             'ReaderPage 必须拿到书源：直供 source 或延迟 sourceFuture 二选一');
 
@@ -167,8 +170,8 @@ class ReaderPage extends StatefulWidget {
   final BookSource? source;
 
   /// 延迟书源（书架「点击即开书」管道）：push 阅读页**不等**读字节 / 建源，
-  /// 准备过程在本页骨架屏（[_OpenSkeleton]）期间进行，就绪后并入既有开书链路
-  /// （见 [_open]）。`null` = [source] 直供（既有路径，行为不变）。
+  /// 准备过程在本页骨架幕布（[_CoverSkeleton]，图书封面）期间进行，就绪后并入
+  /// 既有开书链路（见 [_open]）。`null` = [source] 直供（既有路径，行为不变）。
   final Future<BookSource>? sourceFuture;
 
   /// 本书在库记录（标题 / bookId）。
@@ -224,6 +227,10 @@ class ReaderPage extends StatefulWidget {
   /// 开书落位目标（生词本「跳回原文」，`AI-03` ③）：按 href 覆盖存档进度、段落级对齐；
   /// **不压返回栈**。`null` = 按存档进度恢复（正常开书）。
   final ({String href, int paraIndex})? initialJump;
+
+  /// 封面存储：骨架幕布显示**图书封面**用（书架注入；`null` = 幕布只用默认封面，
+  /// 深链 / 生词本直进路径不传，不影响开书）。
+  final CoverStore? coverStore;
 
   @override
   State<ReaderPage> createState() => _ReaderPageState();
@@ -4335,7 +4342,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // **整页**之上——不只正文，还包括底部读数层（进度条 / 章节 / 百分比）：
     // 落位收敛前 `_liveIndex` / `_livePercent` 还在逐帧变，盖住才能做到
     //「揭幕即定稿」（只盖正文会露出跳动的读数，同样是闪屏）。
-    return _applySkeletonCover(page, theme, systemPadding);
+    return _applySkeletonCover(page, theme);
   }
 
   /// 把骨架幕布盖到整页之上（`_skeletonCover` 期间；否则原样返回）。
@@ -4347,9 +4354,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   ///
   /// 幕布吞掉手势（同 [_restoreMask] 口径）：揭幕前的滚动 / 点击落在未定稿的
   /// 正文上只会制造新的跳变。直供书源路径 `_skeletonCover` 恒 false，本方法
-  /// 原样返回页面。`_ready` 之前页面本身就是骨架屏或错误态，无幕可盖——只在
-  /// 正文**真身**会入屏的那一刻起幕，避免双层骨架。
-  Widget _applySkeletonCover(Widget page, ThemeData theme, EdgeInsets systemPadding) {
+  /// 原样返回页面。
+  Widget _applySkeletonCover(Widget page, ThemeData theme) {
     // `_skeletonCover` 期间恒盖（含 `_ready` 之前）：底部读数的「载入中…」
     // 也属未定稿状态，一并遮住才「揭幕即定稿」。正文侧的骨架分支此时让位
     // （返回空盒），避免双层骨架叠画。
@@ -4366,10 +4372,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             child: ColoredBox(
               // 底色跟页面底色——夜间 / 纯黑背景时不得闪白。
               color: _pageColor(theme),
-              child: _OpenSkeleton(
-                theme: theme,
-                systemPadding: systemPadding,
-                pageMarginH: _settings.pageMargin.horizontal,
+              child: _CoverSkeleton(
+                record: widget.record,
+                coverStore: widget.coverStore,
               ),
             ),
           ),
@@ -5726,12 +5731,133 @@ class _ImageZoomPage extends StatelessWidget {
   }
 }
 
-/// 开书骨架屏：书源 / 章节表未就绪期间铺一张「像这一页书」的占位版面。
+/// 开书骨架幕布的本体：页面底色上一张**图书封面**（居中）。
 ///
 /// 「点击即开书」（书架延迟书源管道，见 [ReaderPage.sourceFuture]）的视觉主体：
-/// 纸张（[ReaderOpenRoute]）滑入时上面就是它——用户点下即见书页成型，而不是
-/// 在书架上对着转圈等待。极轻的呼吸动画（0.55…1.0，1.2s 往返）示意「正在加载」，
-/// 不抢戏。
+/// 纸页翻开时上面就是**这本书自己的封面**——点下即见「这本书要开了」，而不是
+/// 书架上转圈、也不是抽象的灰条。封面口径与书架书卡一致（[DefaultBookCover]
+/// 占位 → `StoredCover` 缩略图异步到位后原位换图），点击即开书的**第一眼**用
+/// 无需 IO 的默认封面（书名哈希取色）就地渲染，缩略图到了再无缝换真封面。
+/// 极轻呼吸动画（0.8…1.0，1.2s 往返）示意「正在加载」，不抢戏。
+class _CoverSkeleton extends StatefulWidget {
+  const _CoverSkeleton({
+    required this.record,
+    required this.coverStore,
+  });
+
+  /// 书目记录（封面引用 + 书名 / 作者供占位封面用）。
+  final BookRecord record;
+
+  /// 封面存储（读 `StoredCover` 缩略图）；`null` = 只用占位封面（深链直进）。
+  final CoverStore? coverStore;
+
+  @override
+  State<_CoverSkeleton> createState() => _CoverSkeletonState();
+}
+
+class _CoverSkeletonState extends State<_CoverSkeleton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat(reverse: true);
+
+  /// `StoredCover` 缩略图字节（到位前用占位封面，到位后原位换图）。
+  Uint8List? _thumb;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadThumb();
+  }
+
+  Future<void> _loadThumb() async {
+    final CoverStore? store = widget.coverStore;
+    if (store == null || widget.record.cover is! StoredCover) return;
+    try {
+      final Uint8List? bytes = await store.readThumb(widget.record.cover);
+      if (mounted && bytes != null) setState(() => _thumb = bytes);
+    } catch (_) {
+      // 封面读不到不影响开书：占位封面就是终态。
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 封面比例 = 与书架书卡同口径的实体书 **2:3**（`shelf_geometry.dart` 的
+    // `kBookCoverAspectRatio`；此处不引书架模块，取同值避免层依赖倒置）。
+    const double aspect = 2 / 3;
+    return Padding(
+      key: const ValueKey<String>('reader-skeleton'),
+      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          // 尺寸随视口收：高不超可用高 55%、宽不超可用宽 70%，小屏自适应。
+          final double height = math.min(
+              constraints.maxHeight * 0.55,
+              constraints.maxWidth * 0.70 / aspect);
+          final double width = height * aspect;
+          return Center(
+            child: AnimatedBuilder(
+              animation: _pulse,
+              child: _cover(width, height),
+              builder: (BuildContext context, Widget? child) =>
+                  Opacity(opacity: 0.8 + 0.2 * _pulse.value, child: child),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 封面本体：`StoredCover` 缩略图（Squircle 裁形与书架书卡同口径）；
+  /// 未到位 / 无封面 / 读取失败 → [DefaultBookCover] 占位（自带同款裁形）。
+  Widget _cover(double width, double height) {
+    final Uint8List? thumb = _thumb;
+    final Widget box;
+    if (thumb != null) {
+      box = Image.memory(
+        thumb,
+        fit: BoxFit.cover,
+        width: width,
+        height: height,
+        // 解码失败退回占位封面（`Image` 会缓存失败态，不会每帧重试）。
+        errorBuilder: (BuildContext _, Object _, StackTrace? _) =>
+            _placeholder(width, height),
+      );
+    } else {
+      box = _placeholder(width, height);
+    }
+    // Squircle 裁形与书架书卡同一把刀（`book_card.dart` 同款 `ClipPath`），
+    // 幕布上的封面与书架上的封面不跳形；占位封面自带裁形，叠裁无害。
+    return ClipPath(
+      clipper: MiSquircleClipper(MiThemeCardMetrics.previewRadius),
+      child: SizedBox(width: width, height: height, child: box),
+    );
+  }
+
+  Widget _placeholder(double width, double height) => SizedBox(
+        width: width,
+        height: height,
+        child: DefaultBookCover(
+          title: widget.record.title,
+          author: widget.record.author,
+          radius: MiThemeCardMetrics.previewRadius,
+        ),
+      );
+}
+
+/// 直供路径的正文占位骨架（灰条版）：书源 / 章节表未就绪且**无封面幕布**
+///（深链 / 生词本直进，`_skeletonCover` 恒 false）时铺在正文区。
+///
+/// 书架「点击即开书」路径的视觉主体是 [_CoverSkeleton]（封面幕布，盖整页），
+/// 本组件只服务直供路径的正文早退分支。极轻的呼吸动画示意「正在加载」。
 class _OpenSkeleton extends StatefulWidget {
   const _OpenSkeleton({
     required this.theme,
