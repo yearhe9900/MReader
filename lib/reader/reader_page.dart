@@ -5731,14 +5731,18 @@ class _ImageZoomPage extends StatelessWidget {
   }
 }
 
-/// 开书骨架幕布的本体：页面底色上一张**图书封面**（居中）。
+/// 开书骨架幕布的本体：页面底色上一张**全屏出血的图书封面**。
 ///
 /// 「点击即开书」（书架延迟书源管道，见 [ReaderPage.sourceFuture]）的视觉主体：
-/// 纸页翻开时上面就是**这本书自己的封面**——点下即见「这本书要开了」，而不是
+/// 纸页翻开时整页就是**这本书自己的封面**——点下即见「这本书要开了」，而不是
 /// 书架上转圈、也不是抽象的灰条。封面口径与书架书卡一致（[DefaultBookCover]
-/// 占位 → `StoredCover` 缩略图异步到位后原位换图），点击即开书的**第一眼**用
-/// 无需 IO 的默认封面（书名哈希取色）就地渲染，缩略图到了再无缝换真封面。
-/// 极轻呼吸动画（0.8…1.0，1.2s 往返）示意「正在加载」，不抢戏。
+/// 占位 → `StoredCover` 原图异步到位后原位换图），点击即开书的**第一眼**用
+/// 无需 IO 的默认封面（书名哈希取色）就地渲染，封面到了再无缝换真封面。
+///
+/// 全屏取**原图**（[CoverStore.readFull]）而非缩略图：缩略图最长边仅 320px
+///（`kCoverThumbMaxEdge`，书架小卡口径），全屏必糊；原图解码成本与详情页
+///「看大图」同款，可接受。极轻呼吸动画（0.92…1.0，1.2s 往返）示意「正在加载」——
+/// 全屏下呼吸幅度必须小，否则整屏明暗晃动反而像闪屏。
 class _CoverSkeleton extends StatefulWidget {
   const _CoverSkeleton({
     required this.record,
@@ -5762,7 +5766,7 @@ class _CoverSkeletonState extends State<_CoverSkeleton>
     duration: const Duration(milliseconds: 1200),
   )..repeat(reverse: true);
 
-  /// `StoredCover` 缩略图字节（到位前用占位封面，到位后原位换图）。
+  /// 封面原图字节（到位前用占位封面，到位后原位换图）。
   Uint8List? _thumb;
 
   @override
@@ -5775,7 +5779,8 @@ class _CoverSkeletonState extends State<_CoverSkeleton>
     final CoverStore? store = widget.coverStore;
     if (store == null || widget.record.cover is! StoredCover) return;
     try {
-      final Uint8List? bytes = await store.readThumb(widget.record.cover);
+      // 全屏取原图（缩略图 320px 全屏必糊，见类头注）。
+      final Uint8List? bytes = await store.readFull(widget.record.cover);
       if (mounted && bytes != null) setState(() => _thumb = bytes);
     } catch (_) {
       // 封面读不到不影响开书：占位封面就是终态。
@@ -5790,66 +5795,47 @@ class _CoverSkeletonState extends State<_CoverSkeleton>
 
   @override
   Widget build(BuildContext context) {
-    // 封面比例 = 与书架书卡同口径的实体书 **2:3**（`shelf_geometry.dart` 的
-    // `kBookCoverAspectRatio`；此处不引书架模块，取同值避免层依赖倒置）。
-    const double aspect = 2 / 3;
+    // 全屏出血：封面铺满整页（含状态栏区域，状态栏图标叠在封面上），
+    // 与「翻开的书就是封面」的观感一致；不再居中留边。
     return Padding(
       key: const ValueKey<String>('reader-skeleton'),
-      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
-      child: LayoutBuilder(
-        builder: (BuildContext context, BoxConstraints constraints) {
-          // 尺寸随视口收：高不超可用高 55%、宽不超可用宽 70%，小屏自适应。
-          final double height = math.min(
-              constraints.maxHeight * 0.55,
-              constraints.maxWidth * 0.70 / aspect);
-          final double width = height * aspect;
-          return Center(
-            child: AnimatedBuilder(
-              animation: _pulse,
-              child: _cover(width, height),
-              builder: (BuildContext context, Widget? child) =>
-                  Opacity(opacity: 0.8 + 0.2 * _pulse.value, child: child),
-            ),
-          );
-        },
+      padding: EdgeInsets.zero,
+      child: AnimatedBuilder(
+        animation: _pulse,
+        child: _cover(),
+        builder: (BuildContext context, Widget? child) =>
+            // 呼吸幅度必须小（0.92 起）：全屏下明暗晃动大了就是闪屏。
+            Opacity(opacity: 0.92 + 0.08 * _pulse.value, child: child),
       ),
     );
   }
 
-  /// 封面本体：`StoredCover` 缩略图（Squircle 裁形与书架书卡同口径）；
-  /// 未到位 / 无封面 / 读取失败 → [DefaultBookCover] 占位（自带同款裁形）。
-  Widget _cover(double width, double height) {
+  /// 封面本体：`StoredCover` **原图**全屏 `BoxFit.cover`（等比放大裁切不拉伸）；
+  /// 未到位 / 无封面 / 读取失败 → [DefaultBookCover] 占位（全屏、直角——
+  /// 屏幕四角不该有封面圆角）。
+  Widget _cover() {
     final Uint8List? thumb = _thumb;
-    final Widget box;
     if (thumb != null) {
-      box = Image.memory(
+      return Image.memory(
         thumb,
         fit: BoxFit.cover,
-        width: width,
-        height: height,
+        width: double.infinity,
+        height: double.infinity,
         // 解码失败退回占位封面（`Image` 会缓存失败态，不会每帧重试）。
         errorBuilder: (BuildContext _, Object _, StackTrace? _) =>
-            _placeholder(width, height),
+            _placeholder(),
       );
-    } else {
-      box = _placeholder(width, height);
     }
-    // Squircle 裁形与书架书卡同一把刀（`book_card.dart` 同款 `ClipPath`），
-    // 幕布上的封面与书架上的封面不跳形；占位封面自带裁形，叠裁无害。
-    return ClipPath(
-      clipper: MiSquircleClipper(MiThemeCardMetrics.previewRadius),
-      child: SizedBox(width: width, height: height, child: box),
-    );
+    return _placeholder();
   }
 
-  Widget _placeholder(double width, double height) => SizedBox(
-        width: width,
-        height: height,
-        child: DefaultBookCover(
-          title: widget.record.title,
-          author: widget.record.author,
-          radius: MiThemeCardMetrics.previewRadius,
-        ),
+  /// 占位封面（全屏）：`DefaultBookCover` 自身按封面宽度等比排字——全屏宽下
+  /// 书名 / 作者 / 水印同步放大，就是一张全屏封面海报；`radius: 0` 取直角
+  /// （其自带的 `ClipPath` 仍兜住故意探出的水印，不致溢出屏幕）。
+  Widget _placeholder() => DefaultBookCover(
+        title: widget.record.title,
+        author: widget.record.author,
+        radius: 0,
       );
 }
 
