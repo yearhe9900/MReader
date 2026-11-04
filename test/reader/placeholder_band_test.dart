@@ -7,7 +7,7 @@
 //      正是「滚动时跳动」的量级）。
 //
 // 夹具：`FakeBookSource(paragraphCounts: [60,60,60])`，第 3 章用闸门挂住内容
-// ⇒ 它必然停在占位块（可稳定观察）。视口 800×572（800×600 − 28dp 指示条让位）。
+// ⇒ 它必然停在占位块（可稳定观察）。视口 800×576（800×600 − 24dp 指示条让位）。
 import 'dart:async';
 import 'dart:io';
 
@@ -90,9 +90,9 @@ void main() {
       expect(views[0].headingHeight, 60.0, reason: '真章标题占高仍是实测值');
       // 与「整页高」的对比断言：占位块必须**远小于**一页。
       expect(views[2].headingHeight, lessThan(sc.config.pageHeight / 2),
-          reason: '占位块不许再占一整屏（改前 = ${572.0}，pageHeight=' 
+          reason: '占位块不许再占一整屏（改前 = ${576.0}，pageHeight='
               '${sc.config.pageHeight}）');
-      expect(sc.config.pageHeight, 572.0);
+      expect(sc.config.pageHeight, 576.0);
 
       // ② 布局总高 = 两章真内容 + 一个占位块（不是三章整屏）。
       //    默认字号 20 的章几何：标题 60 + 内容 2864（页 0 = 11 段 512 +

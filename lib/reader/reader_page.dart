@@ -111,11 +111,12 @@ const double _kHeadingGapBottom = 12;
 
 /// 正文底部为常驻 [ReaderProgressIndicator] 预留的高度（dp，**不含**底部系统栏）。
 ///
-/// ≈26dp 实测（padding + 一行文字）+ 余量；不给会压住末页最后一行。
-/// ⚠️ 本常量**不随底部读数区形态增减**：改它会变分页页高、触发重排与落位漂移。
+/// = 读数条**实测内容高 24dp**（padding 8 + 一行读数；无进度条 / 分界线）⇒
+/// 正文底恰好贴住读数区顶，**零空隙**。⚠️ 改读数行样式（字号 / textScaler /
+/// padding）必须同步重测本值，否则末行会被压或重新留出空带。
 /// 正文预算 = 本常量 + 系统 `padding.bottom`（取 Scaffold **外层** MediaQuery 的
 /// `systemPadding`，见 `_buildBody` 的 `reserve`）——chrome 显隐不影响它。
-const double _kProgressIndicatorReserve = 28;
+const double _kProgressIndicatorReserve = 24;
 
 /// R1②：交互挂起后台补齐的**兜底帧数**（到期自动恢复，见 [_pauseAutoFill]）。
 ///

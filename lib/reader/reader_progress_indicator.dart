@@ -1,13 +1,13 @@
 // `TYP-09`：细粒度阅读进度指示——左「当前章标题」+ 右「章内页/本章总页 + 全书百分比」。
 //
 // 格式（§2.72）：左章节标题、右「8/20 22.2%」（章内页 / 本章总页 /
-// 全书百分比**一位小数**）。**不画进度条**：进度全靠读数数字表达，阅读区与
-// 读数区之间只有一条 1px 极淡半透明分界线。
+// 全书百分比**一位小数**）。**不画进度条、不画分界线**：进度全靠读数数字
+// 表达，读数区与正文用同一块不透明底色连成一片，中间零空隙。
 //
 // 独立于 AppBar / 控制条（`TYP-09` 验收①②：全屏时那两者都隐藏，本指示器必须仍在）；
 // 由 `ReaderPage` 以**滚动实时采样**的显示值驱动（验收②「进度随滚动实时更新」）。
 //
-// **配色随阅读背景**（`TYP-08`「一体化」）：底色 / 文字 / 分界线一律取调用方
+// **配色随阅读背景**（`TYP-08`「一体化」）：底色 / 文字一律取调用方
 // 传入的**页面色板**（`ReaderPage._pageColor` / `_textColor`），不取主题
 // `colorScheme.surface`——否则换了米黄 / 纯黑背景，这条读数还挂着主题底色，
 // 与正文割裂。色板成对传入（底色 + 正文色）是契约：单传底色会造出「黑底黑字」。
@@ -16,7 +16,7 @@
 // 不显示「0/0」这种没有信息量的读数。
 import 'package:flutter/material.dart';
 
-/// 阅读进度指示（1px 极淡分界线 + 「章节标题 …… 页/总页 百分比」）。
+/// 阅读进度指示（「章节标题 …… 页/总页 百分比」一行读数，无进度条 / 分界线）。
 class ReaderProgressIndicator extends StatelessWidget {
   const ReaderProgressIndicator({
     super.key,
@@ -44,8 +44,7 @@ class ReaderProgressIndicator extends StatelessWidget {
   /// 读数条底色 = **页面底色**（`ReaderPage._pageColor`；与正文同源同色）。
   final Color backgroundColor;
 
-  /// 读数条文字色 = **页面正文色**（`ReaderPage._textColor`）；
-  /// 同时充当顶部分界线的取色源（降到 α0.1 后在任何色板上都极淡但可见）。
+  /// 读数条文字色 = **页面正文色**（`ReaderPage._textColor`）。
   final Color textColor;
 
   /// 底部系统栏让位（`MediaQuery.padding.bottom`）。
@@ -66,17 +65,9 @@ class ReaderProgressIndicator extends StatelessWidget {
     return DecoratedBox(
       key: const Key('reader-progress-indicator'),
       decoration: BoxDecoration(
-        // 页面底色原样铺满（不透明）：读数条与正文**同一块底**，一体化；
-        // 正文已由 `_kProgressIndicatorReserve` 让开，条下不会透出文字。
+        // 页面底色原样铺满（不透明）：读数条与正文**同一块底**；⚠️ 不画进度条、
+        // 不画任何横向分界线（含 `Border.top`），两者完全连成一片、零空隙。
         color: backgroundColor,
-        // 阅读区 / 读数区唯一的分界：1px 极淡半透明线，取页面正文色
-        // （随色板换明暗，纯黑预设下也不会消失），**不表达任何进度**。
-        border: Border(
-          top: BorderSide(
-            color: textColor.withValues(alpha: 0.1),
-            width: 1,
-          ),
-        ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,

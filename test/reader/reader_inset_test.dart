@@ -6,7 +6,7 @@
 //     正文区里 `mq.padding.top` 恒为 0（首行被切的真因在落位，见
 //     `PagedScrollerState.offsetFor` 的「为什么按行顶」）。
 //   · 「末行被进度条压住」**成立**：预留若加在正文 Stack **外面**，而指示条在
-//     Stack **里面** `bottom: 0`，两者同步上移照旧重叠、还在控制条上方白留 28dp。
+//     Stack **里面** `bottom: 0`，两者同步上移照旧重叠、还在控制条上方白留一条空带。
 //
 // 本测试钉住三件事：正文排版区确实让开了指示条；正文区高 = 分页预算 `usableHeight`；
 // **唤出 / 收起 chrome 不改变正文排版区**（`TYP-09` 契约）。
@@ -66,12 +66,13 @@ void main() {
 
       // 几何基线（探针实测 393×852，top44/bottom34，**默认沉浸全屏**）：
       //   viewport      top=44  bottom=852 h=808（顶让开 44 状态栏）
-      //   content-area  top=44  bottom=790 h=746（= viewport − 62 让位）
-      //   indicator     top=792 bottom=852 h=60（26 内容 + 34 导航条让位）
-      //   ⇒ content.bottom(790) ≤ indicator.top(792)，两者不重叠。
-      // 让位 = 28dp 指示条 + 34 手势条 = 62：`AppBar` 不在树上、`extendBody*` 让
-      // body 从 y=0 起画，顶部让位由**外层**系统 inset 的 `padding.top` 承担，底部
-      // 34 由外层 `systemMq.padding.bottom` 显式交给正文 `reserve` 与读数行（与 chrome 状态无关）。
+      //   content-area  top=44  bottom=794 h=750（= viewport − 58 让位）
+      //   indicator     top=794 bottom=852 h=58（24 内容 + 34 导航条让位）
+      //   ⇒ content.bottom(794) == indicator.top(794)：零空隙且不重叠。
+      // 让位 = 24dp 指示条（实测内容高；无进度条 / 分界线）+ 34 手势条 = 58：
+      // `AppBar` 不在树上、`extendBody*` 让 body 从 y=0 起画，顶部让位由**外层**
+      // 系统 inset 的 `padding.top` 承担，底部 34 由外层 `systemMq.padding.bottom`
+      // 显式交给正文 `reserve` 与读数行（与 chrome 状态无关）。
       final Rect viewport = tester.getRect(find.byKey(const Key('reader-viewport')));
       expect(viewport.top, moreOrLessEquals(44, epsilon: 0.5),
           reason: '全屏态正文顶让开状态栏');
@@ -79,9 +80,9 @@ void main() {
 
       final Rect content =
           tester.getRect(find.byKey(const Key('reader-content-area')));
-      expect(content.height, 746, reason: '正文可排版高 = 分页预算 usableHeight');
-      expect(viewport.bottom - content.bottom, moreOrLessEquals(62, epsilon: 0.5),
-          reason: '正文区应让开「指示条高 28 + 导航条 34」');
+      expect(content.height, 750, reason: '正文可排版高 = 分页预算 usableHeight');
+      expect(viewport.bottom - content.bottom, moreOrLessEquals(58, epsilon: 0.5),
+          reason: '正文区应让开「指示条高 24 + 导航条 34」');
 
       // 指示条仍贴屏幕底边（它在 Stack 内 `bottom: 0`，不占布局）。
       final Rect indicator =
@@ -110,6 +111,8 @@ void main() {
 
       expect(content.bottom, lessThanOrEqualTo(indicator.top + 0.5),
           reason: 'content.bottom=${content.bottom} indicator.top=${indicator.top}');
+      expect(content.bottom, moreOrLessEquals(indicator.top, epsilon: 0.5),
+          reason: '去掉 2px 条后不留空隙：正文底应紧贴读数区顶');
       expect(tester.takeException(), isNull);
     });
 
@@ -133,8 +136,8 @@ void main() {
 
       // 字面量基线（硬编码，不用被测常量自证）。
       expect(content0.top, 44, reason: '正文顶让开状态栏');
-      expect(content0.height, 746, reason: '正文可排版高 = 分页预算');
-      expect(content0.bottom, 790, reason: '正文底让开读数（28 + 导航条 34）');
+      expect(content0.height, 750, reason: '正文可排版高 = 分页预算');
+      expect(content0.bottom, 794, reason: '正文底贴住读数区（24 + 导航条 34）');
 
       await tester.tap(find.byKey(const Key('reader-chrome-toggle-status')));
       await tester.pump();

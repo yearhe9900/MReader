@@ -4,7 +4,7 @@
 // ## 口径
 //
 // 判定框 = `reader-chrome-toggle` 手势层的盒（与 `reader-content-area` 同框，
-// 顶部让过系统 inset、底部让过 28dp 读数行）。按三分线划 3×3：
+// 顶部让过系统 inset、底部让过 24dp 读数行）。按三分线划 3×3：
 //
 //   · 中宫 `[w/3, 2w/3] × [h/3, 2h/3]`（**含边界**）的落点 = 呼出 / 收起开关
 //     （toggle 语义保留）；
@@ -214,7 +214,7 @@ void main() {
     testWidgets('系统 inset 把正文区推离窗口原点后，判定仍按正文区局部坐标',
         (WidgetTester tester) async {
       // `globalToLocal` 口径钉死用例：顶部 inset 24dp ⇒ 正文区 rect
-      // (0, 24, 800, 548)，**局部 y ≠ 全局 y**。若产品侧误用全局坐标当局部
+      // (0, 24, 800, 552)，**局部 y ≠ 全局 y**。若产品侧误用全局坐标当局部
       // （`localPosition` 兜底退化正是这个形态），中宫横带的判定整体上移 24px，
       // 本用例的陷阱点会立刻翻红。
       // `FakeViewPadding` 以**物理像素**计（`MediaQueryData.fromView` 走
@@ -232,11 +232,11 @@ void main() {
       expect(area.top, 24.0,
           reason: '前提自检：inset 应把正文区推离窗口原点（否则本用例测不到'
               '两坐标系之差）');
-      expect(area.height, 548.0,
-          reason: '前提自检：600 − 24 inset − 28 读数让位');
+      expect(area.height, 552.0,
+          reason: '前提自检：600 − 24 inset − 24 读数让位');
 
-      // 陷阱点：全局 y=200 → 局部 y=176 < 548/3=182.67 ⇒ **顶格**，无响应。
-      // 误用全局坐标时 200 ∈ [182.67, 365.33] 会被误判进中宫。
+      // 陷阱点：全局 y=200 → 局部 y=176 < 552/3=184 ⇒ **顶格**，无响应。
+      // 误用全局坐标时 200 ∈ [184, 368] 会被误判进中宫。
       await tester.tapAt(const Offset(400, 200));
       await tester.pump();
       expect(chromeShown(tester), isFalse,

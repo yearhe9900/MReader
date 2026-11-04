@@ -406,7 +406,7 @@ void main() {
       await showChrome(tester);
       expect(tester.takeException(), isNull, reason: 'chrome 唤出必须无待报异常');
 
-      // 可视区突变：系统 inset 出现（正文可排版高 572 → 508，矮 64）。
+      // 可视区突变：系统 inset 出现（正文可排版高 576 → 512，矮 64）。
       tester.view.padding = const FakeViewPadding(top: 24, bottom: 40);
       addTearDown(tester.view.reset);
       await tester.pump(); // 只 pump 一帧 —— 正是「旧页表 + 新可视区」
@@ -434,9 +434,9 @@ void main() {
       await settle(tester);
     });
 
-    // ── 底部读数区：进度条彻底移除，只留 1px 极淡分界线 ────────────────
+    // ── 底部读数区：无进度条、无分界线、与正文连成一片 ────────────────
 
-    testWidgets('读数区：无进度条，仅 1px 极淡半透明线分界，读数文字照常',
+    testWidgets('读数区：无进度条、无分界线，底色与正文完全同色',
         (WidgetTester tester) async {
       await tester.pumpWidget(buildApp());
       await settle(tester);
@@ -449,35 +449,23 @@ void main() {
       expect(find.byKey(const Key('reader-progress-text')), findsOneWidget,
           reason: '页读数 / 全书百分比照常显示');
 
-      BorderSide topLine(WidgetTester t) {
-        final BoxDecoration deco = t
-                .widget<DecoratedBox>(
-                    find.byKey(const Key('reader-progress-indicator')))
-                .decoration as BoxDecoration;
-        return (deco.border! as Border).top;
-      }
+      BoxDecoration decoOf(WidgetTester t) => t
+          .widget<DecoratedBox>(
+              find.byKey(const Key('reader-progress-indicator')))
+          .decoration as BoxDecoration;
 
-      final BorderSide line = topLine(tester);
-      expect(line.width, 1, reason: '1px 分界线（取代原 0.5px 边线与 2px 进度条）');
-      expect(line.color.a, closeTo(0.1, 0.001), reason: '极淡半透明');
-      // 取页面正文色（不是主题 dividerColor）：与正文同源、一体化。
-      final Color bodyColor = paragraph(tester).style.color!;
-      expect(line.color.r, closeTo(bodyColor.r, 0.002));
-      expect(line.color.g, closeTo(bodyColor.g, 0.002));
-      expect(line.color.b, closeTo(bodyColor.b, 0.002));
+      // ⚠️ 连横向分界线也不画：读数区与正文同一块不透明底色、零空隙。
+      expect(decoOf(tester).border, isNull,
+          reason: '不得有任何 Border / 分割横线');
 
-      // 纯黑预设：分界线随正文色变浅，不会像主题 dividerColor 那样发黑消失。
+      // 纯黑预设：底色跟着换（一体化），仍无任何分界。
       await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-appearance')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('background-black')));
       await tester.pump();
-      final BorderSide darkLine = topLine(tester);
-      expect(darkLine.color.a, closeTo(0.1, 0.001));
-      expect(darkLine.color.r, greaterThan(0.7),
-          reason: '纯黑预设下分界线应是淡白，不是黑的');
-      expect(darkLine.color.g, greaterThan(0.7));
-      expect(darkLine.color.b, greaterThan(0.7));
+      expect(decoOf(tester).color, const Color(0xFF000000));
+      expect(decoOf(tester).border, isNull);
 
       await tester.tapAt(const Offset(10, 10));
       await tester.pumpAndSettle();
