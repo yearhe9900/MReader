@@ -213,112 +213,111 @@ class _ReadingAppearanceSheetState extends State<ReadingAppearanceSheet> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
 
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text('外观', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 16),
-            Text('字体', style: theme.textTheme.labelLarge),
-            const SizedBox(height: 8),
-            // `TYP-07`：系统可用字体族选择（系统默认 / 衬线 / 无衬线）。
-            Wrap(
-              spacing: 8,
-              children: <Widget>[
+    // 不包 `SafeArea`：安全区（含底部手势条让位）由外层 `MiBottomSheet`
+    // 统一吃掉（`reader_page._openAppearance`），再包一层会在抽屉里重复 inset。
+    // 面板大标题也由抽屉标题行承担（「设置」），这里直接从分区标题起排。
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text('字体', style: theme.textTheme.labelLarge),
+          const SizedBox(height: 8),
+          // `TYP-07`：系统可用字体族选择（系统默认 / 衬线 / 无衬线）。
+          Wrap(
+            spacing: 8,
+            children: <Widget>[
+              ChoiceChip(
+                key: const Key('font-default'),
+                label: const Text('系统默认'),
+                selected: _prefs.settings.fontFamily == null,
+                onSelected: (_) => _emit(_prefs.copyWith(
+                  settings: _settingsWith(fontFamily: null),
+                )),
+              ),
+              ChoiceChip(
+                key: const Key('font-serif'),
+                label: const Text('衬线'),
+                selected: _prefs.settings.fontFamily == 'serif',
+                onSelected: (_) => _emit(_prefs.copyWith(
+                  settings: _settingsWith(fontFamily: 'serif'),
+                )),
+              ),
+              ChoiceChip(
+                key: const Key('font-sans'),
+                label: const Text('无衬线'),
+                selected: _prefs.settings.fontFamily == 'sans-serif',
+                onSelected: (_) => _emit(_prefs.copyWith(
+                  settings: _settingsWith(fontFamily: 'sans-serif'),
+                )),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text('排版', style: theme.textTheme.labelLarge),
+          const SizedBox(height: 4),
+          _buildTypographySection(context, theme),
+          const SizedBox(height: 16),
+          Text('翻页方式', style: theme.textTheme.labelLarge),
+          const SizedBox(height: 8),
+          // 模式切换由用户可选（选型拍板①③）。
+          Wrap(
+            spacing: 8,
+            children: <Widget>[
+              for (final ReaderPageMode mode in ReaderPageMode.values)
                 ChoiceChip(
-                  key: const Key('font-default'),
-                  label: const Text('系统默认'),
-                  selected: _prefs.settings.fontFamily == null,
-                  onSelected: (_) => _emit(_prefs.copyWith(
-                    settings: _settingsWith(fontFamily: null),
-                  )),
+                  key: Key('pageMode-${mode.name}'),
+                  label: Text(mode.label),
+                  selected: _prefs.pageMode == mode,
+                  onSelected: (_) => _emit(_prefs.copyWith(pageMode: mode)),
                 ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text('亮度', style: theme.textTheme.labelLarge),
+          Row(
+            children: <Widget>[
+              const Icon(Icons.brightness_low, size: 20),
+              Expanded(
+                child: Slider(
+                  key: const Key('brightness-slider'),
+                  value: _prefs.brightness.clamp(
+                    ReadingPrefs.minBrightness,
+                    ReadingPrefs.maxBrightness,
+                  ),
+                  min: ReadingPrefs.minBrightness,
+                  max: ReadingPrefs.maxBrightness,
+                  divisions: 16,
+                  label: '${(_prefs.brightness * 100).round()}%',
+                  // 拖动中即回传：`TYP-08` ①「亮度实时生效」。
+                  onChanged: (double value) =>
+                      _emit(_prefs.copyWith(brightness: value)),
+                ),
+              ),
+              const Icon(Icons.brightness_high, size: 20),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text('背景色', style: theme.textTheme.labelLarge),
+          const SizedBox(height: 8),
+          // `TYP-08`：预设背景色（白 / 米黄 / 灰 / 纯黑）。
+          Wrap(
+            spacing: 8,
+            children: <Widget>[
+              for (final ReaderBackground background
+                  in ReaderBackground.values)
                 ChoiceChip(
-                  key: const Key('font-serif'),
-                  label: const Text('衬线'),
-                  selected: _prefs.settings.fontFamily == 'serif',
-                  onSelected: (_) => _emit(_prefs.copyWith(
-                    settings: _settingsWith(fontFamily: 'serif'),
-                  )),
+                  key: Key('background-${background.name}'),
+                  selected: _prefs.background == background,
+                  avatar: CircleAvatar(backgroundColor: background.dayColor),
+                  label: Text(background.label),
+                  onSelected: (_) =>
+                      _emit(_prefs.copyWith(background: background)),
                 ),
-                ChoiceChip(
-                  key: const Key('font-sans'),
-                  label: const Text('无衬线'),
-                  selected: _prefs.settings.fontFamily == 'sans-serif',
-                  onSelected: (_) => _emit(_prefs.copyWith(
-                    settings: _settingsWith(fontFamily: 'sans-serif'),
-                  )),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text('排版', style: theme.textTheme.labelLarge),
-            const SizedBox(height: 4),
-            _buildTypographySection(context, theme),
-            const SizedBox(height: 16),
-            Text('翻页方式', style: theme.textTheme.labelLarge),
-            const SizedBox(height: 8),
-            // 模式切换由用户可选（选型拍板①③）。
-            Wrap(
-              spacing: 8,
-              children: <Widget>[
-                for (final ReaderPageMode mode in ReaderPageMode.values)
-                  ChoiceChip(
-                    key: Key('pageMode-${mode.name}'),
-                    label: Text(mode.label),
-                    selected: _prefs.pageMode == mode,
-                    onSelected: (_) => _emit(_prefs.copyWith(pageMode: mode)),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text('亮度', style: theme.textTheme.labelLarge),
-            Row(
-              children: <Widget>[
-                const Icon(Icons.brightness_low, size: 20),
-                Expanded(
-                  child: Slider(
-                    key: const Key('brightness-slider'),
-                    value: _prefs.brightness.clamp(
-                      ReadingPrefs.minBrightness,
-                      ReadingPrefs.maxBrightness,
-                    ),
-                    min: ReadingPrefs.minBrightness,
-                    max: ReadingPrefs.maxBrightness,
-                    divisions: 16,
-                    label: '${(_prefs.brightness * 100).round()}%',
-                    // 拖动中即回传：`TYP-08` ①「亮度实时生效」。
-                    onChanged: (double value) =>
-                        _emit(_prefs.copyWith(brightness: value)),
-                  ),
-                ),
-                const Icon(Icons.brightness_high, size: 20),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text('背景色', style: theme.textTheme.labelLarge),
-            const SizedBox(height: 8),
-            // `TYP-08`：预设背景色（白 / 米黄 / 灰 / 纯黑）。
-            Wrap(
-              spacing: 8,
-              children: <Widget>[
-                for (final ReaderBackground background
-                    in ReaderBackground.values)
-                  ChoiceChip(
-                    key: Key('background-${background.name}'),
-                    selected: _prefs.background == background,
-                    avatar: CircleAvatar(backgroundColor: background.dayColor),
-                    label: Text(background.label),
-                    onSelected: (_) =>
-                        _emit(_prefs.copyWith(background: background)),
-                  ),
-              ],
-            ),
-          ],
-        ),
+            ],
+          ),
+        ],
       ),
     );
   }

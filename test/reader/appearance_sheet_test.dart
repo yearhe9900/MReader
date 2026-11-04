@@ -204,6 +204,42 @@ void main() {
       );
     });
 
+    testWidgets('TYP-08：底部读数条随背景色一体化（底色 / 文字取页面色板）',
+        (WidgetTester tester) async {
+      // 换背景色后读数条必须跟着换（口径：底部进度栏应与正文一体化）——
+      // 改前它锁在主题 `colorScheme.surface` 上，米黄 / 纯黑背景下仍挂一条
+      // 主题色，与正文割裂。
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      await showChrome(tester);
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('background-sepia')));
+      await tester.pump(); // 一帧生效。
+
+      final DecoratedBox strip = tester.widget<DecoratedBox>(
+          find.byKey(const Key('reader-progress-indicator')));
+      expect(
+        (strip.decoration! as BoxDecoration).color,
+        const Color(0xFFF2E7D3),
+        reason: '读数条底色应与页面底色同源（一体化），实际：'
+            '${(strip.decoration! as BoxDecoration).color}',
+      );
+
+      // 文字色与正文同源：底色换到纯黑时靠它保对比度（不黑底黑字）。
+      await tester.tap(find.byKey(const Key('background-black')));
+      await tester.pump();
+      final DecoratedBox blackStrip = tester.widget<DecoratedBox>(
+          find.byKey(const Key('reader-progress-indicator')));
+      expect((blackStrip.decoration! as BoxDecoration).color,
+          const Color(0xFF000000));
+      final Text readout =
+          tester.widget<Text>(find.byKey(const Key('reader-progress-text')));
+      expect(readout.style?.color, const Color(0xFFD9D9D9),
+          reason: '纯黑预设下读数文字应为配对浅色（与正文同色）');
+    });
+
     testWidgets('TYP-08 验收③：夜间模式不产生白底', (WidgetTester tester) async {
       // 暗色主题 = 夜间模式（以实际生效的 brightness 为准）。
       await tester.pumpWidget(buildApp(theme: ThemeData.dark()));
@@ -359,7 +395,11 @@ void main() {
       await settle(tester);
 
       // chrome 收起 / 唤出：只作冒烟（切换过程无异常），不再制造几何突变。
-      await tester.tap(find.byKey(const Key('reader-chrome-toggle-status')));
+      //
+      // 收起入口走**正文中宫**（`reader-chrome-toggle` 中心点）：读数行唤出态
+      // 被控制条盖住，而本用例是无系统 inset 的窗口（读数行原位置压在四格
+      // 按钮下面、没有让位空档可点，见 `reader_inset_test` 的有 inset 口径）。
+      await tester.tap(find.byKey(const Key('reader-chrome-toggle')));
       await tester.pumpAndSettle();
       await settle(tester);
       expect(tester.takeException(), isNull, reason: 'chrome 收起必须无待报异常');

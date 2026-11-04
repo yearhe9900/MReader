@@ -12,7 +12,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:mreader/diagnostics/perf_log.dart';
 import 'package:mreader/format/book_source.dart';
 import 'package:mreader/library/book_record.dart';
@@ -23,7 +22,7 @@ import 'package:mreader/reader/pagination/paged_scroller.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_progress.dart';
-import 'package:mreader/ui/glass_kit.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 
 import 'reader_harness.dart';
 import '../test_config.dart';
@@ -263,19 +262,16 @@ void main() {
 
       expect(find.byType(ListTile), findsNWidgets(3));
 
-      // `UI-03`：目录壳层是玻璃底部弹窗，不是 Material bottom sheet。
-      expect(find.byType(GlassSheet, skipOffstage: false), findsOneWidget);
-      // `UI-04`：列表行垫在 OpaqueContentSurface 上（玻璃只留外壳）。
+      // 壳层是 mi_like 弹出式抽屉（`MiBottomSheet`），不是 Material bottom sheet
+      // （2026-11 拍板：目录 / 设置 / 更多从玻璃 GlassSheet 换 MiBottomSheet）。
+      expect(find.byType(MiBottomSheet), findsOneWidget);
+      // 列表行垫在抽屉的不透明表面上（`UI-04`「正文不透明」口径延续）。
       expect(
         find.ancestor(
           of: find.byType(ListTile),
-          matching: find.byType(OpaqueContentSurface),
+          matching: find.byType(MiBottomSheet),
         ),
         findsWidgets,
-      );
-      expect(
-        isGlassWidget(find.byType(ListTile).evaluate().first.widget),
-        isFalse,
       );
       // 当前章（第 1 章）高亮
       expect(

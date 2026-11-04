@@ -60,6 +60,7 @@ import '../ui/default_book_cover.dart';
 import '../ui/entity_page.dart';
 import '../ui/glass_kit.dart';
 import '../ui/mi_like_ui/mi_like_ui.dart';
+import '../ui/mi_sheet.dart';
 import '../ui/reader_control_chrome.dart';
 import '../ui/search_sheet.dart';
 import 'bookmark.dart';
@@ -3700,35 +3701,28 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   Color _textColor(ThemeData theme) =>
       _background.textColor(night: _isNight(theme));
 
-  /// 打开目录弹窗（`NAV-01`）。
+  /// 打开目录弹窗（`NAV-01`；mi_like 弹出式抽屉）。
   void _openToc() {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null || chapters.isEmpty) return;
-    // `UI-03` 浮层玻璃：玻璃底部弹窗（`M2a-T04`）。
-    // `isScrollable: false` —— TocSheet 自带 ListView（Flexible 定高），
-    // 库默认的外层 SingleChildScrollView 会吃掉内层手势并撑爆非约束高度。
-    GlassOverlays.showSheet<void>(
+    // `MiBottomSheet` 弹出式：TocSheet 自带 ListView（滚动自持，`scrollable:
+    // false` 防嵌套）；限高 60% 屏高——内容是自撑列表，不给上限会顶到可用
+    // 高度顶格（通天抽屉）。
+    //
+    // ⚠️ 选中即跳章，**不等抽屉收口**：收口是弹簧滑出（~0.4s），等它播完
+    // 再跳等于把跳章白滞后一拍。
+    showMiSheet(
       context: context,
-      isScrollable: false,
-      // 库该路径给的是**无界高度**，Flexible+ListView 视口会炸 → 这里补
-      // maxHeight 约束（60% 屏高，内容矮时仍收缩）。
-      // `UI-04`：目录列表行不透明——玻璃 sheet 底上垫 OpaqueContentSurface，
-      // 玻璃只留外壳（弹窗背景 / 拖拽把手），列表行下不透出玻璃。
-      builder: (BuildContext sheetContext) => ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
-        ),
-        child: OpaqueContentSurface(
-          child: TocSheet(
-            chapters: chapters,
-            currentIndex: _currentIndex,
-            onSelect: (int index) {
-              Navigator.of(sheetContext).pop();
-              _exitChrome(); // 落到目标页顶 ⇒ 必须收起顶栏，否则目标被它压住。
-              unawaited(_goToChapter(index));
-            },
-          ),
-        ),
+      title: '目录',
+      maxHeightFactor: 0.6,
+      builder: (BuildContext sheetContext, VoidCallback close) => TocSheet(
+        chapters: chapters,
+        currentIndex: _currentIndex,
+        onSelect: (int index) {
+          close();
+          _exitChrome(); // 落到目标页顶 ⇒ 必须收起顶栏，否则目标被它压住。
+          unawaited(_goToChapter(index));
+        },
       ),
     );
   }
@@ -3824,20 +3818,22 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   /// 打开设置面板（菜单「设置」格；原控制条排版组已并入面板，见
-  /// `reading_appearance_sheet.dart` 的排版区）。
+  /// `reading_appearance_sheet.dart` 的排版区；mi_like 弹出式抽屉）。
   void _openAppearance() {
-    GlassOverlays.showSheet<void>(
+    // 面板是静态纵列（可能超屏高）→ `scrollable: true` 由外层滚动兜底。
+    showMiSheet(
       context: context,
-      builder: (BuildContext sheetContext) => OpaqueContentSurface(
-        child: ReadingAppearanceSheet(
-          prefs: ReadingPrefs(
-            settings: _settings,
-            brightness: _brightness,
-            background: _background,
-            pageMode: _pageTurnMode,
-          ),
-          onChanged: _onPrefsChanged,
+      title: '设置',
+      scrollable: true,
+      builder: (BuildContext sheetContext, VoidCallback close) =>
+          ReadingAppearanceSheet(
+        prefs: ReadingPrefs(
+          settings: _settings,
+          brightness: _brightness,
+          background: _background,
+          pageMode: _pageTurnMode,
         ),
+        onChanged: _onPrefsChanged,
       ),
     );
   }
@@ -3849,42 +3845,39 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   bool get _hasMoreEntries =>
       _summaryEnabled || widget.ttsSettings != null;
 
-  /// 菜单「更多」操作列表（MiDialog 纵向列表形态）：
+  /// 菜单「更多」操作列表（mi_like 弹出式抽屉；原 MiDialog 纵向列表形态）：
   ///
   /// AI 摘要与朗读设置是**低频入口**，从旧控制条收进本列表（截图形态
-  /// 第二行只有四个格子）。选中后先关弹层再执行，与书架长按弹框同款。
+  /// 第二行只有四个格子）。选中即收抽屉并**立刻**执行动作（不等滑出收口，
+  /// 否则白滞后 ~0.4s）。
   void _openMoreMenu() {
-    showDialog<void>(
+    showMiSheet(
       context: context,
-      // 路由遮罩透明：遮罩由 MiDialog 自绘（与书架长按弹框同口径）。
-      barrierColor: Colors.transparent,
-      builder: (BuildContext dialogContext) => MiDialog(
-        layout: MiDialogLayout.list,
-        title: '更多',
-        themeMode: Theme.of(context).brightness == Brightness.dark
-            ? MiThemeMode.dark
-            : MiThemeMode.light,
-        items: <MiDialogItem>[
+      title: '更多',
+      builder: (BuildContext sheetContext, VoidCallback close) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
           if (_summaryEnabled)
-            MiDialogItem(
+            MiSettingsRow(
               label: 'AI 摘要',
-              icon: const Icon(Icons.auto_awesome, size: 22),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
+              leading: const Icon(Icons.auto_awesome, size: 22),
+              chevron: false,
+              onTap: () {
+                close();
                 _openSummarySheet(SummaryMode.chapter);
               },
             ),
           if (widget.ttsSettings != null)
-            MiDialogItem(
+            MiSettingsRow(
               label: '朗读设置',
-              icon: const Icon(Icons.settings_voice, size: 22),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
+              leading: const Icon(Icons.settings_voice, size: 22),
+              chevron: false,
+              onTap: () {
+                close();
                 unawaited(_openTtsSettings());
               },
             ),
         ],
-        onScrimTap: () => Navigator.of(dialogContext).pop(),
       ),
     );
   }
@@ -4205,6 +4198,27 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final EdgeInsets systemPadding = MediaQuery.paddingOf(context);
     final TextScaler systemTextScaler = MediaQuery.textScalerOf(context);
 
+    // 常驻读数条（底部槽内**恒在**）：底色 / 文字色与正文同源（`TYP-08`
+    // 一体化——换了背景色板，这条跟着换，不再挂着主题 `surface` 割裂在正文
+    // 下面）。它同时是 chrome 切换入口（`reader-chrome-toggle-status`）。
+    final Widget progressStatus = GestureDetector(
+      key: const Key('reader-chrome-toggle-status'),
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggleFullscreen,
+      child: ReaderProgressIndicator(
+        chapterTitle: _liveChapterTitle,
+        pageNumber: _livePageNumber.number,
+        pageCount: _livePageNumber.total,
+        percent: _livePercentValue,
+        backgroundColor: _pageColor(theme),
+        textColor: _textColor(theme),
+        // 只有落在**屏幕底边**（chrome 收起）时才让开系统手势导航条；
+        // 唤出态它整条躲在控制条底下，那一条由控制条自己的 `SafeArea(bottom: true)`
+        // 承担——重复计入会在两者之间留一条 34dp 空带。
+        bottomInset: _fullscreen ? systemPadding.bottom : 0,
+      ),
+    );
+
     final Widget page = Scaffold(
       backgroundColor: _pageColor(theme),
       // `TYP-09` 契约：**唤出 / 收起 chrome 不得改变正文排版区高度**。
@@ -4282,51 +4296,67 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             ),
       // 底部层 = 常驻读数（恒在）+ 控制条（chrome 唤出时）。
       //
-      // 合成**同一个槽**、且读数排在**上面**（`[读数, 控制条]`）：
-      //   ① 读数必须落在控制条**正上方**（`control_bar.dart` 的窄屏让位依赖它）；
-      //   ② 收起 chrome 时槽里只剩读数 ⇒ 自然贴屏幕底边；
+      // 合成**同一个 Stack**、读数排在**下面**（`[读数, 控制条]`）：
+      //   ① 控制条唤出时与读数**同底叠放**、整条盖住读数——读数不再浮在正文
+      //      之上透出文字（口径：唤醒功能栏后底部进度栏应被覆盖）；
+      //   ② 收起 chrome 时栈里只剩读数 ⇒ 自然贴屏幕底边；
       //   ③ 配合 `extendBody`，二者只是**覆盖**正文、不参与正文预算 ⇒
       //      增删控制条不改正文排版区高度（`TYP-09`）。
       //
-      // 读数在槽内**恒在**（`TYP-09` 验收①），且它自身就是 chrome 切换入口
-      // （`reader-chrome-toggle-status`）——图片页中央点击被「点页全屏缩放」占用，
-      // 需要一个模式无关的入口。
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          GestureDetector(
-            key: const Key('reader-chrome-toggle-status'),
-            behavior: HitTestBehavior.opaque,
-            onTap: _toggleFullscreen,
-            child: ReaderProgressIndicator(
-              chapterTitle: _liveChapterTitle,
-              pageNumber: _livePageNumber.number,
-              pageCount: _livePageNumber.total,
-              percent: _livePercentValue,
-              // 只有落在**屏幕底边**（chrome 收起）时才让开系统手势导航条；
-              // 控制条在它下面时，那一条由控制条自己的 `SafeArea(bottom: true)`
-              // 承担——重复计入会在两者之间留一条 34dp 空带。
-              bottomInset: _fullscreen ? systemPadding.bottom : 0,
+      // 槽高只认**非 `Positioned`** 的子件（Stack 拿它算尺寸）：收起态读数非
+      // 定位、撑起槽高；唤出态读数改走 `Positioned(bottom: 0)` 落到栈底、由
+      // 控制条撑高——「落到底部被盖住」正是靠这条定位切换实现的。
+      //
+      // 读数在栈内**恒在**（`TYP-09` 验收①），收起态直接可点；唤出态它躲在
+      // 控制条之下（仍在树上，几何测试照常可量）。
+      //
+      // 唤出态另铺一层**透明命中层**补回读数行的切换语义：读数被盖住后，
+      // 它原来那条位置（屏幕底缘 + 系统手势 inset）在控制条里是 SafeArea 空档、
+      // 没有任何控件，点它 = 点读数行 = 收起 chrome。高度取 `systemPadding.bottom`
+      // 与控制条 `SafeArea(bottom: true)` 同源 ⇒ 恰好盖住空档、绝不压到上面的
+      // 四格按钮；无系统 inset 时那条位置本就被操作行占住（读数行不可点），
+      // 故此时不铺（铺了会白抢按钮命中）。
+      bottomNavigationBar: ready && !_fullscreen
+          ? Stack(
+              children: <Widget>[
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: progressStatus,
+                ),
+                ReaderControlBar(
+                  chapterIndex: _liveIndex,
+                  chapterCount: chapters.length,
+                  canGoPrev: _currentIndex > 0,
+                  canGoNext: _currentIndex < chapters.length - 1,
+                  onPrevChapter: () => unawaited(_goToChapter(_currentIndex - 1)),
+                  onNextChapter: () => unawaited(_goToChapter(_currentIndex + 1)),
+                  onSeek: _seekToChapter,
+                  onToc: _openToc,
+                  onNight: _toggleNight,
+                  nightActive: _settings.themeMode == AppThemeMode.dark,
+                  onSettings: _openAppearance,
+                  onMore: _hasMoreEntries ? _openMoreMenu : null,
+                  floating: _buildTtsFab(theme),
+                ),
+                if (systemPadding.bottom > 0)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: systemPadding.bottom,
+                    child: GestureDetector(
+                      key: const Key('reader-chrome-toggle-status-gap'),
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _toggleFullscreen,
+                    ),
+                  ),
+              ],
+            )
+          : Stack(
+              children: <Widget>[progressStatus],
             ),
-          ),
-          if (ready && !_fullscreen)
-            ReaderControlBar(
-              chapterIndex: _liveIndex,
-              chapterCount: chapters.length,
-              canGoPrev: _currentIndex > 0,
-              canGoNext: _currentIndex < chapters.length - 1,
-              onPrevChapter: () => unawaited(_goToChapter(_currentIndex - 1)),
-              onNextChapter: () => unawaited(_goToChapter(_currentIndex + 1)),
-              onSeek: _seekToChapter,
-              onToc: _openToc,
-              onNight: _toggleNight,
-              nightActive: _settings.themeMode == AppThemeMode.dark,
-              onSettings: _openAppearance,
-              onMore: _hasMoreEntries ? _openMoreMenu : null,
-              floating: _buildTtsFab(theme),
-            ),
-        ],
-      ),
       // CNT-04c 验收②：链接返回栈非空时显示「返回」按钮，弹栈恢复原位置；
       // 栈空隐藏（普通 Material，玻璃留给 M2a-T04）。
       floatingActionButton: _linkStack.isNotEmpty

@@ -27,6 +27,7 @@ import '../sync/sync_trigger.dart';
 import '../sync/webdav_client.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
+import 'mi_like_ui/mi_like_ui.dart';
 import 'settings_kit.dart';
 
 /// 页面内容左右留白（与设置页同一左边缘口径）。
@@ -526,7 +527,7 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
           title: '同步阅读统计',
           subtitle:
               enabled ? '已开启：阅读时长记录会与云端合并' : '已关闭：阅读统计仅保留在本机',
-          trailing: Switch(value: enabled, onChanged: _toggleStats),
+          trailing: MiSwitch(value: enabled, onChanged: _toggleStats),
           onTap: () => _toggleStats(!enabled),
         ),
       ],
@@ -556,7 +557,7 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
           accent: SettingsAccents.purple,
           title: '上传书籍文件',
           subtitle: enabled ? '已开启：书籍文件会同步到云端' : '已关闭（默认）',
-          trailing: Switch(
+          trailing: MiSwitch(
             value: enabled,
             onChanged: _bookBusy ? null : _togglePrefs,
           ),

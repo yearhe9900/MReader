@@ -21,6 +21,7 @@ import '../ai/provider_config.dart';
 import '../ai/provider_store.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
+import 'mi_like_ui/mi_like_ui.dart';
 import 'settings_kit.dart';
 
 /// 页面内容左右留白（与设置页同一左边缘口径）。
@@ -117,7 +118,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           accent: SettingsAccents.purple,
           title: '启用 AI 功能',
           subtitle: '关闭后所有 AI 入口隐藏，不发送任何请求',
-          trailing: Switch(
+          trailing: MiSwitch(
             value: prefs.aiEnabled,
             onChanged: (bool v) => widget.store.setAiEnabled(v),
           ),
@@ -128,7 +129,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           accent: SettingsAccents.orange,
           title: '最保守模式',
           subtitle: '仅发送选中的文本，不携带章节或整书内容',
-          trailing: Switch(
+          trailing: MiSwitch(
             value: prefs.selectionOnly,
             onChanged: (bool v) => widget.store.setSelectionOnly(v),
           ),

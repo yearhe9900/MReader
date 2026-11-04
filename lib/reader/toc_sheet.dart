@@ -1,4 +1,8 @@
-// `NAV-01`：目录底部弹窗——列出全部章节，当前章高亮并自动滚入可见区。
+// `NAV-01`：目录列表——列出全部章节，当前章高亮并自动滚入可见区。
+//
+// 只出**列表本体**：标题行与安全区（含底部手势条让位）由外层
+// `MiBottomSheet` 统一提供（`reader_page._openToc`），再包一层 `SafeArea`
+// 会在抽屉里重复吃一遍 inset，列表底会空出一条。
 //
 // 用**固定行高** + `initialScrollOffset` 让「当前章滚入可见区」可用简单算术定位，
 // 不依赖逐项 `GlobalKey`（后者对懒构建的 `ListView.builder` 不可靠）。
@@ -6,9 +10,9 @@ import 'package:flutter/material.dart';
 
 import '../model/chapter.dart';
 
-/// 目录底部弹窗。
+/// 目录列表（`MiBottomSheet` 的内容件）。
 ///
-/// 传入 [onSelect] 即把点击的章节索引回传调用方（由调用方负责关闭弹窗并跳章）。
+/// 传入 [onSelect] 即把点击的章节索引回传调用方（由调用方负责收起弹层并跳章）。
 class TocSheet extends StatefulWidget {
   const TocSheet({
     super.key,
@@ -58,44 +62,35 @@ class _TocSheetState extends State<TocSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Text('目录', style: theme.textTheme.titleMedium),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Flexible(
+          child: ListView.builder(
+            controller: _controller,
+            itemExtent: _itemExtent,
+            itemCount: widget.chapters.length,
+            itemBuilder: (BuildContext context, int index) {
+              final Chapter chapter = widget.chapters[index];
+              return ListTile(
+                selected: index == widget.currentIndex,
+                contentPadding: EdgeInsets.only(
+                  left: (16 + chapter.level * 16).toDouble(),
+                  right: 16,
+                ),
+                title: Text(
+                  chapter.title.isNotEmpty
+                      ? chapter.title
+                      : '第 ${index + 1} 节',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onTap: () => widget.onSelect(index),
+              );
+            },
           ),
-          const Divider(height: 1),
-          Flexible(
-            child: ListView.builder(
-              controller: _controller,
-              itemExtent: _itemExtent,
-              itemCount: widget.chapters.length,
-              itemBuilder: (BuildContext context, int index) {
-                final Chapter chapter = widget.chapters[index];
-                return ListTile(
-                  selected: index == widget.currentIndex,
-                  contentPadding: EdgeInsets.only(
-                    left: (16 + chapter.level * 16).toDouble(),
-                    right: 16,
-                  ),
-                  title: Text(
-                    chapter.title.isNotEmpty
-                        ? chapter.title
-                        : '第 ${index + 1} 节',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  onTap: () => widget.onSelect(index),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

@@ -16,6 +16,7 @@ import '../ai/provider_store.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_engine.dart';
 import '../tts/tts_settings.dart';
+import '../ui/mi_like_ui/mi_like_ui.dart';
 import '../ui/tts_settings_page.dart';
 
 /// 朗读设置面板（引擎 / 语速 / 音色 / 定时停止）。
@@ -163,13 +164,25 @@ class _TtsSettingsSheetState extends State<TtsSettingsSheet> {
                   const Icon(Icons.speed, size: 20),
                 ],
               ),
-              SwitchListTile(
-                key: const Key('tts-follow-rate'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('跟随系统语速'),
-                value: _settings.followSystemRate,
-                onChanged: (bool value) =>
-                    _emit(_settings.copyWith(followSystemRate: value)),
+              // 跟随系统语速（`TTS-04` 开关语义）：行 + MiSwitch（点开关即切）。
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        '跟随系统语速',
+                        style: theme.textTheme.bodyLarge,
+                      ),
+                    ),
+                    MiSwitch(
+                      key: const Key('tts-follow-rate'),
+                      value: _settings.followSystemRate,
+                      onChanged: (bool value) =>
+                          _emit(_settings.copyWith(followSystemRate: value)),
+                    ),
+                  ],
+                ),
               ),
               // 音色（`TTS-04`②）：列表为空 = 平台无引擎查询面 → 不摆空区块。
               if (hasVoices) ...<Widget>[

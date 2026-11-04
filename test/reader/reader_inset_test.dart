@@ -150,28 +150,42 @@ void main() {
       expect(tester.getRect(chapterHeading('第一章')), heading0,
           reason: '正文里的字两态不许挪位（用户可见口径）');
 
-      // 常驻读数恒在，且正好落在控制条**正上方**——`control_bar.dart` 的窄屏
-      // 让位（`kReaderControlProgressMinWidth`）明确依赖这一条。
+      // 常驻读数恒在，且唤出 chrome 时**被控制条整条盖住**（口径：唤醒功能栏
+      // 后底部进度栏应被覆盖——不再浮在正文之上透出文字）。故读数与控制条
+      // **同底**（都贴屏幕下缘）、读数整体落在控制条盒内，而不是叠在它正上方。
       final Rect indicator =
           tester.getRect(find.byKey(const Key('reader-progress-indicator')));
       final Rect bar = tester.getRect(find.byType(ReaderControlBar));
-      expect(indicator.bottom, moreOrLessEquals(bar.top, epsilon: 0.5),
-          reason: '读数应在控制条正上方（indicator.bottom=${indicator.bottom} '
-              'bar.top=${bar.top}）');
+      expect(indicator.bottom, moreOrLessEquals(viewport0.bottom, epsilon: 0.5),
+          reason: '读数应贴屏幕底（indicator.bottom=${indicator.bottom}）');
+      expect(indicator.top, greaterThanOrEqualTo(bar.top - 0.5),
+          reason: '读数应整条落在控制条盒内 = 被盖住'
+              '（indicator.top=${indicator.top} bar.top=${bar.top}）');
       expect(bar.bottom, moreOrLessEquals(viewport0.bottom, epsilon: 0.5),
           reason: '控制条应贴屏幕下缘');
 
-      // 读数与控制条之间**不留空带**：控制条自带 `SafeArea(bottom: true)`，读数在
-      // 它上方时不该再吃一遍系统 inset。变异判别力：`bottomInset` 恒传系统值
-      // （不按 `_fullscreen` 分支）⇒ 多出 34dp 空白 → 判红。
+      // 读数**文字**同样在控制条之下（盖住的是整条，不只外框）；
+      // 两态之间不留空带：控制条自带 `SafeArea(bottom: true)`，读数在唤出态
+      // 不该再吃一遍系统 inset。变异判别力：`bottomInset` 恒传系统值
+      // （不按 `_fullscreen` 分支）⇒ 读数多出 34dp、底边探出控制条 → 判红。
       final Rect readout =
           tester.getRect(find.byKey(const Key('reader-progress-text')));
-      expect(bar.top - readout.bottom, lessThanOrEqualTo(8),
-          reason: '读数与控制条之间不得留空带'
-              '（readout.bottom=${readout.bottom} bar.top=${bar.top}）');
+      expect(readout.bottom, lessThanOrEqualTo(bar.bottom + 0.5),
+          reason: '读数文字不得探出控制条（readout.bottom=${readout.bottom} '
+              'bar.bottom=${bar.bottom}）');
+      expect(readout.top, greaterThanOrEqualTo(bar.top - 0.5),
+          reason: '读数文字应被控制条盖住（readout.top=${readout.top} '
+              'bar.top=${bar.top}）');
 
       // 收起：几何回到与初始完全一致。
-      await tester.tap(find.byKey(const Key('reader-chrome-toggle-status')));
+      //
+      // 读数行此刻被控制条盖住（不再是可命中的 widget），但它原来那条位置
+      // 上铺着同语义的透明命中层（`reader-chrome-toggle-status-gap`）——按
+      // 读数行中心落点即命中那层 = 同一个收起入口。用 `tapAt` 而非
+      // `tap(finder)`：命中的不是 finder 自己那个 widget，后者会报
+      // "would not hit test" 警告（命中的是覆盖层，这正是「被覆盖」的口径）。
+      await tester.tapAt(tester
+          .getCenter(find.byKey(const Key('reader-chrome-toggle-status'))));
       await tester.pump();
       await settle(tester, rounds: 20);
       expect(find.byType(ReaderControlBar), findsNothing);
