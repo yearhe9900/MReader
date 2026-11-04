@@ -9,7 +9,8 @@
 > **完整正文（实测数据、根因链、踩坑记录）不回迁仓库**，仍在 git 历史里：
 > `git show a1d7a40^:docs/tech-usage.md`（原 `§1 技术栈总览` 同在该文件）。
 >
-> **职责分工**：需求与验收契约 → `docs/PRD.md`；变更时间线 → `CHANGELOG.md`；
+> **职责分工**：需求与验收契约 → `docs/PRD.md`（**已删除**，历史在 git：
+> `git log --follow docs/PRD.md`）；变更时间线 → `CHANGELOG.md`；
 > 逐批次拍板与技术决策 → 本文件（`§2.xx`）；实现契约 → 代码注释与测试。
 
 | 编号 | 批次 / 决策 |
