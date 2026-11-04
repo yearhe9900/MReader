@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 // 框架 API 走公共 barrel；若导出缺失会在这里暴露。
 import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 // 内部画笔：只用来把「选中胶囊落在哪个槽位」读成数值（不属公开 API）。
-import 'package:mreader/ui/mi_like_ui/src/components/navigation/glass_side_nav_bar/side_nav_bar_painter.dart';
+import 'package:mreader/ui/mi_like_ui/src/components/navigation/glass_side_nav_bar/glass_side_nav_bar_painter.dart';
 
 /// 宽屏导航回归：侧边导航栏的几何 / 选中态 / 回调，以及示例应用在
 /// **导航断点两侧**的形态切换（底部栏 ⇄ 侧栏）。

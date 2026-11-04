@@ -2,12 +2,13 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../theme/mi_theme.dart';
 import '../../../theme/search_bar_tokens.dart';
 import '../../../theme/theme_mode.dart';
 import '../../../theme/transparency_tokens.dart';
-import '../../../utils/filter_cache.dart';
-import '../../../utils/pressable.dart';
-import 'search_cancel_metrics.dart';
+import '../../../foundations/filter_cache.dart';
+import '../../../foundations/pressable.dart';
+import 'search_cancel_button_metrics.dart';
 
 /// 搜索态取消钮：⌀44.1 圆盘 + 叉号，点按退出搜索态。
 ///
@@ -64,11 +65,11 @@ class MiSearchCancelButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mode = themeMode ??
-        (Theme.of(context).brightness == Brightness.light
-            ? MiThemeMode.light
-            : MiThemeMode.dark);
-    final palette = MiSearchBarPalette.of(mode);
+    final mode = MiTheme.modeOf(context, explicit: themeMode);
+    final palette = MiSearchBarPalette.of(
+      mode,
+      accent: MiTheme.maybeOf(context)?.accent,
+    );
     // 淡入 / 淡出：alpha 乘进各层颜色（不做离屏合成，见 [fade]）。
     final f = fade;
     Color faded(Color c) => f >= 1 ? c : c.withValues(alpha: c.a * f);

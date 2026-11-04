@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../theme/colors.dart';
+import '../../../theme/mi_theme.dart';
 import '../../../theme/theme_mode.dart';
 import '../../../theme/transparency_tokens.dart';
-import '../../../utils/focus_ring.dart';
-import '../../../utils/hover_feedback.dart';
+import '../../../foundations/focus_ring.dart';
+import '../../../foundations/hover_feedback.dart';
 import '../switch_control/switch_metrics.dart';
 import 'slider_metrics.dart';
 
@@ -82,10 +83,7 @@ class MiSlider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mode = themeMode ??
-        (Theme.of(context).brightness == Brightness.light
-            ? MiThemeMode.light
-            : MiThemeMode.dark);
+    final mode = MiTheme.modeOf(context, explicit: themeMode);
     final enabled = onChanged != null;
     const trackTop =
         (MiSliderMetrics.hitHeight - MiSliderMetrics.trackHeight) / 2;

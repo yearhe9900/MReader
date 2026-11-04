@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../../theme/glass_tokens.dart';
-import '../../../utils/squircle.dart';
-import 'side_nav_bar_metrics.dart';
+import '../../../foundations/squircle.dart';
+import 'glass_side_nav_bar_metrics.dart';
 
 /// 纵向玻璃侧栏的绘制：栏体遮罩（在选中胶囊处开洞）+ 胶囊透镜 + 外缘高光。
 ///

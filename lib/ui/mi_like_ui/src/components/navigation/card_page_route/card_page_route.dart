@@ -2,9 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../../../theme/colors.dart';
+import '../../../theme/mi_theme.dart';
 import '../../../theme/transparency_tokens.dart';
-import '../../../utils/squircle.dart';
+import '../../../foundations/squircle.dart';
 import 'card_page_route_metrics.dart';
 
 /// 卡片式页面推入转场：新页从右缘滑入、前缘带大圆角，下层页左移视差并压暗。
@@ -256,11 +256,12 @@ class _MiPushWide extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 幕布色 = 页底色（亮 #F3F3F3 / 暗 #000000），与本库页面同底 ——
-    // 淡入读作「从页面底色里浮出来」，不是「从黑色里亮起来」。
-    final veilColor = Theme.of(context).brightness == Brightness.light
-        ? MiColors.pageBackgroundLight
-        : MiColors.pageBackgroundDark;
+    // 幕布色 = 页底色（亮 #F3F3F3 / 暗 #000000，可由 [MiTheme] 注入覆盖），
+    // 与本库页面同底 —— 淡入读作「从页面底色里浮出来」，不是「从黑色里亮起来」。
+    final veilColor = MiTheme.pageBackgroundFor(
+      context,
+      MiTheme.modeOf(context),
+    );
     return AnimatedBuilder(
       animation: animation,
       child: child,

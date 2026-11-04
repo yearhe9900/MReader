@@ -17,9 +17,9 @@ import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 /// 白名单口径：
 ///  * `*_metrics.dart` —— 组件私有动效数值的家；
 ///  * `motion_tokens.dart` —— 跨组件动效数值的家；
-///  * `lib/ui/mi_like_ui/src/utils/` —— 公开参数默认值是 API 的一部分，
-///    不是隐藏常量，不扫（上游如 `MiHoverFeedback(duration: …)` 的默认 150ms；
-///    本移植树未引入桌面悬停件，口径同源）。
+///  * `lib/ui/mi_like_ui/src/foundations/` + `src/layout/` —— 公开参数默认值是
+///    API 的一部分（如 `MiHoverFeedback(duration: …)` 的默认 150ms），不是隐藏
+///    常量，不扫（上游结构重构批口径）。
 ///
 /// 刻意**放行** `Curves.xxx`：那是 Flutter 官方命名常量（token），不是字面量；
 /// 纪律钉死的是「数值字面量散落」，不骚扰命名引用。
@@ -64,9 +64,11 @@ List<String> _dartFilesIn(String dir) => Directory(dir)
     .where((p) => p.endsWith('.dart'))
     .toList();
 
-/// 组件层扫描目标：排除各组件私有动效的家（`*_metrics.dart`）。
-Iterable<String> _componentFiles() => _dartFilesIn('lib/ui/mi_like_ui/src/components')
-    .where((p) => !p.endsWith('_metrics.dart'));
+/// 组件层扫描目标（含浮层）：排除各组件私有动效的家（`*_metrics.dart`）。
+Iterable<String> _componentFiles() => [
+      ..._dartFilesIn('lib/ui/mi_like_ui/src/components'),
+      ..._dartFilesIn('lib/ui/mi_like_ui/src/overlays'),
+    ].where((p) => !p.endsWith('_metrics.dart'));
 
 /// theme 层扫描目标：排除跨组件动效的家。
 Iterable<String> _themeFiles() => _dartFilesIn('lib/ui/mi_like_ui/src/theme')
@@ -86,12 +88,16 @@ void main() {
           reason: '跨组件动效数值进 MiMotionTokens，其余 theme 文件只引用');
     });
 
-    test('utils 放行有据：默认值是公开参数（规则不空转的旁证之一）', () {
-      // 白名单里的 utils 目录必须真实存在（本移植树以 filter_cache /
-      // glass_rim 为代表；上游的 hover/focus 桌面件未引入），
-      // 这里只确认文件在场、白名单口径没有漂移。
-      expect(File('lib/ui/mi_like_ui/src/utils/filter_cache.dart').existsSync(), isTrue);
-      expect(File('lib/ui/mi_like_ui/src/utils/glass_rim.dart').existsSync(), isTrue);
+    test('foundations 放行有据：默认值是公开参数（规则不空转的旁证之一）', () {
+      // MiHoverFeedback / MiFocusRing 的默认时长是 API 的一部分，
+      // 白名单放行；这里只确认文件确实存在、白名单口径没有漂移。
+      expect(
+          File('lib/ui/mi_like_ui/src/foundations/hover_feedback.dart')
+              .existsSync(),
+          isTrue);
+      expect(File('lib/ui/mi_like_ui/src/foundations/focus_ring.dart')
+          .existsSync(),
+          isTrue);
     });
   });
 

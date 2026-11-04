@@ -3,14 +3,15 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../../../theme/dimens.dart';
+import '../../../theme/mi_theme.dart';
 import '../../../theme/search_bar_tokens.dart';
 import '../../../theme/theme_mode.dart';
 import '../../../theme/transparency_tokens.dart';
 import '../../../theme/typography.dart';
-import '../../../utils/filter_cache.dart';
-import '../../../utils/glass_rim.dart';
-import '../../../utils/pressable.dart';
-import '../../../utils/squircle.dart';
+import '../../../foundations/filter_cache.dart';
+import '../../../foundations/glass_rim.dart';
+import '../../../foundations/pressable.dart';
+import '../../../foundations/squircle.dart';
 import 'search_bar_metrics.dart';
 import 'search_bar_painter.dart';
 
@@ -119,11 +120,11 @@ class MiSearchBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mode = themeMode ??
-        (Theme.of(context).brightness == Brightness.light
-            ? MiThemeMode.light
-            : MiThemeMode.dark);
-    final palette = MiSearchBarPalette.of(mode);
+    final mode = MiTheme.modeOf(context, explicit: themeMode);
+    final palette = MiSearchBarPalette.of(
+      mode,
+      accent: MiTheme.maybeOf(context)?.accent,
+    );
     // 未选填充两态：平底 = 低调半透明（palette.fill）；压内容 = 该档再垫一层
     // 玻璃膜（预合成为单色，平底观感不变）。
     final fill = overContent

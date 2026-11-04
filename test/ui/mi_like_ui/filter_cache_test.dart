@@ -1,13 +1,12 @@
 // [MiFilterCache] 过滤缓存工具契约用例。
 //
-// 上游 `d081e69`（弹层单点渲染层 + 表单四件 + 可达性批）一比一移植（移植树
-// `lib/ui/mi_like_ui/src/utils/filter_cache.dart`），用例同步移植。
+// 上游 `a987743`（结构重构批：utils → foundations、浮层归 overlays）一比一移植
+//（移植树 `lib/ui/mi_like_ui/src/foundations/filter_cache.dart`），用例同步移植。
 
 import 'package:flutter_test/flutter_test.dart';
 
+// 框架 API 走公共 barrel（上游本批起 `filter_cache` 已入 barrel 导出）。
 import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
-// 框架内部工具（不经 barrel）：直接引 src 验证缓存契约。
-import 'package:mreader/ui/mi_like_ui/src/utils/filter_cache.dart';
 
 /// `MiFilterCache` 值相等缓存的守门测试。
 ///
