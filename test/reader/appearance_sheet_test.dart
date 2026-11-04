@@ -30,6 +30,7 @@ import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_prefs.dart';
 import 'package:mreader/reader/reading_prefs_store.dart';
 import 'package:mreader/typography/typeset.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 
 import 'reader_harness.dart';
 import '../test_config.dart';
@@ -431,6 +432,64 @@ void main() {
       }
       expect(tester.takeException(), isNull);
 
+      await settle(tester);
+    });
+
+    // ── 阅读设置：全书进度条显示开关 ───────────────────────────────────
+
+    testWidgets('阅读设置：全书进度条默认显示、可关闭且读数仍在、落盘保留、可恢复',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      const Key barKey = Key('reader-progress-bar');
+      const Key readoutKey = Key('reader-progress-text');
+      const Key switchKey = Key('reader-setting-show-progress-bar');
+      final Finder bar = find.byKey(barKey);
+      final Finder readout = find.byKey(readoutKey);
+      expect(bar, findsOneWidget, reason: '默认显示 2px 全书进度细条');
+      expect(readout, findsOneWidget);
+
+      await showChrome(tester);
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(switchKey));
+      await tester.pumpAndSettle();
+      expect(tester.widget<MiSwitch>(find.byKey(switchKey)).value, isTrue);
+
+      await tester.tap(find.byKey(switchKey));
+      await tester.pumpAndSettle();
+
+      expect(bar, findsNothing, reason: '关掉后细条不渲染');
+      expect(readout, findsOneWidget, reason: '章标题 / 页读数 / 百分比照常显示');
+      expect(find.byKey(const Key('reader-progress-indicator')), findsOneWidget);
+      expect(tester.widget<MiSwitch>(find.byKey(switchKey)).value, isFalse,
+          reason: '开关自身态跟着刷新');
+
+      // 收起抽屉（点遮罩）再排空落盘的真 IO。
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+      await settle(tester);
+      final ReadingPrefs? saved =
+          await tester.runAsync<ReadingPrefs?>(() => prefsStore.load());
+      expect(saved?.showProgressBar, isFalse, reason: '关闭态即时落盘');
+
+      // 真·关书重进：仍不显示。
+      await closeBook(tester);
+      await tester.pumpWidget(buildApp(prefs: ReadingPrefsStore(paths)));
+      await settle(tester);
+      expect(bar, findsNothing, reason: '重进保留关闭态');
+
+      // 再打开可恢复显示。
+      await showChrome(tester);
+      await tester.tap(find.byKey(const Key('reader-appearance')));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(switchKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(switchKey));
+      await tester.pumpAndSettle();
+      expect(bar, findsOneWidget, reason: '重新打开后细条回来');
+      expect(tester.widget<MiSwitch>(find.byKey(switchKey)).value, isTrue);
       await settle(tester);
     });
   });

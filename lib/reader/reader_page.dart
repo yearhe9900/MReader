@@ -457,6 +457,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 预设背景色板（`TYP-08`）。
   ReaderBackground _background = ReaderBackground.white;
 
+  /// 是否显示底部 2px 全书进度细条（阅读设置项，默认显示）。
+  ///
+  /// **只影响绘制**：正文预留 [_kProgressIndicatorReserve] 恒定，切换不重排。
+  bool _showProgressBar = true;
+
   /// 书签列表（添加顺序；`TYP-06`）。
   List<Bookmark> _bookmarks = <Bookmark>[];
 
@@ -812,6 +817,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           _brightness = prefs.brightness;
           _background = prefs.background;
           _pageTurnMode = prefs.pageMode;
+          _showProgressBar = prefs.showProgressBar;
         }
         // `_bookmarks` 异步后到（见 `bookmarksF`），[_loadMetaAfterReady] 同理。
         _chapters = chapters;
@@ -3832,6 +3838,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           brightness: _brightness,
           background: _background,
           pageMode: _pageTurnMode,
+          showProgressBar: _showProgressBar,
         ),
         onChanged: _onPrefsChanged,
       ),
@@ -4051,6 +4058,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         brightness: _brightness,
         background: _background,
         pageMode: _pageTurnMode,
+        showProgressBar: _showProgressBar,
       ));
     } catch (_) {
       // 保存失败不影响阅读。
@@ -4158,6 +4166,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       _brightness = next.brightness;
       _background = next.background;
       _pageTurnMode = next.pageMode;
+      _showProgressBar = next.showProgressBar;
     });
     if (typesetChanged) {
       // 字号 / 行距 / 字体族会重排 → 与控制条同款「锚定 → setState → 校正」。
@@ -4212,6 +4221,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         percent: _livePercentValue,
         backgroundColor: _pageColor(theme),
         textColor: _textColor(theme),
+        showProgressBar: _showProgressBar,
         // 只有落在**屏幕底边**（chrome 收起）时才让开系统手势导航条；
         // 唤出态它整条躲在控制条底下，那一条由控制条自己的 `SafeArea(bottom: true)`
         // 承担——重复计入会在两者之间留一条 34dp 空带。

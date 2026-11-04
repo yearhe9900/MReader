@@ -1,5 +1,5 @@
 // `TYP-09`：细粒度阅读进度指示——左「当前章标题」+ 右「章内页/本章总页 + 全书百分比」
-// + 2px 细进度条。
+// + 2px 细进度条（可在阅读设置里单独关闭；读数行恒在）。
 //
 // 格式（§2.72，负责人拍板口径）：左章节标题、右「8/20 22.2%」（章内页 / 本章总页 /
 // 全书百分比**一位小数**）+ 2px 进度条。
@@ -27,6 +27,7 @@ class ReaderProgressIndicator extends StatelessWidget {
     required this.backgroundColor,
     required this.textColor,
     this.bottomInset = 0,
+    this.showProgressBar = true,
   });
 
   /// 当前章标题（空串 = 未解析出标题 → 只显示右侧读数）。
@@ -54,6 +55,13 @@ class ReaderProgressIndicator extends StatelessWidget {
   /// 底色也被顶上去，系统栏区域会露出正文（「进度条浮在文字上、底下漏一条」）。
   /// 调用方（`ReaderPage`）**必须**把同一个量加进正文的 reserve，否则正文会被多盖住。
   final double bottomInset;
+
+  /// 是否绘制顶部 2px **全书进度细条**（默认显示；阅读设置里可关）。
+  ///
+  /// ⚠️ 关掉只少画这一条，读数行与调用方的 28dp 正文预留**都不变** ⇒
+  /// 切换只重绘、不重排（分页页高 / 落位语义全不动），留出的 2dp 由同一
+  /// 页面底色铺满，看不出空隙。
+  final bool showProgressBar;
 
   @override
   Widget build(BuildContext context) {
@@ -84,13 +92,14 @@ class ReaderProgressIndicator extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          // 细进度条（2px）：全书进度。
-          LinearProgressIndicator(
-            key: const Key('reader-progress-bar'),
-            value: fraction,
-            minHeight: 2,
-            backgroundColor: track,
-          ),
+          // 细进度条（2px）：全书进度，可在阅读设置里关掉（读数行照常）。
+          if (showProgressBar)
+            LinearProgressIndicator(
+              key: const Key('reader-progress-bar'),
+              value: fraction,
+              minHeight: 2,
+              backgroundColor: track,
+            ),
           Padding(
             // 水平 12：与正文的页边距对齐观感（避免贴边）。
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
