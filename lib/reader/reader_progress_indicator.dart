@@ -1,13 +1,13 @@
-// `TYP-09`：细粒度阅读进度指示——左「当前章标题」+ 右「章内页/本章总页 + 全书百分比」
-// + 2px 细进度条（可在阅读设置里单独关闭；读数行恒在）。
+// `TYP-09`：细粒度阅读进度指示——左「当前章标题」+ 右「章内页/本章总页 + 全书百分比」。
 //
-// 格式（§2.72，负责人拍板口径）：左章节标题、右「8/20 22.2%」（章内页 / 本章总页 /
-// 全书百分比**一位小数**）+ 2px 进度条。
+// 格式（§2.72）：左章节标题、右「8/20 22.2%」（章内页 / 本章总页 /
+// 全书百分比**一位小数**）。**不画进度条**：进度全靠读数数字表达，阅读区与
+// 读数区之间只有一条 1px 极淡半透明分界线。
 //
 // 独立于 AppBar / 控制条（`TYP-09` 验收①②：全屏时那两者都隐藏，本指示器必须仍在）；
 // 由 `ReaderPage` 以**滚动实时采样**的显示值驱动（验收②「进度随滚动实时更新」）。
 //
-// **配色随阅读背景**（`TYP-08`「一体化」）：底色 / 文字 / 进度槽一律取调用方
+// **配色随阅读背景**（`TYP-08`「一体化」）：底色 / 文字 / 分界线一律取调用方
 // 传入的**页面色板**（`ReaderPage._pageColor` / `_textColor`），不取主题
 // `colorScheme.surface`——否则换了米黄 / 纯黑背景，这条读数还挂着主题底色，
 // 与正文割裂。色板成对传入（底色 + 正文色）是契约：单传底色会造出「黑底黑字」。
@@ -16,7 +16,7 @@
 // 不显示「0/0」这种没有信息量的读数。
 import 'package:flutter/material.dart';
 
-/// 阅读进度指示（细进度条 + 「章节标题 …… 页/总页 百分比」）。
+/// 阅读进度指示（1px 极淡分界线 + 「章节标题 …… 页/总页 百分比」）。
 class ReaderProgressIndicator extends StatelessWidget {
   const ReaderProgressIndicator({
     super.key,
@@ -27,7 +27,6 @@ class ReaderProgressIndicator extends StatelessWidget {
     required this.backgroundColor,
     required this.textColor,
     this.bottomInset = 0,
-    this.showProgressBar = true,
   });
 
   /// 当前章标题（空串 = 未解析出标题 → 只显示右侧读数）。
@@ -46,7 +45,7 @@ class ReaderProgressIndicator extends StatelessWidget {
   final Color backgroundColor;
 
   /// 读数条文字色 = **页面正文色**（`ReaderPage._textColor`）；
-  /// 同时充当进度条底槽的取色源（降透明后在任何背景上都可见）。
+  /// 同时充当顶部分界线的取色源（降到 α0.1 后在任何色板上都极淡但可见）。
   final Color textColor;
 
   /// 底部系统栏让位（`MediaQuery.padding.bottom`）。
@@ -56,25 +55,13 @@ class ReaderProgressIndicator extends StatelessWidget {
   /// 调用方（`ReaderPage`）**必须**把同一个量加进正文的 reserve，否则正文会被多盖住。
   final double bottomInset;
 
-  /// 是否绘制顶部 2px **全书进度细条**（默认显示；阅读设置里可关）。
-  ///
-  /// ⚠️ 关掉只少画这一条，读数行与调用方的 28dp 正文预留**都不变** ⇒
-  /// 切换只重绘、不重排（分页页高 / 落位语义全不动），留出的 2dp 由同一
-  /// 页面底色铺满，看不出空隙。
-  final bool showProgressBar;
-
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final double fraction = (percent / 100).clamp(0.0, 1.0).toDouble();
     final bool hasPage = pageCount > 0 && pageNumber > 0;
     final String tail = hasPage
         ? '$pageNumber/$pageCount ${percent.toStringAsFixed(1)}%'
         : '${percent.toStringAsFixed(1)}%';
-    // 进度条底槽：与正文色同源、只降透明——白底黑字 → 淡黑槽，黑底白字 →
-    // 淡白槽，色板换到哪都看得见（主题 `dividerColor` 在纯黑预设下是黑的，
-    // 槽会整个消失）。
-    final Color track = textColor.withValues(alpha: 0.2);
 
     return DecoratedBox(
       key: const Key('reader-progress-indicator'),
@@ -82,24 +69,19 @@ class ReaderProgressIndicator extends StatelessWidget {
         // 页面底色原样铺满（不透明）：读数条与正文**同一块底**，一体化；
         // 正文已由 `_kProgressIndicatorReserve` 让开，条下不会透出文字。
         color: backgroundColor,
+        // 阅读区 / 读数区唯一的分界：1px 极淡半透明线，取页面正文色
+        // （随色板换明暗，纯黑预设下也不会消失），**不表达任何进度**。
         border: Border(
           top: BorderSide(
-            color: theme.dividerColor.withValues(alpha: 0.4),
-            width: 0.5,
+            color: textColor.withValues(alpha: 0.1),
+            width: 1,
           ),
         ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          // 细进度条（2px）：全书进度，可在阅读设置里关掉（读数行照常）。
-          if (showProgressBar)
-            LinearProgressIndicator(
-              key: const Key('reader-progress-bar'),
-              value: fraction,
-              minHeight: 2,
-              backgroundColor: track,
-            ),
+          // ⚠️ 不画进度条：进度只由右侧读数数字表达（禁 `LinearProgressIndicator`）。
           Padding(
             // 水平 12：与正文的页边距对齐观感（避免贴边）。
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),

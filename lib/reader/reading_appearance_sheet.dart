@@ -1,5 +1,5 @@
 // `TYP-07` / `TYP-08` + 排版快捷区：阅读设置面板——字体族 + 字号 / 行距 /
-// 页边距 + 应用内亮度遮罩 + 预设背景色 + 全书进度条显示开关。
+// 页边距 + 应用内亮度遮罩 + 预设背景色。
 //
 // 排版三件（字号 / 行距 / 页边距）原在底部控制条的「排版」分组；菜单按截图
 // 形态简化后（`control_bar.dart`），它们整体迁入本面板的「排版」区，
@@ -315,32 +315,6 @@ class _ReadingAppearanceSheetState extends State<ReadingAppearanceSheet> {
                   onSelected: (_) =>
                       _emit(_prefs.copyWith(background: background)),
                 ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text('阅读进度', style: theme.textTheme.labelLarge),
-          const SizedBox(height: 4),
-          // 只关底部 2px 全书进度细条：章标题 / 页读数 / 百分比照常显示，
-          // 正文预留几何也不变 ⇒ 切换只重绘、不重排。
-          Row(
-            key: const Key('reader-setting-progress-row'),
-            children: <Widget>[
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text('显示全书进度条', style: theme.textTheme.bodyMedium),
-                    Text('底部读数条上方的细进度条',
-                        style: theme.textTheme.bodySmall),
-                  ],
-                ),
-              ),
-              MiSwitch(
-                key: const Key('reader-setting-show-progress-bar'),
-                value: _prefs.showProgressBar,
-                onChanged: (bool value) =>
-                    _emit(_prefs.copyWith(showProgressBar: value)),
-              ),
             ],
           ),
         ],

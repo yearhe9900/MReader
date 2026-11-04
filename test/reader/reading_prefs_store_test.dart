@@ -48,7 +48,6 @@ void main() {
       expect(prefs.brightness, 1.0);
       expect(prefs.background, ReaderBackground.white);
       expect(prefs.pageMode, ReaderPageMode.scroll, reason: '翻页方式默认滚动');
-      expect(prefs.showProgressBar, isTrue, reason: '全书进度条默认显示');
     });
 
     test('亮度构造 clamp 到 [0.2, 1.0]', () {
@@ -69,43 +68,9 @@ void main() {
         brightness: 0.5,
         background: ReaderBackground.sepia,
         pageMode: ReaderPageMode.cover,
-        showProgressBar: false,
       );
       final ReadingPrefs restored = ReadingPrefs.fromJson(prefs.toJson());
       expect(restored, prefs);
-    });
-
-    test('全书进度条开关：默认显示 / 旧存档缺键回退显示 / 关闭态可落盘可恢复',
-        () {
-      expect(ReadingPrefs().showProgressBar, isTrue, reason: '默认显示');
-      expect(
-        ReadingPrefs.fromJson(<String, Object?>{'showProgressBar': false})
-            .showProgressBar,
-        isFalse,
-      );
-      expect(
-        ReadingPrefs.fromJson(<String, Object?>{'showProgressBar': 'x'})
-            .showProgressBar,
-        isTrue,
-        reason: '类型错 → 默认显示',
-      );
-      expect(
-        ReadingPrefs.fromJson(<String, Object?>{}).showProgressBar,
-        isTrue,
-        reason: '旧存档无该键 → 默认显示（不把关闭态误植给老用户）',
-      );
-
-      final ReadingPrefs off = ReadingPrefs().copyWith(showProgressBar: false);
-      expect(off.showProgressBar, isFalse);
-      expect(off.toJson()['showProgressBar'], isFalse);
-      expect(ReadingPrefs.fromJson(off.toJson()).showProgressBar, isFalse,
-          reason: '关闭态要能落盘并读回');
-      expect(off == ReadingPrefs(), isFalse,
-          reason: '开关参与相等性判定，否则 copyWith / 同步会漏');
-      expect(off.copyWith(brightness: 0.4).showProgressBar, isFalse,
-          reason: 'copyWith 改别的字段不得把开关重置回默认');
-      expect(off.copyWith(showProgressBar: true).showProgressBar, isTrue,
-          reason: '可恢复显示');
     });
 
     test('ReaderPageMode.fromName：命中还原、未知 / 缺失回退 scroll', () {

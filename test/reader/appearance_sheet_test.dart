@@ -30,7 +30,6 @@ import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/reader/reading_prefs.dart';
 import 'package:mreader/reader/reading_prefs_store.dart';
 import 'package:mreader/typography/typeset.dart';
-import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 
 import 'reader_harness.dart';
 import '../test_config.dart';
@@ -435,61 +434,71 @@ void main() {
       await settle(tester);
     });
 
-    // ── 阅读设置：全书进度条显示开关 ───────────────────────────────────
+    // ── 底部读数区：进度条彻底移除，只留 1px 极淡分界线 ────────────────
 
-    testWidgets('阅读设置：全书进度条默认显示、可关闭且读数仍在、落盘保留、可恢复',
+    testWidgets('读数区：无进度条，仅 1px 极淡半透明线分界，读数文字照常',
         (WidgetTester tester) async {
       await tester.pumpWidget(buildApp());
       await settle(tester);
 
-      const Key barKey = Key('reader-progress-bar');
-      const Key readoutKey = Key('reader-progress-text');
-      const Key switchKey = Key('reader-setting-show-progress-bar');
-      final Finder bar = find.byKey(barKey);
-      final Finder readout = find.byKey(readoutKey);
-      expect(bar, findsOneWidget, reason: '默认显示 2px 全书进度细条');
-      expect(readout, findsOneWidget);
+      expect(find.byType(LinearProgressIndicator), findsNothing,
+          reason: '进度只由读数数字表达，不得再画进度条');
+      expect(find.byKey(const Key('reader-progress-bar')), findsNothing);
+      expect(find.byKey(const Key('reader-progress-chapter')), findsOneWidget,
+          reason: '章标题照常显示');
+      expect(find.byKey(const Key('reader-progress-text')), findsOneWidget,
+          reason: '页读数 / 全书百分比照常显示');
 
+      BorderSide topLine(WidgetTester t) {
+        final BoxDecoration deco = t
+                .widget<DecoratedBox>(
+                    find.byKey(const Key('reader-progress-indicator')))
+                .decoration as BoxDecoration;
+        return (deco.border! as Border).top;
+      }
+
+      final BorderSide line = topLine(tester);
+      expect(line.width, 1, reason: '1px 分界线（取代原 0.5px 边线与 2px 进度条）');
+      expect(line.color.a, closeTo(0.1, 0.001), reason: '极淡半透明');
+      // 取页面正文色（不是主题 dividerColor）：与正文同源、一体化。
+      final Color bodyColor = paragraph(tester).style.color!;
+      expect(line.color.r, closeTo(bodyColor.r, 0.002));
+      expect(line.color.g, closeTo(bodyColor.g, 0.002));
+      expect(line.color.b, closeTo(bodyColor.b, 0.002));
+
+      // 纯黑预设：分界线随正文色变浅，不会像主题 dividerColor 那样发黑消失。
       await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-appearance')));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.byKey(switchKey));
-      await tester.pumpAndSettle();
-      expect(tester.widget<MiSwitch>(find.byKey(switchKey)).value, isTrue);
+      await tester.tap(find.byKey(const Key('background-black')));
+      await tester.pump();
+      final BorderSide darkLine = topLine(tester);
+      expect(darkLine.color.a, closeTo(0.1, 0.001));
+      expect(darkLine.color.r, greaterThan(0.7),
+          reason: '纯黑预设下分界线应是淡白，不是黑的');
+      expect(darkLine.color.g, greaterThan(0.7));
+      expect(darkLine.color.b, greaterThan(0.7));
 
-      await tester.tap(find.byKey(switchKey));
-      await tester.pumpAndSettle();
-
-      expect(bar, findsNothing, reason: '关掉后细条不渲染');
-      expect(readout, findsOneWidget, reason: '章标题 / 页读数 / 百分比照常显示');
-      expect(find.byKey(const Key('reader-progress-indicator')), findsOneWidget);
-      expect(tester.widget<MiSwitch>(find.byKey(switchKey)).value, isFalse,
-          reason: '开关自身态跟着刷新');
-
-      // 收起抽屉（点遮罩）再排空落盘的真 IO。
       await tester.tapAt(const Offset(10, 10));
       await tester.pumpAndSettle();
       await settle(tester);
-      final ReadingPrefs? saved =
-          await tester.runAsync<ReadingPrefs?>(() => prefsStore.load());
-      expect(saved?.showProgressBar, isFalse, reason: '关闭态即时落盘');
+    });
 
-      // 真·关书重进：仍不显示。
-      await closeBook(tester);
-      await tester.pumpWidget(buildApp(prefs: ReadingPrefsStore(paths)));
+    testWidgets('阅读设置里不再有「显示全书进度条」开关',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(buildApp());
       await settle(tester);
-      expect(bar, findsNothing, reason: '重进保留关闭态');
-
-      // 再打开可恢复显示。
       await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-appearance')));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.byKey(switchKey));
+
+      expect(find.byKey(const Key('reader-setting-show-progress-bar')),
+          findsNothing);
+      expect(find.byKey(const Key('reader-setting-progress-row')), findsNothing);
+      expect(find.text('显示全书进度条'), findsNothing);
+
+      await tester.tapAt(const Offset(10, 10));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(switchKey));
-      await tester.pumpAndSettle();
-      expect(bar, findsOneWidget, reason: '重新打开后细条回来');
-      expect(tester.widget<MiSwitch>(find.byKey(switchKey)).value, isTrue);
       await settle(tester);
     });
   });

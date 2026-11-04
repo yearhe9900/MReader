@@ -62,15 +62,13 @@ enum ReaderPageMode {
   }
 }
 
-/// 阅读偏好（不可变）：排版 [settings] + 亮度 [brightness] + 背景 [background]
-/// + 翻页方式 [pageMode] + 全书进度条显示 [showProgressBar]。
+/// 阅读偏好（不可变）：排版 [settings] + 亮度 [brightness] + 背景 [background]。
 class ReadingPrefs {
   ReadingPrefs({
     this.settings = const ReaderSettings(),
     double brightness = maxBrightness,
     this.background = ReaderBackground.white,
     this.pageMode = ReaderPageMode.scroll,
-    this.showProgressBar = true,
   }) : brightness = brightness.clamp(minBrightness, maxBrightness).toDouble();
 
   /// 亮度下限（`TYP-08`：遮罩最深仍需可读，不提供全黑遮罩）。
@@ -94,12 +92,6 @@ class ReadingPrefs {
   /// 翻页方式（默认滚动 = 既有行为）。
   final ReaderPageMode pageMode;
 
-  /// 是否显示底部 2px **全书进度细条**（默认显示）。
-  ///
-  /// ⚠️ 只关细条、不动整条读数栏：章标题 / 页读数 / 百分比照常在，正文预留
-  /// 高度也恒定 ⇒ 切换只重绘、不重排（分页页高与落位语义不受影响）。
-  final bool showProgressBar;
-
   /// 生成一份新副本（`null` 表示不改该字段）。
   ///
   /// [settings] / [background] 允许显式传 `null` 时**保持原值**（与
@@ -110,14 +102,12 @@ class ReadingPrefs {
     double? brightness,
     ReaderBackground? background,
     ReaderPageMode? pageMode,
-    bool? showProgressBar,
   }) {
     return ReadingPrefs(
       settings: settings ?? this.settings,
       brightness: brightness ?? this.brightness,
       background: background ?? this.background,
       pageMode: pageMode ?? this.pageMode,
-      showProgressBar: showProgressBar ?? this.showProgressBar,
     );
   }
 
@@ -131,7 +121,6 @@ class ReadingPrefs {
         'brightness': brightness,
         'background': background.name,
         'pageMode': pageMode.name,
-        'showProgressBar': showProgressBar,
       };
 
   /// 防御式反序列化：非 `Map` → 整体默认值；字段缺失 / 类型异常**逐项**回退默认
@@ -157,16 +146,11 @@ class ReadingPrefs {
       brightness: _asDouble(json['brightness'], maxBrightness),
       background: ReaderBackground.fromName(json['background'] as String?),
       pageMode: ReaderPageMode.fromName(json['pageMode'] as String?),
-      // 旧存档无该键 / 类型异常 → 默认显示（不把「关掉」误植给老用户）。
-      showProgressBar: _asBool(json['showProgressBar'], true),
     );
   }
 
   static double _asDouble(Object? value, double fallback) =>
       value is num ? value.toDouble() : fallback;
-
-  static bool _asBool(Object? value, bool fallback) =>
-      value is bool ? value : fallback;
 
   /// 页边距按名字解析；未知或缺失回退 [PageMargin.normal]。
   static PageMargin _pageMarginFromName(String? name) {
@@ -186,20 +170,12 @@ class ReadingPrefs {
           settings == other.settings &&
           brightness == other.brightness &&
           background == other.background &&
-          pageMode == other.pageMode &&
-          showProgressBar == other.showProgressBar;
+          pageMode == other.pageMode;
 
   @override
-  int get hashCode => Object.hash(
-        settings,
-        brightness,
-        background,
-        pageMode,
-        showProgressBar,
-      );
+  int get hashCode => Object.hash(settings, brightness, background, pageMode);
 
   @override
   String toString() => 'ReadingPrefs($settings, brightness: $brightness, '
-      'bg: $background, pageMode: $pageMode, '
-      'showProgressBar: $showProgressBar)';
+      'bg: $background, pageMode: $pageMode)';
 }
