@@ -43,6 +43,7 @@ import '../diagnostics/open_trace.dart';
 import '../diagnostics/perf_log.dart';
 import '../format/book_registry.dart';
 import '../format/book_source.dart';
+import '../settings/developer_options.dart';
 import '../format/book_instance_key.dart';
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
@@ -726,12 +727,25 @@ class ShelfPageState extends State<ShelfPage> {
 
     final BookSource? pooled =
         widget.repository.takePooledSource(record, cacheKey);
-    if (pooled != null) {
+    // 池判据 (bookId, mtime, size) 不含 PDF 内核模式：切换开发者开关后旧模式的
+    // 驻留源必须丢弃，否则开关「看起来没生效」。
+    final bool modeMismatch = pooled != null &&
+        (switch (pooled.implId) {
+          'pdfrx-pdf' => DeveloperOptions.pdfUseRustKernel,
+          'rust-pdf' => !DeveloperOptions.pdfUseRustKernel,
+          _ => false,
+        });
+    if (pooled != null && !modeMismatch) {
       trace.step('poolHit', statsWatch.elapsedMs,
           'impl=${pooled.implId} sizeKB=${(cacheKey?.size ?? 0) ~/ 1024}');
       PerfLog.step('open.pool', statsWatch.elapsedMs,
           'hit=1 impl=${pooled.implId}');
       return pooled;
+    }
+    if (pooled != null && modeMismatch) {
+      await pooled.dispose();
+      PerfLog.step('open.pool', statsWatch.elapsedMs,
+          'hit=0 impl=${pooled.implId} modeChanged');
     }
 
     final PerfWatch readWatch = PerfLog.watch('open.readBytes');

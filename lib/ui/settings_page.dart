@@ -49,6 +49,7 @@ import '../sync/sync_trigger.dart';
 import '../sync/webdav_client.dart';
 import '../theme/app_theme.dart';
 import 'ai_settings_page.dart';
+import 'developer_options_page.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'mi_like_ui/mi_like_ui.dart'
     show MiColors, MiDimens, MiThemeMode, MiTopBar, MiTopBarMetrics, MiViewport;
@@ -204,7 +205,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       _buildAppearanceGroup(),
                       _buildAiGroup(),
                       _buildSyncGroup(),
-                      // 后续分组（RUST-10 加速参数…）在此追加。
+                      _buildDeveloperGroup(),
                     ],
                   ),
                 ),
@@ -229,6 +230,25 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ],
       ),
+    );
+  }
+
+  /// 「开发者选项」组：实验开关子页（不进用户主流程）。
+  Widget _buildDeveloperGroup() {
+    return SettingsGroupCard(
+      children: <Widget>[
+        SettingsTile(
+          icon: Icons.science_outlined,
+          accent: SettingsAccents.gray,
+          title: '开发者选项',
+          subtitle: 'PDF 解析内核 / 实验开关',
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute<void>(
+              builder: (_) => const DeveloperOptionsPage(),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

@@ -23,6 +23,7 @@ import 'dart:typed_data';
 
 import '../highperf/high_perf_capability.dart';
 import '../highperf/high_perf_registry.dart';
+import '../settings/developer_options.dart';
 import '../src/rust/api/error.dart' as rk_err;
 import 'book_source.dart';
 import 'cbr_source.dart';
@@ -130,6 +131,15 @@ class BookRegistry {
       case FormatKind.cbr:
         return CbrSource(fileName: fileName, bytes: bytes);
       case FormatKind.pdf:
+        // 开发者实验开关：开启时走 rrk-pdf 的 L1 文字重排（与固版式并列）；
+        // capabilityFor(pdf) 为 null ⇒ 不记加速层统计。
+        if (DeveloperOptions.pdfUseRustKernel) {
+          return _openKernel(
+            kind: FormatKind.pdf,
+            fileName: fileName,
+            bytes: bytes,
+          );
+        }
         return PdfSource(fileName: fileName, bytes: bytes);
       case FormatKind.unsupported:
         throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
@@ -173,10 +183,11 @@ class BookRegistry {
       );
     }
     final FormatErrorCode code = switch (error.kind) {
-      rk_err.HighPerfErrorKind.encrypted =>
-        kind == FormatKind.mobi
-            ? FormatErrorCode.encryptedMobi
-            : FormatErrorCode.encryptedEpub,
+      rk_err.HighPerfErrorKind.encrypted => switch (kind) {
+        FormatKind.mobi => FormatErrorCode.encryptedMobi,
+        FormatKind.pdf => FormatErrorCode.encryptedPdf,
+        _ => FormatErrorCode.encryptedEpub,
+      },
       rk_err.HighPerfErrorKind.missingContainer =>
         FormatErrorCode.missingContainer,
       rk_err.HighPerfErrorKind.io => FormatErrorCode.corruptFile,

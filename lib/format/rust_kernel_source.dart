@@ -326,6 +326,9 @@ class RustKernelSource implements BookSource {
   /// 是否 CBZ（页级图库：`content` = 图片页序列，不走正文织入管线）。
   bool get _isCbz => _meta.format == 'CBZ';
 
+  /// PDF 走内核的 L1 文字重排视图（章文本，无页级图资源）。
+  bool get _isPdf => _meta.format == 'PDF';
+
   /// 打开一本书。失败抛异常（[BookRegistry] 捕获后回落纯 Dart 实现）。
   ///
   /// [filePath] 可选：给了就走内核路径型打开（文件读入 Rust，不经 FFI 拷贝）；
@@ -627,6 +630,16 @@ class RustKernelSource implements BookSource {
         charCountSupported: false,
       );
     }
+    if (_isPdf) {
+      // L1 文字重排：无页级图资源（内核 load_resource 明确不支持），文本可搜。
+      return const SourceCapabilities(
+        hasImages: false,
+        hasFootnotes: false,
+        reflowable: true,
+        searchable: true,
+        charCountSupported: true,
+      );
+    }
     return SourceCapabilities(
       hasImages: _meta.format != 'TXT',
       hasFootnotes: false,
@@ -673,9 +686,10 @@ class RustKernelSource implements BookSource {
     }
   }
 
-  /// CBZ 图片页给不出可序列化源描述（也不可搜）→ `null`（同 `CbzSource`）。
+  /// 图片页 / PDF 文字版都绑 FRB 句柄、不可序列化 → 走本 isolate 流式
+  /// （长驻 isolate 里重开读不到开发者开关，会拿到另一套内核）。
   @override
-  SearchBookSpec? get searchSpec => _isCbz
+  SearchBookSpec? get searchSpec => (_isCbz || _isPdf)
       ? null
       : SearchBookSpec(fileName: fileName, bytes: bytes);
 
@@ -731,6 +745,7 @@ class RustKernelSource implements BookSource {
 
   @override
   Future<Uint8List?> readResource(String href) async {
+    if (_isPdf) return null; // L1 文字版无页级图资源（内核 load_resource 明确不支持）
     if (_isCbz) {
       // 口径同 `CbzSource.readResource`：resolveEntryName 三试探（大小写 /
       // 百分号转义容错）→ 内核页资源 `page:{id}`；尽力而为、坏包不抛。
