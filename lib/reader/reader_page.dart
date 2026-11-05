@@ -23,6 +23,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -36,9 +37,13 @@ import '../ai/vocab_store.dart';
 import '../diagnostics/open_trace.dart';
 import '../diagnostics/perf_log.dart';
 import '../format/book_source.dart';
+import '../format/page_raster_source.dart';
+import '../format/pdf_source.dart' show kPdfPageRenderWidthPx;
 import '../library/book_record.dart';
 import '../library/library_repository.dart';
 import '../meta/cover_store.dart';
+import '../platform/bgra_image.dart';
+import '../platform/pdf_engine.dart';
 import '../settings/settings_store.dart';
 import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
@@ -1161,12 +1166,43 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return bytes;
   }
 
-  /// 点页 → 全屏缩放查看（`FMT-02` 验收②「缩放后不糊」）：查看器对**原始字节**
-  /// 解码（不设 `cacheWidth` 降采样），缩放矩阵作用在原始分辨率位图上。
-  void _openImageZoom(Uint8List bytes) {
+  /// 取一页原始像素并直通解码（`PageRasterSource`，PDF 专用）。
+  ///
+  /// 非光栅源 / 渲染失败 / 已释放 → `null`，调用方**回落**字节管线（CBZ 走的就是
+  /// 这条，行为零变化）。
+  Future<ui.Image?> _resolvePageBitmap(String href) async {
+    final Object source = _source;
+    if (_disposed || source is! PageRasterSource) return null;
+    final PerfWatch watch = PerfLog.watch('reader.page');
+    final PdfRasterPage? raster =
+        await source.renderPageRaster(href, widthPx: kPdfPageRenderWidthPx);
+    if (raster == null || _disposed) {
+      watch.done('$href raster=NULL');
+      return null;
+    }
+    try {
+      final ui.Image image = await decodeBgraToImage(raster);
+      watch.done('$href ${raster.width}x${raster.height}');
+      return image;
+    } catch (error) {
+      watch.done('$href decode=FAILED $error');
+      return null;
+    }
+  }
+
+  /// 点页 → 全屏缩放查看（`FMT-02` 验收②「缩放后不糊」）：查看器对**原始分辨率**
+  /// 位图解码 / 直接复用（不设 `cacheWidth` 降采样），缩放矩阵作用在原始像素上。
+  ///
+  /// PDF 走 [PageRasterPage] 直通位图时，把 `ui.Image` **clone** 一份交出去：查看器
+  /// 自己负责 `dispose`，与图片页的生命周期解耦（阅读页若在缩放期间被回收，
+  /// 也不至于让查看器拿到已释放的位图）。
+  void _openPageZoom(_PageBitmap bitmap) {
+    final ui.Image? image = bitmap.image?.clone();
+    final Uint8List? bytes = bitmap.bytes;
     unawaited(Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (BuildContext ctx) => _ImageZoomPage(bytes: bytes),
+        builder: (BuildContext ctx) =>
+            _ImageZoomPage(bytes: bytes, image: image),
       ),
     ));
   }
@@ -5613,7 +5649,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                 key: Key('reader-image-page:${imagePages[p]}'),
                 src: imagePages[p],
                 resolveImage: _resolveImage,
-                onOpen: _openImageZoom,
+                resolvePage: _source is PageRasterSource
+                    ? _resolvePageBitmap
+                    : null,
+                onOpen: _openPageZoom,
               ),
           ],
         ),
@@ -5679,28 +5718,36 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 }
 
-/// 图片页（CBZ 整页图，`FMT-02`）：异步加载原始字节 → 整页宽显示 → 点击全屏缩放。
+/// 图片页（CBZ 整页图 / PDF 渲染页，`FMT-02`）：异步加载 → 整页宽显示 → 点击全屏缩放。
 ///
 /// 生命周期与 `typeset.dart` 的 `_InlineImage` 同款：`initState` 发起加载，rebuild
 /// 不重载；加载中 / 失败给 240 高占位（既是骨架也是稳定的点击热区）。
-/// `Image.memory` **不设 `cacheWidth` 降采样**：保留原始分辨率——验收②「缩放后不糊」
-/// 的前提（全屏查看器缩放的是原始位图）。
+///
+/// **两种载荷**（[resolvePage] 非空即走前者）：
+/// · 原始像素直通（PDF）：解码成 [ui.Image] 直接上屏，省掉 PNG 编解码三跳；
+/// · 编码字节（CBZ / EPUB 内嵌图）：`Image.memory` 解码。**不设 `cacheWidth`
+///   降采样**：保留原始分辨率——验收②「缩放后不糊」的前提。
 class _ImagePage extends StatefulWidget {
   const _ImagePage({
     super.key,
     required this.src,
     required this.resolveImage,
+    required this.resolvePage,
     required this.onOpen,
   });
 
-  /// 图片的包内条目路径（CBZ = zip 条目名）。
+  /// 图片的包内条目路径（CBZ = zip 条目名 / PDF = 页资源键）。
   final String src;
 
-  /// 图片加载回调（`BookSource.readResource`）。
+  /// 字节加载回调（`BookSource.readResource`）。
   final Future<Uint8List?> Function(String href) resolveImage;
 
-  /// 点击回调：参数为已解出的原始字节（全屏查看器直接消费）。
-  final void Function(Uint8List bytes) onOpen;
+  /// 原始像素直通加载回调（`PageRasterSource`）：`null` = 本源的页不是现渲染的。
+  /// 返回 `null` 时回落 [resolveImage]（渲染失败 / 该源不提供光栅）。
+  final Future<ui.Image?> Function(String href)? resolvePage;
+
+  /// 点击回调：已就绪的位图载荷（全屏查看器直接消费）。
+  final void Function(_PageBitmap bitmap) onOpen;
 
   @override
   State<_ImagePage> createState() => _ImagePageState();
@@ -5708,6 +5755,10 @@ class _ImagePage extends StatefulWidget {
 
 class _ImagePageState extends State<_ImagePage> {
   Uint8List? _bytes;
+
+  /// 直通解码的位图（PDF）：本 State 持有，`dispose()` 释放。
+  ui.Image? _image;
+
   bool _loading = true;
   bool _error = false;
 
@@ -5717,8 +5768,30 @@ class _ImagePageState extends State<_ImagePage> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _image?.dispose(); // 位图不经 ImageCache 托管，生命周期由本 State 负责
+    super.dispose();
+  }
+
   Future<void> _load() async {
     try {
+      final Future<ui.Image?> Function(String)? resolvePage = widget.resolvePage;
+      if (resolvePage != null) {
+        final ui.Image? image = await resolvePage(widget.src);
+        if (!mounted) {
+          image?.dispose();
+          return;
+        }
+        if (image != null) {
+          setState(() {
+            _image = image;
+            _loading = false;
+          });
+          return;
+        }
+        // 光栅失败 → 落回字节管线（与 CBZ 同形，绝不因此空白）。
+      }
       final Uint8List? bytes = await widget.resolveImage(widget.src);
       if (!mounted) return;
       setState(() {
@@ -5738,6 +5811,7 @@ class _ImagePageState extends State<_ImagePage> {
   @override
   Widget build(BuildContext context) {
     final Uint8List? bytes = _bytes;
+    final ui.Image? image = _image;
     if (_loading) {
       return const SizedBox(
         height: 240,
@@ -5750,7 +5824,7 @@ class _ImagePageState extends State<_ImagePage> {
         ),
       );
     }
-    if (_error || bytes == null) {
+    if (_error || (bytes == null && image == null)) {
       return const SizedBox(
         height: 240,
         child: Center(child: Icon(Icons.broken_image_outlined, size: 48)),
@@ -5758,31 +5832,62 @@ class _ImagePageState extends State<_ImagePage> {
     }
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => widget.onOpen(bytes),
+      onTap: () => widget.onOpen(image != null
+          ? _PageBitmap.decoded(image)
+          : _PageBitmap.bytes(bytes!)),
       child: ConstrainedBox(
         // minHeight：位图未解码完也有稳定点击热区（解码后按宽高比撑开）。
         constraints: const BoxConstraints(minHeight: 240),
-        child: Image.memory(
-          bytes,
-          fit: BoxFit.fitWidth,
-          width: double.infinity,
-          gaplessPlayback: true,
-        ),
+        child: image != null
+            ? RawImage(image: image, fit: BoxFit.fitWidth, width: double.infinity)
+            : Image.memory(
+                bytes!,
+                fit: BoxFit.fitWidth,
+                width: double.infinity,
+                gaplessPlayback: true,
+              ),
       ),
     );
   }
 }
 
+/// 图片页已就绪的位图载荷：编码字节（CBZ 等）与已解码位图（PDF 直通）二选一。
+class _PageBitmap {
+  const _PageBitmap.bytes(Uint8List this.bytes) : image = null;
+
+  const _PageBitmap.decoded(ui.Image this.image) : bytes = null;
+
+  final Uint8List? bytes;
+  final ui.Image? image;
+}
+
 /// 全屏图片缩放查看器（`FMT-02` 验收②）：`InteractiveViewer` 捏合缩放 + 拖动。
 ///
-/// 显示**原始字节**解码的位图（不降采样）——放大到 1:1 以上像素级锐利（「不糊」）。
-class _ImageZoomPage extends StatelessWidget {
-  const _ImageZoomPage({required this.bytes});
+/// 显示**原始分辨率**位图（不降采样）——放大到 1:1 以上像素级锐利（「不糊」）：
+/// 字节载荷走 `Image.memory`，直通载荷直接复用已解码位图（[image]，由本页
+/// `dispose()` 释放——调用方交进来的是 `clone()`）。
+class _ImageZoomPage extends StatefulWidget {
+  const _ImageZoomPage({this.bytes, this.image})
+      : assert(bytes != null || image != null, '缩放查看器需要字节或位图之一');
 
-  final Uint8List bytes;
+  final Uint8List? bytes;
+  final ui.Image? image;
+
+  @override
+  State<_ImageZoomPage> createState() => _ImageZoomPageState();
+}
+
+class _ImageZoomPageState extends State<_ImageZoomPage> {
+  @override
+  void dispose() {
+    widget.image?.dispose(); // clone 的配额归本页
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final Uint8List? bytes = widget.bytes;
+    final ui.Image? image = widget.image;
     return Scaffold(
       key: const Key('reader-image-zoom'),
       backgroundColor: Colors.black,
@@ -5795,7 +5900,10 @@ class _ImageZoomPage extends StatelessWidget {
         child: InteractiveViewer(
           maxScale: 5,
           minScale: 1,
-          child: Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true),
+          child: image != null
+              ? RawImage(image: image, fit: BoxFit.contain)
+              : Image.memory(bytes!,
+                  fit: BoxFit.contain, gaplessPlayback: true),
         ),
       ),
     );

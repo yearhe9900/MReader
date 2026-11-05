@@ -8,7 +8,8 @@
 // （`Q4 ①` 验收①）。
 //
 // 纯 Dart 纪律：本文件不 import Flutter、不 import `dart:io`、不 import pdfrx——
-// 只描述能力（字节进、编码图片字节出），格式层继续满足「纯 Dart、可进 isolate」约束。
+// 只描述能力（字节 / 原始像素进，编码图片字节出），格式层继续满足「纯 Dart、可进
+// isolate」约束；把原始像素变成可显示位图（`decodeImageFromPixels`）是**阅读页**的事。
 import 'dart:typed_data';
 
 /// 打开失败的原因。第三方引擎的异常类型**不向上泄漏**：适配器把 pdfrx 的
@@ -45,6 +46,28 @@ abstract interface class PdfEngine {
   Future<PdfEngineDocument> open(Uint8List bytes);
 }
 
+/// 一页的**原始光栅**（未编码像素）。
+///
+/// 存在的理由：手写 PNG 编码（B/R 换位 + deflate + CRC）在整页 1600×2263 上是
+/// 数百毫秒级的纯 CPU 工作，而 Flutter 侧 `decodeImageFromPixels` 能吃原始像素直通
+/// 解码——阅读页因此跳过「编码 → 传输 → 解码」三跳，只付一次原生解码。
+///
+/// [bgra] 是**堆上**的独立副本（不是原生缓冲区视图）：调用方可在任意时刻读，
+/// 与文档句柄生命周期无关。
+class PdfRasterPage {
+  const PdfRasterPage({
+    required this.bgra,
+    required this.width,
+    required this.height,
+  });
+
+  /// BGRA8888 像素，行序自上而下、无行填充，长度 = `width * height * 4`。
+  final Uint8List bgra;
+
+  final int width;
+  final int height;
+}
+
 /// 已打开的 PDF 文档句柄。
 ///
 /// **必须 [dispose]**（`PERF-02` 非驻留纪律：打开态持有原生资源，不能随 source 泄漏）。
@@ -52,10 +75,18 @@ abstract interface class PdfEngineDocument {
   /// 总页数（`FMT-01` 伪分章的唯一输入）。
   int get pageCount;
 
+  /// 把第 [pageIndex] 页渲染为**原始像素**（阅读页 `decodeImageFromPixels` 直通）。
+  ///
+  /// [widthPx] 是目标像素宽，高度按页宽高比推导；越界 / 渲染失败返回 `null`
+  /// （**不抛异常**——渲染层尽力而为，坏页不炸阅读）；实现内部的原生位图必须当场
+  /// 释放，只把堆上副本交出去（`PERF-02` 非驻留）。
+  Future<PdfRasterPage?> renderPageRaster(int pageIndex, {required int widthPx});
+
   /// 把第 [pageIndex] 页渲染为**编码后的图片字节**（PNG）。契约：返回值可直接交
-  /// `Image.memory`（与 CBZ 图片页管线同构，阅读页零适配）；[widthPx] 是目标像素宽，
-  /// 高度按页宽高比推导；越界 / 渲染失败返回 `null`（**不抛异常**——渲染层尽力而为，
-  /// 坏页不炸阅读）；实现内部渲染出的位图必须当场释放，不驻留。
+  /// `Image.memory`（与 CBZ 图片页管线同构）；参数与失败口径同 [renderPageRaster]。
+  ///
+  /// 阅读页已改走 [renderPageRaster]（跳编码）；本方法留给**需要字节**的场合
+  /// （搜索 / 导出 / 测试取证）。
   Future<Uint8List?> renderPagePng(int pageIndex, {required int widthPx});
 
   /// 第 [pageIndex] 页的文本层（`Q4 ②` 拍板：PDF 纳入 `CNT-06` 全书搜索）。

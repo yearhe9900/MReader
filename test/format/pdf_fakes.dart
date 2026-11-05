@@ -84,7 +84,7 @@ class FakePdfDocument implements PdfEngineDocument {
   int get pageCount => engine.pageCount;
 
   @override
-  Future<Uint8List?> renderPagePng(int pageIndex, {required int widthPx}) async {
+  Future<PdfRasterPage?> renderPageRaster(int pageIndex, {required int widthPx}) async {
     engine.activeRenders++;
     if (engine.activeRenders > engine.maxConcurrentRenders) {
       engine.maxConcurrentRenders = engine.activeRenders;
@@ -97,16 +97,29 @@ class FakePdfDocument implements PdfEngineDocument {
       engine.renderedWidths.add(widthPx);
       if (pageIndex < 0 || pageIndex >= engine.pageCount) return null;
       if (engine.renderFailedPages.contains(pageIndex)) return null;
-      // 用**真实编码器**产出合法 PNG（2×1 纯色）：封面嗅探 / 解码链路验的是真字节，
-      // 不是「号称是 PNG」的假头（`kTinyPng` 教训：夹具必须真有效）。
-      return encodeBgraToPng(
-        solidBgra(width: 2, height: 1, seed: pageIndex),
+      // 2×1 纯色原始像素：阅读页直通解码 / 编码路径验的都是真像素，不是假头。
+      return PdfRasterPage(
+        bgra: solidBgra(width: 2, height: 1, seed: pageIndex),
         width: 2,
         height: 1,
       );
     } finally {
       engine.activeRenders--;
     }
+  }
+
+  @override
+  Future<Uint8List?> renderPagePng(int pageIndex, {required int widthPx}) async {
+    final PdfRasterPage? raster =
+        await renderPageRaster(pageIndex, widthPx: widthPx);
+    if (raster == null) return null;
+    // 与真实适配器同构：PNG 只是原始像素的一种编码出口（封面嗅探要真字节，
+    // 不是「号称是 PNG」的假头——`kTinyPng` 教训：夹具必须真有效）。
+    return encodeBgraToPng(
+      raster.bgra,
+      width: raster.width,
+      height: raster.height,
+    );
   }
 
   @override

@@ -145,6 +145,61 @@ void main() {
     });
   });
 
+  group('PdfSource · 原始像素直通（PageRasterSource：省掉 PNG 编解码三跳）', () {
+    test('renderPageRaster("p3") 给原始像素，宽 = kPdfPageRenderWidthPx、无编码',
+        () async {
+      final FakePdfEngine engine = FakePdfEngine(pageCount: 25);
+      final PdfSource source = _source(engine);
+      final PdfRasterPage? raster =
+          await source.renderPageRaster('p3', widthPx: kPdfPageRenderWidthPx);
+      expect(raster, isNotNull);
+      expect(raster!.width, 2);
+      expect(raster.height, 1);
+      expect(raster.bgra.length, raster.width * raster.height * 4,
+          reason: '交出去的是原始 BGRA，不是 PNG 字节');
+      expect(engine.renderedPages, <int>[3]);
+      expect(engine.renderedWidths, <int>[kPdfPageRenderWidthPx]);
+      await source.dispose();
+    });
+
+    test('非法键 / 越界 / 坏页 → null（阅读页据此回落字节管线）', () async {
+      final FakePdfEngine engine =
+          FakePdfEngine(pageCount: 5, renderFailedPages: const <int>{2});
+      final PdfSource source = _source(engine);
+      expect(await source.renderPageRaster('p', widthPx: 1200), isNull);
+      expect(await source.renderPageRaster('p5', widthPx: 1200), isNull);
+      expect(await source.renderPageRaster('p2', widthPx: 1200), isNull);
+      expect(await source.renderPageRaster('p1', widthPx: 1200), isNotNull);
+      await source.dispose();
+    });
+
+    test('dispose 后 renderPageRaster → null，且不再触发渲染', () async {
+      final FakePdfEngine engine = FakePdfEngine(pageCount: 5);
+      final PdfSource source = _source(engine);
+      await source.chapters();
+      await source.dispose();
+      expect(await source.renderPageRaster('p0', widthPx: 1200), isNull);
+      expect(engine.renderedPages, isEmpty);
+    });
+
+    test('光栅与 PNG 两条出口共用同一个渲染闸门（削峰不被绕过）', () async {
+      final FakePdfEngine engine = FakePdfEngine(
+        pageCount: 10,
+        renderDelay: const Duration(milliseconds: 10),
+      );
+      final PdfSource source = _source(engine);
+      await source.chapters();
+      await Future.wait(<Future<Object?>>[
+        for (int i = 0; i < 5; i++)
+          source.renderPageRaster('p$i', widthPx: 1200),
+        for (int i = 5; i < 10; i++) source.readResource('p$i'),
+      ]);
+      expect(engine.renderedPages.length, 10);
+      expect(engine.maxConcurrentRenders, kPdfMaxConcurrentRenders);
+      await source.dispose();
+    });
+  });
+
   group('PdfSource · 封面（META-10 ①②）', () {
     test('封面 = 第 0 页渲染结果为 PendingCover(PNG)，来源 metadata', () async {
       final FakePdfEngine engine = FakePdfEngine(pageCount: 25);

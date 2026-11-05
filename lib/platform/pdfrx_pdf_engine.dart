@@ -4,7 +4,8 @@
 // 职责（只做三件事）：1. 惰性初始化 pdfrx（`pdfrxFlutterInitialize`）；2. 把 pdfrx 的
 // 异常**收敛**成 [PdfEngineOpenException]（加密 / 不可读两类），不让第三方异常类型
 // 泄漏到格式层（格式层再映射成 `FormatErrorCode`，`RD-05`）；3. 把 `PdfImage`
-// （BGRA8888）编成 PNG 字节并**当场 dispose**（`PERF-02` 非驻留）。
+// （BGRA8888）拷成堆上原始像素并**当场 dispose**（`PERF-02` 非驻留）——阅读页直通
+// `decodeImageFromPixels`，PNG 编码只在需要字节的调用方那里发生。
 //
 // 与 pdfrx 交互的关键事实（读自 pdfrx 2.6.5 / pdfrx_engine 0.6.1 源码）：
 //   · `PdfDocument.openData` **不传** `passwordProvider` 时，需要密码的 PDF 抛
@@ -80,7 +81,10 @@ class _PdfrxDocument implements PdfEngineDocument {
   int get pageCount => _document.pages.length;
 
   @override
-  Future<Uint8List?> renderPagePng(int pageIndex, {required int widthPx}) async {
+  Future<PdfRasterPage?> renderPageRaster(
+    int pageIndex, {
+    required int widthPx,
+  }) async {
     if (_disposed || widthPx <= 0) return null;
     final List<pdfrx.PdfPage> pages = _document.pages;
     if (pageIndex < 0 || pageIndex >= pages.length) return null;
@@ -101,17 +105,28 @@ class _PdfrxDocument implements PdfEngineDocument {
     }
     if (image == null) return null;
     try {
-      // ⚠️ `pixels` 是 native malloc 的视图，跨 isolate 前必须堆拷贝一次：
-      // `dispose()` 会 free，后台 isolate 直接读视图即 use-after-free。
-      final Uint8List snapshot = Uint8List.fromList(image.pixels);
-      return await encodeBgraToPngInBackground(
-        snapshot,
+      // ⚠️ `pixels` 是 native malloc 的视图，`dispose()` 即 free：交出去之前必须
+      // 堆拷贝一次，否则调用方（含跨 isolate 的编码）读到的是已释放内存。
+      return PdfRasterPage(
+        bgra: Uint8List.fromList(image.pixels),
         width: image.width,
         height: image.height,
       );
     } finally {
       image.dispose(); // PERF-02 ①：渲染位图不驻留（含异常路径）
     }
+  }
+
+  @override
+  Future<Uint8List?> renderPagePng(int pageIndex, {required int widthPx}) async {
+    final PdfRasterPage? raster =
+        await renderPageRaster(pageIndex, widthPx: widthPx);
+    if (raster == null) return null;
+    return encodeBgraToPngInBackground(
+      raster.bgra,
+      width: raster.width,
+      height: raster.height,
+    );
   }
 
   @override

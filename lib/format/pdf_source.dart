@@ -11,6 +11,8 @@
 // · **正文 = 图片页序列**：`ChapterContent.imagePages(['p0','p1',…])`，元素是**按页
 //   资源键**，阅读页经 `readResource` 取 PNG 字节后走既有图片页分支（整页竖向滚动 +
 //   点页全屏缩放，与 CBZ 完全同构 → 「连续翻阅」验收①成立，阅读页零改动）；
+//   **另开 [PageRasterSource] 直通口**（[renderPageRaster]）：阅读页优先取原始像素交
+//   `decodeImageFromPixels`，省掉「PNG 编码 → 传输 → 解码」三跳（见该接口文件头）；
 // · **进度可持久化**：直接复用语义坐标 `(chapterHref, chapterPos)`（验收③）——
 //   伪章粒度天然可用，不为 PDF 造第二套进度模型；
 // · **封面 = 渲染第 0 页**（`META-10` ①）：`PendingCover` + 魔数嗅探真实格式
@@ -30,10 +32,12 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import '../diagnostics/perf_log.dart';
 import '../meta/meta_source.dart';
 import '../meta/txt_meta.dart';
 import '../platform/pdf_engine.dart';
 import 'book_source.dart';
+import 'page_raster_source.dart';
 
 /// 每多少页合成一个伪章节（`FMT-01`「按 N 页一个伪章节」，取值理由见文件头）。
 const int kPdfPagesPerChapter = 10;
@@ -66,7 +70,7 @@ const String kPdfPageKeyPrefix = 'p';
 /// [dispose] 之后、以及竞态恢复后，所有公开方法返回优雅空结果、绝不抛异常：
 /// `load()` → 最小 [BookMeta]（origins 全 `MetaOrigin.none`）；`chapters()` /
 /// `content()` → 空；`readResource()` → `null`。每个 `await` 恢复后重查 [_disposed]。
-class PdfSource implements BookSource {
+class PdfSource implements BookSource, PageRasterSource {
   PdfSource({
     required this.fileName,
     required this.bytes,
@@ -269,6 +273,31 @@ class PdfSource implements BookSource {
     return _renderPage(page, kPdfPageRenderWidthPx);
   }
 
+  // ---- PageRasterSource：阅读页的原始像素直通出口（跳 PNG 编码） ----
+
+  @override
+  Future<PdfRasterPage?> renderPageRaster(
+    String href, {
+    required int widthPx,
+  }) async {
+    try {
+      await _ensurePrepared();
+    } catch (_) {
+      return null;
+    }
+    if (_disposed) return null;
+    final int? page = _pageIndexOf(href);
+    if (page == null || page < 0 || page >= _pageCount) return null;
+    final PerfWatch watch = PerfLog.watch('pdf.page');
+    final PdfRasterPage? raster =
+        await _withRenderSlot((PdfEngineDocument d) =>
+            d.renderPageRaster(page, widthPx: widthPx));
+    watch.done(raster == null
+        ? 'p=$page w=$widthPx FAILED'
+        : 'p=$page w=$widthPx ${raster.width}x${raster.height}');
+    return raster;
+  }
+
   @override
   Future<void> dispose() async {
     _disposed = true;
@@ -392,13 +421,20 @@ class PdfSource implements BookSource {
   ///
   /// **非驻留**（`PERF-02` ①）：每次现渲染，位图在引擎实现内当场释放；
   /// 失败返回 `null`（阅读页图片分支已有缺图兜底，不炸阅读）。
-  Future<Uint8List?> _renderPage(int pageIndex, int widthPx) async {
+  Future<Uint8List?> _renderPage(int pageIndex, int widthPx) =>
+      _withRenderSlot((PdfEngineDocument document) =>
+          document.renderPagePng(pageIndex, widthPx: widthPx));
+
+  /// 在渲染闸门内跑一次渲染（[kPdfMaxConcurrentRenders] 削峰；任何失败收敛成 `null`）。
+  Future<T?> _withRenderSlot<T>(
+    Future<T?> Function(PdfEngineDocument document) render,
+  ) async {
     final PdfEngineDocument? document = _document;
     if (_disposed || document == null) return null;
     if (!await _acquireRenderSlot()) return null;
     try {
       if (_disposed) return null; // 等槽位期间可能已被 dispose
-      return await document.renderPagePng(pageIndex, widthPx: widthPx);
+      return await render(document);
     } catch (_) {
       return null; // 防引擎实现漏收敛异常：坏页不给上层抛
     } finally {
