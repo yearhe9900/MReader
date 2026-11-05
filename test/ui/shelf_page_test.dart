@@ -940,7 +940,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('shelf-search-entry')));
       // 搜索页输入框光标闪烁是永不停的定时器：**禁 pumpAndSettle**，按转场时长
-      // （`MiCardPageRouteMetrics.durationMs` = 400ms）固定推进。
+      // （`MiCardPageRouteMetrics.durationMs` = 220ms）固定推进。
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 420));
 

@@ -98,6 +98,15 @@ class _ShelfSearchPageState extends State<ShelfSearchPage> {
     });
   }
 
+  /// 返回：先收焦点再出栈，让键盘收起与转场**并行**。
+  ///
+  /// 直接 `maybePop()` 时焦点还在输入框上，键盘要等路由结束、本页销毁才收，
+  /// 系统键盘动画叠在 pop 之后，读作「返回还要再等一下」。
+  void _close() {
+    if (_focus.hasFocus) _focus.unfocus();
+    if (mounted) Navigator.of(context).maybePop();
+  }
+
   @override
   void dispose() {
     _controller.dispose();
@@ -134,31 +143,38 @@ class _ShelfSearchPageState extends State<ShelfSearchPage> {
         ? _headerInset
         : MiDimens.spaceXxl;
 
-    return Scaffold(
-      backgroundColor: MiColors.pageBackgroundFor(mode),
-      // 点书开读后冻结键盘响应（[_openingFrozen]）：收起动画不得逐帧改写
-      // body 高度——打字期间照常适配，点书那刻起布局稳定。
-      resizeToAvoidBottomInset: !_openingFrozen,
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Padding(
-            padding: EdgeInsets.fromLTRB(inset, headerTop, inset, 0),
-            child: SizedBox(
-              height: _controlHeight,
-              child: Row(
-                children: <Widget>[
-                  _BackCircle(ink: ink, palette: palette),
-                  const SizedBox(width: _controlGap),
-                  Expanded(child: _field(palette)),
-                  const SizedBox(width: _controlGap),
-                  _searchAction(ink: ink, palette: palette),
-                ],
+    return PopScope(
+      // 系统返回（手势 / 返回键）同一口径：pop 一发生就 unfocus，键盘收起
+      // 与出栈转场并行，不等本页销毁。
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (_focus.hasFocus) _focus.unfocus();
+      },
+      child: Scaffold(
+        backgroundColor: MiColors.pageBackgroundFor(mode),
+        // 点书开读后冻结键盘响应（[_openingFrozen]）：收起动画不得逐帧改写
+        // body 高度——打字期间照常适配，点书那刻起布局稳定。
+        resizeToAvoidBottomInset: !_openingFrozen,
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Padding(
+              padding: EdgeInsets.fromLTRB(inset, headerTop, inset, 0),
+              child: SizedBox(
+                height: _controlHeight,
+                child: Row(
+                  children: <Widget>[
+                    _BackCircle(ink: ink, palette: palette, onTap: _close),
+                    const SizedBox(width: _controlGap),
+                    Expanded(child: _field(palette)),
+                    const SizedBox(width: _controlGap),
+                    _searchAction(ink: ink, palette: palette),
+                  ],
+                ),
               ),
             ),
-          ),
-          Expanded(child: _body(palette, inset)),
-        ],
+            Expanded(child: _body(palette, inset)),
+          ],
+        ),
       ),
     );
   }
@@ -276,17 +292,22 @@ class _ShelfSearchPageState extends State<ShelfSearchPage> {
 
 /// 返回圆钮：⌀44.1 圆盘 + 顶栏同一枚箭头墨迹（度量与光学偏置同顶栏回退钮）。
 class _BackCircle extends StatelessWidget {
-  const _BackCircle({required this.ink, required this.palette});
+  const _BackCircle({
+    required this.ink,
+    required this.palette,
+    required this.onTap,
+  });
 
   final Color ink;
   final MiSearchBarPalette palette;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       key: const ValueKey<String>('shelf-search-back'),
       behavior: HitTestBehavior.opaque,
-      onTap: () => Navigator.of(context).maybePop(),
+      onTap: onTap,
       child: Container(
         width: MiSearchBarMetrics.barHeight,
         height: MiSearchBarMetrics.barHeight,

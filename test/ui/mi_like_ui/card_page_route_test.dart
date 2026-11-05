@@ -55,10 +55,13 @@ void main() {
       tester.getTopLeft(find.byKey(key)).dx;
 
   group('几何与时值', () {
-    test('时值 / 圆角 / 视差都是度量值', () {
-      // 实测拟合 400ms；本库取 300ms（整页滑完一个屏宽，400ms 读作「点了
-      // 以后等了一下才到位」）。曲线不变。
-      expect(MiCardPageRouteMetrics.durationMs, 300);
+    test('曲线形状是度量值，时长是手感压值', () {
+      // 进入曲线实测拟合 400ms；本库按手感压到 220ms（短于系统键盘升起动画，
+      // 「转场 + 键盘」并行结束）。退出另取 180ms 且用独立曲线——反向播进入
+      // 曲线会变成「先空等、再突然弹回」。
+      expect(MiCardPageRouteMetrics.durationMs, 220);
+      expect(MiCardPageRouteMetrics.reverseDurationMs, 180);
+      expect(MiCardPageRouteMetrics.exitMotion, Curves.easeOutCubic);
       // 素材 190px ÷ 3.104 px/dp = 61.2
       expect(MiCardPageRouteMetrics.cornerRadius, moreOrLessEquals(61.2));
       expect(MiCardPageRouteMetrics.parallaxFraction, 0.25);
@@ -96,7 +99,7 @@ void main() {
       await tester.pump();
       expect(leftOf(tester, pageKey), moreOrLessEquals(w, epsilon: 1),
           reason: '起手 = FractionalTranslation(+1)，整页在右缘外');
-      // 半程：easeOutCubic 已经走掉 87.5%，故只要求落在中间区间
+      // 时程前段（100/220）：easeOutCubic 已走掉八成，故只要求落在中间区间
       await tester.pump(const Duration(milliseconds: 100));
       final double mid = leftOf(tester, pageKey);
       expect(mid, greaterThan(0));
@@ -188,7 +191,8 @@ void main() {
   });
 
   group('进出与栈行为', () {
-    testWidgets('返回时新页滑回右缘并出栈', (WidgetTester tester) async {
+    testWidgets('返回时新页滑回右缘并出栈（退出快起，不再反向播进入曲线）',
+        (WidgetTester tester) async {
       await pumpHost(tester);
       await tester.tap(find.text('push'));
       await tester.pumpAndSettle();
@@ -196,9 +200,15 @@ void main() {
 
       tester.state<NavigatorState>(find.byType(Navigator)).pop();
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
+      const quarterMs = MiCardPageRouteMetrics.reverseDurationMs ~/ 4;
+      await tester.pump(const Duration(milliseconds: quarterMs));
+      final double quarter = leftOf(tester, pageKey);
+      expect(quarter, greaterThan(w * 0.5),
+          reason: '退出 1/4 时程应已回退过半；反向播 easeOutCubic 这里只有 7%');
+
+      await tester.pump(const Duration(milliseconds: quarterMs));
       final double mid = leftOf(tester, pageKey);
-      expect(mid, greaterThan(0));
+      expect(mid, greaterThan(quarter));
       expect(mid, lessThan(w));
 
       await tester.pumpAndSettle();
