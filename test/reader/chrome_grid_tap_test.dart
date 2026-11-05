@@ -7,7 +7,9 @@
 // 顶部让过系统 inset、底部让过 24dp 读数行）。按三分线划 3×3：
 //
 //   · 中宫 `[w/3, 2w/3] × [h/3, 2h/3]`（**含边界**）的落点 = 呼出 / 收起开关
-//     （toggle 语义保留）；
+//     （toggle 语义保留）。⚠️ **按下点与抬起点都要在中宫**，且漂移 ≤ 8dp：
+//     `TapGestureRecognizer` 的缺省 slop 是 18dp，18dp 内的短滑仍派发 `onTapUp`
+//     ⇒ 只看抬起位置会把翻页起手 / 手抖判成点按；
 //   · 其余八格落点**无任何效果**（既不呼出、也不收起——防阅读时侧边 / 角落
 //     误触把 chrome 翻出来）。
 //
@@ -74,6 +76,28 @@ void main() {
 
     Rect contentRect(WidgetTester tester) => tester
         .getRect(find.byKey(const ValueKey<String>('reader-content-area')));
+
+    /// 裸手势：按下 → 单次小位移 → 抬起（**不能用** `tester.drag`，它会连带
+    /// `pump`，见 `notes-pitfalls.md` §2.76）。
+    Future<void> swipe(WidgetTester tester, Offset from, Offset delta) async {
+      final TestGesture gesture = await tester.startGesture(from);
+      await gesture.moveBy(delta);
+      await gesture.up();
+      await tester.pump();
+    }
+
+    /// 断言这次手势**不改变** chrome 状态：用相对判据，避免前一步误触发后
+    /// 状态翻成 true、下一步又翻回 false 恰好落回期望值造成假绿。
+    Future<void> expectNoToggle(
+      WidgetTester tester,
+      Offset from,
+      Offset delta,
+      String reason,
+    ) async {
+      final bool was = chromeShown(tester);
+      await swipe(tester, from, delta);
+      expect(chromeShown(tester), was, reason: reason);
+    }
 
     testWidgets('中宫点按唤出 chrome，再点中宫收起（toggle 语义保留）',
         (WidgetTester tester) async {
@@ -249,6 +273,66 @@ void main() {
       await tester.tapAt(const Offset(400, 300));
       await tester.pump();
       expect(chromeShown(tester), isFalse);
+
+      await closeBook(tester);
+    });
+
+    testWidgets('中宫短滑 / 斜滑 / 边界外滑入一律不切 chrome（点按≠滑动）',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      final Rect area = contentRect(tester);
+      final Offset center = area.center;
+      expect(chromeShown(tester), isFalse, reason: '默认即沉浸全屏');
+
+      // ⚠️ 复现形态：`TapGestureRecognizer.preAcceptSlopTolerance` 缺省 = 18dp
+      // （`gestures/recognizer.dart`），18dp 内的短滑仍会派发 `onTapUp`；而
+      // `DragGestureRecognizer` 未越 slop 时在抬起处自行 `reject`
+      // （`monodrag.dart` `_giveUpPointer`）⇒ 竞技场由 tap 胜出。真机上
+      // 「翻页起手 / 手抖」就是这样被判成点按的。
+      for (final Offset delta in <Offset>[
+        const Offset(0, -10), // 竖向短滑
+        const Offset(10, 0), // 横向短滑
+        const Offset(9, 9), // 斜滑（欧氏 12.7dp < 18dp）
+      ]) {
+        await expectNoToggle(tester, center, delta,
+            '中宫 $delta 短滑属于滑动，不得唤出 / 收起 chrome');
+      }
+
+      // 从中宫带外滑入中宫：抬起落点在中宫、按下点不在；旧闸门只看抬起位置。
+      // ⚠️ 位移刻意取 5dp（**小于** 8dp 漂移阈值）：单独钉住「按下点也必须在
+      // 中宫」。若位移超过阈值，本条会被漂移闸门一并挡下、与上面那组重复，
+      // 按下点闸门就失去判别力（变异判红测不出来）。
+      final Offset outside =
+          area.topLeft + Offset(area.width / 2, area.height / 3 - 3);
+      await expectNoToggle(tester, outside, const Offset(0, 5),
+          '按下点在顶格、抬起在中宫也不算点中宫');
+
+      // 微抖仍是点按：防止闸门收紧过头把正常点击一起吞掉。
+      await swipe(tester, center, const Offset(3, -2));
+      expect(chromeShown(tester), isTrue, reason: '3.6dp 手抖仍是点按');
+      await tester.tapAt(center);
+      await tester.pump();
+      expect(chromeShown(tester), isFalse, reason: '回归：正常点按仍能收起');
+
+      await closeBook(tester);
+    });
+
+    testWidgets('被取消的滑动手势不会污染下一次点按', (WidgetTester tester) async {
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      final Offset center = contentRect(tester).center;
+      // 越过 18dp slop ⇒ tap 识别器自我拒绝并派发 `onTapCancel`（横向避开
+      // 竖向滚动识别器，避免引入滚动惯性动画）。
+      await swipe(tester, center, const Offset(30, 0));
+      expect(chromeShown(tester), isFalse, reason: '真正的滑动不得切 chrome');
+
+      await tester.tapAt(center);
+      await tester.pump();
+      expect(chromeShown(tester), isTrue,
+          reason: '取消后新一轮点按必须重新记录按下点');
 
       await closeBook(tester);
     });

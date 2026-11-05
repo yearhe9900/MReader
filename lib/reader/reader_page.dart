@@ -118,6 +118,15 @@ const double _kHeadingGapBottom = 12;
 /// `systemPadding`，见 `_buildBody` 的 `reserve`）——chrome 显隐不影响它。
 const double _kProgressIndicatorReserve = 24;
 
+/// 中宫点按允许的「按下 → 抬起」漂移上界（dp）。
+///
+/// ⚠️ `TapGestureRecognizer` 的 `preAcceptSlopTolerance` 缺省是
+/// `kTouchSlop`(18dp)，18dp 内的短滑仍会派发 `onTapUp`；而滚动识别器未越
+/// slop 时会在抬起处自行拒绝 ⇒ 翻页起手 / 手抖被判成点按、误呼出菜单。
+/// 收紧到 8dp（约 slop 的 44%），留足正常点按的抖动余量；**不改竞技场结构**，
+/// 滚动 / 链接 / 长按划词各自的识别器一律不动。
+const double _kChromeTapMaxDrift = 8;
+
 /// R1②：交互挂起后台补齐的**兜底帧数**（到期自动恢复，见 [_pauseAutoFill]）。
 ///
 /// 按补齐批次数计而非定时器——定时器在 widget 测试 `FakeAsync` 下会留未清挂起物
@@ -595,6 +604,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 挂在 `reader-chrome-toggle` 外的 `KeyedSubtree` 上（key 位已被测试锚点占用，
   /// 且 KeyedSubtree 无自身 RenderObject，落点即手势层的盒）。
   final GlobalKey _chromeToggleKey = GlobalKey(debugLabel: 'chrome-toggle-box');
+
+  /// 在途正文 tap 的按下点（全局坐标）；`null` = 无在途 tap。
+  /// `onTapDown` 记录、`onTapUp` 消费、`onTapCancel` 清空（三处都不 setState）。
+  Offset? _chromeTapDownGlobal;
 
   /// 停稳流程序号：用户再次滚动即作废在途的 async 停稳序列。
   int _pagedStopSeq = 0;
@@ -4106,11 +4119,25 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     setState(() => _fullscreen = !_fullscreen);
   }
 
+  /// 记录本次正文 tap 的按下点（点按 ≠ 滑动，见 [_onContentTapUp]）。
+  void _onContentTapDown(TapDownDetails details) {
+    _chromeTapDownGlobal = details.globalPosition;
+  }
+
+  /// 手势被竞技场判给滚动 / 链接 / 长按：丢弃按下点，别留给下一次 tap。
+  void _onContentTapCancel() {
+    _chromeTapDownGlobal = null;
+  }
+
   /// 正文层 tap 的落点闸门：阅读页划为九宫格，**只有最中间的宫格**能点击呼出菜单。
   ///
   /// 判定框 = `reader-chrome-toggle` 自身的盒（与正文排版区同框）；按**三分线**
   /// 划 3×3，只有落进中宫 `[w/3, 2w/3] × [h/3, 2h/3]`（含边界）的 tap 才调
   /// [_toggleFullscreen]，其余八格落点一律无事（防阅读时侧边 / 角落误触翻出 chrome）。
+  ///
+  /// ⚠️ **点按 ≠ 滑动**：按下点与抬起点**都**要在中宫，且两者漂移 ≤
+  /// [_kChromeTapMaxDrift]。只看抬起位置会被 18dp slop 内的短滑（翻页起手 /
+  /// 手抖 / 从边界外滑入）误触发；没有在途按下点（孤立 up）一律不响应。
   ///
   /// ⚠️ 落点换算用 **`globalToLocal(globalPosition)`**，不用
   /// `TapUpDetails.localPosition`：后者构造兜底是 `localPosition ?? globalPosition`，
@@ -4122,17 +4149,26 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 长按划词（`AI-02`）各有自己的识别器，赢竞技场后本回调根本不触发，
   /// 中宫判定不碰它们。
   void _onContentTapUp(TapUpDetails details) {
+    final Offset? down = _chromeTapDownGlobal;
+    _chromeTapDownGlobal = null;
+    if (down == null) return;
+    if ((details.globalPosition - down).distance > _kChromeTapMaxDrift) return;
+
     final RenderObject? obj =
         _chromeToggleKey.currentContext?.findRenderObject();
     final RenderBox? box = obj is RenderBox ? obj : null;
     if (box == null || !box.hasSize) return;
-    final Offset local = box.globalToLocal(details.globalPosition);
     final Size size = box.size;
-    final bool inCenterCell = local.dx >= size.width / 3 &&
-        local.dx <= size.width * 2 / 3 &&
-        local.dy >= size.height / 3 &&
-        local.dy <= size.height * 2 / 3;
-    if (inCenterCell) _toggleFullscreen();
+    bool inCenterCell(Offset global) {
+      final Offset local = box.globalToLocal(global);
+      return local.dx >= size.width / 3 &&
+          local.dx <= size.width * 2 / 3 &&
+          local.dy >= size.height / 3 &&
+          local.dy <= size.height * 2 / 3;
+    }
+    if (inCenterCell(down) && inCenterCell(details.globalPosition)) {
+      _toggleFullscreen();
+    }
   }
 
   /// 从弹层里选定一个位置跳过去后**收起 chrome**（`TYP-09`）。
@@ -5388,14 +5424,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     // `TapGestureRecognizer`（`CNT-04` 链接点击会失效）。
                     // 做祖先时 path 是「链接 → 本层」，链接先入竞技场即胜出。
                     //
-                    // 不干扰滚动：`TapGestureRecognizer` 一旦超出 `kTouchSlop`
-                    // 就自我拒绝，拖拽 / 惯性 / 长按划词都不受影响。
+                    // ⚠️ 不注册 drag 类识别器（会抢正文滚动 / 链接）；`kTouchSlop`
+                    // (18dp) 内的短滑仍会派发 tap，收紧交给 [_onContentTapUp] 的
+                    // 「按下点 + 漂移」闸门，竞技场结构保持不变。
                     child: KeyedSubtree(
                       key: _chromeToggleKey,
                       child: GestureDetector(
                         key: const Key('reader-chrome-toggle'),
                         behavior: HitTestBehavior.translucent,
+                        onTapDown: _onContentTapDown,
                         onTapUp: _onContentTapUp,
+                        onTapCancel: _onContentTapCancel,
                         child: _pagedMode
                             ? _buildPagedBody()
                             : ListView.builder(
