@@ -44,8 +44,9 @@ enum FormatKind { epub, txt, cbz, cbr, mobi, pdf, unsupported }
 ///
 /// ⚠️ 增减格式支持必须两处同步：本表 + [sniffFormat] 的分发分支；契约测试
 /// `home_shell_test` 硬编码期望值，漏改会判红。
-/// ⚠️ Android 端 file_picker 会把扩展名经 `MimeTypeMap` 转 MIME，映射不到的
-/// 扩展名会被忽略 ⇒ 真机仍需验证 `.azw3` / `.cbz` 等是否可选。
+/// ⚠️ 本表**只对桌面端生效**：移动端 file_picker 把扩展名转系统类型（Android
+/// `MimeTypeMap` / iOS UTType）时会漏格式，已由 `shelf_page.dart` 的
+/// `importPickerOptions` 分流为 `FileType.any`，格式统一交 [sniffFormat] 判定。
 const List<String> kImportExtensions = <String>[
   'epub',
   'txt',

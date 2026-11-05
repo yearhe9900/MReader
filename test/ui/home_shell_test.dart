@@ -2,7 +2,7 @@
 //
 // 书架「添加图书」入口在底栏**绿圆钮**（`MiGlassNavFab`，经 `GlobalKey<ShelfPageState>`
 // 转 `pickAndImport`）。本文件钉整条接线链：绿圆钮 onTap → pickAndImport →
-// `FilePicker.platform.pickFiles`（格式层白名单，多选）。`FilePicker` 用假件替换（setter 允许
+// `FilePicker.platform.pickFiles`（桌面走格式层白名单、移动端不过滤，多选）。`FilePicker` 用假件替换（setter 允许
 // 注入，假件须 **extends** [FilePicker] 才能过 `PlatformInterface.verifyToken`），
 // 记录调用参数后返回 null（模拟取消）。
 import 'dart:io';
@@ -24,6 +24,7 @@ import 'package:mreader/stats/stats_service.dart';
 import 'package:mreader/ui/home_shell.dart';
 import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart'
     show MiGlassNavMetrics, MiGlassNavBar;
+import 'package:mreader/ui/shelf_page.dart' show importPickerOptions;
 
 import '../reader/reader_harness.dart';
 import '../test_config.dart';
@@ -36,6 +37,7 @@ import '../test_config.dart';
 /// 其余成员基类自带 `UnimplementedError` 默认实现，无需补。
 class _RecordingFilePicker extends FilePicker {
   int pickCalls = 0;
+  FileType? lastType;
   List<String>? lastAllowedExtensions;
   bool? lastAllowMultiple;
 
@@ -55,6 +57,7 @@ class _RecordingFilePicker extends FilePicker {
     bool readSequential = false,
   }) async {
     pickCalls++;
+    lastType = type;
     lastAllowedExtensions = allowedExtensions;
     lastAllowMultiple = allowMultiple;
     return null;
@@ -138,6 +141,8 @@ void main() {
       await tester.pump(); // pickAndImport 的假件 await 在微任务里完成
 
       expect(picker.pickCalls, 1, reason: '绿圆钮 onTap 必须走到 FilePicker');
+      expect(picker.lastType, FileType.custom,
+          reason: '测试宿主是桌面平台 ⇒ 走保留白名单的分支');
       // ⚠️ 期望值**故意硬编码字面量**（不引用 `kImportExtensions`）：引用同一
       // 常量会变成同义反复，白名单漏掉 azw3 / mobi 时用例照样判绿。
       expect(picker.lastAllowedExtensions, <String>[
@@ -299,6 +304,42 @@ void main() {
         () => Future<void>.delayed(const Duration(milliseconds: 60)),
       );
       await settle(tester, rounds: 10);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // 导入选择器分流：移动端系统类型映射会漏格式，必须绕开扩展名过滤
+  // ────────────────────────────────────────────────────────────────────────────
+  group('importPickerOptions（移动端不过滤 / 桌面保留白名单）', () {
+    test('mobile=true → FileType.any + allowedExtensions 为 null', () {
+      final ({FileType type, List<String>? allowedExtensions}) options =
+          importPickerOptions(mobile: true);
+      expect(options.type, FileType.any,
+          reason: 'Android MimeTypeMap / iOS UTType 解析不出 azw3 等扩展名时'
+              '会静默跳过，custom 白名单在真机上等于把书挡在门外');
+      expect(options.allowedExtensions, isNull,
+          reason: 'FileType.any 传非空 allowedExtensions 会被 file_picker 抛异常');
+    });
+
+    test('mobile=false → FileType.custom + 7 项白名单（含 azw3）', () {
+      final ({FileType type, List<String>? allowedExtensions}) options =
+          importPickerOptions(mobile: false);
+      expect(options.type, FileType.custom);
+      // 硬编码字面量（不引用 `kImportExtensions`），保证漏格式能判红。
+      expect(options.allowedExtensions, <String>[
+        'epub',
+        'txt',
+        'pdf',
+        'cbz',
+        'cbr',
+        'mobi',
+        'azw3',
+      ]);
+    });
+
+    test('不传 mobile 时按真实平台判定（widget 测试宿主 = 桌面）', () {
+      expect(importPickerOptions().type, FileType.custom,
+          reason: 'flutter test 跑在 Windows/Linux 宿主，不是 Android/iOS');
     });
   });
 }

@@ -28,6 +28,7 @@
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:ui' show ImageFilter;
 
 import 'package:file_picker/file_picker.dart';
@@ -82,6 +83,29 @@ import 'mi_like_ui/mi_like_ui.dart'
         MiTopBarPalette;
 import 'shelf_grid.dart';
 import 'shelf_search_page.dart';
+
+/// 「添加图书」文件选择器的参数（唯一事实源；`home_shell_test` 直接钉两种平台）。
+///
+/// ⚠️ **移动端必须 `FileType.any` + `allowedExtensions == null`**：file_picker
+/// 的 Android 端把扩展名经 `MimeTypeMap` 转 MIME、iOS 端转 UTType，解析不出
+/// 的（`azw3` / `cbz` 等）会被静默跳过或生成 `dyn.*` 动态 UTI ⇒ 文件在系统
+/// 选择器里**根本不可选**（真机实录）。桌面三平台是字符串过滤，
+/// `kImportExtensions` 有效 ⇒ 保留后缀白名单。
+///
+/// 移动端放开后格式判定完全交 `sniffFormat`（魔数优先 + 后缀兜底），选错文件
+/// 给可读报错，不会静默吞掉。⚠️ `FileType.any` 时**不能**传非空
+/// `allowedExtensions`（`file_picker_io.dart` 会直接抛异常）。
+///
+/// [mobile] 仅供测试注入；不传时按真实平台判定（Web 工程已删，五平台均可用
+/// `dart:io`，口径同 `lib/platform/audio_service.dart`）。
+({FileType type, List<String>? allowedExtensions}) importPickerOptions({
+  bool? mobile,
+}) {
+  final bool isMobile = mobile ?? (Platform.isAndroid || Platform.isIOS);
+  return isMobile
+      ? (type: FileType.any, allowedExtensions: null)
+      : (type: FileType.custom, allowedExtensions: kImportExtensions);
+}
 
 /// 书架首页。
 class ShelfPage extends StatefulWidget {
@@ -391,11 +415,11 @@ class ShelfPageState extends State<ShelfPage> {
       _importErrors = <String>[];
     });
 
+    final ({FileType type, List<String>? allowedExtensions}) options =
+        importPickerOptions();
     final FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      // ⚠️ 白名单取格式层唯一事实源（含 mobi / azw3 / pdf / cbz / cbr），别在
-      // 这里另写一份字面量：漏一种格式就表现为「添加图书时选不到、识别不到」。
-      allowedExtensions: kImportExtensions,
+      type: options.type,
+      allowedExtensions: options.allowedExtensions,
       withData: true,
       allowMultiple: true,
     );
