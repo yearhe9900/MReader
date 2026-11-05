@@ -1,5 +1,5 @@
-// 开书转场（§2.77 起，§2.113 斜向掀开，§2.114 补「页面弯曲 + 逐渐展开」）：
-// 书架 → 阅读页的**翻书**。
+// 开书转场（§2.77 起，§2.113 斜向掀开，§2.114 补「页面弯曲 + 逐渐展开」，
+// §2.115 补折角纸背）。书架 → 阅读页的**翻书**。
 //
 // ── 四个几何口径（改这块前先把这四条对齐）────────────────────────────
 //  ① 触发点（起点）= 屏幕**右下角**：点书即从这一角起势，整张纸钉在这点附近。
@@ -17,12 +17,13 @@
 // 单列出来（[readerOpenCurl]）：
 //   · 卷曲量走 `sin(π·进度)`：起手 0（纸是直的、且整张不可见）、中段最大、落位回 0
 //     ⇒ 「逐渐展开」就是这条曲线，不是另加的一段动画。
-//   · 卷曲作用在**自由角 + 相邻两条边**上（[readerOpenCurlPath]）：圆角被撑大、
-//     两条边向内收，轮廓自己弯，配角落的背光渐变（[kReaderCurlShadeMax]）读出「纸角
-//     被卷起来」。
+//   · 卷曲分两层表达：**轮廓**（[readerOpenCurlPath]，自由角的圆角被撑大 ⇒ 角上
+//     让出一块）与**折角纸背**（[readerOpenFoldPath] + [ReaderOpenFoldPainter]，
+//     一片不透明的纸被翻过来盖在纸面上，带投影与折痕高光）。只有轮廓时纸读成
+//     「被剪掉角的板」，补上纸背才读成「纸角翻折过来」。
 //   · ⚠️ 真正的柱面弯曲需要把阅读页抓成纹理再按网格变形（`toImage` + `drawVertices`），
 //     那会给开书关键路径再加一次全屏快照，与「开书不卡」的既有红线冲突，故用
-//     「轮廓 + 光影」的等价近似：观感一致，零额外光栅化。
+//     「轮廓 + 折角 + 光影」的等价近似：观感一致，零额外光栅化。
 //
 // ⚠️ §2.78 §5 订正：参考动效里书架其实同向**左移**并伴压暗（本实现按「静止」做了），
 // **是否补这条视差待拍板**（挂账 #10）。
@@ -174,9 +175,29 @@ double readerOpenCurlAmount(Size size, double turn) =>
     kReaderCurlMaxRatio * math.min(size.width, size.height) *
     readerOpenCurl(turn);
 
-/// 纸页轮廓：三只角正常圆角，**自由角（左上）随卷曲被撑大 + 相邻两边向内收**。
+/// 四分弧的三次贝塞尔常数：控制点落在边长的 0.5523 处时，曲线逼近正圆弧到 0.02%。
+const double kReaderArcK = 0.5523;
+
+/// 自由角圆弧的**起弧点**到角点的距离（dp）：基础圆角 + 卷曲量。
 ///
-/// 只用「轮廓」表达弯曲而不是把纸真的掰弯：一个 `Matrix4` 是投影变换，
+/// 轮廓（[readerOpenCurlPath]）与折角（[readerOpenFoldPath]）共用这一个数——
+/// 折角的折痕必须**严丝合缝地贴在这条弧上**，否则会浮在纸心（读作「纸上有块白斑」）
+/// 或者被剪掉一半（读作「纸角缺一块」）。
+double readerOpenCurlReach(
+  Size size, {
+  required double radius,
+  required double curl,
+}) {
+  final double short = math.min(size.width, size.height);
+  final double r = radius.clamp(0.0, short / 2);
+  // 1.45 = 「卷曲撑大圆角」与「卷曲压塌两条边」两笔量的合账（旧实现分成 c 与 sag，
+  // 起弧点恰好是 c + sag = r + 1.45·curl，这里只是把它显式写出来）。
+  return (r + curl * 1.45).clamp(0.0, short * 0.46);
+}
+
+/// 纸页轮廓：三只角正常圆角，**自由角（左上）随卷曲被撑大**。
+///
+/// 只用「轮廓 + 折角」表达弯曲而不是把纸真的掰弯：一个 `Matrix4` 是投影变换，
 /// 保直线、掰不弯曲面；真网格要么抓纹理、要么上着色器，都会在开书关键路径上加
 /// 一次全屏快照（见文件头 ⚠️）。卷曲量 [curl] = 0 时本函数退化成普通圆角矩形。
 Path readerOpenCurlPath(
@@ -188,17 +209,12 @@ Path readerOpenCurlPath(
   final double h = size.height;
   final double short = math.min(w, h);
   final double r = radius.clamp(0.0, short / 2);
-  // 自由角的外延：基础圆角 + 卷曲量。卷起来的那一圈纸「占」掉角上的这段边。
-  final double c = (r + curl).clamp(0.0, short * 0.42);
-  // 卷曲把相邻两边带进来的量（也让两边的起弧点错开，不显得是纯圆角）。
-  final double sag = curl * 0.45;
+  final double reach = readerOpenCurlReach(size, radius: radius, curl: curl);
   return Path()
     ..moveTo(0, h - r)
-    ..lineTo(0, c + sag)
-    // 自由角：三次贝塞尔。控制点贴着两条边 ⇒ 凸圆角；卷曲越大弧越「厚」。
-    ..cubicTo(sag * 0.9, c * 0.55, c * 0.55, sag * 0.9, c, 0)
-    // 顶边：紧跟自由角的一小段随卷曲向内凹（纸被卷离屏面，轮廓跟着塌一点）。
-    ..quadraticBezierTo(c * 1.6, sag * 1.6, c + sag, 0)
+    ..lineTo(0, reach)
+    // 自由角：四分弧。卷曲越大 `reach` 越远 ⇒ 弧被撑大、角被「卷」掉一块。
+    ..cubicTo(0, reach * kReaderArcK, reach * kReaderArcK, 0, reach, 0)
     ..lineTo(w - r, 0)
     ..quadraticBezierTo(w, 0, w, r)
     ..lineTo(w, h - r)
@@ -207,6 +223,158 @@ Path readerOpenCurlPath(
     ..lineTo(r, h)
     ..quadraticBezierTo(0, h, 0, h - r)
     ..close();
+}
+
+/// 折角尖端沿角平分线伸进纸面的位置（相对起弧距离 [readerOpenCurlReach] 的 x 坐标）。
+///
+/// 0.46 时折角是个「不到巴掌大」的三角：再大就读作「贴了张便签」，再小就看不出翻折。
+const double kReaderFoldTipRatio = 0.50;
+
+/// 折角尖端倒圆的比例（相对尖端坐标）：折痕收尾不能是尖刺。
+const double kReaderFoldTipRound = 0.26;
+
+/// 折角投影偏移（以卷曲量为单位）：纸角翘起 ⇒ 暗影落在纸心一侧。
+const double kReaderFoldShadowShift = 0.085;
+
+/// 折角投影的最强 alpha：两层纸叠在一起处的环境遮蔽。
+const double kReaderFoldShadowMax = 0.34;
+
+/// 折角纸背的受光色 / 背光色（**半透白**，不是实色白）。
+///
+/// 纸背是「同一张纸的另一面」，底色应当随主题走：奶油纸上混成近白、夜间底色上混成
+/// 被打亮的一层灰。写死实色白会在夜间模式开书时闪一记白光。
+const Color kReaderFoldFaceLight = Color(0xE8FFFFFF);
+const Color kReaderFoldFaceShade = Color(0xB4FFFFFF);
+
+/// 折角（自由角翻起来露出的那片**纸背**）的轮廓。
+///
+/// 参考图的读法不是「纸角被裁掉一块」，而是**纸被翻折过来、露出背面**。所以形状要
+/// 同时满足两件事：
+///   · 外缘与剪影的角弧**同一段贝塞尔、同一组端点** ⇒ 零缝隙（折痕不会浮在纸心）；
+///   · 内缘收成一个**指向纸心的圆角尖端** ⇒ 读作「折起来的一层纸」。内缘若对称地
+///     鼓出去（Lens）会读成「贴了片叶子」——这是第一版的形态，被否掉了。
+///
+/// [curl] <= 0.5 时返回空路径：平直的纸没有折角（起手与落位都必须**一丝不画**，
+/// 否则落位帧会在屏幕角上留一片白）。
+Path readerOpenFoldPath(
+  Size size, {
+  required double radius,
+  required double curl,
+}) {
+  if (curl <= 0.5) return Path();
+  final double reach = readerOpenCurlReach(size, radius: radius, curl: curl);
+  final double tip = reach * kReaderFoldTipRatio;
+  final double round = tip * kReaderFoldTipRound;
+  // 尖端倒圆：沿两条折边各退 `round`，再用二次贝塞尔以尖端点作控制点收口。
+  final double dx = reach - tip;
+  final double dy = tip;
+  final double len = math.sqrt(dx * dx + dy * dy);
+  final double p1x = tip + dx / len * round;
+  final double p1y = tip - dy / len * round;
+  return Path()
+    // 外缘：与剪影的自由角弧完全同源 ⇒ 严丝合缝。
+    ..moveTo(0, reach)
+    ..cubicTo(0, reach * kReaderArcK, reach * kReaderArcK, 0, reach, 0)
+    // 折边（贴顶边那一侧）→ 圆角尖端 → 折边（贴左边那一侧）→ 回到起点。
+    ..lineTo(p1x, p1y)
+    ..quadraticBezierTo(tip, tip, p1y, p1x)
+    ..close();
+}
+
+/// 折角的**折痕**（内缘）：纸背与纸面的交界线。高光沿它落。
+Path readerOpenFoldCrease(
+  Size size, {
+  required double radius,
+  required double curl,
+}) {
+  if (curl <= 0.5) return Path();
+  final double reach = readerOpenCurlReach(size, radius: radius, curl: curl);
+  final double tip = reach * kReaderFoldTipRatio;
+  final double round = tip * kReaderFoldTipRound;
+  final double dx = reach - tip;
+  final double dy = tip;
+  final double len = math.sqrt(dx * dx + dy * dy);
+  final double p1x = tip + dx / len * round;
+  final double p1y = tip - dy / len * round;
+  return Path()
+    ..moveTo(reach, 0)
+    ..lineTo(p1x, p1y)
+    ..quadraticBezierTo(tip, tip, p1y, p1x);
+}
+
+/// 折角的绘制层：投影（两层纸叠在一起的环境遮蔽）+ 纸背（明暗渐变）+ 折痕高光。
+///
+/// 这是「像真书被翻开」的最后一块：只有轮廓时纸读成一块**被剪掉角**的板；
+/// 补上这片不透明纸背，角才读成「翻折过来的纸」。
+class ReaderOpenFoldPainter extends CustomPainter {
+  /// 创建折角绘制层。
+  const ReaderOpenFoldPainter({
+    required this.radius,
+    required this.curl,
+    required this.opacity,
+  });
+
+  /// 三只角的基础圆角（与剪切器同口径）。
+  final double radius;
+
+  /// 卷曲幅度（dp）：0 = 平直，不画。
+  final double curl;
+
+  /// 可见度 0→1→0（[readerOpenCurl]）：两端必须为 0，纸直着的时候不许有折角。
+  final double opacity;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (opacity <= 0.01) return;
+    final Path fold = readerOpenFoldPath(size, radius: radius, curl: curl);
+    if (fold.getBounds().isEmpty) return;
+
+    // ① 投影：先按「折角整体往纸心方向挪一点 + 高斯模糊」画一层黑，再盖上纸背 ⇒
+    //    露出一圈带方向的柔暗边。方向（+x, +y）就是纸心方向：纸角翘起后挡光、
+    //    亮的纸背压暗下面那张纸，暗边落在折痕的**纸心侧**。
+    final double shift = curl * kReaderFoldShadowShift;
+    canvas.drawPath(
+      fold.shift(Offset(shift, shift)),
+      Paint()
+        ..color = Color.fromRGBO(0, 0, 0, kReaderFoldShadowMax * opacity)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, math.max(1.5, curl * 0.16)),
+    );
+
+    // ② 纸背：从剪口（朝光，亮）到折痕尖端（转离光源，暗）的线性渐变。
+    //    ⚠️ 色值本身带 alpha（半透白，随主题底色自动化开），这里只能**乘**上可见度，
+    //    不能直接 `withValues(alpha: opacity)` —— 那会把半透白冲成纯白实色。
+    final Rect bounds = fold.getBounds();
+    canvas.drawPath(
+      fold,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            kReaderFoldFaceLight.withValues(
+                alpha: kReaderFoldFaceLight.a * opacity),
+            kReaderFoldFaceShade.withValues(
+                alpha: kReaderFoldFaceShade.a * opacity),
+          ],
+        ).createShader(bounds),
+    );
+
+    // ③ 折痕高光：折起来的那道棱是整张纸上最亮的一条线，缺了它折角会读成平面贴图。
+    canvas.drawPath(
+      readerOpenFoldCrease(size, radius: radius, curl: curl),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..strokeCap = StrokeCap.round
+        ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.55 * opacity),
+    );
+  }
+
+  @override
+  bool shouldRepaint(ReaderOpenFoldPainter oldDelegate) =>
+      oldDelegate.radius != radius ||
+      oldDelegate.curl != curl ||
+      oldDelegate.opacity != opacity;
 }
 
 /// 纸页轮廓的剪切器（公开以便测试读回口径：基础圆角 / 卷曲量）。
@@ -474,35 +642,44 @@ class _PageFlipTransitionState extends State<_PageFlipTransition> {
                     radius: kReaderPaperRadius * (1 - settle),
                     curl: curl,
                   ),
-                  child: DecoratedBox(
-                    // ⚠️ 必须 `foreground`：`DecoratedBox` 默认把装饰画在**子节点下面**，
-                    // 而纸页是不透明的一整块（阅读页自己铺底色）⇒ 默认位置上的背光
-                    // 一丝都看不见（旧实现的「背光压暗」其实一直是空转）。
-                    position: DecorationPosition.foreground,
-                    // 受光衰减：纸立起来时整页压暗、平铺归 0。
-                    decoration: BoxDecoration(
-                      color: Color.fromRGBO(0, 0, 0, kReaderPageShadeMax * tilt),
+                  // 折角层：画在纸**上面**（`foregroundPainter`），因为那片纸背是
+                  // 翻过来盖在纸面上的第二层纸，不是背景。
+                  child: CustomPaint(
+                    foregroundPainter: ReaderOpenFoldPainter(
+                      radius: kReaderPaperRadius * (1 - settle),
+                      curl: curl,
+                      opacity: curl01,
                     ),
                     child: DecoratedBox(
-                      // 卷曲背光：贴**自由角**（左上）的斜向渐变带（沿反对角线方向
-                      // 淡出）。纸角卷离屏面后转离光源 ⇒ 角上一带压暗、向纸心迅速
-                      // 化开，这是「这是一张纸、不是一个色块」最直接的读法。
+                      // ⚠️ 必须 `foreground`：`DecoratedBox` 默认把装饰画在**子节点下面**，
+                      // 而纸页是不透明的一整块（阅读页自己铺底色）⇒ 默认位置上的背光
+                      // 一丝都看不见（旧实现的「背光压暗」其实一直是空转）。
                       position: DecorationPosition.foreground,
+                      // 受光衰减：纸立起来时整页压暗、平铺归 0。
                       decoration: BoxDecoration(
-                        gradient: curl01 <= 0.01
-                            ? null
-                            : LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: <Color>[
-                                  Color.fromRGBO(
-                                      0, 0, 0, kReaderCurlShadeMax * curl01),
-                                  const Color.fromRGBO(0, 0, 0, 0),
-                                ],
-                                stops: const <double>[0, 0.24],
-                              ),
+                        color: Color.fromRGBO(0, 0, 0, kReaderPageShadeMax * tilt),
                       ),
-                      child: paper,
+                      child: DecoratedBox(
+                        // 卷曲背光：贴**自由角**（左上）的斜向渐变带（沿反对角线方向
+                        // 淡出）。纸角卷离屏面后转离光源 ⇒ 角上一带压暗、向纸心迅速
+                        // 化开，这是「这是一张纸、不是一个色块」最直接的读法。
+                        position: DecorationPosition.foreground,
+                        decoration: BoxDecoration(
+                          gradient: curl01 <= 0.01
+                              ? null
+                              : LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: <Color>[
+                                    Color.fromRGBO(
+                                        0, 0, 0, kReaderCurlShadeMax * curl01),
+                                    const Color.fromRGBO(0, 0, 0, 0),
+                                  ],
+                                  stops: const <double>[0, 0.24],
+                                ),
+                        ),
+                        child: paper,
+                      ),
                     ),
                   ),
                 ),

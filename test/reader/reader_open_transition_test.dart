@@ -28,6 +28,7 @@
 // 翻页形态下**右下角钉住**、其余三角随进度归位，故「四角投影」才是掀开进度的读数。
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -225,6 +226,22 @@ double paperRadius(WidgetTester tester) => paperClipper(tester).radius;
 /// 自由角（左上）的卷曲幅度（dp）：0 = 纸是平直的一张。
 double paperCurl(WidgetTester tester) => paperClipper(tester).curl;
 
+/// 折角绘制层（露出的那片纸背）：读它而不是读像素——折角只有「画/不画」与
+/// 「跟着卷曲量走」两条口径，像素断言会在 AA 上抖。
+ReaderOpenFoldPainter paperFold(WidgetTester tester) {
+  final CustomPaint paint = tester.widget<CustomPaint>(
+    find
+        .descendant(
+          of: find
+              .ancestor(of: find.byKey(_kPaperKey), matching: find.byType(ClipPath))
+              .first,
+          matching: find.byType(CustomPaint),
+        )
+        .first,
+  );
+  return paint.foregroundPainter! as ReaderOpenFoldPainter;
+}
+
 /// 背景暗化层的 alpha：转场层 `Stack` 的第一个 child（`ColoredBox`）。
 double scrimAlpha(WidgetTester tester) {
   final Stack stack = tester.widget<Stack>(
@@ -414,6 +431,37 @@ void main() {
       await tester.pumpAndSettle();
       expect(paperCurl(tester), 0,
           reason: '落位时必须完全平直——弯的纸会与静态阅读页的屏幕边不一致');
+    });
+
+    testWidgets('折角纸背：中段画出一片纸背（带投影与折痕），起手与落位一丝不画',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(const _Host());
+      await openAndStart(tester);
+      // 起手：纸立在屏外且是**直的** ⇒ 折角必须为空（弯着立在屏外会漏出弯边）。
+      expect(paperFold(tester).opacity, 0, reason: '起手不许有折角');
+      expect(paperFold(tester).curl, 0, reason: '起手不许有折角');
+
+      await tester.pump(kReaderOpenDuration ~/ 3);
+      final ReaderOpenFoldPainter mid = paperFold(tester);
+      expect(mid.opacity, greaterThan(0.2),
+          reason: '中段必须画出纸背——否则角读成「被剪掉一块的板」');
+      expect(mid.curl, paperCurl(tester),
+          reason: '折角必须与剪影吃同一个卷曲量（两套数字会立刻错位、折痕浮在纸心）');
+      expect(mid.radius, paperRadius(tester),
+          reason: '折角与剪影必须吃同一个圆角');
+
+      // 整段行程里纸背必须**满显过**：卷曲量走 `sin(π·进度)`，峰值只有一瞬，
+      // 采样点撞在半山腰上会误判「纸背一直很淡」。
+      double peak = mid.opacity;
+      for (int i = 0; i < 8; i++) {
+        await tester.pump(kReaderOpenDuration ~/ 24);
+        peak = math.max(peak, paperFold(tester).opacity);
+      }
+      expect(peak, greaterThan(0.95), reason: '纸背全程没有满显过（折角一直半透明）');
+
+      await tester.pumpAndSettle();
+      expect(paperFold(tester).opacity, 0, reason: '落位后纸是平的，不许留折角');
+      expect(paperFold(tester).curl, 0);
     });
 
     testWidgets('展开是渐进的：自由角一路向屏内推进，不回弹',
@@ -658,6 +706,67 @@ void main() {
           reason: '卷起后自由角连同顶边一起内收，$probe 应落在纸外（弧线缺口）');
       // 纸的中心永远在纸上。
       expect(curled.contains(const Offset(200, 400)), isTrue);
+    });
+
+    test('折角纸背：外缘与剪影角弧逐点重合（贴住剪口、不越出纸边）', () {
+      const Size size = Size(393, 852);
+      const double curl = 63;
+      final double reach = readerOpenCurlReach(size, radius: 70, curl: curl);
+      final Path fold = readerOpenFoldPath(size, radius: 70, curl: curl);
+      final Path paper = readerOpenCurlPath(size, radius: 70, curl: curl);
+      final Offset center = Offset(reach, reach);
+
+      /// 剪影自由角弧（与生产同一组端点 / 同一段三次贝塞尔）在参数 [t] 处的点。
+      Offset arcAt(double t) {
+        final double u = 1 - t;
+        return Offset(0, reach) * (u * u * u) +
+            Offset(0, reach * kReaderArcK) * (3 * u * u * t) +
+            Offset(reach * kReaderArcK, 0) * (3 * u * t * t) +
+            Offset(reach, 0) * (t * t * t);
+      }
+
+      // 沿弧取三点，各自沿法向往里 / 往外挪 2dp：往里必须在折角上（贴住剪口），
+      // 往外必须不在（折角越出纸边会被 `ClipPath` 削掉半截 = 露出断掉的折痕）。
+      for (final double t in <double>[0.2, 0.5, 0.8]) {
+        final Offset onArc = arcAt(t);
+        final Offset normal = center - onArc;
+        final Offset unit = normal / normal.distance;
+        final Offset inward = onArc + unit * 2;
+        final Offset outward = onArc - unit * 2;
+        expect(paper.contains(inward), isTrue, reason: 't=$t 前提：$inward 应在纸上');
+        expect(fold.contains(inward), isTrue,
+            reason: 't=$t 折角没有贴到剪口（$inward 不在折角上）——'
+                '纸背会读成浮在纸心的一块白斑');
+        expect(paper.contains(outward), isFalse, reason: 't=$t 前提：$outward 应在纸外');
+        expect(fold.contains(outward), isFalse,
+            reason: 't=$t 折角越出了纸边（$outward 仍被画到）——会被削掉半截折痕');
+      }
+    });
+
+    test('折角纸背：尖端指向纸心（不是一条贴边的带子），平直时为空', () {
+      const Size size = Size(393, 852);
+      const double curl = 63;
+      final double reach =
+          readerOpenCurlReach(size, radius: 70, curl: curl);
+      final Path fold = readerOpenFoldPath(size, radius: 70, curl: curl);
+      final double tip = reach * kReaderFoldTipRatio;
+
+      // 沿对角线：剪口弧在 0.414·reach 处，折角必须一直报到尖端附近（0.9·tip）。
+      final Offset nearTip = Offset(tip * 0.9, tip * 0.9);
+      expect(fold.contains(nearTip), isTrue,
+          reason: '折角没有伸进纸心（只是一条贴边的带子）——读不出「翻折过来的一层纸」');
+      // 越过尖端就不再是纸背。
+      expect(fold.contains(Offset(tip * 1.35, tip * 1.35)), isFalse,
+          reason: '折角伸得太远（越过尖端还在画）——会盖住正文');
+
+      // 平直：起手与落位都必须一丝不画。
+      expect(readerOpenFoldPath(size, radius: 70, curl: 0).getBounds().isEmpty,
+          isTrue, reason: '平直的纸没有折角');
+      expect(readerOpenFoldPath(size, radius: 70, curl: 0.4).getBounds().isEmpty,
+          isTrue, reason: '亚像素卷曲也不许画（落位帧会留一条白丝）');
+      expect(
+          readerOpenFoldCrease(size, radius: 70, curl: 0).getBounds().isEmpty,
+          isTrue);
     });
   });
 
