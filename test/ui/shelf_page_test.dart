@@ -22,6 +22,7 @@ import 'package:mreader/ui/book_card.dart';
 import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
 import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
+import 'package:mreader/ui/scroll_sigma.dart';
 import 'package:mreader/ui/shelf_page.dart';
 
 import '../test_config.dart';
@@ -367,6 +368,67 @@ void main() {
         moreOrLessEquals(96.1, epsilon: 0.01),
         reason: '羽化收尾落在盒底（旧口径是栏底硬切）',
       );
+    });
+
+    testWidgets('头部磨砂：运动降 σ 并合并成 3 段，慢速收尾回满档阶梯', (
+      WidgetTester tester,
+    ) async {
+      tester.view.physicalSize = const Size(390, 700);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      // 12 本（3 列 4 行）才有滚动余量。
+      for (int i = 0; i < 12; i++) {
+        await tester.runAsync(
+          () => repo.importFile(bytes: _txtBytes('书$i'), fileName: 's$i.txt'),
+        );
+      }
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      List<MiTopBarBlurBand> bandsAt(double scale) => MiTopBar.headerBlurBands(
+            MiTopBarPalette.light,
+            extent: 96.1,
+            underSurface: false,
+            sigmaScale: scale,
+          );
+      final Finder blurLayer = find.byKey(
+        const ValueKey<String>('shelf-header-blur'),
+      );
+      int blurCount() => tester
+          .widgetList(
+            find.descendant(
+              of: blurLayer,
+              matching: find.byType(BackdropFilter),
+            ),
+          )
+          .length;
+
+      final int restCount = blurCount();
+      expect(restCount, bandsAt(1.0).length, reason: '静止按满档阶梯铺');
+
+      final ScrollController controller =
+          tester.widget<GridView>(find.byType(GridView)).controller!;
+      expect(controller.position.maxScrollExtent, greaterThan(260));
+
+      // 高速：相邻帧 40px / 16ms = 2500dp/s（远超 vRef 1200）→ σ 饱和到 minScale。
+      for (int i = 0; i < 6; i++) {
+        controller.jumpTo(controller.offset + 40);
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(
+        blurCount(),
+        bandsAt(ScrollSigma.minScale).length,
+        reason: '运动中按 0.6 档合并段数',
+      );
+      expect(blurCount(), lessThan(restCount));
+
+      // 慢速收尾（每帧 1px ≈ 62dp/s）→ 量化回满档，段数恢复。
+      for (int i = 0; i < 12; i++) {
+        controller.jumpTo(controller.offset + 1);
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(blurCount(), restCount, reason: '停下后恢复满档阶梯');
     });
 
     testWidgets('头部亮边：静止不亮，网格滚动后搜索胶囊与胶囊行随位移渐亮', (
@@ -948,6 +1010,13 @@ void main() {
 
       expect(find.byType(MiPillTabBar), findsOneWidget);
       expect(find.byType(BookCard), findsOneWidget);
+      // 常规态：分组胶囊行**完整可见**（`fade` 是 alpha 系数；误传搜索态
+      // 可见度会让它在常规态 alpha 归零 = 整行消失）。
+      expect(
+        tester.widget<MiPillTabBar>(find.byType(MiPillTabBar)).fade,
+        1.0,
+        reason: '常规态分组胶囊行必须完全可见',
+      );
       final double restWidth =
           tester.getSize(find.byType(MiSearchBar)).width;
 
@@ -981,8 +1050,14 @@ void main() {
       // ③ 内容让位：书架网格退出，换成搜索引导
       expect(find.byType(BookCard), findsNothing);
       expect(find.text('输入关键字开始搜索'), findsOneWidget);
+      // ④ 分组胶囊行淡出（alpha 系数归零），让位给搜索输入
+      expect(
+        tester.widget<MiPillTabBar>(find.byType(MiPillTabBar)).fade,
+        0.0,
+        reason: '搜索态分组胶囊行应完全淡出',
+      );
 
-      // ④ 壳层收到「进入搜索态」（浮动底栏据此卸掉）
+      // ⑤ 壳层收到「进入搜索态」（浮动底栏据此卸掉）
       expect(searchNotices, <bool>[true]);
     });
 

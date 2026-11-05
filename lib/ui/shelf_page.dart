@@ -83,6 +83,7 @@ import 'mi_like_ui/mi_like_ui.dart'
         MiTopBarBlurBand,
         MiTopBarMetrics,
         MiTopBarPalette;
+import 'scroll_sigma.dart';
 import 'shelf_grid.dart';
 
 /// 「添加图书」文件选择器的参数（唯一事实源；`home_shell_test` 直接钉两种平台）。
@@ -206,6 +207,10 @@ class ShelfPageState extends State<ShelfPage>
   /// 只重建头部两层零件。
   final ValueNotifier<double> _headerRim = ValueNotifier<double>(0);
 
+  /// 头部磨砂的 σ 缩放（滚动速度 → 0.6…1.0，见 [ScrollSigma]）：运动时降档、
+  /// 停稳回满档，避免每帧按满档 9 段铺全宽高斯。
+  final ScrollSigma _headerSigma = ScrollSigma();
+
   /// 详情页路由在栈上（push 已发起、尚未 pop）：吞掉过渡期 / 会话期的重复点卡，
   /// 防「双击卡片 → 叠两个详情页」。pop 后由 [_openDetail] 的 `finally` 释放。
   bool _detailPushing = false;
@@ -301,8 +306,9 @@ class ShelfPageState extends State<ShelfPage>
   ///  * `t` = **几何位移**进度（缓动后）：进入走 [MiTopBarMetrics.searchMotion]
   ///    （前 5% 静止 + easeOutQuint），退出走 [MiTopBarMetrics.searchExitMotion]
   ///    作用于「退出已过时间」并取补 —— 两向都是快起慢停；
-  ///  * `visible` = **搜索态可见度**（淡出类用）：进入收进前 70%
+  ///  * `visible` = **搜索态**可见度：进入收进前 70%
   ///    （[MiTopBarMetrics.searchFadeInterval]），退出随 `t` 一起走。
+  ///    搜索态零件（取消钮）直接用它，常规内容（分组胶囊行）取 `1 - visible`。
   ({double t, double visible}) _searchProgress() {
     final double p = _searchAnim.value.clamp(0.0, 1.0);
     if (_exitingSearch) {
@@ -326,6 +332,7 @@ class ShelfPageState extends State<ShelfPage>
     widget.shelfPrefs.addListener(_onStoreChanged);
     widget.shelfLayout.addListener(_onStoreChanged);
     _gridScrollController.addListener(_syncHeaderRim);
+    _headerSigma.attach(_gridScrollController);
     _searchAnim = AnimationController(
       vsync: this,
       duration:
@@ -341,6 +348,7 @@ class ShelfPageState extends State<ShelfPage>
     widget.shelfPrefs.removeListener(_onStoreChanged);
     widget.shelfLayout.removeListener(_onStoreChanged);
     _gridScrollController.removeListener(_syncHeaderRim);
+    _headerSigma.dispose();
     _gridScrollController.dispose();
     _headerRim.dispose();
     // 页被换掉（切 tab）时若还在搜索态，要让壳层把底栏装回来。
@@ -711,11 +719,11 @@ class ShelfPageState extends State<ShelfPage>
     final Future<BookSource> sourceFuture = _prepareSource(record, trace);
     sourceFuture.ignore();
     // 开书转场：用 [ReaderOpenRoute] 替掉裸 [MaterialPageRoute]——阅读页作为
-    // **一整张纸从右侧滑入**铺满，书架静止在后被压暗（320ms / easeOutCubic /
-    // 70dp 圆角）。延迟路径下骨架屏首帧即放行（见 `ReaderPage._open`），
-    // 用户点下即见纸张推进，而非在书架上等待。
+    // **一整张纸从右下角斜向掀开**铺满（铰链钉在屏幕右下角、380ms、两端收力的
+    // 曲线、70dp 圆角），书架静止在后被压暗。延迟路径下骨架屏首帧即放行
+    // （见 `ReaderPage._open`），用户点下即见纸张掀开，而非在书架上等待。
     final ReaderOpenRoute route = ReaderOpenRoute(
-      // 退场起步即释放守卫：纸张滑出的 240ms 里书架已可点，守卫晚放到
+      // 退场起步即释放守卫：纸张收回右下角的 260ms 里书架已可点，守卫晚放到
       // `popped`（反向动画落定）会吞掉关书后的首击。
       onPopStarted: () => _opening = false,
       builder: (_) => ReaderPage(
@@ -965,9 +973,9 @@ class ShelfPageState extends State<ShelfPage>
   /// （水波纹与文字样式要求最近处有 Material）；搜索胶囊是玻璃控件（[GlassButton]）、
   /// 分组标签行是 [AdaptivePillTabBar] 纯色胶囊，都不需要 Material
   /// （`MaterialType.transparency` 不绘制底色，不破坏玻璃观感）。
-  /// [t] = 几何位移进度（缓动后），[visible] = 搜索态可见度（淡出类用）——
-  /// 两条都由 [_searchProgress] 按方向算好传入（进入走 `searchMotion` /
-  /// `searchFadeInterval`，退出走 `searchExitMotion`）。
+  /// [t] = 几何位移进度（缓动后），[visible] = **搜索态**可见度（淡出类用；
+  /// 常规内容取 `1 - visible`）—— 两条都由 [_searchProgress] 按方向算好传入
+  /// （进入走 `searchMotion` / `searchFadeInterval`，退出走 `searchExitMotion`）。
   Widget _buildHeader({required double t, required double visible}) {
     final MiThemeMode mode = navThemeModeOf(context);
     // 取消钮让位宽度：间隙 10.0 + 直径 44.1（上游 `MiSearchCancelMetrics`）。
@@ -1054,7 +1062,13 @@ class ShelfPageState extends State<ShelfPage>
                     child: ValueListenableBuilder<double>(
                       valueListenable: _headerRim,
                       builder: (BuildContext context, double rim, _) =>
-                          _buildGroupFilterBar(rimProgress: rim, fade: visible),
+                          // ⚠️ `visible` 是**搜索态**可见度：常规内容（胶囊行）要取
+                          // `1 - visible`——直接用它会让胶囊行在常规态 alpha 归零
+                          // （整条分组胶囊行消失）。
+                          _buildGroupFilterBar(
+                            rimProgress: rim,
+                            fade: 1 - visible,
+                          ),
                     ),
                   ),
                 ),
@@ -1290,12 +1304,23 @@ class ShelfPageState extends State<ShelfPage>
         ),
         // 头部区磨砂（`UI-02` ②）。叠在列表**之后**（同 Stack）才采样得到滚动
         // 内容；`IgnorePointer` 不吃手势，不影响点卡 / 长按。
+        //
+        // 只包模糊层：σ 换档时重建它是必要的，但不应连带网格与头部零件。
         Positioned(
           top: 0,
           left: 0,
           right: 0,
           height: topInset + headerHeight,
-          child: _buildHeaderBlur(topInset, headerHeight, navThemeModeOf(context)),
+          child: ValueListenableBuilder<double>(
+            valueListenable: _headerSigma,
+            builder: (BuildContext context, double sigmaScale, _) =>
+                _buildHeaderBlur(
+              topInset,
+              headerHeight,
+              navThemeModeOf(context),
+              sigmaScale: sigmaScale,
+            ),
+          ),
         ),
       ],
     );
@@ -1308,23 +1333,28 @@ class ShelfPageState extends State<ShelfPage>
   /// 逐深度 erf 拟合给出 7.6…9.0 / 3.2…4.4 / ≈0.4dp）。
   ///
   /// 分段定 σ 阶梯由 `MiTopBar.headerBlurBands` 给出（σ 已量化 0.05 档护
-  /// [MiFilterCache]；本页头部自身静止，按满档铺 9 段）。
+  /// [MiFilterCache]）。
   ///
   /// ⚠️ 头部 widget 静止**不等于**磨砂静止：backdrop 是下面滚动的网格，每帧
-  /// 都要重算这 9 段全宽 `BackdropFilter`。滤镜实例必须走 [MiFilterCache]
-  /// （同上游 `MiTopBar._uniformBands` / `MiGradientBlur`），否则每次重建
-  /// 都会新建 native filter 对象。
+  /// 都要重算这 9 段全宽 `BackdropFilter`。两处护栏缺一不可：
+  ///  * 滤镜实例走 [MiFilterCache]（同上游 `MiTopBar._uniformBands` /
+  ///    `MiGradientBlur`），否则每次重建都会新建 native filter 对象；
+  ///  * [sigmaScale] 由滚动速度下发（[ScrollSigma]）：运动中 σ 压到 0.6、
+  ///    `headerBlurBands` 随之合并成 3 段，停稳回满档 9 段 —— 上游首页能跑满
+  ///    高刷靠的就是这条，满档常驻会把每帧全宽高斯放大到 3~5 倍。
   Widget _buildHeaderBlur(
     double topInset,
     double headerHeight,
-    MiThemeMode mode,
-  ) {
+    MiThemeMode mode, {
+    double sigmaScale = 1.0,
+  }) {
     final double extent = topInset + headerHeight;
     final List<MiTopBarBlurBand> bands = MiTopBar.headerBlurBands(
       MiTopBarPalette.of(mode),
       extent: extent,
       // 头部压在滚动内容上、无叠色实心段可省 → 全段铺出，盒底羽化归零。
       underSurface: false,
+      sigmaScale: sigmaScale,
     );
     return ClipRect(
       // 定位键：契约测试按它数分段高斯层数（`shelf_page_test`）。
