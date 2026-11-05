@@ -142,7 +142,7 @@ const int kAutoFillPauseFrames = 20;
 ///
 /// 窗口由路由动画的 completed / dismissed 落定；万一落定信号漏到（后续代码
 /// 引入新的挂起路径），超时强制收口——代价只是少冻结一秒预热，远小于
-/// 「排版永久停摆」。滑入本身 320ms，2s ≈ 6× 余量。
+/// 「排版永久停摆」。掀页本身 380ms，2s ≈ 5× 余量。
 const Duration kReaderOpenSlideSettleTimeout = Duration(seconds: 2);
 
 /// 换参 reprime 的首屏突发预算（字号 / 行距 / 页边距 / 视口变更后的重分页）。
@@ -898,8 +898,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 正文尚未 paint；探针量到的那一帧才是「看到书」，两者之差即渲染段）。
       widget.openTrace?.mark('ready', 'paged=$paged chapters=${chapters.length}');
       widget.openTrace?.attachFirstFrameProbe();
-      // 放行纸张滑入。**必须等下一帧真正上屏**（此刻正文还没 paint，提前放行
-      // 纸张会带空白滑入 = 「打开书闪一下」）；分页模式再加门闸（`requireLanded`）：
+      // 放行纸张掀开。**必须等下一帧真正上屏**（此刻正文还没 paint，提前放行
+      // 纸张会带空白掀开 = 「打开书闪一下」）；分页模式再加门闸（`requireLanded`）：
       // 精确落位收敛才放行。无门闸（深链 / 测试直进）时是 no-op。
       _signalOpenReady(requireLanded: paged);
       // 元数据后到（不阻塞首帧；见 [_loadMetaAfterReady]）。
