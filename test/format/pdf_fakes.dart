@@ -27,6 +27,7 @@ class FakePdfEngine implements PdfEngine {
     this.texts = const <int, String>{},
     this.pageWidth = 612, // 美制 Letter 的 72dpi 尺寸
     this.pageHeight = 792,
+    this.renderDelay = Duration.zero,
   });
 
   final int pageCount;
@@ -45,12 +46,19 @@ class FakePdfEngine implements PdfEngine {
   final double pageWidth;
   final double pageHeight;
 
+  /// 每次渲染的模拟耗时（削峰用例靠它拉出在途重叠窗口）。
+  final Duration renderDelay;
+
   /// 观察点。
   int openCount = 0;
   int lastOpenedByteLength = -1;
   int disposeCount = 0;
   final List<int> renderedPages = <int>[];
   final List<int> renderedWidths = <int>[];
+
+  /// 并发观察点（[PdfSource] 渲染闸门用）。
+  int activeRenders = 0;
+  int maxConcurrentRenders = 0;
 
   @override
   bool get isAvailable => available;
@@ -77,17 +85,28 @@ class FakePdfDocument implements PdfEngineDocument {
 
   @override
   Future<Uint8List?> renderPagePng(int pageIndex, {required int widthPx}) async {
-    engine.renderedPages.add(pageIndex);
-    engine.renderedWidths.add(widthPx);
-    if (pageIndex < 0 || pageIndex >= engine.pageCount) return null;
-    if (engine.renderFailedPages.contains(pageIndex)) return null;
-    // 用**真实编码器**产出合法 PNG（2×1 纯色）：封面嗅探 / 解码链路验的是真字节，
-    // 不是「号称是 PNG」的假头（`kTinyPng` 教训：夹具必须真有效）。
-    return encodeBgraToPng(
-      solidBgra(width: 2, height: 1, seed: pageIndex),
-      width: 2,
-      height: 1,
-    );
+    engine.activeRenders++;
+    if (engine.activeRenders > engine.maxConcurrentRenders) {
+      engine.maxConcurrentRenders = engine.activeRenders;
+    }
+    try {
+      if (engine.renderDelay != Duration.zero) {
+        await Future<void>.delayed(engine.renderDelay);
+      }
+      engine.renderedPages.add(pageIndex);
+      engine.renderedWidths.add(widthPx);
+      if (pageIndex < 0 || pageIndex >= engine.pageCount) return null;
+      if (engine.renderFailedPages.contains(pageIndex)) return null;
+      // 用**真实编码器**产出合法 PNG（2×1 纯色）：封面嗅探 / 解码链路验的是真字节，
+      // 不是「号称是 PNG」的假头（`kTinyPng` 教训：夹具必须真有效）。
+      return encodeBgraToPng(
+        solidBgra(width: 2, height: 1, seed: pageIndex),
+        width: 2,
+        height: 1,
+      );
+    } finally {
+      engine.activeRenders--;
+    }
   }
 
   @override

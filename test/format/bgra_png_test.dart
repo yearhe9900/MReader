@@ -156,4 +156,20 @@ void main() {
       );
     });
   });
+
+  group('encodeBgraToPngInBackground（开书动画期不占主 isolate）', () {
+    test('输出与同步版（同 zlib level）逐字节一致，PNG 结构仍有效', () async {
+      final Uint8List bgra = solidBgra(width: 2, height: 2, seed: 7);
+      final Uint8List expected =
+          encodeBgraToPng(bgra, width: 2, height: 2, zlibLevel: 1);
+      final Uint8List actual = await encodeBgraToPngInBackground(
+        bgra,
+        width: 2,
+        height: 2,
+        zlibLevel: 1,
+      );
+      expect(actual, expected);
+      expect(_parsePng(actual).colorType, 6);
+    });
+  });
 }

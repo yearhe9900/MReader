@@ -127,6 +127,22 @@ void main() {
       expect(await source.readResource('p0'), isNull);
       expect(engine.renderedPages, isEmpty, reason: '已释放不应再触发渲染');
     });
+
+    test('10 页并发读 → 在途渲染不超过 kPdfMaxConcurrentRenders（开书削峰）',
+        () async {
+      final FakePdfEngine engine = FakePdfEngine(
+        pageCount: 10,
+        renderDelay: const Duration(milliseconds: 10),
+      );
+      final PdfSource source = _source(engine);
+      await source.chapters();
+      await Future.wait(<Future<Uint8List?>>[
+        for (int i = 0; i < 10; i++) source.readResource('p$i'),
+      ]);
+      expect(engine.renderedPages.length, 10);
+      expect(engine.maxConcurrentRenders, kPdfMaxConcurrentRenders);
+      await source.dispose();
+    });
   });
 
   group('PdfSource · 封面（META-10 ①②）', () {

@@ -27,6 +27,7 @@
 // 本类**不缓存任何页字节**：每次 `readResource` 现渲染（位图在适配器内当场释放），
 // 结果交阅读页已有的 `ImageCacheLRU`（50MB 上界）兜解码缓存；文档句柄
 // （[PdfEngineDocument]）随本实例生命周期，[dispose] 时释放。
+import 'dart:async';
 import 'dart:typed_data';
 
 import '../meta/meta_source.dart';
@@ -50,6 +51,10 @@ const int kPdfCoverRenderWidthPx = 512;
 /// （那是 `FMT-02` 对 CBZ 原始字节的要求）。要无损放大须改「按倍率重渲染 + 分块」
 /// 架构，不在本批范围。
 const int kPdfPageRenderWidthPx = 1600;
+
+/// 同时在途的页渲染上限（开书削峰）：一章 10 页急构建时别让 10 张 1600px
+/// 位图的编码 / 解码一起涌进转场动画窗口。
+const int kPdfMaxConcurrentRenders = 2;
 
 /// 页资源键前缀（`p` + 0 基页索引），既是 `imagePages` 元素，也是 `readResource` 入参。
 const String kPdfPageKeyPrefix = 'p';
@@ -86,6 +91,10 @@ class PdfSource implements BookSource {
 
   int _pageCount = 0;
   List<Chapter>? _chapters;
+
+  /// 渲染削峰闸门（[kPdfMaxConcurrentRenders]）：在途计数 + 等待队列。
+  int _activeRenders = 0;
+  final List<Completer<void>> _renderWaiters = <Completer<void>>[];
 
   /// 已释放 / 竞态时 `load()` 的最小返回（满足 `META-01` 兜底不变式）。
   static const BookMeta _disposedMeta = BookMeta(
@@ -266,6 +275,11 @@ class PdfSource implements BookSource {
     _preparing = null;
     _chapters = null;
     _pageCount = 0;
+    // 放行等槽位的读请求：它们恢复后会因 _disposed 优雅返回 null，不悬挂。
+    for (final Completer<void> waiter in _renderWaiters) {
+      if (!waiter.isCompleted) waiter.complete();
+    }
+    _renderWaiters.clear();
     final PdfEngineDocument? document = _document;
     _document = null;
     if (document != null) {
@@ -381,10 +395,37 @@ class PdfSource implements BookSource {
   Future<Uint8List?> _renderPage(int pageIndex, int widthPx) async {
     final PdfEngineDocument? document = _document;
     if (_disposed || document == null) return null;
+    if (!await _acquireRenderSlot()) return null;
     try {
+      if (_disposed) return null; // 等槽位期间可能已被 dispose
       return await document.renderPagePng(pageIndex, widthPx: widthPx);
     } catch (_) {
       return null; // 防引擎实现漏收敛异常：坏页不给上层抛
+    } finally {
+      _releaseRenderSlot();
+    }
+  }
+
+  /// 取一个渲染槽位；满员则排队。返回 `false` = 等待期间源已释放。
+  Future<bool> _acquireRenderSlot() async {
+    while (!_disposed) {
+      if (_activeRenders < kPdfMaxConcurrentRenders) {
+        _activeRenders++;
+        return true;
+      }
+      final Completer<void> waiter = Completer<void>();
+      _renderWaiters.add(waiter);
+      await waiter.future;
+    }
+    return false;
+  }
+
+  /// 归还槽位并唤醒一个等待者（唤醒者回 [kPdfMaxConcurrentRenders] 重新抢）。
+  void _releaseRenderSlot() {
+    _activeRenders--;
+    if (_renderWaiters.isNotEmpty) {
+      final Completer<void> next = _renderWaiters.removeAt(0);
+      if (!next.isCompleted) next.complete();
     }
   }
 }

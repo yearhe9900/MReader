@@ -101,8 +101,11 @@ class _PdfrxDocument implements PdfEngineDocument {
     }
     if (image == null) return null;
     try {
-      return encodeBgraToPng(
-        image.pixels,
+      // ⚠️ `pixels` 是 native malloc 的视图，跨 isolate 前必须堆拷贝一次：
+      // `dispose()` 会 free，后台 isolate 直接读视图即 use-after-free。
+      final Uint8List snapshot = Uint8List.fromList(image.pixels);
+      return await encodeBgraToPngInBackground(
+        snapshot,
         width: image.width,
         height: image.height,
       );

@@ -17,6 +17,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../task/isolate_runner.dart';
+
 /// PNG 文件签名（8 字节，`\x89PNG\r\n\x1a\n`）。
 const List<int> kPngSignature = <int>[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
@@ -69,6 +71,46 @@ Uint8List encodeBgraToPng(
   _addChunk(png, 'IEND', const <int>[]);
   return png.takeBytes();
 }
+
+/// 后台编码请求（跨 isolate 纯数据）。
+typedef _PngEncodeRequest = ({
+  Uint8List bgra,
+  int width,
+  int height,
+  int zlibLevel,
+});
+
+/// isolate 任务入口：必须是顶层函数，不得捕获 this / 闭包变量。
+Uint8List _encodePngTask(_PngEncodeRequest request) => encodeBgraToPng(
+      request.bgra,
+      width: request.width,
+      height: request.height,
+      zlibLevel: request.zlibLevel,
+    );
+
+/// BGRA→PNG 的后台版：编码在独立 isolate 跑，主 isolate 只付一次字节拷贝。
+///
+/// ⚠️ 入参必须是**堆上**的 [Uint8List]：pdfrx 的 `image.pixels` 指向 native
+/// malloc，`image.dispose()` 后跨 isolate 读即 use-after-free，须先
+/// `Uint8List.fromList(...)` 快照。
+/// [zlibLevel] 取 1：整页位图的 deflate 是编码大头，level 6 多出的压缩率换不来
+/// 动画窗口里的等待（PNG 略大，仍走既有解码管线）。
+Future<Uint8List> encodeBgraToPngInBackground(
+  Uint8List bgra, {
+  required int width,
+  required int height,
+  int zlibLevel = 1,
+}) =>
+    const IsolateRunner().runWithFallback<_PngEncodeRequest, Uint8List>(
+      _encodePngTask,
+      (
+        bgra: bgra,
+        width: width,
+        height: height,
+        zlibLevel: zlibLevel,
+      ),
+      debugLabel: 'pdf-png',
+    );
 
 void _addChunk(BytesBuilder out, String type, List<int> data) {
   final List<int> typeBytes = ascii.encode(type);
