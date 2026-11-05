@@ -35,10 +35,26 @@ import 'sniffer.dart';
 
 /// 格式种类。
 ///
-/// [mobi] = MOBI/AZW3（PalmDB `BOOKMOBI` 家族，`FMT-06` ① 识别）。[pdf] = PDF
-/// （`FMT-01`）：`%PDF` 魔数 / `.pdf` 后缀识别，渲染内核经 `PdfEngine` 注入
-/// （`META-10` ③，见 `lib/platform/pdf_engine.dart`）。
+/// [mobi] = MOBI/AZW3（PalmDB `BOOKMOBI` 家族，`FMT-06` ① 识别；`.mobi` /
+/// `.azw3` 后缀另给兜底）。[pdf] = PDF（`FMT-01`）：`%PDF` 魔数 / `.pdf` 后缀
+/// 识别，渲染内核经 `PdfEngine` 注入（`META-10` ③，见 `lib/platform/pdf_engine.dart`）。
 enum FormatKind { epub, txt, cbz, cbr, mobi, pdf, unsupported }
+
+/// 导入文件选择器放行的后缀 = [sniffFormat] 能识别的全部后缀（**唯一事实源**）。
+///
+/// ⚠️ 增减格式支持必须两处同步：本表 + [sniffFormat] 的分发分支；契约测试
+/// `home_shell_test` 硬编码期望值，漏改会判红。
+/// ⚠️ Android 端 file_picker 会把扩展名经 `MimeTypeMap` 转 MIME，映射不到的
+/// 扩展名会被忽略 ⇒ 真机仍需验证 `.azw3` / `.cbz` 等是否可选。
+const List<String> kImportExtensions = <String>[
+  'epub',
+  'txt',
+  'pdf',
+  'cbz',
+  'cbr',
+  'mobi',
+  'azw3',
+];
 
 /// 装配 + 分发点。
 ///
@@ -197,11 +213,14 @@ Future<BookSource> openBook({
 /// 3. **CBZ / CBR**：扩展名 `.cbz` / `.cbr`（坏包由各自实现给可读提示；
 ///    `FMT-03`：CBR 由 `CbrSource` 明确提示暂不支持）；
 /// 3b. **PDF 后缀**：非 PDF 字节改名 `.pdf` → 交给 PDF 解析器给可读报错（同 `.epub` 口径）；
+/// 3c. **MOBI 系后缀**：`.mobi` / `.azw3` 但魔数不命中（加密 / 截断 / 非
+///    `BOOKMOBI` 变体）也交 MOBI 解析器给可读报错，不静默落 `unsupported`；
 /// 4. **TXT**：非 zip 且（扩展名 `.txt` 或字节可判为文本）；
 /// 5. 其余：`unsupported`。
 ///
 /// 边界声明：① MOBI 与 AZW3 不做家族内区分（同判据同 kind）；② 非 `BOOKMOBI` 的
-/// 其他 PalmDB 落 `unsupported`；③ cbz/cbr 的「纯文本内容」不做纠偏（坏包走可读报错）；
+/// 其他 PalmDB 仅凭 `.mobi`/`.azw3` 后缀才进 MOBI 解析器，其余仍落 `unsupported`；
+/// ③ cbz/cbr 的「纯文本内容」不做纠偏（坏包走可读报错）；
 /// ④ PDF 判据只看**偏移 0** 的 `%PDF`（不做「头 1024 字节内搜索」的宽松变体——
 /// 宁可落 `unsupported` 也不误开）。
 FormatKind sniffFormat({
@@ -222,6 +241,10 @@ FormatKind sniffFormat({
   // 3b. PDF 后缀（FMT-01）：非 PDF 字节改名 `.pdf` 也交 PDF 解析器给可读报错
   //     （口径同 `.epub`；`looksLikeZip` 之前，故 zip 改名 `.pdf` 也报「不是有效 PDF」）。
   if (ext == 'pdf') return FormatKind.pdf;
+  // 3c. MOBI 系后缀兜底（FMT-06 ①）：魔数不命中也交 MOBI 解析器给可读报错
+  //     （口径同 .epub / .pdf），不静默落 unsupported；放在 `looksLikeZip` 之前，
+  //     且魔数判定已在最前面 ⇒ 魔数纠偏仍然优先。
+  if (ext == 'mobi' || ext == 'azw3') return FormatKind.mobi;
   if (looksLikeZip(bytes)) return FormatKind.unsupported;
   if (ext == 'txt') return FormatKind.txt;
   if (looksLikeText(bytes)) return FormatKind.txt;

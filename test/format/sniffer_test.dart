@@ -5,6 +5,9 @@
 // type "BOOK" + creator "MOBI"）；AZW3 头 8 字节为可打印 ASCII（PDB name 字段），
 // 夹具照此复刻（可打印 name + NUL 填充 + BOOKMOBI tag），顺带覆盖「头可打印 ≠ 纯文本」
 // 陷阱（AZW3 改名 .txt 不得落 txt）。
+//
+// 另有一组**后缀兜底**用例：真样本魔数都命中，但加密 / 截断 / 非 BOOKMOBI 变体
+// 不命中；`.mobi` / `.azw3` 后缀仍要交 MOBI 解析器给可读报错，不静默 unsupported。
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -213,6 +216,77 @@ void main() {
       expect(
         sniffFormat(fileName: 'x.bin', bytes: Uint8List.fromList(<int>[0x00, 0x01])),
         FormatKind.unsupported,
+      );
+    });
+  });
+
+  group('sniffFormat · MOBI/AZW3 后缀兜底（魔数不命中也要诚实报错）', () {
+    /// 真样本形态但魔数被破坏（加密 / 截断 / 非 BOOKMOBI 变体）：PalmDB name
+    /// 仍可打印、头部含 NUL ⇒ `looksLikeText` / `looksLikeZip` 都不该接管。
+    Uint8List mobiWithoutMagic() {
+      final Uint8List bytes = _mobiFixture();
+      bytes[60] = 0x58; // 破坏 "BOOKMOBI" 首字节
+      return bytes;
+    }
+
+    test('.mobi / .azw3 + 非 BOOKMOBI 头 → mobi（不再静默 unsupported）', () {
+      expect(hasMobiMagic(mobiWithoutMagic()), isFalse, reason: '前提自检');
+      for (final String name in <String>['牧神记.mobi', '牧神记.azw3']) {
+        expect(
+          sniffFormat(fileName: name, bytes: mobiWithoutMagic()),
+          FormatKind.mobi,
+          reason: '$name 应交 MOBI 解析器给可读报错',
+        );
+      }
+    });
+
+    test('.azw3 + 纯文本 / PK 头 → 仍 mobi（兜底须在文本与 zip 判定之前）', () {
+      expect(
+        sniffFormat(fileName: '伪装.azw3', bytes: _text('纯文本。')),
+        FormatKind.mobi,
+        reason: '不得被 looksLikeText 吃掉',
+      );
+      expect(
+        sniffFormat(fileName: '伪装.azw3', bytes: _fakeZip()),
+        FormatKind.mobi,
+        reason: '不得被 looksLikeZip 提前判 unsupported',
+      );
+    });
+
+    test('后缀大小写 + Windows 路径分隔符照样兜底', () {
+      expect(
+        sniffFormat(
+          fileName: r'D:\书\牧神记.AZW3',
+          bytes: mobiWithoutMagic(),
+        ),
+        FormatKind.mobi,
+      );
+    });
+
+    test('回归：同样的非魔数字节换别的后缀仍 unsupported（兜底不泛化）', () {
+      expect(
+        sniffFormat(fileName: 'x.bin', bytes: mobiWithoutMagic()),
+        FormatKind.unsupported,
+      );
+      expect(
+        sniffFormat(fileName: 'noext', bytes: mobiWithoutMagic()),
+        FormatKind.unsupported,
+      );
+      expect(
+        sniffFormat(fileName: 'x.txt', bytes: mobiWithoutMagic()),
+        FormatKind.txt,
+        reason: '.txt 后缀的既有口径不变',
+      );
+    });
+
+    test('回归：魔数纠偏仍优先于后缀兜底（PDF 头 + .azw3 → pdf）', () {
+      final Uint8List pdf = Uint8List.fromList(<int>[
+        0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34, 0x0A,
+      ]);
+      expect(sniffFormat(fileName: '伪装.azw3', bytes: pdf), FormatKind.pdf);
+      expect(
+        sniffFormat(fileName: '伪装.mobi', bytes: _mobiFixture()),
+        FormatKind.mobi,
       );
     });
   });

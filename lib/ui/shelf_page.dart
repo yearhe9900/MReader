@@ -391,7 +391,9 @@ class ShelfPageState extends State<ShelfPage> {
 
     final FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const <String>['epub', 'txt'],
+      // ⚠️ 白名单取格式层唯一事实源（含 mobi / azw3 / pdf / cbz / cbr），别在
+      // 这里另写一份字面量：漏一种格式就表现为「添加图书时选不到、识别不到」。
+      allowedExtensions: kImportExtensions,
       withData: true,
       allowMultiple: true,
     );

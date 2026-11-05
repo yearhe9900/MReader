@@ -47,7 +47,8 @@ bool looksLikeText(Uint8List bytes) {
 /// 边界声明：
 /// ① 不做 MOBI 与 AZW3 的家族内区分（同判据同信号；DRM/加密另由
 ///    `encryptedMobi` 错误码在解析层处理）；
-/// ② 非 `BOOKMOBI` 的其他 PalmDB（PalmDOC 等）不命中，仍落 `unsupported`；
+/// ② 非 `BOOKMOBI` 的其他 PalmDB（PalmDOC 等）不命中；是否仍交 MOBI 解析器
+///    由 `sniffFormat` 的 `.mobi` / `.azw3` 后缀兜底决定（本函数只管魔数）；
 /// ③ 纯文本恰好在偏移 60..68 处含 ASCII `BOOKMOBI` 会误判——8 字节
 ///    精确定位碰撞概率可忽略，且 type+creator 是 PalmDB 的业界判据。
 bool hasMobiMagic(Uint8List bytes) {

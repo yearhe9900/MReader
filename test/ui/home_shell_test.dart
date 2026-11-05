@@ -2,7 +2,7 @@
 //
 // 书架「添加图书」入口在底栏**绿圆钮**（`MiGlassNavFab`，经 `GlobalKey<ShelfPageState>`
 // 转 `pickAndImport`）。本文件钉整条接线链：绿圆钮 onTap → pickAndImport →
-// `FilePicker.platform.pickFiles`（epub/txt 多选）。`FilePicker` 用假件替换（setter 允许
+// `FilePicker.platform.pickFiles`（格式层白名单，多选）。`FilePicker` 用假件替换（setter 允许
 // 注入，假件须 **extends** [FilePicker] 才能过 `PlatformInterface.verifyToken`），
 // 记录调用参数后返回 null（模拟取消）。
 import 'dart:io';
@@ -120,7 +120,8 @@ void main() {
           ),
         );
 
-    testWidgets('点绿圆钮 → pickFiles（epub/txt 多选）被调用一次', (tester) async {
+    testWidgets('点绿圆钮 → pickFiles（全部已支持格式，多选）被调用一次',
+        (tester) async {
       // ⚠️ 必须钉**窄视口**：默认测试窗 800 宽 > `kShellRailBreakpoint`(600)
       // 会走宽屏侧边导航轨，绿圆钮（底栏形态专属）不在树上。
       tester.view.physicalSize = const Size(393, 800);
@@ -137,7 +138,17 @@ void main() {
       await tester.pump(); // pickAndImport 的假件 await 在微任务里完成
 
       expect(picker.pickCalls, 1, reason: '绿圆钮 onTap 必须走到 FilePicker');
-      expect(picker.lastAllowedExtensions, <String>['epub', 'txt']);
+      // ⚠️ 期望值**故意硬编码字面量**（不引用 `kImportExtensions`）：引用同一
+      // 常量会变成同义反复，白名单漏掉 azw3 / mobi 时用例照样判绿。
+      expect(picker.lastAllowedExtensions, <String>[
+        'epub',
+        'txt',
+        'pdf',
+        'cbz',
+        'cbr',
+        'mobi',
+        'azw3',
+      ], reason: 'MOBI/AZW3 等已支持格式必须能在导入选择器里选中');
       expect(picker.lastAllowMultiple, isTrue);
 
       // 拆树排空（各页 initState 起的真 IO），避免 tearDown 删目录竞态。
