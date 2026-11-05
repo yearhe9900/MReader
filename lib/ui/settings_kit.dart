@@ -68,7 +68,7 @@ abstract final class SettingsKitMetrics {
   ///
   /// ⚠️ 这对色值依赖 **Mi 页底色**（亮 #F3F3F3 / 暗 #000000）才有对比——
   /// 用它们的页面底色须取 `MiColors.pageBackgroundFor`（`我的` 页即如此，
-  /// 与 `shelf_search_page` 同先例），不能用近白的 M3 surface。
+  /// 与书架页同先例），不能用近白的 M3 surface。
   static Color cardFor(Brightness brightness) => brightness == Brightness.light
       ? const Color(0xFFFFFFFF)
       : const Color(0xFF1E1E1E);

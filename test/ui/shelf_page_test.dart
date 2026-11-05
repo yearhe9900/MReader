@@ -23,7 +23,6 @@ import 'package:mreader/ui/book_detail_page.dart';
 import 'package:mreader/ui/glass_kit.dart';
 import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 import 'package:mreader/ui/shelf_page.dart';
-import 'package:mreader/ui/shelf_search_page.dart';
 
 import '../test_config.dart';
 
@@ -927,49 +926,67 @@ void main() {
       expect(_titles(tester).first, 'c', reason: '标题降序');
     });
 
-    testWidgets('点搜索栏 → 卡片式推入搜索页（头部三件套几何 + 返回圆钮出栈）',
+    testWidgets('点搜索栏 → 就地进入搜索态（不换页：输入框 + 取消钮让位 + 内容让位）',
         (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _txtBytes('甲'), fileName: 'alpha.txt'),
       );
-      await tester.pumpWidget(buildApp());
+      final List<bool> searchNotices = <bool>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ShelfPage(
+            repository: repo,
+            coverStore: coverStore,
+            progressStore: progressStore,
+            shelfPrefs: shelfPrefs,
+            shelfLayout: shelfLayout,
+            onSearchActiveChanged: searchNotices.add,
+          ),
+        ),
+      );
       await _settle(tester);
 
       expect(find.byType(MiPillTabBar), findsOneWidget);
       expect(find.byType(BookCard), findsOneWidget);
+      final double restWidth =
+          tester.getSize(find.byType(MiSearchBar)).width;
 
       await tester.tap(find.byKey(const Key('shelf-search-entry')));
-      // 搜索页输入框光标闪烁是永不停的定时器：**禁 pumpAndSettle**，按转场时长
-      // （`MiCardPageRouteMetrics.durationMs` = 220ms）固定推进。
+      // 进入 180ms（`MiTopBarMetrics.searchTransitionMs`）；输入框光标是永不停
+      // 的定时器 ⇒ **禁 pumpAndSettle**，按度量固定推进。
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 420));
+      await tester.pump(const Duration(milliseconds: 200));
 
-      // ① 推入独立搜索页：整屏、无 App 级导航（书架被不透明路由盖住 → offstage）
-      expect(find.byType(ShelfSearchPage), findsOneWidget);
-      expect(find.byType(MiPillTabBar), findsNothing);
-      expect(find.text('输入关键字开始搜索'), findsOneWidget);
+      // ① 不换页：仍是本页顶栏里那条搜索栏，只是变成真输入框
+      expect(find.byType(ShelfPage), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('shelf-search-entry')),
+          matching: find.byType(TextField),
+        ),
+        findsOneWidget,
+      );
+
+      // ② 取消钮出现，搜索栏右缘让位（间隙 10.0 + 直径 44.1）
+      expect(find.byType(MiSearchCancelButton), findsOneWidget);
+      expect(
+        restWidth - tester.getSize(find.byType(MiSearchBar)).width,
+        moreOrLessEquals(
+          MiSearchCancelMetrics.barGap + MiSearchCancelMetrics.diameter,
+          epsilon: 0.5,
+        ),
+        reason: '搜索态搜索栏右缘应为取消钮让位',
+      );
+
+      // ③ 内容让位：书架网格退出，换成搜索引导
       expect(find.byType(BookCard), findsNothing);
+      expect(find.text('输入关键字开始搜索'), findsOneWidget);
 
-      // ② 头部几何（上游度量）：圆钮 ⌀44.1；输入框与圆钮同中心；圆钮→输入框 11
-      final Rect back = tester
-          .getRect(find.byKey(const ValueKey<String>('shelf-search-back')));
-      final Rect field = tester
-          .getRect(find.byKey(const ValueKey<String>('shelf-search-field')));
-      expect(back.width, moreOrLessEquals(MiSearchBarMetrics.barHeight));
-      expect(back.height, moreOrLessEquals(MiSearchBarMetrics.barHeight));
-      expect(field.center.dy, moreOrLessEquals(back.center.dy, epsilon: 0.5));
-      expect(field.left - back.right, moreOrLessEquals(11.0, epsilon: 0.2));
-
-      // ③ 返回圆钮出栈，书架回来（头部仍是静态搜索胶囊）
-      await tester.tap(find.byKey(const ValueKey<String>('shelf-search-back')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 420));
-      expect(find.byType(ShelfSearchPage), findsNothing);
-      expect(find.byType(MiSearchBar), findsOneWidget);
-      expect(find.byType(MiPillTabBar), findsOneWidget);
+      // ④ 壳层收到「进入搜索态」（浮动底栏据此卸掉）
+      expect(searchNotices, <bool>[true]);
     });
 
-    testWidgets('搜索页输入即过滤（元数据命中）；无命中给提示；返回不残留',
+    testWidgets('搜索态输入即过滤（元数据命中）；无命中给提示；取消退出不残留',
         (WidgetTester tester) async {
       await tester.runAsync(() async {
         await repo.importFile(bytes: _txtBytes('甲'), fileName: 'alpha.txt');
@@ -981,30 +998,99 @@ void main() {
 
       await tester.tap(find.byKey(const Key('shelf-search-entry')));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 420));
+      await tester.pump(const Duration(milliseconds: 200));
 
-      Finder field() => find.descendant(
-            of: find.byKey(const ValueKey<String>('shelf-search-field')),
-            matching: find.byType(TextField),
-          );
+      final Finder field = find.descendant(
+        of: find.byKey(const Key('shelf-search-entry')),
+        matching: find.byType(TextField),
+      );
 
       // 输入即过滤：书名 / 作者 / 原始文件名任一命中
-      await tester.enterText(field(), 'alpha');
+      await tester.enterText(field, 'alpha');
       await tester.pump();
       expect(_titles(tester), <String>['alpha'], reason: '只留命中的那本');
 
       // 无命中 → 提示文案（不出网格）
-      await tester.enterText(field(), '不存在的书名');
+      await tester.enterText(field, '不存在的书名');
       await tester.pump();
       expect(find.byType(BookCard), findsNothing);
       expect(find.textContaining('没有匹配'), findsOneWidget);
 
-      // 返回：搜索页出栈，书架全量网格照旧
-      await tester.tap(find.byKey(const ValueKey<String>('shelf-search-back')));
+      // 取消钮退出：搜索栏回到静态态，书架全量回来
+      await tester.tap(find.byType(MiSearchCancelButton));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 420));
-      expect(find.byType(ShelfSearchPage), findsNothing);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.byType(MiSearchCancelButton), findsNothing);
+      expect(find.byType(TextField), findsNothing);
       expect(find.byType(BookCard), findsNWidgets(2));
+    });
+
+    testWidgets('搜索态点结果：先收键盘再开书（输入法不与开书转场叠加）',
+        (WidgetTester tester) async {
+      await tester.runAsync(
+        () => repo.importFile(
+          bytes: _utf8TxtBytes('这是正文内容。'),
+          fileName: 'alpha.txt',
+        ),
+      );
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      await tester.tap(find.byKey(const Key('shelf-search-entry')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      final Finder field = find.descendant(
+        of: find.byKey(const Key('shelf-search-entry')),
+        matching: find.byType(TextField),
+      );
+      await tester.enterText(field, 'alpha');
+      await tester.pump();
+      await tester.pump();
+      expect(
+        tester.widget<TextField>(field).focusNode?.hasPrimaryFocus ?? false,
+        isTrue,
+        reason: '前置条件：输入后输入框应处于聚焦态',
+      );
+
+      await tester.tap(_cardOf('alpha'));
+      await tester.pump();
+      expect(
+        tester.widget<TextField>(field).focusNode?.hasPrimaryFocus ?? false,
+        isFalse,
+        reason: '点结果应先收键盘，输入法收起不得与开书转场叠加',
+      );
+      await _settle(tester);
+    });
+
+    testWidgets('退出搜索态走独立曲线：1/4 时程即回退过半（不是反向播进入曲线）',
+        (WidgetTester tester) async {
+      await tester.runAsync(
+        () => repo.importFile(bytes: _txtBytes('甲'), fileName: 'alpha.txt'),
+      );
+      await tester.pumpWidget(buildApp());
+      await _settle(tester);
+
+      final double restWidth = tester.getSize(find.byType(MiSearchBar)).width;
+      const double cancelExtent =
+          MiSearchCancelMetrics.barGap + MiSearchCancelMetrics.diameter;
+
+      await tester.tap(find.byKey(const Key('shelf-search-entry')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        restWidth - tester.getSize(find.byType(MiSearchBar)).width,
+        moreOrLessEquals(cancelExtent, epsilon: 0.5),
+      );
+
+      await tester.tap(find.byType(MiSearchCancelButton));
+      await tester.pump();
+      await tester
+          .pump(Duration(milliseconds: MiTopBarMetrics.searchExitMs ~/ 4));
+      final double givenBack =
+          tester.getSize(find.byType(MiSearchBar)).width -
+              (restWidth - cancelExtent);
+      expect(givenBack / cancelExtent, greaterThan(0.5),
+          reason: '退出 1/4 时程应已回退过半；反向播 searchMotion 这里几乎没动');
     });
 
     testWidgets('没有任何分组时，chips 只有「全部」', (WidgetTester tester) async {

@@ -21,9 +21,10 @@ import 'package:mreader/settings/settings_store.dart';
 import 'package:mreader/settings/shelf_layout_store.dart';
 import 'package:mreader/settings/shelf_prefs_store.dart';
 import 'package:mreader/stats/stats_service.dart';
+import 'package:mreader/ui/glass_nav_host.dart';
 import 'package:mreader/ui/home_shell.dart';
 import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart'
-    show MiGlassNavMetrics, MiGlassNavBar;
+    show MiGlassNavMetrics, MiGlassNavBar, MiSearchCancelButton;
 import 'package:mreader/ui/shelf_page.dart' show importPickerOptions;
 
 import '../reader/reader_harness.dart';
@@ -157,6 +158,41 @@ void main() {
       expect(picker.lastAllowMultiple, isTrue);
 
       // 拆树排空（各页 initState 起的真 IO），避免 tearDown 删目录竞态。
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 60)),
+      );
+      await settle(tester, rounds: 10);
+    });
+
+    testWidgets('书架进入就地搜索态 → 浮动底栏与绿圆钮整组卸掉；退出装回',
+        (tester) async {
+      tester.view.physicalSize = const Size(393, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(buildShell());
+      await settle(tester, rounds: 30);
+
+      expect(find.byType(GlassNavHost), findsOneWidget);
+      expect(_fabGlyph(), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('shelf-search-entry')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(find.byType(GlassNavHost), findsNothing,
+          reason: '搜索态照参考素材是整屏无 App 级导航：底栏整组卸掉');
+      expect(_fabGlyph(), findsNothing);
+
+      await tester.tap(find.byType(MiSearchCancelButton));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(find.byType(GlassNavHost), findsOneWidget,
+          reason: '退出搜索态底栏装回');
+      expect(_fabGlyph(), findsOneWidget);
+
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 60)),

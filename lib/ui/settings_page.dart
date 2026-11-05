@@ -5,7 +5,7 @@
 // 逐项收在 `settings_kit.dart` 的 [SettingsKitMetrics]），卡片直接自上而下
 // 排列——**组标题已去掉**（上游无组标题；AI / 同步等子页仍保留各自的组标题
 // 与脚注，分组语义不丢）。页底取 Mi 页底色（`MiColors.pageBackgroundFor`，
-// 与 `shelf_search_page` 同先例；上游卡片色 #FFFFFF/#1E1E1E 依赖它才有对比）。
+// 与书架页同先例；上游卡片色 #FFFFFF/#1E1E1E 依赖它才有对比）。
 //
 // **无搜索栏**：上游「我的」页首行有静态 `MiSearchBar`（demo 占位），本项目
 // **不搬**——拍板④「不给能搜但搜不到的错误预期」仍有效（旧搜索占位已删），
@@ -170,7 +170,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     // 上游「我的」页同款：滚动内容铺底 + 顶栏钉顶。页底取 **Mi 页底色**（上游
-    // 卡片色 #FFFFFF/#1E1E1E 依赖它才有对比；与 `shelf_search_page` 同先例），
+    // 卡片色 #FFFFFF/#1E1E1E 依赖它才有对比；与书架页同先例），
     // 页面独立成树（测试 / push 子页）时也不露窗口底色。顶栏形态 = 大标题折叠：
     // 磨砂 + 叠色 + 大/紧凑标题两段式；内容区顶部渐进模糊由顶栏材质自带
     // （`showBlur` 内部复用 `MiGradientBlur`）。

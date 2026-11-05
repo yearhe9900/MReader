@@ -187,6 +187,12 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   /// 当前底栏下标。
   int _index = 0;
 
+  /// 书架是否处于**就地搜索态**（`ShelfPage.onSearchActiveChanged` 上报）。
+  ///
+  /// 搜索态照参考素材是整屏无 App 级导航的 ⇒ 底栏 / 侧栏 / 绿圆钮整组卸掉，
+  /// 退出搜索态再装回来（上游分类页同款）。
+  bool _shelfSearching = false;
+
   @override
   void initState() {
     super.initState();
@@ -252,6 +258,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       bookmarkStore: widget.bookmarkStore,
       readingPrefsStore: widget.readingPrefsStore,
       syncTrigger: widget.syncTrigger,
+      onSearchActiveChanged: (bool active) {
+        if (active == _shelfSearching) return;
+        setState(() => _shelfSearching = active);
+      },
     ),
     NotesPage(
       vocabStore: widget.vocabStore,
@@ -366,7 +376,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       child: Stack(
         children: <Widget>[
           Positioned(
-            left: sideNav ? MiGlassSideNavMetrics.gutterWidth : 0,
+            // 搜索态：整页让满宽（底栏 / 侧栏都卸掉，见 [_shelfSearching]）。
+            left: sideNav && !_shelfSearching
+                ? MiGlassSideNavMetrics.gutterWidth
+                : 0,
             top: 0,
             right: 0,
             bottom: 0,
@@ -374,7 +387,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             // 非当前页不绘制、不参与命中测试。
             child: IndexedStack(index: _index, children: pages),
           ),
-          if (sideNav)
+          if (sideNav && !_shelfSearching)
             // 侧栏贴顶对齐、距画面左缘与安全区各一档留白（与底部栏距屏底一档
             // 留白同一口径）；栏体自身收缩到内容高。一定要让开状态栏：铺满窗口
             // 后侧栏顶就在状态栏那一带。
@@ -401,8 +414,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                 ),
               ),
             )
-          else
+          else if (!_shelfSearching)
             // 窄屏（手机 / 窄窗）：内容 + 浮动胶囊底栏 + 绿色圆钮。
+            // 搜索态不画（见 [_shelfSearching]）。
             //
             // ⚠️ **必须是 `Stack + Positioned` 而非 `Scaffold.bottomNavigationBar`**：
             // 玻璃底栏的 [BackdropFilter] 需要采样**栏下方**的内容才能出磨砂效果；

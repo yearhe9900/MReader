@@ -96,8 +96,8 @@ const double kShelfCrossAxisSpacing = MiThemeCardMetrics.columnGap;
 /// 书架网格的**页面左右边距** = Mi 首页卡片图区的实测页边距 11.9
 /// （`MiThemeCardMetrics` 度量表：page edge inset 25~28px × 0.4461）。
 ///
-/// ⚠️ Mi 首页没有现成常量（度量表里只有文字），故本文件自建；与搜索页既有的
-/// `_headerInset`（`shelf_search_page.dart`，同为 11.9）天然对齐。
+/// ⚠️ Mi 首页没有现成常量（度量表里只有文字），故本文件自建；与顶栏搜索栏的
+/// 内边距（同为 11.9）天然对齐。
 const double kShelfPageInset = 11.9;
 
 /// 书架网格内边距。
