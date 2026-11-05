@@ -391,29 +391,28 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   /// 「更多」菜单内容（`value` 槽：`ShelfSortField` = 排序规则，其余见
   /// [_ShelfMoreAction]）。排序项带子菜单 ⇒ 点开第二级，首行返回上级。
+  /// **只做降序**（2026-11-05 拍板）：不给方向切换入口，方向一律保持降序。
   List<MiMenuGroup> _shelfMoreMenuGroups() {
     final ShelfPrefs prefs = widget.shelfPrefs.prefs;
-    final String direction = prefs.sortAscending ? '升序' : '降序';
     return <MiMenuGroup>[
       MiMenuGroup(<MiMenuItem>[
-        const MiMenuItem(
-          label: '添加图书',
-          value: _ShelfMoreAction.importBook,
-        ),
+        // 「排序」在上、「添加图书」在下（2026-11-05 拍板）。
         MiMenuItem(
           label: '排序',
-          // 二级页看不到一级项的副标题 ⇒ 当前规则与方向挂在触发器这行。
-          subtitle: '${shelfSortLabel(prefs.sortField)} · $direction',
+          // 二级页看不到一级项的副标题 ⇒ 当前生效的规则挂在触发器这行。
+          subtitle: shelfSortLabel(prefs.sortField),
           children: <MiMenuItem>[
             for (final ShelfSortField field in ShelfSortField.values)
               MiMenuItem(
                 label: shelfSortLabel(field),
-                // 方向只标在当前生效的规则上（其余项没有「正在用的方向」）。
-                subtitle: prefs.sortField == field ? direction : null,
                 selected: prefs.sortField == field,
                 value: field,
               ),
           ],
+        ),
+        const MiMenuItem(
+          label: '添加图书',
+          value: _ShelfMoreAction.importBook,
         ),
       ]),
     ];
@@ -422,12 +421,27 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   void _onShelfMoreSelected(MiMenuSelection selection) {
     final Object? value = selection.item.value;
     if (value is ShelfSortField) {
-      // 同一条规则再点 = 翻转升降序（`setSortField` 内部处理）。
-      unawaited(widget.shelfPrefs.setSortField(value));
+      unawaited(_setShelfSort(value));
       return;
     }
     if (value == _ShelfMoreAction.importBook) {
       _shelfKey.currentState?.pickAndImport();
+    }
+  }
+
+  /// 按 [field] 排序，**方向恒为降序**。
+  ///
+  /// `setSortField` 在「同字段再点」时会翻方向（列表界面的通行手感），这里
+  /// 刻意不走它：升序没有 UI 入口（拍板），只在残留旧数据时把方向拉回降序。
+  Future<void> _setShelfSort(ShelfSortField field) async {
+    final ShelfPrefs prefs = widget.shelfPrefs.prefs;
+    if (prefs.sortField != field) {
+      // 换规则时 `setSortField` 自带 `sortAscending = false`。
+      await widget.shelfPrefs.setSortField(field);
+      return;
+    }
+    if (prefs.sortAscending) {
+      await widget.shelfPrefs.setSortAscending(false);
     }
   }
 

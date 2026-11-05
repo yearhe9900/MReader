@@ -2,9 +2,9 @@
 //
 // 书架「添加图书」入口 = 底栏**绿圆钮**（`MiGlassNavFab`）的竖点「更多」→ `MiMenu`
 // 菜单「添加图书」（经 `GlobalKey<ShelfPageState>` 转 `pickAndImport`）；同菜单的
-// 「排序」走级联子菜单（规则 = `ShelfSortField`）。本文件钉整条接线链：
-// 圆钮 → 菜单项 → pickAndImport → `FilePicker.platform.pickFiles`（桌面走格式层
-// 白名单、移动端不过滤，多选），以及排序级联选中即落盘、同项再点翻转方向。
+// 「排序」走级联子菜单（规则 = `ShelfSortField`，排在「添加图书」上方、只做降序）。
+// 本文件钉整条接线链：圆钮 → 菜单项 → pickAndImport → `FilePicker.platform.pickFiles`
+// （桌面走格式层白名单、移动端不过滤，多选），以及排序级联选中即落盘且方向恒降序。
 // `FilePicker` 用假件替换（setter 允许注入，假件须 **extends** [FilePicker] 才能过
 // `PlatformInterface.verifyToken`），记录调用参数后返回 null（模拟取消）。
 import 'dart:io';
@@ -233,7 +233,7 @@ void main() {
       );
       await settle(tester, rounds: 10);
     });
-    testWidgets('「更多」→ 排序级联：子菜单列全部规则、选中即生效、同项再点翻转方向',
+    testWidgets('「更多」→ 排序级联：排序在「添加图书」上方、列全部规则、选中即降序',
         (tester) async {
       // 同上：窄视口才走底栏形态（宽屏圆钮挂在侧栏栏尾）。
       tester.view.physicalSize = const Size(393, 800);
@@ -245,13 +245,22 @@ void main() {
 
       await tester.tap(_moreGlyph());
       await settle(tester, rounds: 60);
-      // 一级行的副标题 = 当前规则 + 方向（进二级后一级副标题看不到）。
+      // 一级两行：**排序在上、添加图书在下**；副标题 = 当前规则（无方向档）。
       expect(find.text('排序'), findsOneWidget);
-      expect(find.text('导入时间 · 降序'), findsOneWidget,
-          reason: '默认规则 = 导入时间降序（ShelfPrefs 默认值）');
+      expect(find.text('添加图书'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('排序')).dy,
+        lessThan(tester.getTopLeft(find.text('添加图书')).dy),
+        reason: '排序行必须排在添加图书上方',
+      );
+      expect(find.text('导入时间'), findsOneWidget,
+          reason: '默认规则 = 导入时间（ShelfPrefs 默认值）');
+      expect(find.text('升序'), findsNothing,
+          reason: '方向没有 UI 入口，菜单里不该出现升序');
 
       await tester.tap(find.text('排序'));
-      await settle(tester, rounds: 40);
+      // 退出层（一级）约 300ms 才从树上移除，等 480ms 才算切干净。
+      await settle(tester, rounds: 60);
       // 级联子菜单 = 返回上级的同名行 + 全部规则。
       expect(find.text('排序'), findsOneWidget, reason: '首行是返回上级的同名行');
       for (final ShelfSortField field in ShelfSortField.values) {
@@ -259,23 +268,39 @@ void main() {
             reason: '规则「${shelfSortLabel(field)}」必须在子菜单里可点');
       }
 
-      await tester.tap(find.text('书名'));
-      await settle(tester, rounds: 40);
+      // `.last`：返回上级那行会照抄父项副标题（= 当前规则名），同名文本会
+      // 同时命中「副标题」与「规则行」，规则行在树里靠后。
+      await tester.tap(find.text('书名').last);
+      await settle(tester, rounds: 60);
       expect(prefs.prefs.sortField, ShelfSortField.title,
           reason: '选中规则必须写进偏好（书架顺序由它驱动）');
-      expect(prefs.prefs.sortAscending, isFalse, reason: '换规则默认降序');
+      expect(prefs.prefs.sortAscending, isFalse, reason: '只做降序');
 
       // 再开一次：菜单读的是**最新偏好**（壳层订阅 prefs，不是展开那刻的快照）。
       await tester.tap(_moreGlyph());
       await settle(tester, rounds: 60);
-      expect(find.text('书名 · 降序'), findsOneWidget,
-          reason: '副标题必须跟着偏好刷新，否则菜单永远显示旧规则');
+      expect(find.text('书名'), findsOneWidget,
+          reason: '一级行副标题必须跟着偏好刷新');
+      expect(find.text('书名 · 降序'), findsNothing, reason: '方向不进副标题');
       await tester.tap(find.text('排序'));
-      await settle(tester, rounds: 40);
-      await tester.tap(find.text('书名'));
-      await settle(tester, rounds: 40);
-      expect(prefs.prefs.sortAscending, isTrue,
-          reason: '同一规则再点 = 翻转升降序');
+      await settle(tester, rounds: 60);
+      await tester.tap(find.text('书名').last);
+      await settle(tester, rounds: 60);
+      expect(prefs.prefs.sortAscending, isFalse,
+          reason: '同一条规则再点也不翻方向（升序没有入口）');
+
+      // 残留的升序（旧偏好数据）在选中规则时被拉回降序。
+      await tester.runAsync(() => prefs.setSortAscending(true));
+      await settle(tester, rounds: 20);
+      expect(prefs.prefs.sortAscending, isTrue, reason: '前提：旧数据确实是升序');
+      await tester.tap(_moreGlyph());
+      await settle(tester, rounds: 60);
+      await tester.tap(find.text('排序'));
+      await settle(tester, rounds: 60);
+      await tester.tap(find.text('书名').last);
+      await settle(tester, rounds: 60);
+      expect(prefs.prefs.sortAscending, isFalse,
+          reason: '升序在选中规则时必须被拉回降序');
 
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(
