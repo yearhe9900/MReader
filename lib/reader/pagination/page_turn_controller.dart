@@ -1,14 +1,14 @@
 // 翻页控制器：模式集合 + 跟手拖拽 commit/cancel + 页图层几何 + 相邻页预排窗口
-// （纯 Dart，无 Flutter 依赖，可单测）。选型 §6 ①③：slide + cover 首批、none 随后；
-// `scroll` 归滚动容器、`curl` P2 不阻塞。
+// （纯 Dart，无 Flutter 依赖，可单测）。选型 §6 ①③：slide + cover + none；
+// `scroll` 归滚动容器；**仿真翻页（curl）不做**——卷页观感只放在开书转场（§2.116）。
 // 保证③：动画期只回放页图层——几何与判定都在这里算好，视图层只做 Transform
 // （见 `page_turn_layers.dart`）。commit/cancel 在 [PageTurnController.endDrag]
 // **一处判定**（0.3 距离阈值 / 800 甩动阈值），视图无权改判。
 
-/// 翻页模式（§6 ③：slide + cover 首批、none 随后）。
+/// 翻页模式（§6 ③：slide + cover + none）。
 ///
-/// `scroll`（页纵向拼接）由阅读页滚动容器承载、不进本控制器；`curl`（仿真翻页）
-/// P2 不阻塞，落地时在此追加枚举值并补几何分支。
+/// `scroll`（页纵向拼接）由阅读页滚动容器承载、不进本控制器。**不追加 `curl`
+/// （仿真翻页）**：§2.116 已定「阅读页不做翻页效果，卷页角只放在开书转场」。
 enum PageTurnMode {
   /// 左右滑动：两页并排平移。
   slide,
