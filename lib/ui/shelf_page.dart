@@ -29,7 +29,6 @@
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:ui' show ImageFilter;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -72,6 +71,7 @@ import 'mi_like_ui/mi_like_ui.dart'
         MiDialogActionStyle,
         MiDialogItem,
         MiDialogLayout,
+        MiFilterCache,
         MiPillItemWidth,
         MiPillTabBar,
         MiPillTabMetrics,
@@ -1099,7 +1099,12 @@ class ShelfPageState extends State<ShelfPage> {
   /// 逐深度 erf 拟合给出 7.6…9.0 / 3.2…4.4 / ≈0.4dp）。
   ///
   /// 分段定 σ 阶梯由 `MiTopBar.headerBlurBands` 给出（σ 已量化 0.05 档护
-  /// `MiFilterCache`；本页头部静止呈现，直接按满档铺）。
+  /// [MiFilterCache]；本页头部自身静止，按满档铺 9 段）。
+  ///
+  /// ⚠️ 头部 widget 静止**不等于**磨砂静止：backdrop 是下面滚动的网格，每帧
+  /// 都要重算这 9 段全宽 `BackdropFilter`。滤镜实例必须走 [MiFilterCache]
+  /// （同上游 `MiTopBar._uniformBands` / `MiGradientBlur`），否则每次重建
+  /// 都会新建 native filter 对象。
   Widget _buildHeaderBlur(
     double topInset,
     double headerHeight,
@@ -1126,10 +1131,7 @@ class ShelfPageState extends State<ShelfPage> {
               height: band.height,
               child: ClipRect(
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(
-                    sigmaX: band.sigma,
-                    sigmaY: band.sigma,
-                  ),
+                  filter: MiFilterCache.blur(band.sigma),
                   child: const SizedBox.expand(),
                 ),
               ),

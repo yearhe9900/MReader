@@ -349,6 +349,19 @@ void main() {
         matching: find.byType(BackdropFilter),
       );
       expect(blurLayers, findsNWidgets(bands.length));
+      // ⚠️ 滤镜必须复用 `MiFilterCache`（同上游 `MiTopBar._uniformBands` /
+      // `MiGradientBlur`）：直接在 build 里 `ImageFilter.blur(...)` 会每次新建
+      // native filter 对象。钉同一实例，换回裸构造即红。
+      final List<BackdropFilter> filters = tester
+          .widgetList<BackdropFilter>(blurLayers)
+          .toList();
+      for (int i = 0; i < bands.length; i++) {
+        expect(
+          filters[i].filter,
+          same(MiFilterCache.blur(bands[i].sigma)),
+          reason: '第 $i 段复用缓存的 native filter',
+        );
+      }
       expect(tester.getRect(blurLayers.first).top, 0);
       expect(
         tester.getRect(blurLayers.last).bottom,
