@@ -4,8 +4,9 @@
 // 封面区按 [kBookCoverAspectRatio]（书本比例 2:3，比 Mi 卡的锁屏比例 259:472
 // 更矮、更像一本书）随列宽等比定高、圆角 [MiDimens.radiusLg]（20）、封面与信息区
 // 间距 8、书名用 `MiTypography.cardTitle` 并左内缩 8.8（与 Mi 首页卡标题同列起排）——几何数值集中在 `shelf_geometry.dart`
-//（事实源）。**四项保留**（PRD US-06 / LIB-01，不随 Mi 换掉）：默认封面、
-// 真封面（缩略图）、封面右下角格式角标、底部书名·作者·进度。
+//（事实源）。**三项保留**（不随 Mi 换掉）：默认封面、真封面（缩略图）、
+// 底部书名·作者·进度。封面不展示格式角标（2026-11-05 移除），格式信息只在
+// 详情页与长按操作单出现。
 //
 // 以下机制与 anx 时代一致、本次不动：**不用卡片底板**——
 // 封面直接浮在书架渐变背景上，靠 `BoxShadow` 投出层次（投影**色源随主题**：
@@ -16,7 +17,7 @@
 // GridView 滚动/拖拽识别器在手势竞技场吞点（既有实证结论）；`Card` 本身做成
 // 无色、无 elevation、不裁剪、零外边距 ⇒ 观感无卡片、手势链路不变。
 //
-// 封面（真封面 / 占位）与角标一律画在**子树内**、且不透明——**不要**用 `Ink` /
+// 封面（真封面 / 占位）一律画在**子树内**、且不透明——**不要**用 `Ink` /
 // `Ink.image`（墨迹特性由上层 `Material` 先于子树绘制）：会 ① 逃逸封面外框的
 // `ClipRRect`（方角）② 被外框投影的**填充**盖住而染色变暗。见 §2.54。
 //
@@ -291,8 +292,7 @@ class _BookCardState extends State<BookCard> {
   ///    Squircle（不是卡片外框的方角，否则长按会看到一张方角灰板）。
   ///    纯画笔层无内容，Opacity 无 saveLayer 副作用。
   /// ③ [kBookCoverSurfaceKey] 的 `ClipPath(MiSquircleClipper)`——G2 连续圆角
-  ///    裁切（半径 [kBookCoverRadius]，含自带裁切的 `DefaultBookCover`）；
-  ///    角标与加载蒙层放在它**内**，随圆角一起裁。
+  ///    裁切（半径 [kBookCoverRadius]，含自带裁切的 `DefaultBookCover`）。
   Widget _buildCoverSurface(ThemeData theme) {
     final double radius = kBookCoverRadius;
     return Stack(
@@ -321,23 +321,13 @@ class _BookCardState extends State<BookCard> {
             ),
           ),
         ),
-        // ③ 内容裁形（角标与加载蒙层在 ClipPath 内，随之裁切不溢出）。
+        // ③ 内容裁形（封面内容在 ClipPath 内，随之裁切不溢出）。
         ClipPath(
           key: kBookCoverSurfaceKey,
           clipper: MiSquircleClipper(radius),
           child: Stack(
             fit: StackFit.expand,
-            children: <Widget>[
-              _buildCover(theme),
-              Positioned(
-                right: kBookFormatBadgeInset,
-                bottom: kBookFormatBadgeInset,
-                child: _FormatTag(format: widget.record.format),
-              ),
-              // 「打开准备中」的封面 loading 覆盖层已随「点击即开书」移除：
-              // 点卡后书立即以骨架屏进阅读页（`ReaderPage.sourceFuture`），
-              // 书架侧不再有准备期。
-            ],
+            children: <Widget>[_buildCover(theme)],
           ),
         ),
       ],
@@ -383,8 +373,8 @@ class _BookCardState extends State<BookCard> {
   );
 
   /// 信息区：书名（单行省略，Mi 卡口径）/ 作者 · 进度。高度固定 [kBookInfoHeight]（= 30），
-  /// 于是书名长短不同的卡片都等高、网格行距不跳；格式标签已挪到封面上（见
-  /// [BookCard] 头注的保留项清单）。几何数值取自 `shelf_geometry.dart`（事实源）。
+  /// 于是书名长短不同的卡片都等高、网格行距不跳；卡片上不展示格式文字。
+  /// 几何数值取自 `shelf_geometry.dart`（事实源）。
   ///
   /// ⚠️ 两行文字的 `height` **显式钉死**（1.0 / 1.18），否则 [kBookInfoHeight] 的
   /// 推导（13.85 + 2 + 13 ≤ 30）会随主题字体的默认行距漂移，信息区溢出或留白。
@@ -440,33 +430,6 @@ class _BookCardState extends State<BookCard> {
               ],
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 格式标签（EPUB / TXT）——现作**封面右下角角标**。PRD `US-06` / `LIB-01` 要求
-/// 书架展示格式；拍板「挪到封面上做角标」，从而信息区只留书名与作者·进度、
-/// 对齐到固定 [kBookInfoHeight]。
-class _FormatTag extends StatelessWidget {
-  const _FormatTag({required this.format});
-  final String format;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        format.toUpperCase(),
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: theme.colorScheme.onSecondaryContainer,
-          fontWeight: FontWeight.w600,
         ),
       ),
     );

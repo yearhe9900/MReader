@@ -196,8 +196,6 @@ void main() {
       expect(kBookInfoIndent, 8.8);
       // 本项目自有值（Mi 与 anx 该处均无此物，见事实源注释）。
       expect(kBookTitleToAuthorGap, 2);
-      // 角标内缩 8（= `MiDimens.spaceSm`；圆角放大到 20 后，旧值 6 会被角弧擦到）。
-      expect(kBookFormatBadgeInset, 8);
     });
   });
 
@@ -269,40 +267,30 @@ void main() {
       );
     });
 
-    testWidgets('格式标签角标贴在封面右下角（PRD US-06/LIB-01 的呈现位置）', (
+    testWidgets('书卡不再展示格式文字（2026-11-05 移除封面角标）', (
       WidgetTester tester,
     ) async {
       await _pumpGrid(tester, width: 392, bookCount: 1);
 
-      // 角标是封面 Stack 内的 Positioned，故它必须是 BookCard 的后代。
-      final Finder badge = find.descendant(
-        of: find.byType(BookCard),
-        matching: find.text('EPUB'),
-      );
-      expect(badge, findsOneWidget, reason: '格式标签须在书卡内可见');
-
-      // 位置：贴右下角（距右/下各 6），即不在卡片左半、也不在卡片上半。
-      final Rect badgeRect = tester.getRect(badge);
-      final Rect cellRect = tester.getRect(find.byType(BookCard).first);
+      final Finder card = find.byType(BookCard);
+      // 记录里的 format 仍在（详情页 / 长按操作单要用），只是书卡子树不渲染它。
+      expect(tester.widget<BookCard>(card).record.format, 'epub');
       expect(
-        badgeRect.center.dx,
-        greaterThan(cellRect.center.dx),
-        reason: '角标应在封面右半侧',
+        find.descendant(of: card, matching: find.text('EPUB')),
+        findsNothing,
+        reason: '书卡内不得再出现格式角标文字',
+      );
+      // 反向护栏：书名与作者仍在，防止「整卡不渲染」让上面的断言恒绿。
+      expect(
+        find.descendant(of: card, matching: find.text('书0')),
+        findsWidgets,
+        reason: '书名仍须可见',
       );
       expect(
-        badgeRect.center.dy,
-        greaterThan(cellRect.center.dy),
-        reason: '角标应在封面下半侧',
+        find.descendant(of: card, matching: find.text('作者0')),
+        findsWidgets,
+        reason: '作者仍须可见',
       );
-      // 距右缘 14 = `Positioned(right: 8)` 的角标内缩（`kBookFormatBadgeInset`）+
-      // `_FormatTag` 自带的 `horizontal: 6` 内边距——本断言量的是角标**文案 Text**。
-      expect(
-        cellRect.right - badgeRect.right,
-        closeTo(14, 1),
-        reason: '文案右缘距卡片右缘 = 内缩 8 + 标签内边距 6',
-      );
-      expect(cellRect.bottom - badgeRect.bottom, greaterThan(6),
-          reason: '角标贴封面底，其下方还有信息区');
     });
 
     testWidgets('封面 Squircle 圆角 12.9、投影 = anx 四参数（**浅色主题**）', (

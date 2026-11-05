@@ -2,7 +2,7 @@
 //
 // 要点：
 //   · 空态 = 引导文案 + 导入按钮；有书 = 浮动头部（全宽玻璃搜索胶囊 + 分组 chips）
-//     + 网格 [BookCard]（封面缩略图 + 书名 + 作者 + 格式标签）；
+//     + 网格 [BookCard]（封面缩略图 + 书名 + 作者·进度）；
 //   · 内容 edge-to-edge（`extendBody: true`）从头部下穿过、透出磨砂模糊（`UI-02` ②）；
 //     首行保护 = 网格 `padding.top` 留出头部高（[shelfGridPadding]）；
 //   · 导入 = `FilePicker` 多选 → 逐个 `importFile`（进度 + 失败清单）；删除 = 长按书卡

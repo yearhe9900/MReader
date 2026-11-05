@@ -6,7 +6,7 @@
 // 本项目书架几何**对齐 mi_like_ui 首页卡片**（拍板「整体全换 Mi 度量」，2026-10-27）：
 // 网格与单卡的间距 / 圆角逐项取自 `MiThemeCard`（HyperOS 主题商店首页
 // 「精选主题」卡）的 1:1 实测度量——**不自己写字面量，直接引用框架 token**
-// （`MiThemeCardMetrics` / `MiDimens`），框架改值书架自动跟。
+// （`MiThemeCardMetrics`），框架改值书架自动跟。
 // **唯一例外 = 封面比例**：Mi 卡的 259:472 是**锁屏预览图**的手机比例，书卡用
 // 它会比真书瘦高一圈；拍板「高度降低一些，视觉上像一本书」（2026-10-27）
 // → 书封改用常见实体书比例 **2:3**（[kBookCoverAspectRatio]，本项目自有值）。
@@ -18,9 +18,9 @@
 // 配套的**契约测试** `test/ui/shelf_geometry_contract_test.dart` 锁住关键数值
 // （用硬编码期望值断言真实渲染尺寸，而不是回头引用这里的常量——引用常量等于
 // 同义反复）。**改本文件任何数值前，先核对：**
-//   ① PRD 有没有相应要求（US-06 / LIB-01 / UI-04）
-//   ② 引用的 `MiThemeCardMetrics` / `MiDimens` token 值是否仍是当前值
-//   ③ **保留项没被换掉**：默认封面、真封面、封面右下角格式角标、底部书名·作者·进度
+//   ① 负责人当口指示（卡片上要不要展示格式等元素）
+//   ② 引用的 `MiThemeCardMetrics` token 值是否仍是当前值
+//   ③ **保留项没被换掉**：默认封面、真封面、底部书名·作者·进度
 // ══════════════════════════════════════════════════════════════════════════════
 //
 // 范围（拍板「只动布局几何」，后追加「封面圆角」）：本文件只管**几何**——列数、
@@ -31,7 +31,7 @@ import 'package:flutter/widgets.dart' show EdgeInsets;
 
 import 'home_shell.dart' show kShellBottomInset;
 // Mi 首页卡片的实测度量与圆角 token（框架只读引用，本文件不改框架）。
-import 'mi_like_ui/mi_like_ui.dart' show MiDimens, MiThemeCardMetrics;
+import 'mi_like_ui/mi_like_ui.dart' show MiThemeCardMetrics;
 
 // ---------------------------------------------------------------------------
 // 网格度量（`ShelfGrid`）
@@ -188,8 +188,8 @@ const double kBookCoverToInfoGap = MiThemeCardMetrics.titleTopGap;
 /// ＋ [kBookTitleToAuthorGap] 2 ＋ 作者·进度行盒 13（fontSize 11 × `height: 1.18`）
 /// = 28.85 ≤ 30（余 1.15 防字形溢出）。**两行文字样式的 `height` 必须显式钉死**
 /// （见 `book_card.dart` 的 `_buildInfo`），否则实际渲染高度会随主题字体漂移。
-/// 内部只允许两段：书名（单行省略，Mi 卡口径）+ 作者·进度行；**格式标签不在此处**
-/// （PRD `US-06`/`LIB-01` 要求格式标签，拍板「挪到封面上做角标」）。
+/// 内部只允许两段：书名（单行省略，Mi 卡口径）+ 作者·进度行；**卡片上不展示
+/// 格式文字**（2026-11-05 移除封面角标，格式信息只在详情页 / 长按操作单）。
 const double kBookInfoHeight = 30;
 
 /// 书名与「作者 · 进度」行之间的间距。
@@ -203,10 +203,3 @@ const double kBookTitleToAuthorGap = 2;
 /// （`MiThemeCardMetrics.titleIndent`；anx 旧值 2）。内缩后书名与 Mi 首页卡的
 /// 标题同列起排；右侧同值，使进度百分比不贴卡片边缘。
 const double kBookInfoIndent = MiThemeCardMetrics.titleIndent;
-
-/// 封面右下角**格式标签角标**的内边距（距封面右/下边缘各此值；anx 旧值 6）。
-///
-/// 角标放在 `ClipRRect` **内**，随封面圆角一起裁切，不会溢出圆角。取 8
-/// （= [MiDimens.spaceSm]）：圆角放大到 20 后，内缩 6 时角标外角距角弧只剩
-/// 0.2，会被弧擦到。
-const double kBookFormatBadgeInset = MiDimens.spaceSm;
