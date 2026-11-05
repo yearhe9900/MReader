@@ -6,7 +6,7 @@
 //   · 内容 edge-to-edge（`extendBody: true`）从头部下穿过、透出磨砂模糊（`UI-02` ②）；
 //     首行保护 = 网格 `padding.top` 留出头部高（[shelfGridPadding]）；
 //   · 导入 = `FilePicker` 多选 → 逐个 `importFile`（进度 + 失败清单）；删除 = 长按书卡
-//     → 长按弹框（mi_like_ui `MiDialog`）→ 确认框 → `deleteBook`（`LIB-06`
+//     → 长按弹框 → 删除确认框（均 mi_like_ui `MiDialog`）→ `deleteBook`（`LIB-06`
 //     二次确认）+ 连带清理进度；
 //   · 点击书卡 = **直接进阅读页**；长按「书籍详情」是详情页**唯一**入口（`META-08`）；
 //     详情页「继续阅读」经**注入的** `_openBook` 开书（**不复制**开书管道），pop 后
@@ -67,6 +67,8 @@ import 'mi_like_ui/mi_like_ui.dart'
     show
         MiCardPageRoute,
         MiDialog,
+        MiDialogAction,
+        MiDialogActionStyle,
         MiDialogItem,
         MiDialogLayout,
         MiPillItemWidth,
@@ -451,24 +453,30 @@ class ShelfPageState extends State<ShelfPage> {
   }
 
   Future<void> _deleteBook(BookRecord record) async {
-    // `UI-03` 浮层玻璃：玻璃确认框。barrier 可关（返回 null = 取消）：非 `true`
-    // 一律不删。
-    final bool? confirmed = await GlassOverlays.showAlert<bool>(
+    // 二次确认（`LIB-06`）走 mi_like_ui [MiDialog] 按钮形态，与上一层长按
+    // 操作弹框同一套遮罩 / 明暗口径（[navThemeModeOf]）；弹框不是玻璃件，
+    // 玻璃开 / 关两档同形。点遮罩 / 系统返回都返回 null ⇒ 非 `true` 一律不删。
+    // ⚠️ 路由遮罩必须透明：遮罩由 MiDialog 自绘，两层不可叠加。
+    final bool? confirmed = await showDialog<bool>(
       context: context,
-      title: '删除确认',
-      message: '确定删除「${record.title}」？\n删除后书架不再列出，封面文件一并清理。',
-      barrierDismissible: true,
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '取消',
-          onPressed: () => Navigator.pop(context, false),
-        ),
-        GlassDialogAction(
-          label: '删除',
-          isDestructive: true,
-          onPressed: () => Navigator.pop(context, true),
-        ),
-      ],
+      barrierColor: Colors.transparent,
+      builder: (BuildContext dialogContext) => MiDialog(
+        title: '删除确认',
+        message: '确定删除「${record.title}」？\n删除后书架不再列出，封面文件一并清理。',
+        themeMode: navThemeModeOf(context),
+        actions: <MiDialogAction>[
+          MiDialogAction(
+            label: '取消',
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+          ),
+          MiDialogAction(
+            label: '删除',
+            style: MiDialogActionStyle.destructive,
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+          ),
+        ],
+        onScrimTap: () => Navigator.of(dialogContext).pop(),
+      ),
     );
     if (confirmed == true) {
       await widget.repository.deleteBook(record);

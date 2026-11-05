@@ -217,13 +217,22 @@ void main() {
       expect(find.text('取消'), findsOneWidget);
       expect(find.text('删除'), findsOneWidget);
 
-      // `UI-03`：确认框是玻璃对话框，不是 Material AlertDialog。
-      expect(find.byType(GlassDialog, skipOffstage: false), findsOneWidget);
+      // 二次确认同样走 mi_like_ui `MiDialog`（按钮形态）：与上一层操作弹框
+      // 同款不透明卡片 / 遮罩，玻璃对话框与 Material AlertDialog 都不在树上。
+      expect(find.byType(MiDialog, skipOffstage: false), findsOneWidget);
+      expect(find.byType(GlassDialog, skipOffstage: false), findsNothing);
       expect(find.byType(AlertDialog, skipOffstage: false), findsNothing);
+      // 钉住新行为：按钮形态 + 「删除」为破坏性（红字），点它才真删。
+      final MiDialog confirmDialog =
+          tester.widget<MiDialog>(find.byType(MiDialog));
+      expect(confirmDialog.layout, MiDialogLayout.buttons);
+      expect(confirmDialog.actions, hasLength(2));
+      expect(confirmDialog.actions[1].label, '删除');
+      expect(confirmDialog.actions[1].style, MiDialogActionStyle.destructive);
 
       // 点「取消」→ 返回 false → 不删。
       await tester.tap(find.text('取消'));
-      // 玻璃弹窗关闭转场 >400ms，_settle 推不完 → pumpAndSettle 走到路由移除。
+      // MiDialog 零转场，pumpAndSettle 即可走到路由移除。
       await tester.pumpAndSettle();
       expect(find.byType(BookCard), findsOneWidget);
       expect(find.text('删除确认'), findsNothing);
