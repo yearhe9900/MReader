@@ -109,6 +109,16 @@ import 'shelf_grid.dart';
       : (type: FileType.custom, allowedExtensions: kImportExtensions);
 }
 
+/// 排序字段的中文名（唯一事实源：书架「更多」菜单的排序级联列表用它，
+/// 菜单本身在壳层 `home_shell.dart` —— 排序偏好与文案都归书架层）。
+String shelfSortLabel(ShelfSortField field) => switch (field) {
+      ShelfSortField.importedAt => '导入时间',
+      ShelfSortField.lastReadAt => '最近阅读',
+      ShelfSortField.title => '书名',
+      ShelfSortField.author => '作者',
+      ShelfSortField.manual => '手动排序',
+    };
+
 /// 书架首页。
 class ShelfPage extends StatefulWidget {
   const ShelfPage({
@@ -185,8 +195,8 @@ class ShelfPage extends StatefulWidget {
   State<ShelfPage> createState() => ShelfPageState();
 }
 
-/// [ShelfPage] 的状态类（公开：`HomeShell` 经 [GlobalKey] 把底栏绿圆钮的
-/// 「导入书籍」动作接到 [pickAndImport]）。
+/// [ShelfPage] 的状态类（公开：`HomeShell` 经 [GlobalKey] 把底栏「更多」菜单
+/// 的「添加图书」项接到 [pickAndImport]）。
 class ShelfPageState extends State<ShelfPage>
     with SingleTickerProviderStateMixin {
   List<BookRecord> _books = <BookRecord>[];
@@ -401,7 +411,7 @@ class ShelfPageState extends State<ShelfPage>
 
     // 手动顺序单独一条路径：顺序**就是** `order` 本身，不受升降序开关影响
     // （否则「再点同项翻转方向」会把顺序打乱）；`order` 由过去的拖拽重排写入
-    // （拖拽重排已删，此分支仅消费旧数据 + 排序菜单入口）。
+    // （拖拽重排已删，此分支仅消费旧数据 + 「更多」菜单里的排序入口）。
     if (prefs.sortField == ShelfSortField.manual) {
       final List<String> order = widget.shelfLayout.layout.order;
       final Map<String, int> rank = <String, int>{
@@ -443,15 +453,6 @@ class ShelfPageState extends State<ShelfPage>
     return a.compareTo(b);
   }
 
-  /// 排序字段的中文名。
-  static String _sortLabel(ShelfSortField field) => switch (field) {
-        ShelfSortField.importedAt => '导入时间',
-        ShelfSortField.lastReadAt => '最近阅读',
-        ShelfSortField.title => '书名',
-        ShelfSortField.author => '作者',
-        ShelfSortField.manual => '手动排序',
-      };
-
   Future<void> _loadBooks() async {
     final List<BookRecord> books = await widget.repository.loadBooks();
     if (mounted) {
@@ -466,9 +467,9 @@ class ShelfPageState extends State<ShelfPage>
     );
   }
 
-  /// 导入书籍入口（`FilePicker` 多选 → 逐个 `importFile`）。由底栏**绿圆钮**
-  /// 触发（`HomeShell` 经 GlobalKey 调本方法，原顶部加号按钮已移除）；
-  /// 空态引导按钮仍调本方法（`LIB-01` ②）。
+  /// 导入书籍入口（`FilePicker` 多选 → 逐个 `importFile`）。由底栏绿圆钮的
+  /// 「更多」菜单「添加图书」项触发（`HomeShell` 经 GlobalKey 调本方法，
+  /// 原顶部加号按钮已移除）；空态引导按钮仍调本方法（`LIB-01` ②）。
   Future<void> pickAndImport() async {
     setState(() {
       _importErrors = <String>[];
@@ -966,13 +967,14 @@ class ShelfPageState extends State<ShelfPage>
     );
   }
 
-  /// 浮动头部（两行，参考图形态）：搜索行（胶囊 + 排序）+ 分组标签行。
-  /// 导入按钮在底栏**绿圆钮**（`HomeShell` 经 GlobalKey 调 [pickAndImport]），
-  /// 搜索行原「+」按钮移除；导入进行中在原槽位显示进度圈（只是状态指示）。
-  /// 整体包一层透明 [Material]：右侧动作按钮（排序）是 Material [IconButton]
-  /// （水波纹与文字样式要求最近处有 Material）；搜索胶囊是玻璃控件（[GlassButton]）、
-  /// 分组标签行是 [AdaptivePillTabBar] 纯色胶囊，都不需要 Material
-  /// （`MaterialType.transparency` 不绘制底色，不破坏玻璃观感）。
+  /// 浮动头部（两行，参考图形态）：搜索行（胶囊）+ 分组标签行。
+  /// 导入 / 排序入口都在底栏**绿圆钮**（竖点「更多」→ `MiMenu`，见
+  /// `home_shell.dart`）：搜索行原「+」与排序按钮均已移除；导入进行中在
+  /// 原「+」槽位显示进度圈（只是状态指示）。
+  /// 整体包一层透明 [Material]：搜索胶囊是玻璃控件（[GlassButton]）、
+  /// 分组标签行是 [MiPillTabBar] 纯色胶囊，本不需要 Material；保留这层是给
+  /// 后续可能回到头部的 Material 控件留好主题（`MaterialType.transparency`
+  /// 不绘制底色，不破坏玻璃观感）。
   /// [t] = 几何位移进度（缓动后），[visible] = **搜索态**可见度（淡出类用；
   /// 常规内容取 `1 - visible`）—— 两条都由 [_searchProgress] 按方向算好传入
   /// （进入走 `searchMotion` / `searchFadeInterval`，退出走 `searchExitMotion`）。
@@ -1017,9 +1019,8 @@ class ShelfPageState extends State<ShelfPage>
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   ),
-                // 搜索行右侧的**排序按钮移除**（顶部只留搜索栏 + 胶囊行）。
-                // 排序逻辑与菜单 [_showSortMenu] 原样保留，入口暂缺——挂账待定，
-                // 确定落点后直接接回，不必重写。
+                // 头部不再有排序按钮（排序入口收进底栏「更多」菜单），
+                // 搜索行只留「搜索栏 + 取消钮」。
                 //
                 // 取消钮：占位宽随 t 展开、颜色按 visible 淡入（`fade` 乘进各层
                 // alpha —— 圆钮内含 backdrop 磨砂，套 `Opacity` 会让磨砂整段消失）。
@@ -1149,54 +1150,6 @@ class ShelfPageState extends State<ShelfPage>
         },
       ),
     );
-  }
-
-  /// 排序菜单（右上角弹出；当前字段右侧显示方向箭头，再点同项即翻转方向）。
-  ///
-  /// **当前无 UI 入口**（搜索行右侧的排序按钮移除，顶部只留「搜索栏 + 胶囊行」）。
-  /// 排序**功能与偏好照旧完整保留**——字段 / 方向仍在 `ShelfPrefsStore` 生效、
-  /// `_visibleBooks` 照旧读它；入口暂缺、挂账待定（候选：胶囊行末尾的排序胶囊 /
-  /// 设置页书架分组）。定案后直接给某个按钮接上 `onPressed: _showSortMenu` 即可。
-  // ignore: unused_element
-  Future<void> _showSortMenu() async {
-    final ThemeData theme = Theme.of(context);
-    final ShelfPrefs prefs = widget.shelfPrefs.prefs;
-    final Size screen = MediaQuery.of(context).size;
-    final double top =
-        MediaQuery.of(context).padding.top + kShelfHeaderHeight;
-
-    final ShelfSortField? picked = await showMenu<ShelfSortField>(
-      context: context,
-      // 锚在右上角下方——与顶栏的排序按钮相邻（照搬 anx-reader 的定位方式）。
-      position: RelativeRect.fromLTRB(screen.width, top, 0, 0),
-      items: <PopupMenuEntry<ShelfSortField>>[
-        for (final ShelfSortField field in ShelfSortField.values)
-          PopupMenuItem<ShelfSortField>(
-            value: field,
-            child: Row(
-              children: <Widget>[
-                if (prefs.sortField == field)
-                  Icon(Icons.check, size: 16, color: theme.colorScheme.primary)
-                else
-                  const SizedBox(width: 16),
-                const SizedBox(width: 8),
-                Expanded(child: Text(_sortLabel(field))),
-                if (prefs.sortField == field)
-                  Icon(
-                    prefs.sortAscending
-                        ? Icons.arrow_upward
-                        : Icons.arrow_downward,
-                    size: 16,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-              ],
-            ),
-          ),
-      ],
-    );
-    if (picked == null) return;
-    // 同字段再次选中 → `setSortField` 内部翻转方向。
-    await widget.shelfPrefs.setSortField(picked);
   }
 
   /// 当前分组里一本都没有时的空态（区别于「书架里一本书都没有」）。

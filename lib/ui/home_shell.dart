@@ -11,9 +11,16 @@
 // 底栏形态 = **mi_like_ui 玻璃悬浮胶囊**（整组一比一移植入 `lib/ui/mi_like_ui/`，
 // 与上游逐字节一致；几何/材质/动效事实源 = `MiGlassNavMetrics` / `MiGlassPalette`）。
 // tab = 书架 / 笔记 / 我的，「设置」改名「我的」（图标 `SmileyBeretIconPainter`）、
-// **「统计」移出底栏**、入口收进「我的」页；右侧绿色圆钮（预留空位圆钮）选中
-// 「书架」时弹出、切走收起，暂不接功能。MReader 侧只做档位退化与明暗映射
-// （见 `glass_nav_host.dart`）。
+// **「统计」移出底栏**、入口收进「我的」页；右侧绿色圆钮（竖点「更多」）选中
+// 「书架」时弹出、切走收起，点开 `MiMenu`：添加图书 / 排序（级联规则）。MReader
+// 侧只做档位退化与明暗映射（见 `glass_nav_host.dart`）。
+//
+// ══════════════════════════════════════════════════════════════════════════════
+// 弹层宿主
+// ══════════════════════════════════════════════════════════════════════════════
+// 壳层本身挂一层 `MiPopupHost`：书架「更多」菜单（`MiMenu`）经它渲染在整块壳层
+// 之上。缺这层时 `MiMenu` 退化成「锚点就地渲染」——面板会被底栏 / 侧栏的裁剪框
+// 切掉，必须由宿主出层。
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // 底部避让
@@ -75,6 +82,10 @@ const double kShellBottomInset = 100;
 
 /// 宽屏断点（超过则改用侧边导航轨）；与 anx-reader 取值一致。
 const double kShellRailBreakpoint = 600;
+
+/// 书架「更多」菜单里的**非排序**动作（`MiMenuItem.value` 槽的具体类型；
+/// 排序规则的槽位直接放 `ShelfSortField`，两者靠类型区分）。
+enum _ShelfMoreAction { importBook }
 
 /// 底栏胶囊距**物理屏底**的浮起高度（`MiGlassNavMetrics` 同族实测读数，
 /// **不在摆放处硬编码**——收口成常量，改实测口径只改这一行）。
@@ -180,9 +191,12 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
-  /// 书架页句柄：底栏**绿圆钮**的「导入书籍」动作经它转到
+  /// 书架页句柄：底栏**绿圆钮**的「添加图书」菜单项经它转到
   /// [ShelfPageState.pickAndImport]。
   final GlobalKey<ShelfPageState> _shelfKey = GlobalKey<ShelfPageState>();
+
+  /// 书架「更多」菜单开合（绿圆钮点开）。
+  final MiMenuController _shelfMoreMenu = MiMenuController();
 
   /// 当前底栏下标。
   int _index = 0;
@@ -197,6 +211,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 「更多」菜单的选中态 / 副标题读的是排序偏好：偏好一变就重建圆钮子树，
+    // 否则菜单会一直显示展开那一刻的旧勾号（`MiMenu` 的 groups 是构造入参）。
+    widget.shelfPrefs.addListener(_onShelfPrefsChanged);
     // `SYNC-06`：App 启动 → 仅拉进度（条目/书籍不拉，PRD §10.4）。
     final SyncTrigger? trigger = widget.syncTrigger;
     if (trigger != null) {
@@ -207,7 +224,15 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.shelfPrefs.removeListener(_onShelfPrefsChanged);
+    _shelfMoreMenu.dispose();
     super.dispose();
+  }
+
+  void _onShelfPrefsChanged() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
@@ -323,27 +348,88 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   void _select(int index) {
     if (index == _index) return;
+    // 切走会连圆钮一起收走 ⇒ 菜单跟着收，否则面板会留在新 tab 的页面上。
+    _shelfMoreMenu.close();
     setState(() => _index = index);
   }
 
-  /// 导入书籍绿圆钮（**两种导航形态共用同一份声明**，上游口径）：窄窗挂底栏
-  /// 右侧（栏体左移让位）、宽屏挂侧栏栏尾下方；显隐契约、弹出曲线与直径/间距
-  /// token 两种形态逐帧同源（选中「书架」= `tabIndex 0` 时弹出）。绿钮接
-  /// 「导入书籍」（经 [_shelfKey] 转 [ShelfPageState.pickAndImport]），取代原
-  /// 书架头部加号按钮。
-  MiGlassNavFab _buildFab() => MiGlassNavFab(
-    tabIndex: 0,
-    onTap: () => _shelfKey.currentState?.pickAndImport(),
-    // 绿钮 glyph = 白色圆角加号（参考项目配套用法）。
-    child: Semantics(
-      label: '导入书籍',
-      button: true,
-      child: CustomPaint(
-        painter: PlusIconPainter(Colors.white),
-        size: const Size.square(18.2),
+  /// 导入书籍 / 排序的入口圆钮（**两种导航形态共用同一份声明**，上游口径）：
+  /// 窄窗挂底栏右侧（栏体左移让位）、宽屏挂侧栏栏尾下方；显隐契约、弹出曲线与
+  /// 直径/间距 token 两种形态逐帧同源（选中「书架」= `tabIndex 0` 时弹出）。
+  ///
+  /// glyph = **竖点「更多」**，点开 mi_like [MiMenu]（`添加图书` / `排序 →` 级联
+  /// 各排序规则）。锚点取整枚圆钮：面板右缘与圆钮右缘对齐（只包 glyph 会内缩），
+  /// 圆钮贴着屏底 ⇒ 下方放不下，面板自然翻到圆钮**上方**。
+  MiGlassNavFab _buildFab() {
+    final MiThemeMode mode = navThemeModeOf(context);
+    return MiGlassNavFab(
+      tabIndex: 0,
+      // [MiMenu] **不劫持**触发器点按：圆钮自己的 onTap 负责开合。
+      onTap: _shelfMoreMenu.toggle,
+      child: MiMenu(
+        controller: _shelfMoreMenu,
+        themeMode: mode,
+        groups: _shelfMoreMenuGroups(),
+        onSelected: _onShelfMoreSelected,
+        child: SizedBox(
+          width: MiGlassNavMetrics.fabDiameter,
+          height: MiGlassNavMetrics.fabDiameter,
+          child: Center(
+            child: Semantics(
+              label: '更多',
+              button: true,
+              child: CustomPaint(
+                painter: MoreVerticalIconPainter(Colors.white),
+                size: const Size(4, 18),
+              ),
+            ),
+          ),
+        ),
       ),
-    ),
-  );
+    );
+  }
+
+  /// 「更多」菜单内容（`value` 槽：`ShelfSortField` = 排序规则，其余见
+  /// [_ShelfMoreAction]）。排序项带子菜单 ⇒ 点开第二级，首行返回上级。
+  List<MiMenuGroup> _shelfMoreMenuGroups() {
+    final ShelfPrefs prefs = widget.shelfPrefs.prefs;
+    final String direction = prefs.sortAscending ? '升序' : '降序';
+    return <MiMenuGroup>[
+      MiMenuGroup(<MiMenuItem>[
+        const MiMenuItem(
+          label: '添加图书',
+          value: _ShelfMoreAction.importBook,
+        ),
+        MiMenuItem(
+          label: '排序',
+          // 二级页看不到一级项的副标题 ⇒ 当前规则与方向挂在触发器这行。
+          subtitle: '${shelfSortLabel(prefs.sortField)} · $direction',
+          children: <MiMenuItem>[
+            for (final ShelfSortField field in ShelfSortField.values)
+              MiMenuItem(
+                label: shelfSortLabel(field),
+                // 方向只标在当前生效的规则上（其余项没有「正在用的方向」）。
+                subtitle: prefs.sortField == field ? direction : null,
+                selected: prefs.sortField == field,
+                value: field,
+              ),
+          ],
+        ),
+      ]),
+    ];
+  }
+
+  void _onShelfMoreSelected(MiMenuSelection selection) {
+    final Object? value = selection.item.value;
+    if (value is ShelfSortField) {
+      // 同一条规则再点 = 翻转升降序（`setSortField` 内部处理）。
+      unawaited(widget.shelfPrefs.setSortField(value));
+      return;
+    }
+    if (value == _ShelfMoreAction.importBook) {
+      _shelfKey.currentState?.pickAndImport();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -352,7 +438,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       builder: (BuildContext context, BoxConstraints constraints) {
         // 与上游 `MiBreakpoints.usesSideNav` 同口径：**严格大于** 600 才切侧栏。
         final bool sideNav = constraints.maxWidth > kShellRailBreakpoint;
-        return _buildLayout(pages, sideNav);
+        // 弹层单点渲染层（`MiPopupHost`）：书架「更多」菜单注册到它、由它在
+        // 整块壳层之上渲染 —— 不往页面栈里插子级（插子级会让后续子树重建）。
+        return MiPopupHost(child: _buildLayout(pages, sideNav));
       },
     );
   }

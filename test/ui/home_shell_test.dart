@@ -1,10 +1,12 @@
-// `test/ui/home_shell_test.dart`：主壳层接线测试（底栏绿圆钮 → 书架导入）。
+// `test/ui/home_shell_test.dart`：主壳层接线测试（底栏绿圆钮「更多」菜单 → 书架）。
 //
-// 书架「添加图书」入口在底栏**绿圆钮**（`MiGlassNavFab`，经 `GlobalKey<ShelfPageState>`
-// 转 `pickAndImport`）。本文件钉整条接线链：绿圆钮 onTap → pickAndImport →
-// `FilePicker.platform.pickFiles`（桌面走格式层白名单、移动端不过滤，多选）。`FilePicker` 用假件替换（setter 允许
-// 注入，假件须 **extends** [FilePicker] 才能过 `PlatformInterface.verifyToken`），
-// 记录调用参数后返回 null（模拟取消）。
+// 书架「添加图书」入口 = 底栏**绿圆钮**（`MiGlassNavFab`）的竖点「更多」→ `MiMenu`
+// 菜单「添加图书」（经 `GlobalKey<ShelfPageState>` 转 `pickAndImport`）；同菜单的
+// 「排序」走级联子菜单（规则 = `ShelfSortField`）。本文件钉整条接线链：
+// 圆钮 → 菜单项 → pickAndImport → `FilePicker.platform.pickFiles`（桌面走格式层
+// 白名单、移动端不过滤，多选），以及排序级联选中即落盘、同项再点翻转方向。
+// `FilePicker` 用假件替换（setter 允许注入，假件须 **extends** [FilePicker] 才能过
+// `PlatformInterface.verifyToken`），记录调用参数后返回 null（模拟取消）。
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -25,7 +27,8 @@ import 'package:mreader/ui/glass_nav_host.dart';
 import 'package:mreader/ui/home_shell.dart';
 import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart'
     show MiGlassNavMetrics, MiGlassNavBar, MiSearchCancelButton;
-import 'package:mreader/ui/shelf_page.dart' show importPickerOptions;
+import 'package:mreader/ui/shelf_page.dart'
+    show importPickerOptions, shelfSortLabel;
 
 import '../reader/reader_harness.dart';
 import '../test_config.dart';
@@ -65,12 +68,12 @@ class _RecordingFilePicker extends FilePicker {
   }
 }
 
-/// 绿圆钮 glyph 的 [Semantics]（`HomeShell` 接线时挂的「导入书籍」标签）。
+/// 绿圆钮 glyph 的 [Semantics]（`HomeShell` 接线时挂的「更多」标签）。
 ///
-/// 不用 `find.bySemanticsLabel`：空态引导按钮的语义标签同为「导入书籍」会歧义；
-/// 这里按 [Semantics.properties.label] 精确匹配 widget 本体，只命中绿圆钮。
-Finder _fabGlyph() => find.byWidgetPredicate(
-      (Widget w) => w is Semantics && w.properties.label == '导入书籍',
+/// 不用 `find.bySemanticsLabel`：空态引导按钮的语义标签「导入书籍」与菜单项同名时
+/// 会歧义；这里按 [Semantics.properties.label] 精确匹配 widget 本体，只命中绿圆钮。
+Finder _moreGlyph() => find.byWidgetPredicate(
+      (Widget w) => w is Semantics && w.properties.label == '更多',
     );
 
 void main() {
@@ -80,6 +83,7 @@ void main() {
     late Directory tempDir;
     late TestAppPaths paths;
     late LibraryRepository repo;
+    late ShelfPrefsStore prefs;
     late _RecordingFilePicker picker;
     FilePicker? originalPicker;
 
@@ -87,6 +91,7 @@ void main() {
       tempDir = Directory.systemTemp.createTempSync('mreader_home_shell_');
       paths = TestAppPaths(tempDir);
       repo = fakeRepository(paths);
+      prefs = ShelfPrefsStore(tempDir);
       picker = _RecordingFilePicker();
       // `FilePicker._instance` 是 `late`：未初始化时 getter 抛错，此时无从恢复，
       // 留假件在原地无妨（本文件独立 isolate，不影响其它测试文件）。
@@ -112,7 +117,7 @@ void main() {
             repository: repo,
             coverStore: FileCoverStore(paths),
             progressStore: ProgressStore(paths),
-            shelfPrefs: ShelfPrefsStore(tempDir),
+            shelfPrefs: prefs,
             shelfLayout: ShelfLayoutStore(tempDir),
             settings: SettingsStore(tempDir),
             statsService: StatsService(paths),
@@ -124,7 +129,7 @@ void main() {
           ),
         );
 
-    testWidgets('点绿圆钮 → pickFiles（全部已支持格式，多选）被调用一次',
+    testWidgets('点绿圆钮 → 「添加图书」→ pickFiles（全部已支持格式，多选）被调用一次',
         (tester) async {
       // ⚠️ 必须钉**窄视口**：默认测试窗 800 宽 > `kShellRailBreakpoint`(600)
       // 会走宽屏侧边导航轨，绿圆钮（底栏形态专属）不在树上。
@@ -136,12 +141,18 @@ void main() {
       await settle(tester, rounds: 30);
 
       // 绿圆钮挂在「书架」tab（tabIndex 0），首页默认选中 → 弹出可见。
-      expect(_fabGlyph(), findsOneWidget);
+      expect(_moreGlyph(), findsOneWidget);
 
-      await tester.tap(_fabGlyph());
+      await tester.tap(_moreGlyph());
+      await settle(tester, rounds: 60); // 「更多」菜单展开（弹簧 ~0.5s）
+      expect(find.text('添加图书'), findsOneWidget,
+          reason: '圆钮只负责开菜单，导入动作在菜单项里');
+      expect(picker.pickCalls, 0, reason: '开菜单不该直接触发文件选择器');
+
+      await tester.tap(find.text('添加图书'));
       await tester.pump(); // pickAndImport 的假件 await 在微任务里完成
 
-      expect(picker.pickCalls, 1, reason: '绿圆钮 onTap 必须走到 FilePicker');
+      expect(picker.pickCalls, 1, reason: '菜单「添加图书」必须走到 FilePicker');
       expect(picker.lastType, FileType.custom,
           reason: '测试宿主是桌面平台 ⇒ 走保留白名单的分支');
       // ⚠️ 期望值**故意硬编码字面量**（不引用 `kImportExtensions`）：引用同一
@@ -175,7 +186,7 @@ void main() {
       await settle(tester, rounds: 30);
 
       expect(find.byType(GlassNavHost), findsOneWidget);
-      expect(_fabGlyph(), findsOneWidget);
+      expect(_moreGlyph(), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('shelf-search-entry')));
       await tester.pump();
@@ -183,7 +194,7 @@ void main() {
 
       expect(find.byType(GlassNavHost), findsNothing,
           reason: '搜索态照参考素材是整屏无 App 级导航：底栏整组卸掉');
-      expect(_fabGlyph(), findsNothing);
+      expect(_moreGlyph(), findsNothing);
 
       await tester.tap(find.byType(MiSearchCancelButton));
       await tester.pump();
@@ -191,7 +202,7 @@ void main() {
 
       expect(find.byType(GlassNavHost), findsOneWidget,
           reason: '退出搜索态底栏装回');
-      expect(_fabGlyph(), findsOneWidget);
+      expect(_moreGlyph(), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(
@@ -200,7 +211,7 @@ void main() {
       await settle(tester, rounds: 10);
     });
 
-    testWidgets('绿圆钮带「导入书籍」无障碍标签（按钮语义）', (tester) async {
+    testWidgets('绿圆钮带「更多」无障碍标签（按钮语义）', (tester) async {
       // 同上：窄视口才走底栏形态。
       tester.view.physicalSize = const Size(393, 800);
       tester.view.devicePixelRatio = 1.0;
@@ -210,11 +221,61 @@ void main() {
       await settle(tester, rounds: 30);
 
       final Semantics semantics =
-          tester.widget<Semantics>(_fabGlyph());
+          tester.widget<Semantics>(_moreGlyph());
       expect(semantics.properties.button, isTrue);
 
-      // 旧入口（顶部加号按钮）已移除，导入只剩绿圆钮 + 空态引导两个入口。
+      // 旧入口（顶部加号按钮）已移除；导入只剩「更多」菜单 + 空态引导两个入口。
       expect(find.byIcon(Icons.add), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 60)),
+      );
+      await settle(tester, rounds: 10);
+    });
+    testWidgets('「更多」→ 排序级联：子菜单列全部规则、选中即生效、同项再点翻转方向',
+        (tester) async {
+      // 同上：窄视口才走底栏形态（宽屏圆钮挂在侧栏栏尾）。
+      tester.view.physicalSize = const Size(393, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(buildShell());
+      await settle(tester, rounds: 30);
+
+      await tester.tap(_moreGlyph());
+      await settle(tester, rounds: 60);
+      // 一级行的副标题 = 当前规则 + 方向（进二级后一级副标题看不到）。
+      expect(find.text('排序'), findsOneWidget);
+      expect(find.text('导入时间 · 降序'), findsOneWidget,
+          reason: '默认规则 = 导入时间降序（ShelfPrefs 默认值）');
+
+      await tester.tap(find.text('排序'));
+      await settle(tester, rounds: 40);
+      // 级联子菜单 = 返回上级的同名行 + 全部规则。
+      expect(find.text('排序'), findsOneWidget, reason: '首行是返回上级的同名行');
+      for (final ShelfSortField field in ShelfSortField.values) {
+        expect(find.text(shelfSortLabel(field)), findsWidgets,
+            reason: '规则「${shelfSortLabel(field)}」必须在子菜单里可点');
+      }
+
+      await tester.tap(find.text('书名'));
+      await settle(tester, rounds: 40);
+      expect(prefs.prefs.sortField, ShelfSortField.title,
+          reason: '选中规则必须写进偏好（书架顺序由它驱动）');
+      expect(prefs.prefs.sortAscending, isFalse, reason: '换规则默认降序');
+
+      // 再开一次：菜单读的是**最新偏好**（壳层订阅 prefs，不是展开那刻的快照）。
+      await tester.tap(_moreGlyph());
+      await settle(tester, rounds: 60);
+      expect(find.text('书名 · 降序'), findsOneWidget,
+          reason: '副标题必须跟着偏好刷新，否则菜单永远显示旧规则');
+      await tester.tap(find.text('排序'));
+      await settle(tester, rounds: 40);
+      await tester.tap(find.text('书名'));
+      await settle(tester, rounds: 40);
+      expect(prefs.prefs.sortAscending, isTrue,
+          reason: '同一规则再点 = 翻转升降序');
 
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(

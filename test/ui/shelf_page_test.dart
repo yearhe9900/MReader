@@ -961,7 +961,7 @@ void main() {
       expect(_chipLabels(tester), <String>['全部', '玄幻']);
     });
 
-    testWidgets('排序入口已移除（挂账），排序偏好仍驱动书架顺序',
+    testWidgets('头部不设排序按钮（入口在底栏「更多」菜单），排序偏好仍驱动书架顺序',
         (WidgetTester tester) async {
       await tester.runAsync(() async {
         await repo.importFile(bytes: _txtBytes('A'), fileName: 'a.txt');
@@ -971,10 +971,11 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 排序按钮已**移除**（顶部只留「搜索栏 + 胶囊行」）；反向钉住：谁把按钮加回搜索行就判红。
+      // 头部**不设**排序按钮（入口收进底栏绿圆钮的「更多」菜单）；反向钉住：
+      // 谁把按钮加回搜索行就判红。
       expect(find.byIcon(Icons.sort), findsNothing);
 
-      // 移除的只是**入口**，排序能力仍完整：偏好一改顺序随之变。两步都显式给方向，
+      // 头部没有入口、排序能力仍完整：偏好一改顺序随之变。两步都显式给方向，
       // 不依赖 store 的默认升降序（否则用例会跟着默认值漂）。
       await tester.runAsync(() async {
         await shelfPrefs.setSortField(ShelfSortField.title);
