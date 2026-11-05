@@ -14,9 +14,9 @@ members = ["vendor/*"]
 
 [workspace.package]
 # 与上游 rust_reader_kernel 的 workspace.package.version 同步（vendored crate 用
-# `version.workspace = true` 解析到此处；上游 0.3.0 = 内核 ABI 10，含 issue #13
-# 无 TOC 章标题回填 / fuzz 五轮加固 / PDF 页面树防线）。
-version = "0.3.0"
+# `version.workspace = true` 解析到此处；上游 0.4.0 = 内核 ABI 11，含体验冲刺
+# 三批 PDF/EPUB/MOBI 目录与中文正确性 + FFI panic 红线门禁与排版金样基建）。
+version = "0.4.0"
 edition = "2021"
 # 与内核上游一致：MIT OR Apache-2.0（vendored 代码的许可）。
 license = "MIT OR Apache-2.0"

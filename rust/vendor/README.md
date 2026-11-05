@@ -20,12 +20,17 @@
 | `rrk-pdf` | PDF：L1 文本抽取/重排 + L2 光栅 |
 | `rrk-kernel` | 会话编排（句柄表 + 格式注册 + 生命周期；`BookKind` 分流重排/页级） |
 
-**同步点**：上游 `rust_reader_kernel@d40f59f`（体验冲刺 + 并发加固：PDF 书签
+**同步点**：上游 `rust_reader_kernel@281970a`（v0.4.0/ABI 11 发布批：MOBI
+体验冲刺第三批——EXTH 121 → NCX（DTB navMap）目录解析，KF8/AZW3 书有目录了
+（navPoint 嵌套保留树深、NCX 优先 filepos 回退）；FFI panic 红线门禁 + 排版金样
+测试基建在 `rrk-ffi`/`rrk-layout`——不在 vendored 集合，宿主桥面不变；上游
+workspace 版本 0.3.0 → 0.4.0）。
+前一同步点：`d40f59f`（体验冲刺 + 并发加固：PDF 书签
 递归/命名 Dest、`/Encrypt` 拒绝、`/Differences` 中文解码、Form XObject 递归；
 EPUB nav 只取 toc；HTML 清洗修 `<meta>` 未闭合丢章/行间空格/ruby；内核锁中毒
 自恢复 + 句柄 generation 防 ABA。上游 ABI v10→v11 的增量出口在 `rrk-ffi`/
 `rrk-layout`——不在 vendored 集合，宿主桥面不变）。
-前一同步点：`46a3010`（畸形输入加固第一批：MOBI record0
+再前一同步点：`46a3010`（畸形输入加固第一批：MOBI record0
 短头越界 panic 改 `opt32` 缺省读取 + 封面偏移饱和、HUFF/CDIC 偏移表夹紧、解压
 炸弹三道闸（单次 32MB / 词典深度 64 层 / 全书 256MB）、PDF 流解码限长（`decode_stream_limited`）+ ObjStm 负 `/N` 夹紧防挂死、MOBI 书名尾 NUL 剔除）。
 再前一同步点：`fa4b4cf`（issue #14：`search_chapter` 的 `done` 语义修复——真正扫完
