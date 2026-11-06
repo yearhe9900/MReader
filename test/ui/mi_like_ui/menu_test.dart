@@ -1,0 +1,398 @@
+// `MiMenu` 几何 / 开合 / 级联 / 禁用 / 遮罩契约 —— 上游 `3bf6462` 九例 +
+// `89fb9d3` 尺寸过渡 + `613f7ad` 行尾装饰（勾号不参与行高）**同步移植**，
+// 移植树 `lib/ui/mi_like_ui/src/overlays/menu/`；宿主接线（底栏「更多」菜单）
+// 见 `test/ui/home_shell_test.dart`。
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+// 框架 API 走公共 barrel；缺导出会在这里暴露。
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
+
+/// `MiMenu` 的几何 / 开合 / 级联 / 禁用 / 遮罩契约。
+///
+/// 锚点一律用 200×48 的色块（可精确读盒子），宿主用 [MiPopupHost]
+/// （与 demo 外壳同口径）—— 菜单的位置是「相对宿主坐标」算的，没有宿主
+/// 时会退化成锚点自身坐标系，几何断言不再成立。
+void main() {
+  const anchorKey = Key('menu-test-anchor');
+
+  /// 单组三级选项：A 选中、C 禁用、B 带子菜单。
+  List<MiMenuGroup> defaultGroups() => const [
+        MiMenuGroup([
+          MiMenuItem(label: '选项 A', selected: true, value: 'a'),
+          MiMenuItem(
+            label: '选项 B',
+            subtitle: '带子菜单',
+            value: 'b',
+            children: [
+              MiMenuItem(label: '子项 1', value: 'b1'),
+              MiMenuItem(label: '子项 2', value: 'b2'),
+            ],
+          ),
+          MiMenuItem(label: '选项 C', enabled: false, value: 'c'),
+        ]),
+      ];
+
+  Widget page({
+    required MiMenuController controller,
+    Alignment alignment = Alignment.topLeft,
+    bool enableScrim = true,
+    bool collapseOnSelect = true,
+    ValueChanged<MiMenuSelection>? onSelected,
+    VoidCallback? onDismissed,
+    List<MiMenuGroup> Function()? groups,
+  }) {
+    return MaterialApp(
+      theme: ThemeData.dark(useMaterial3: true),
+      home: MiPopupHost(
+        child: Scaffold(
+          body: Align(
+            alignment: alignment,
+            child: Padding(
+              padding: const EdgeInsets.all(100),
+              child: MiMenu(
+                controller: controller,
+                groups: (groups ?? defaultGroups)(),
+                enableScrim: enableScrim,
+                collapseOnSelect: collapseOnSelect,
+                onSelected: onSelected,
+                onDismissed: onDismissed,
+                child: const SizedBox(key: anchorKey, width: 200, height: 48),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 打开菜单并等动画落定（注册表把通知推到帧末，首帧只是登记）。
+  Future<void> open(WidgetTester tester, MiMenuController controller) async {
+    controller.open();
+    await tester.pump();
+    await tester.pump();
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('展开：面板落在锚点下方、右缘与锚点对齐、宽度在 200–288 间', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(page(controller: controller));
+    expect(find.byKey(MiMenu.panelKey), findsNothing);
+
+    await open(tester, controller);
+
+    final anchor = tester.getRect(find.byKey(anchorKey));
+    final panel = tester.getRect(find.byKey(MiMenu.panelKey));
+    expect(panel.top, closeTo(anchor.bottom + MiMenuMetrics.margin, 0.5));
+    expect(panel.right, closeTo(anchor.right, 0.5));
+    // 弹簧落定在 fraction ≈ 0.9999（Tolerance 收口），缩放层会带出
+    // 0.1% 的尺寸偏差 —— 断言按 0.5dp 容差看，不追到浮点位。
+    expect(panel.width, greaterThanOrEqualTo(MiMenuMetrics.minWidth - 0.5));
+    expect(panel.width, lessThanOrEqualTo(MiMenuMetrics.maxWidth + 0.5));
+    expect(find.text('选项 A'), findsOneWidget);
+    expect(find.text('选项 C'), findsOneWidget);
+  });
+
+  testWidgets('放不下时翻到锚点上方（底缘对齐）', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      page(controller: controller, alignment: Alignment.bottomLeft),
+    );
+    await open(tester, controller);
+
+    final anchor = tester.getRect(find.byKey(anchorKey));
+    final panel = tester.getRect(find.byKey(MiMenu.panelKey));
+    expect(panel.bottom, closeTo(anchor.top - MiMenuMetrics.margin, 0.5));
+    expect(find.text('选项 A'), findsOneWidget);
+  });
+
+  testWidgets('点叶子项：回调带 value、菜单自动收起、收口后触发 onDismissed', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    MiMenuSelection? picked;
+    var dismissed = 0;
+    await tester.pumpWidget(
+      page(
+        controller: controller,
+        onSelected: (s) => picked = s,
+        onDismissed: () => dismissed++,
+      ),
+    );
+    await open(tester, controller);
+
+    await tester.tap(find.text('选项 A'));
+    await tester.pumpAndSettle();
+
+    expect(picked, isNotNull);
+    expect(picked!.item.value, 'a');
+    expect(picked!.path, hasLength(1));
+    expect(find.byKey(MiMenu.panelKey), findsNothing);
+    expect(dismissed, 1);
+    expect(controller.isOpen, isFalse);
+  });
+
+  testWidgets('级联：父项展开子列表，首行返回上级，子项回调路径包含父项', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    MiMenuSelection? picked;
+    await tester.pumpWidget(
+      page(controller: controller, onSelected: (s) => picked = s),
+    );
+    await open(tester, controller);
+
+    await tester.tap(find.text('选项 B'));
+    await tester.pumpAndSettle();
+
+    // 二级：首行 = 返回上级（同名行），下面是子项。
+    expect(find.text('子项 1'), findsOneWidget);
+    expect(find.text('选项 B'), findsOneWidget);
+    expect(find.text('选项 A'), findsNothing);
+
+    await tester.tap(find.text('子项 2'));
+    await tester.pumpAndSettle();
+
+    expect(picked, isNotNull);
+    expect(picked!.item.value, 'b2');
+    expect(picked!.path.map((e) => e.value), ['b', 'b2']);
+    expect(find.byKey(MiMenu.panelKey), findsNothing);
+  });
+
+  testWidgets('级联：点首行返回一级', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(page(controller: controller));
+    await open(tester, controller);
+
+    await tester.tap(find.text('选项 B'));
+    await tester.pumpAndSettle();
+    expect(find.text('子项 1'), findsOneWidget);
+
+    await tester.tap(find.text('选项 B'));
+    await tester.pumpAndSettle();
+    expect(find.text('子项 1'), findsNothing);
+    expect(find.text('选项 A'), findsOneWidget);
+  });
+
+  testWidgets('级联：两层行数不同时面板尺寸按 submenuMs 过渡，不瞬跳', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    // 一级 2 行、二级 4 行（返回行 + 3 个子项）：尺寸必须变化的场景。
+    await tester.pumpWidget(
+      page(
+        controller: controller,
+        groups: () => const [
+          MiMenuGroup([
+            MiMenuItem(
+              label: '展开',
+              children: [
+                MiMenuItem(label: '子一'),
+                MiMenuItem(label: '子二'),
+                MiMenuItem(label: '子三'),
+              ],
+            ),
+            MiMenuItem(label: '叶子'),
+          ]),
+        ],
+      ),
+    );
+    await open(tester, controller);
+
+    final one = tester.getSize(find.byKey(MiMenu.panelKey)).height;
+    await tester.tap(find.text('展开'));
+    await tester.pump();
+    // 过渡中段：应该已经在变，但还没到位。
+    await tester.pump(const Duration(milliseconds: 100));
+    final mid = tester.getSize(find.byKey(MiMenu.panelKey)).height;
+    await tester.pumpAndSettle();
+    final two = tester.getSize(find.byKey(MiMenu.panelKey)).height;
+
+    expect(two, greaterThan(one));
+    expect(mid, greaterThan(one), reason: '过渡中段应已长高');
+    expect(mid, lessThan(two), reason: '过渡中段不应直接跳到终值');
+  });
+
+  testWidgets('禁用项不响应；整组禁用同理', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    var calls = 0;
+    await tester.pumpWidget(
+      page(controller: controller, onSelected: (_) => calls++),
+    );
+    await open(tester, controller);
+
+    await tester.tap(find.text('选项 C'));
+    await tester.pumpAndSettle();
+
+    expect(calls, 0);
+    expect(find.byKey(MiMenu.panelKey), findsOneWidget);
+  });
+
+  testWidgets('点遮罩收起；enableScrim=false 时遮罩透明但仍能点外收起', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(page(controller: controller, enableScrim: false));
+    await open(tester, controller);
+
+    final scrim = tester.widget<ColoredBox>(find.byKey(MiMenu.scrimKey));
+    expect(scrim.color, MiTransparencyTokens.clear);
+
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pumpAndSettle();
+    expect(find.byKey(MiMenu.panelKey), findsNothing);
+  });
+
+  testWidgets('collapseOnSelect=false：选中后保持展开（连续操作型菜单）', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    var calls = 0;
+    await tester.pumpWidget(
+      page(
+        controller: controller,
+        collapseOnSelect: false,
+        onSelected: (_) => calls++,
+      ),
+    );
+    await open(tester, controller);
+
+    await tester.tap(find.text('选项 A'));
+    await tester.pumpAndSettle();
+
+    expect(calls, 1);
+    expect(find.byKey(MiMenu.panelKey), findsOneWidget);
+    expect(controller.isOpen, isTrue);
+  });
+
+  testWidgets('多分组：组间画分隔线，禁用整组仍占位', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(useMaterial3: true),
+        home: MiPopupHost(
+          child: Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: Padding(
+                padding: const EdgeInsets.all(100),
+                child: MiMenu(
+                  controller: controller,
+                  groups: const [
+                    MiMenuGroup([MiMenuItem(label: '上层动作')]),
+                    MiMenuGroup([MiMenuItem(label: '危险动作')], enabled: false),
+                  ],
+                  child: const SizedBox(key: anchorKey, width: 200, height: 48),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await open(tester, controller);
+
+    expect(find.text('上层动作'), findsOneWidget);
+    expect(find.text('危险动作'), findsOneWidget);
+  });
+
+  testWidgets('行高：勾号不参与行高，选中行与普通行等高（相邻中心距一致）', (tester) async {
+    final controller = MiMenuController();
+    addTearDown(controller.dispose);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(393, 856);
+    addTearDown(tester.view.reset);
+
+    // 5 行：首 / 末行走 20dp 边距，中间三行都是 12dp —— 比较「选中」与
+    // 「未选中」的中间行高度即可判断勾号有没有把行撑高。
+    await tester.pumpWidget(
+      page(
+        controller: controller,
+        groups: () => const [
+          MiMenuGroup([
+            MiMenuItem(label: '第一项'),
+            MiMenuItem(label: '第二项', selected: true),
+            MiMenuItem(label: '第三项'),
+            MiMenuItem(label: '第四项'),
+            MiMenuItem(label: '第五项'),
+          ]),
+        ],
+      ),
+    );
+    await open(tester, controller);
+
+    double rowHeight(String label) => tester
+        .getSize(
+          find
+              .ancestor(of: find.text(label), matching: find.byType(MiPressable))
+              .first,
+        )
+        .height;
+
+    final selected = rowHeight('第二项');
+    final plain = rowHeight('第三项');
+    expect(
+      selected,
+      closeTo(plain, 0.01),
+      reason: '选中行的勾号 20dp 不应撑高行盒（正文行盒 15.9dp）',
+    );
+    // 行高 = 上下各 12 的行内边距 + 正文行盒（15.9 → 引擎取整成 16.0）。
+    expect(
+      selected,
+      closeTo(MiMenuMetrics.rowPadY * 2 + 15.9, 0.2),
+      reason: '行高应由正文行盒决定',
+    );
+
+    // 相邻中心距：选中行上下两侧都不该比别人多 2dp。
+    final centers = [
+      for (final l in ['第一项', '第二项', '第三项', '第四项', '第五项'])
+        tester.getCenter(find.text(l)).dy,
+    ];
+    // centers[1]→[2] 跨「选中行」，centers[2]→[3] 全为普通行，两者须相等。
+    expect(
+      centers[2] - centers[1],
+      closeTo(centers[3] - centers[2], 0.01),
+      reason: '选中行两侧中心距应与普通行一致',
+    );
+  });
+}
