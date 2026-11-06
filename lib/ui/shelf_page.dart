@@ -720,11 +720,11 @@ class ShelfPageState extends State<ShelfPage>
     final Future<BookSource> sourceFuture = _prepareSource(record, trace);
     sourceFuture.ignore();
     // 开书转场：用 [ReaderOpenRoute] 替掉裸 [MaterialPageRoute]——阅读页作为
-    // **一整张纸从右下角斜向掀开**铺满（铰链钉在屏幕右下角、380ms、两端收力的
-    // 曲线、70dp 圆角），书架静止在后被压暗。延迟路径下骨架屏首帧即放行
-    // （见 `ReaderPage._open`），用户点下即见纸张掀开，而非在书架上等待。
+    // **一整张纸从右侧滑入**铺满（320ms、easeOutCubic、70dp 圆角），书架静止在后
+    // 被压暗。延迟路径下骨架屏首帧即放行（见 `ReaderPage._open`），用户点下即见
+    // 纸张滑入，而非在书架上等待。
     final ReaderOpenRoute route = ReaderOpenRoute(
-      // 退场起步即释放守卫：纸张收回右下角的 260ms 里书架已可点，守卫晚放到
+      // 退场起步即释放守卫：纸张右移滑出的 240ms 里书架已可点，守卫晚放到
       // `popped`（反向动画落定）会吞掉关书后的首击。
       onPopStarted: () => _opening = false,
       builder: (_) => ReaderPage(

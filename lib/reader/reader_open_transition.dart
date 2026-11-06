@@ -1,36 +1,14 @@
-// 开书转场（§2.77 起，§2.113 斜向掀开，§2.114 补「页面弯曲 + 逐渐展开」，
-// §2.115 补折角纸背）。书架 → 阅读页的**翻书**。
+// 开书转场（§2.77）：书架 → 阅读页的**整页「纸张滑入」**。
 //
-// ── 四个几何口径（改这块前先把这四条对齐）────────────────────────────
-//  ① 触发点（起点）= 屏幕**右下角**：点书即从这一角起势，整张纸钉在这点附近。
-//  ② 旋转轴（装订边）= 过触发点、沿**反对角线**（屏幕「右上」45°）的直线。选它
-//     不是随手：轴线另一半落在**屏幕下方之外**，纸立起来时整个投影退化成那条屏外
-//     直线（只擦到右下角一点）⇒ 屏内一像素不露，这是「先按住、等就绪再翻」的前提。
-//  ③ 展开方向 = 自右下角向屏幕**左上**铺开：纸从屏外翻进来，自由角（左上，离铰链
-//     最远）沿斜向扫进屏内，其余三角随后归位。
-//  ④ 结束状态 = **恒等矩阵**：四边贴屏幕四边、圆角收到 0、纸完全平直 ⇒ 与静态阅读
-//     页逐像素一致（布局与正文排版全程不受影响，`Transform`/`ClipPath` 只碰绘制）。
-//
-// ── 「像真书被翻开」而不是「一块板从角上扇出来」─────────────────────
-// 只有刚性旋转时，纸是一块没有厚度的板——这就是「生硬」的另一半。真实纸页翻开时
-// 会**弯曲**：离铰链最远的自由角先卷起，中段卷得最狠，落位时被拉平。本实现把这条
-// 单列出来（[readerOpenCurl]）：
-//   · 卷曲量走 `sin(π·进度)`：起手 0（纸是直的、且整张不可见）、中段最大、落位回 0
-//     ⇒ 「逐渐展开」就是这条曲线，不是另加的一段动画。
-//   · 卷曲分两层表达：**轮廓**（[readerOpenCurlPath]，自由角的圆角被撑大 ⇒ 角上
-//     让出一块）与**折角纸背**（[readerOpenFoldPath] + [ReaderOpenFoldPainter]，
-//     一片不透明的纸被翻过来盖在纸面上，带投影与折痕高光）。只有轮廓时纸读成
-//     「被剪掉角的板」，补上纸背才读成「纸角翻折过来」。
-//   · ⚠️ 真正的柱面弯曲需要把阅读页抓成纹理再按网格变形（`toImage` + `drawVertices`），
-//     那会给开书关键路径再加一次全屏快照，与「开书不卡」的既有红线冲突，故用
-//     「轮廓 + 折角 + 光影」的等价近似：观感一致，零额外光栅化。
+// 形态：整页纸从右侧平移铺满屏，320ms easeOutCubic，圆角恒定 70px、平移到位才收 0，
+// 书架在后被 scrim 压暗至 54%，纸上直接是已就绪的阅读页。
 //
 // ⚠️ §2.78 §5 订正：参考动效里书架其实同向**左移**并伴压暗（本实现按「静止」做了），
 // **是否补这条视差待拍板**（挂账 #10）。
 //
-// 「先按住，就绪后再翻」：若转场播完时阅读页首帧未渲染，「页」是透明的，屏幕上
-// 只剩被 scrim 压暗的书架 ⇒ 实测会整屏先暗后亮闪一下。故点书后先把转场按住
-// （页立在屏外、不压暗书架），等阅读页首帧真正上屏再放行——没有空页期。
+// 「先按住，就绪后再滑」：若转场播完时阅读页首帧未渲染，「纸」是透明的，屏幕上只剩
+// 被 scrim 压暗的书架 ⇒ 实测会整屏先暗后亮闪一下。故点书后先把转场按住（纸停在
+// 屏幕右侧之外、不压暗书架），等阅读页首帧真正上屏再放行——没有空纸期。
 //
 // 门闸（`ReaderOpenTransition`）只回答「阅读页好了没有」，与遮罩无关：**按住的是
 // 路由动画本身**（作用在 `PageRoute` 的 `AnimationController` 上），所以等待期
@@ -39,83 +17,37 @@
 // `_ready` 的 `setState` 那一刻）；另有 [kReaderOpenHoldTimeout] 兜底防漏报卡死。
 //
 // 「点击即开书」路径（书架延迟书源 [ReaderPage.sourceFuture]）：阅读页先铺骨架屏
-// （`_OpenSkeleton`），**骨架首帧上屏即放行翻页**——页不透明（骨架即画），等待
-// 全程在翻开后的阅读页里进行；正文就绪后仍被骨架幕布盖到落位收敛才揭幕
-// （`ReaderPage._skeletonCover`，防闪屏）。直供书源（深链 / 详情页 / 生词本）
-// 仍走「精确落位收敛才放行」的旧口径，本文件的按住语义对它不变。
+// （`_OpenSkeleton`），**骨架首帧上屏即放行**——纸不透明（骨架即画），等待全程
+// 在滑入后的阅读页里进行，门闸不再按到正文就绪。直供书源（深链 / 详情页 /
+// 生词本）仍走「精确落位收敛才放行」的旧口径，本文件的按住语义对它不变。
 //
 // 路由仍是 [Navigator.push] + [PageRoute]，返回手势 / 预测性返回行为**完全不变**；
-// 阅读页内部逻辑**零改动**，本转场只在**上层**加旋转、卷曲、光影与遮罩。
+// 阅读页内部逻辑**零改动**，本转场只在**上层**加位移与遮罩。
 
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// 翻页动画时长。
+/// 纸张滑入时长：§2.109 提速拍板——参考动效 11 帧 ≈ 460ms，用户实测「观感偏慢」。
 ///
-/// §2.109 曾从 460ms 提速到 320ms（当时翻页还在盖住等待）。§2.113 改斜向掀开：
-/// 行程变成「从屏外斜着展开」而非「一块板横扫」，曲线也换成两端都收力的形态
-/// （[kReaderOpenCurve]），同样的观感需要更多时间走完 → 380ms。等待期仍由门闸
-/// 兜着（不靠动画盖），故时长只服务「翻得自然」，不影响开书快慢。
-const Duration kReaderOpenDuration = Duration(milliseconds: 380);
+/// §2.78 改「先按住、就绪后再滑」后，等待期已不再被滑入盖住，滑入只剩「内容
+/// 已就绪的登场」——长时长失去「盖住等待」的收益，只贡献拖沓；提速到 320ms
+/// （约 0.7×）曲线形态（easeOutCubic）不变。
+const Duration kReaderOpenDuration = Duration(milliseconds: 320);
 
-/// 返回（合回右下角）时长：比进入略快，收得干脆。
-const Duration kReaderOpenReverseDuration = Duration(milliseconds: 260);
+/// 返回（纸张右移滑出）时长：比进入略快，收得干脆。
+const Duration kReaderOpenReverseDuration = Duration(milliseconds: 240);
 
-/// 纸页**基础**圆角半径（自由角之外的三只角）：参考动效实测 70px。
-///
-/// 只有基础值；自由角（左上）的圆角随卷曲被撑大，见 [readerOpenCurlPath]。
+/// 纸张圆角半径：参考动效实测 70px（屏宽的 15.8%）。
 const double kReaderPaperRadius = 70;
 
 /// 背景书架被压暗的**终值** alpha（参考动效实测 0.54）。
 const double kReaderOpenScrimAlpha = 0.54;
 
-/// 观察距离（以屏幕**对角线**为单位）：透视强度 = `1 / (本倍数 × 对角线)`。
-///
-/// 必须按视口尺寸反比缩放才**同时适配手机与桌面**：固定常数（旧 0.0008）在
-/// 1600dp 的桌面窗口上会退化成正交（看不出立体），在窄屏上又把纸压扁。
-/// 按对角线取而不是按宽/高：纸页离铰链最远的角到眼的距离恒有 3.75−0.94 倍
-/// 对角线的余量（`w ∈ [0.75, 1.25]`），任何比例、任何倾角都不会「穿到眼后」炸开。
-const double kReaderOpenEyeDistance = 3.75;
-
-/// 对角线夹取区间（dp）：防止极端窗口把纸拍扁 / 拉爆。
-const double _kPerspectiveMinDiagonal = 400;
-const double _kPerspectiveMaxDiagonal = 2200;
-
-/// 掀页起手倾角：-90° = 纸页立起到「与屏幕垂直」。负号 = 纸从屏幕**远离观察者**
-/// 的一侧翻上来（近大远小 ⇒ 起手时视觉面积≈0，不会先糊一大片在屏上）。
-const double kReaderPeelAngle = -math.pi / 2;
-
-/// 铰链轴在屏幕平面内的方向角（`Rz` 角）：-45° ⇒ 轴方向 (√2/2, -√2/2)，即屏幕上
-/// 「右上」的反对角线。过右下角时轴线另一半落在屏幕**下方之外**（见文件头 ②）。
-const double kReaderPeelAxisAngle = -math.pi / 4;
-
-/// 翻页时间曲线：两端都收力（起手从静止加速 → 中段快速翻过 → 尾巴长减速软落位）。
-///
-/// 旧形态用 `easeOutCubic`（t=0 就是全速、末段硬刹）——「生硬」的一半来自曲线本身。
-/// 本条在 t=0 与 t=1 的斜率都是 0：纸页像被手掀起来、又被惯性轻轻放平。
-const Curve kReaderOpenCurve = Cubic(0.20, 0.0, 0.25, 1.0);
-
-/// 整页受光衰减终值（alpha）：纸立起来时背光最暗、平铺归 0。
-const double kReaderPageShadeMax = 0.20;
-
-/// 卷曲背光终值（alpha）：贴自由角两侧边的渐变，读出「纸角卷起后转离光源」的暗面。
-///
-/// 太弱（旧 0.18）在真机上几乎看不见，纸会读成一块平卡片；0.30 是「一眼看出纸边
-/// 卷起来了」又不至于像挖了个洞的量级。
-const double kReaderCurlShadeMax = 0.42;
-
-/// 卷曲幅度的上限：自由角的圆角外延 = 本比例 × 屏幕短边。
-///
-/// 0.16 的量级：手机（393 短边）≈ 63dp、桌面（900 短边）≈ 144dp——大到一眼看出
-/// 「纸卷起来了」，又不至于把角落挖掉一块。
-const double kReaderCurlMaxRatio = 0.16;
-
 /// 圆角收回的起点进度。
 ///
-/// 圆角**保持满值直到平铺到位才突收到 0**，**不能**用「圆角随进度线性收」
-/// （翻页中段圆弧会一路变小）。这里把收回压在进度最后 1% 之内，
+/// 参考动效圆角**保持 70px 直到平移到位才突收到 0**，**不能**用「圆角随进度线性收」
+/// （滑入中段圆弧会一路变小，与参考不符）。这里把收回压在进度最后 1% 之内，
 /// 观感即「落位瞬间收角」。
 const double _kRadiusSettleFrom = 0.99;
 
@@ -123,279 +55,6 @@ const double _kRadiusSettleFrom = 0.99;
 ///
 /// 转场被按住时没有任何其他退出路径，漏报 = 书永远打不开，故超时兜底。
 const Duration kReaderOpenHoldTimeout = Duration(seconds: 3);
-
-/// 视口对应的透视强度（`Matrix4` 的 (3,2) 位）：见 [kReaderOpenEyeDistance]。
-double readerOpenPerspective(Size size) {
-  final double diagonal = math.sqrt(
-    size.width * size.width + size.height * size.height,
-  ).clamp(_kPerspectiveMinDiagonal, _kPerspectiveMaxDiagonal);
-  return 1 / (kReaderOpenEyeDistance * diagonal);
-}
-
-/// 掀页变换：绕「过右下角、沿反对角线」的装订边，把纸页从立起转到平铺。
-///
-/// [tilt]：1 = 完全立起（[kReaderPeelAngle]，投影退化成屏外一条线），
-/// 0 = 平铺（**恒等矩阵**，落位与静态阅读页完全一致）。
-///
-/// 矩阵 = `T(右下角) · P · Rz(φ) · Rx(θ) · Rz(-φ) · T(-右下角)`：
-/// 把 [kReaderPeelAxisAngle] 方向的轴转到 x 轴再绕它转 [tilt]（绕任意平面内轴翻折），
-/// 原点钉在右下角（该点在轴上 ⇒ 全程不动，纸像沿装订边翻开）。
-///
-/// ⚠️ **透视中心必须一起搬到右下角**（`T(pivot) · P · T(-pivot)`，而不是把
-/// `P` 放在最外层）：投影中心是 `(0, 0, -1/k)`，只有它落在「过铰链点、含 z 轴的
-/// 平面」里，纸立起到 90° 时整张纸才会**退化成一条线**（= 屏内看不见）。按旧写法
-/// （眼睛在左上角）90° 的纸会在屏上摊成一大块楔形——「按住期一像素不露」直接失效。
-Matrix4 readerOpenPeelTransform(Size size, double tilt) {
-  final Offset pivot = Offset(size.width, size.height);
-  return Matrix4.identity()
-    ..translateByDouble(pivot.dx, pivot.dy, 0, 1)
-    ..multiply(Matrix4.identity()..setEntry(3, 2, readerOpenPerspective(size)))
-    ..rotateZ(kReaderPeelAxisAngle)
-    ..rotateX(kReaderPeelAngle * tilt)
-    ..rotateZ(-kReaderPeelAxisAngle)
-    ..translateByDouble(-pivot.dx, -pivot.dy, 0, 1);
-}
-
-/// 卷曲曲线：进度的 0 → 1 → 0（`sin(π·turn)`）。
-///
-/// [turn] = 0（纸立在屏外）→ 1（平铺）。两端都必须为 0：
-/// 起手时纸是**直的**（否则立着的那张纸边缘会弯，屏外反而漏出弯边）；
-/// 落位时必须**完全平**（否则屏幕角上留一条弧线缺口 = 与静态阅读页不一致）。
-/// 中段取满 = 「先把纸卷起来翻过来、再铺平」，这就是「逐渐展开」。
-double readerOpenCurl(double turn) {
-  final double t = turn.clamp(0.0, 1.0);
-  // 端点**必须精确为 0**：`sin(π)` 在浮点下是 1.2e-16，不夹掉的话落位那一帧的
-  // 轮廓仍会带一丝卷曲（与静态阅读页差一个亚像素缺口）。
-  if (t <= 0 || t >= 1) return 0;
-  return math.sin(math.pi * t);
-}
-
-/// 卷曲幅度（dp）：0 = 纸是平直的一张，> 0 = 自由角（左上）被卷起多少。
-double readerOpenCurlAmount(Size size, double turn) =>
-    kReaderCurlMaxRatio * math.min(size.width, size.height) *
-    readerOpenCurl(turn);
-
-/// 四分弧的三次贝塞尔常数：控制点落在边长的 0.5523 处时，曲线逼近正圆弧到 0.02%。
-const double kReaderArcK = 0.5523;
-
-/// 自由角圆弧的**起弧点**到角点的距离（dp）：基础圆角 + 卷曲量。
-///
-/// 轮廓（[readerOpenCurlPath]）与折角（[readerOpenFoldPath]）共用这一个数——
-/// 折角的折痕必须**严丝合缝地贴在这条弧上**，否则会浮在纸心（读作「纸上有块白斑」）
-/// 或者被剪掉一半（读作「纸角缺一块」）。
-double readerOpenCurlReach(
-  Size size, {
-  required double radius,
-  required double curl,
-}) {
-  final double short = math.min(size.width, size.height);
-  final double r = radius.clamp(0.0, short / 2);
-  // 1.45 = 「卷曲撑大圆角」与「卷曲压塌两条边」两笔量的合账（旧实现分成 c 与 sag，
-  // 起弧点恰好是 c + sag = r + 1.45·curl，这里只是把它显式写出来）。
-  return (r + curl * 1.45).clamp(0.0, short * 0.46);
-}
-
-/// 纸页轮廓：三只角正常圆角，**自由角（左上）随卷曲被撑大**。
-///
-/// 只用「轮廓 + 折角」表达弯曲而不是把纸真的掰弯：一个 `Matrix4` 是投影变换，
-/// 保直线、掰不弯曲面；真网格要么抓纹理、要么上着色器，都会在开书关键路径上加
-/// 一次全屏快照（见文件头 ⚠️）。卷曲量 [curl] = 0 时本函数退化成普通圆角矩形。
-Path readerOpenCurlPath(
-  Size size, {
-  required double radius,
-  required double curl,
-}) {
-  final double w = size.width;
-  final double h = size.height;
-  final double short = math.min(w, h);
-  final double r = radius.clamp(0.0, short / 2);
-  final double reach = readerOpenCurlReach(size, radius: radius, curl: curl);
-  return Path()
-    ..moveTo(0, h - r)
-    ..lineTo(0, reach)
-    // 自由角：四分弧。卷曲越大 `reach` 越远 ⇒ 弧被撑大、角被「卷」掉一块。
-    ..cubicTo(0, reach * kReaderArcK, reach * kReaderArcK, 0, reach, 0)
-    ..lineTo(w - r, 0)
-    ..quadraticBezierTo(w, 0, w, r)
-    ..lineTo(w, h - r)
-    // 右下角就是铰链点：留圆角但角度不变（这点全程钉住，不能挖掉）。
-    ..quadraticBezierTo(w, h, w - r, h)
-    ..lineTo(r, h)
-    ..quadraticBezierTo(0, h, 0, h - r)
-    ..close();
-}
-
-/// 折角尖端沿角平分线伸进纸面的位置（相对起弧距离 [readerOpenCurlReach] 的 x 坐标）。
-///
-/// 0.46 时折角是个「不到巴掌大」的三角：再大就读作「贴了张便签」，再小就看不出翻折。
-const double kReaderFoldTipRatio = 0.50;
-
-/// 折角尖端倒圆的比例（相对尖端坐标）：折痕收尾不能是尖刺。
-const double kReaderFoldTipRound = 0.26;
-
-/// 折角投影偏移（以卷曲量为单位）：纸角翘起 ⇒ 暗影落在纸心一侧。
-const double kReaderFoldShadowShift = 0.085;
-
-/// 折角投影的最强 alpha：两层纸叠在一起处的环境遮蔽。
-const double kReaderFoldShadowMax = 0.34;
-
-/// 折角纸背的受光色 / 背光色（**半透白**，不是实色白）。
-///
-/// 纸背是「同一张纸的另一面」，底色应当随主题走：奶油纸上混成近白、夜间底色上混成
-/// 被打亮的一层灰。写死实色白会在夜间模式开书时闪一记白光。
-const Color kReaderFoldFaceLight = Color(0xE8FFFFFF);
-const Color kReaderFoldFaceShade = Color(0xB4FFFFFF);
-
-/// 折角（自由角翻起来露出的那片**纸背**）的轮廓。
-///
-/// 参考图的读法不是「纸角被裁掉一块」，而是**纸被翻折过来、露出背面**。所以形状要
-/// 同时满足两件事：
-///   · 外缘与剪影的角弧**同一段贝塞尔、同一组端点** ⇒ 零缝隙（折痕不会浮在纸心）；
-///   · 内缘收成一个**指向纸心的圆角尖端** ⇒ 读作「折起来的一层纸」。内缘若对称地
-///     鼓出去（Lens）会读成「贴了片叶子」——这是第一版的形态，被否掉了。
-///
-/// [curl] <= 0.5 时返回空路径：平直的纸没有折角（起手与落位都必须**一丝不画**，
-/// 否则落位帧会在屏幕角上留一片白）。
-Path readerOpenFoldPath(
-  Size size, {
-  required double radius,
-  required double curl,
-}) {
-  if (curl <= 0.5) return Path();
-  final double reach = readerOpenCurlReach(size, radius: radius, curl: curl);
-  final double tip = reach * kReaderFoldTipRatio;
-  final double round = tip * kReaderFoldTipRound;
-  // 尖端倒圆：沿两条折边各退 `round`，再用二次贝塞尔以尖端点作控制点收口。
-  final double dx = reach - tip;
-  final double dy = tip;
-  final double len = math.sqrt(dx * dx + dy * dy);
-  final double p1x = tip + dx / len * round;
-  final double p1y = tip - dy / len * round;
-  return Path()
-    // 外缘：与剪影的自由角弧完全同源 ⇒ 严丝合缝。
-    ..moveTo(0, reach)
-    ..cubicTo(0, reach * kReaderArcK, reach * kReaderArcK, 0, reach, 0)
-    // 折边（贴顶边那一侧）→ 圆角尖端 → 折边（贴左边那一侧）→ 回到起点。
-    ..lineTo(p1x, p1y)
-    ..quadraticBezierTo(tip, tip, p1y, p1x)
-    ..close();
-}
-
-/// 折角的**折痕**（内缘）：纸背与纸面的交界线。高光沿它落。
-Path readerOpenFoldCrease(
-  Size size, {
-  required double radius,
-  required double curl,
-}) {
-  if (curl <= 0.5) return Path();
-  final double reach = readerOpenCurlReach(size, radius: radius, curl: curl);
-  final double tip = reach * kReaderFoldTipRatio;
-  final double round = tip * kReaderFoldTipRound;
-  final double dx = reach - tip;
-  final double dy = tip;
-  final double len = math.sqrt(dx * dx + dy * dy);
-  final double p1x = tip + dx / len * round;
-  final double p1y = tip - dy / len * round;
-  return Path()
-    ..moveTo(reach, 0)
-    ..lineTo(p1x, p1y)
-    ..quadraticBezierTo(tip, tip, p1y, p1x);
-}
-
-/// 折角的绘制层：投影（两层纸叠在一起的环境遮蔽）+ 纸背（明暗渐变）+ 折痕高光。
-///
-/// 这是「像真书被翻开」的最后一块：只有轮廓时纸读成一块**被剪掉角**的板；
-/// 补上这片不透明纸背，角才读成「翻折过来的纸」。
-class ReaderOpenFoldPainter extends CustomPainter {
-  /// 创建折角绘制层。
-  const ReaderOpenFoldPainter({
-    required this.radius,
-    required this.curl,
-    required this.opacity,
-  });
-
-  /// 三只角的基础圆角（与剪切器同口径）。
-  final double radius;
-
-  /// 卷曲幅度（dp）：0 = 平直，不画。
-  final double curl;
-
-  /// 可见度 0→1→0（[readerOpenCurl]）：两端必须为 0，纸直着的时候不许有折角。
-  final double opacity;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (opacity <= 0.01) return;
-    final Path fold = readerOpenFoldPath(size, radius: radius, curl: curl);
-    if (fold.getBounds().isEmpty) return;
-
-    // ① 投影：先按「折角整体往纸心方向挪一点 + 高斯模糊」画一层黑，再盖上纸背 ⇒
-    //    露出一圈带方向的柔暗边。方向（+x, +y）就是纸心方向：纸角翘起后挡光、
-    //    亮的纸背压暗下面那张纸，暗边落在折痕的**纸心侧**。
-    final double shift = curl * kReaderFoldShadowShift;
-    canvas.drawPath(
-      fold.shift(Offset(shift, shift)),
-      Paint()
-        ..color = Color.fromRGBO(0, 0, 0, kReaderFoldShadowMax * opacity)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, math.max(1.5, curl * 0.16)),
-    );
-
-    // ② 纸背：从剪口（朝光，亮）到折痕尖端（转离光源，暗）的线性渐变。
-    //    ⚠️ 色值本身带 alpha（半透白，随主题底色自动化开），这里只能**乘**上可见度，
-    //    不能直接 `withValues(alpha: opacity)` —— 那会把半透白冲成纯白实色。
-    final Rect bounds = fold.getBounds();
-    canvas.drawPath(
-      fold,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: <Color>[
-            kReaderFoldFaceLight.withValues(
-                alpha: kReaderFoldFaceLight.a * opacity),
-            kReaderFoldFaceShade.withValues(
-                alpha: kReaderFoldFaceShade.a * opacity),
-          ],
-        ).createShader(bounds),
-    );
-
-    // ③ 折痕高光：折起来的那道棱是整张纸上最亮的一条线，缺了它折角会读成平面贴图。
-    canvas.drawPath(
-      readerOpenFoldCrease(size, radius: radius, curl: curl),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2
-        ..strokeCap = StrokeCap.round
-        ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.55 * opacity),
-    );
-  }
-
-  @override
-  bool shouldRepaint(ReaderOpenFoldPainter oldDelegate) =>
-      oldDelegate.radius != radius ||
-      oldDelegate.curl != curl ||
-      oldDelegate.opacity != opacity;
-}
-
-/// 纸页轮廓的剪切器（公开以便测试读回口径：基础圆角 / 卷曲量）。
-class ReaderOpenCurlClipper extends CustomClipper<Path> {
-  /// 创建剪切器。
-  const ReaderOpenCurlClipper({required this.radius, required this.curl});
-
-  /// 三只角的基础圆角（自由角在此之上再加 [curl]）。
-  final double radius;
-
-  /// 卷曲幅度（dp）：0 = 平直。
-  final double curl;
-
-  @override
-  Path getClip(Size size) =>
-      readerOpenCurlPath(size, radius: radius, curl: curl);
-
-  @override
-  bool shouldReclip(ReaderOpenCurlClipper oldClipper) =>
-      oldClipper.radius != radius || oldClipper.curl != curl;
-}
 
 /// 开书转场的**门闸**：阅读页 ⇄ 转场之间的唯一通信面（只回答「好了没有」）。
 ///
@@ -408,7 +67,7 @@ abstract final class ReaderOpenTransition {
   /// 当前是否有转场在等（供阅读页判断要不要报「我好了」）。
   static bool get isActive => _release != null;
 
-  /// 由转场创建：登记「可以放行翻页了」的回调。
+  /// 由转场创建：登记「可以放行滑入了」的回调。
   static void arm(Object owner, VoidCallback onReady) {
     _owner = owner;
     _release = onReady;
@@ -430,11 +89,10 @@ abstract final class ReaderOpenTransition {
   }
 }
 
-/// 开书转场路由：阅读页作为一整页书从**右下角沿装订边翻开**铺满，书架静止在后被压暗。
+/// 开书转场路由：阅读页作为一整张纸从右侧滑入铺满，书架静止在后被压暗。
 ///
-/// 与常规路由的区别是**初始不起跑**：路由入栈后动画会被 [hold] 按住，页面立在
-/// 屏外（投影退化成右下角外的一条线、不可见）、也不压暗书架；阅读页首帧上屏后
-/// 由 [release] 放行才播翻页。
+/// 与常规路由的区别是**初始不起跑**：路由入栈后动画会被 [hold] 按住，纸张停在
+/// 屏幕右侧之外、也不压暗书架；阅读页首帧上屏后由 [release] 放行才播滑入。
 class ReaderOpenRoute extends PageRoute<void> {
   /// 创建开书转场。
   ReaderOpenRoute({required this.builder, this.onPopStarted});
@@ -445,7 +103,7 @@ class ReaderOpenRoute extends PageRoute<void> {
   /// 返回手势 / 系统返回**发起**那一刻的回调（`didPop`，动画起步即调）。
   ///
   /// 书架开书守卫用它在退场**开始**就释放（而非等 `popped` 要等的反向动画落定）：
-  /// 页面合回右下角期间书架已可点，守卫晚放 = 关书后首点被吞（见 `shelf_page._openBook`）。
+  /// 纸张滑出期间书架已可点，守卫晚放 = 关书后首点被吞（见 `shelf_page._openBook`）。
   final VoidCallback? onPopStarted;
 
   AnimationController? _controller;
@@ -465,10 +123,10 @@ class ReaderOpenRoute extends PageRoute<void> {
 
   /// 把转场按住在起点，返回**是否真的按住了**。
   ///
-  /// 「按住」= **冻住进度**（否则页带着空白翻进来）+ **状态停在 `forward`**（`opaque`
+  /// 「按住」= **冻住进度**（否则纸带着空白滑进来）+ **状态停在 `forward`**（`opaque`
   /// 只在动画 `completed` 时才置回 true，一旦 completed 下层书架不再绘制、屏幕空掉）。
-  /// 返回 `false`：控制器还没建，或进度已到 1（那时 `opaque` 已 true）。
-  /// 另：`canceled: false` **不是**「让 future 悬着」——`whenCompleteOrCancel`
+  /// 返回 `false`：控制器还没建，或进度已到 1（那时 `opaque` 已 true，挪回屏幕外只会
+  /// 露空白）。另：`canceled: false` **不是**「让 future 悬着」——`whenCompleteOrCancel`
   /// 在 `_complete()` / `_cancel()` 下都会结算，只是避免 `orCancel` 多一条错误路径。
   bool hold() {
     final AnimationController? controller = _controller;
@@ -477,7 +135,7 @@ class ReaderOpenRoute extends PageRoute<void> {
     return true;
   }
 
-  /// 放行：页面带着**已经渲染好的内容**从右下角翻开（完整 [kReaderOpenDuration]）。
+  /// 放行：纸张带着**已经渲染好的正文**从起点滑入（完整 320ms）。
   /// 返回**是否真的起跑了**；被返回手势打断时不跑，返回 `false`。
   bool release() {
     final AnimationController? controller = _controller;
@@ -524,8 +182,8 @@ class ReaderOpenRoute extends PageRoute<void> {
     Animation<double> secondaryAnimation,
     Widget child,
   ) {
-    // 进入：阅读页**自己**沿装订边翻开，不再另加平台转场（两层动效会打架）。
-    return _PageFlipTransition(
+    // 进入：阅读页**自己**平移进来，不再另加平台转场（两层动效会打架）。
+    return _PaperSlideTransition(
       route: this,
       animation: animation,
       child: child,
@@ -533,9 +191,9 @@ class ReaderOpenRoute extends PageRoute<void> {
   }
 }
 
-/// 转场本体：底层一块压在书架上的暗化层 + 上层一页从右下角翻开的卷曲纸页。
-class _PageFlipTransition extends StatefulWidget {
-  const _PageFlipTransition({
+/// 转场本体：底层一块压在书架上的暗化层 + 上层一张从右平移进来的圆角纸。
+class _PaperSlideTransition extends StatefulWidget {
+  const _PaperSlideTransition({
     required this.route,
     required this.animation,
     required this.child,
@@ -544,18 +202,18 @@ class _PageFlipTransition extends StatefulWidget {
   /// 宿主路由（用于 [ReaderOpenRoute.hold] / [ReaderOpenRoute.release]）。
   final ReaderOpenRoute route;
 
-  /// 路由转场进度 0→1（0 = 页立在屏外、不可见）。
+  /// 路由转场进度 0→1（0 = 纸张完全在屏幕右侧之外）。
   final Animation<double> animation;
 
-  /// 阅读页本体（即那一页书）。
+  /// 阅读页本体（即那张「纸」）。
   final Widget child;
 
   @override
-  State<_PageFlipTransition> createState() => _PageFlipTransitionState();
+  State<_PaperSlideTransition> createState() => _PaperSlideTransitionState();
 }
 
-class _PageFlipTransitionState extends State<_PageFlipTransition> {
-  /// 本层是否正被「按住」：按住期间**视觉恒为 p == 0**（页立在屏外、不可见）。
+class _PaperSlideTransitionState extends State<_PaperSlideTransition> {
+  /// 本层是否正被「按住」：按住期间**视觉恒为 p == 0**。
   ///
   /// 用标志位而不是把控制器 `value` 写 0：`value` setter 会 `notifyListeners()`，
   /// 而 `initState` 跑在 build 相位，标记祖先 `_ModalScope` 重建会抛「setState() or
@@ -596,7 +254,7 @@ class _PageFlipTransitionState extends State<_PageFlipTransition> {
   void _release() {
     if (!mounted || !_held) return;
     // 先让路由决定要不要起跑：被返回手势打断时它会拒绝，此时**保持按住**，视觉继续
-    // 停在 p == 0（别把页从半路露出来），超时兜底也继续留着。
+    // 停在 p == 0（别把纸从半路露出来），超时兜底也继续留着。
     if (!widget.route.release()) return;
     _timeout?.cancel();
     _timeout = null;
@@ -606,83 +264,33 @@ class _PageFlipTransitionState extends State<_PageFlipTransition> {
 
   @override
   Widget build(BuildContext context) {
-    // 铰链原点取**整页尺寸**（全屏路由 ⇒ 与视口一致）：桌面窗口改尺寸、平板分屏
-    // 时右下角跟着变，不写死任何分辨率。
-    final Size size = MediaQuery.sizeOf(context);
     return AnimatedBuilder(
       animation: widget.animation,
       child: widget.child,
       builder: (BuildContext context, Widget? paper) {
+        // 参考动效的位移曲线是 easeOutCubic：半程已走 87.5%。
         final double p =
-            kReaderOpenCurve.transform(_held ? 0 : widget.animation.value);
-        // 立起程度：1 = 立在屏外（不可见），0 = 平铺。翻折角只由它驱动。
-        final double tilt = 1 - p;
-        // 卷曲：0 → 1 → 0，与倾角是两条曲线（纸先被卷起来翻过去，最后才被拉平）。
-        final double curl01 = readerOpenCurl(p);
-        final double curl = readerOpenCurlAmount(size, p);
-        // 圆角：全程满值，仅在落位的一瞬间收回（见 [_kRadiusSettleFrom]）。
+            Curves.easeOutCubic.transform(_held ? 0 : widget.animation.value);
+        final double width = MediaQuery.sizeOf(context).width;
+        // 圆角：全程 70，仅在落位的一瞬间收回（见 [_kRadiusSettleFrom]）。
         final double settle =
             ((p - _kRadiusSettleFrom) / (1 - _kRadiusSettleFrom)).clamp(0.0, 1.0);
         return Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            // 背景：书架**不动**，只被压暗（alpha 到 54%）；等待期 p == 0 ⇒ 不先暗。
+            // 背景：书架**不动**，只被压暗（alpha 线性增到 54%）；等待期 p == 0 ⇒ 不先暗。
             ColoredBox(
               color: Colors.black.withValues(alpha: kReaderOpenScrimAlpha * p),
             ),
-            // 页面：沿装订边翻折 + 透视 + 卷曲轮廓 + 光影。`Transform`/`ClipPath`
-            // 只影响绘制与命中测试，不触发布局；按住期（页投影在屏外）`IgnorePointer`
-            // 让点击照常落到下层书架（-90° 附近逆变换会把命中区映射成一条线，不可靠）。
-            IgnorePointer(
-              ignoring: _held,
-              child: Transform(
-                transform: readerOpenPeelTransform(size, tilt),
-                child: ClipPath(
-                  clipper: ReaderOpenCurlClipper(
-                    radius: kReaderPaperRadius * (1 - settle),
-                    curl: curl,
-                  ),
-                  // 折角层：画在纸**上面**（`foregroundPainter`），因为那片纸背是
-                  // 翻过来盖在纸面上的第二层纸，不是背景。
-                  child: CustomPaint(
-                    foregroundPainter: ReaderOpenFoldPainter(
-                      radius: kReaderPaperRadius * (1 - settle),
-                      curl: curl,
-                      opacity: curl01,
-                    ),
-                    child: DecoratedBox(
-                      // ⚠️ 必须 `foreground`：`DecoratedBox` 默认把装饰画在**子节点下面**，
-                      // 而纸页是不透明的一整块（阅读页自己铺底色）⇒ 默认位置上的背光
-                      // 一丝都看不见（旧实现的「背光压暗」其实一直是空转）。
-                      position: DecorationPosition.foreground,
-                      // 受光衰减：纸立起来时整页压暗、平铺归 0。
-                      decoration: BoxDecoration(
-                        color: Color.fromRGBO(0, 0, 0, kReaderPageShadeMax * tilt),
-                      ),
-                      child: DecoratedBox(
-                        // 卷曲背光：贴**自由角**（左上）的斜向渐变带（沿反对角线方向
-                        // 淡出）。纸角卷离屏面后转离光源 ⇒ 角上一带压暗、向纸心迅速
-                        // 化开，这是「这是一张纸、不是一个色块」最直接的读法。
-                        position: DecorationPosition.foreground,
-                        decoration: BoxDecoration(
-                          gradient: curl01 <= 0.01
-                              ? null
-                              : LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: <Color>[
-                                    Color.fromRGBO(
-                                        0, 0, 0, kReaderCurlShadeMax * curl01),
-                                    const Color.fromRGBO(0, 0, 0, 0),
-                                  ],
-                                  stops: const <double>[0, 0.24],
-                                ),
-                        ),
-                        child: paper,
-                      ),
-                    ),
-                  ),
-                ),
+            // 纸张：整页平移 + 圆角。`Transform` 只影响绘制与命中测试，不触发布局。
+            // `Stack` 默认 `Clip.hardEdge` ⇒ 纸在屏幕外时天然不可见，但 build / layout /
+            // paint 照常发生（阅读页首帧渲染依赖这一点）。
+            Transform.translate(
+              offset: Offset(width * (1 - p), 0),
+              child: ClipRRect(
+                borderRadius:
+                    BorderRadius.circular(kReaderPaperRadius * (1 - settle)),
+                child: paper,
               ),
             ),
           ],

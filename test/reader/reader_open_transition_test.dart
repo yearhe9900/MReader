@@ -1,34 +1,29 @@
-// 开书转场「先按住、就绪后再翻」（`ReaderOpenRoute`，右下角斜向掀页）的 widget 测试。
+// 开书转场「先按住、就绪后再滑」（`ReaderOpenRoute`）的 widget 测试。
 //
 // 形态来源：参考动效的逐帧量化见 §2.77；「打开书闪一下」的诊断与修法
-// （**点书后按住、等阅读页就绪再放行**）见 §2.78；斜向掀开（铰链过右下角、沿反对角线）
-// 见 §2.113。放行门闸（路线 A §7③「排到目标页才上屏」，见 路线 A §7）：分页模式的
-// 「就绪」= **目标语义坐标精确落位收敛**，不是「首帧上屏」——估算落位只是过渡帧，
-// `_pendingLand` 二次精确落位完成前转场必须继续按住（否则翻页中视口大跳 =「开书闪动」主链）。
+// （**点书后按住、等阅读页就绪再放行**）见 §2.78。放行门闸（路线 A §7③
+// 「排到目标页才上屏」，见 路线 A §7）：分页模式的「就绪」= **目标语义坐标
+// 精确落位收敛**，不是「首帧上屏」——估算落位只是过渡帧，`_pendingLand` 二次
+// 精确落位完成前转场必须继续按住（否则滑入中视口大跳 =「开书闪动」主链）。
 // §7②「占位换血出视口」：放行时刻视口必须是**真身**——可见区间内**不许**残留
 // 「载入中…」占位带（`pages.isEmpty` 的 96dp 带），否则邻章「占位→真」换血的
-// 高度突变发生在翻页中（开书闪动链②）。
+// 高度突变发生在纸张滑入中（开书闪动链②）。
 // §2.110 补第三条「锚点布局定稿」：视口顶之前的前序章页表未定稿不放行——
 // 上方高度再涨会触发超域补跳的「1 帧滑移」（落位后闪一下别的正文 = 闪屏）。
 // 本文件钉住六件事：
-//   ① **等待期绝对静止**：就绪信号到达之前，纸恒立在屏外（四角共线于右下角外的
-//      铰链线 = 一像素不露）、暗化恒为 0、书架锚点一个像素都不动（「闪一下」的修法本身）；
-//   ② **就绪之后才动**：信号一到，纸立刻起掀——两者有先后，不能混在同时；
-//   ③ **右下角是翻折原点**：掀开各时点该点都钉在屏幕右下角、其余三角离位（「斜向
-//      掀开」而非「整页平移 / 绕左缘翻板」），书架坐标不变；
-//   ④ **圆角与弯页口径**：圆角全程保持 70dp，只在落位那一下收到 0；卷曲量走
-//      `sin(π·进度)`（起手 0 / 中段最大 / 落位 0），且卷曲只把**自由角（左上）**吃掉，
-//      不许碰铰链点那只角（它全程钉在屏幕右下角）；
-//   ⑤ **暗化口径**：背景黑色遮罩随翻页进度涨到 54%；
-//   ⑥ **漏报就绪不卡死**：超时兜底无条件放行；按住期间返回也不能把页反着翻出来。
+//   ① **等待期绝对静止**：就绪信号到达之前，纸张恒停在屏幕右侧之外、暗化恒为 0、
+//      书架锚点一个像素都不动（这就是「闪一下」的修法本身）；
+//   ② **就绪之后才动**：信号一到，纸张立刻起滑——两者有先后，不能混在同时；
+//   ③ **纸张在动、书架不动**：滑入各时点纸张左边缘从屏宽递减到 0，书架坐标不变；
+//   ④ **圆角口径**：全程保持 70dp，只在落位那一下收到 0（禁「随进度线性收角」）；
+//   ⑤ **暗化口径**：背景黑色遮罩随滑入进度涨到 54%；
+//   ⑥ **漏报就绪不卡死**：超时兜底无条件放行；按住期间返回也不能把纸反着滑进来。
 //
-// 测量纪律：量的是纸页四角 `localToGlobal` 的结果（会叠加 `Transform` 的旋转 +
-// 透视除法），即「屏幕上纸的角落在哪」，而不是读某个 widget 参数——后者会把
-//「参数对了但渲染没应用」的缺陷放过去（§2.71 探针自建的教训）。
-// 翻页形态下**右下角钉住**、其余三角随进度归位，故「四角投影」才是掀开进度的读数。
+// 测量纪律：`paperLeft` 量的是 `localToGlobal` 结果（会叠加 `Transform` 的位移），
+// 即「屏幕上纸在哪」，而不是读某个 widget 参数——后者会把「参数对了但渲染没应用」
+// 的缺陷放过去（§2.71 探针自建的教训）。
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -151,95 +146,34 @@ class _PaperState extends State<_Paper> {
   }
 }
 
-/// 纸页四角在屏幕上的**投影**坐标（`localToGlobal` 已含旋转 + 透视除法）。
+/// 纸张左边缘的**屏幕**坐标（含 `Transform` 位移）。
+double paperLeft(WidgetTester tester) =>
+    tester.getTopLeft(find.byKey(_kPaperKey)).dx;
+
+/// 「纸张完全停在屏幕右侧之外」的判据：左边缘正好在**一整张纸宽**（= 屏宽）处。
 ///
-/// 测量纪律：量的是「屏幕上纸的四个角落在哪」，而不是读某个 widget 参数——后者会把
-/// 「参数对了但渲染没应用」的缺陷放过去（§2.71 探针自建的教训）。
-List<Offset> paperCorners(WidgetTester tester) => <Offset>[
-      tester.getTopLeft(find.byKey(_kPaperKey)),
-      tester.getTopRight(find.byKey(_kPaperKey)),
-      tester.getBottomLeft(find.byKey(_kPaperKey)),
-      tester.getBottomRight(find.byKey(_kPaperKey)),
-    ];
-
-/// 屏幕矩形（与生产代码同口径取 `MediaQuery`）。
-Rect screenBox(WidgetTester tester) =>
-    Offset.zero & MediaQuery.sizeOf(tester.element(find.byKey(_kPaperKey)));
-
-/// 「纸立在屏外」判据：四角投影**全部**落在屏幕右缘 / 下缘之外。
-///
-/// 掀页的铰链轴过右下角、沿反对角线，其另一半在屏幕**下方之外** ⇒ 纸立起来时整张
-/// 纸的投影退化成那条屏外直线（四角共线），屏内一像素不露。纸是凸四边形、投影
-/// 保持共线性（直线仍映射成直线），故「四角都在屏外」= 屏内看不见任何纸。
-bool paperOffScreen(WidgetTester tester) {
-  final Rect box = screenBox(tester);
-  return paperCorners(tester).every((Offset c) =>
-      c.dx >= box.right - 0.5 || c.dy >= box.bottom - 0.5);
-}
-
-/// 纸页左上角的投影：掀开时它是**最先探进屏内**的那个角（离开屏外的铰链线）。
-Offset paperHead(WidgetTester tester) =>
-    tester.getTopLeft(find.byKey(_kPaperKey));
-
-/// 铰链点（屏幕右下角）在纸上的投影：绕它翻折 ⇒ 全程钉住不动。
-Offset paperPivot(WidgetTester tester) =>
-    tester.getBottomRight(find.byKey(_kPaperKey));
+/// 用纸自身宽度做基准而不是 `MediaQuery`：纸是 `StackFit.expand` 铺满的一屏，
+/// 两个口径应当相等，这里顺带把「纸没铺满」这类问题也钉住。
+Matcher offscreenRight(WidgetTester tester) => moreOrLessEquals(
+      tester.getSize(find.byKey(_kPaperKey)).width,
+      epsilon: 0.01,
+    );
 
 /// 书架锚点的屏幕坐标。
 Offset shelfAt(WidgetTester tester) => tester.getTopLeft(find.byKey(_kShelfKey));
 
-/// 落位判据：四角投影各自贴到屏幕四角（= 与静态阅读页**完全一致**）。
-///
-/// 逐个角断言而不是比外接矩形：纸一转起来外接矩形就没意义了，落位时也只有
-/// 「四个角各自归位」才说明矩阵真的收到恒等（排除「中间留了一条 1px 缝」这类）。
-void expectPaperFillsScreen(WidgetTester tester) {
-  final Rect box = screenBox(tester);
-  final List<Offset> target = <Offset>[
-    box.topLeft,
-    box.topRight,
-    box.bottomLeft,
-    box.bottomRight,
-  ];
-  final List<Offset> actual = paperCorners(tester);
-  for (int i = 0; i < target.length; i++) {
-    expect((actual[i] - target[i]).distance, lessThan(0.5),
-        reason: '第 $i 个角没贴到屏幕角（实际 ${actual[i]}，应 ${target[i]}）');
-  }
-}
+/// 屏幕逻辑宽度（与生产代码同口径取 `MediaQuery`）。
+double screenWidth(WidgetTester tester) =>
+    MediaQuery.sizeOf(tester.element(find.byKey(_kPaperKey))).width;
 
-/// 纸页轮廓的剪切口径：转场层那个 `ClipPath` 的 clipper（基础圆角 + 卷曲量）。
-///
-/// 读 clipper 而不是读渲染结果的「角半径」——卷曲把自由角撑成贝塞尔弧，
-/// 屏幕上量不出一个「半径」；圆角 / 卷曲两条口径就是生产代码真正吃的参数。
-ReaderOpenCurlClipper paperClipper(WidgetTester tester) {
-  final ClipPath clip = tester.widget<ClipPath>(
+/// 纸张的圆角半径：转场层那个 `ClipRRect`（纸张的最近 `ClipRRect` 祖先）。
+double paperRadius(WidgetTester tester) {
+  final ClipRRect clip = tester.widget<ClipRRect>(
     find
-        .ancestor(of: find.byKey(_kPaperKey), matching: find.byType(ClipPath))
+        .ancestor(of: find.byKey(_kPaperKey), matching: find.byType(ClipRRect))
         .first,
   );
-  return clip.clipper! as ReaderOpenCurlClipper;
-}
-
-/// 三只非自由角的基础圆角（卷曲不参与）。
-double paperRadius(WidgetTester tester) => paperClipper(tester).radius;
-
-/// 自由角（左上）的卷曲幅度（dp）：0 = 纸是平直的一张。
-double paperCurl(WidgetTester tester) => paperClipper(tester).curl;
-
-/// 折角绘制层（露出的那片纸背）：读它而不是读像素——折角只有「画/不画」与
-/// 「跟着卷曲量走」两条口径，像素断言会在 AA 上抖。
-ReaderOpenFoldPainter paperFold(WidgetTester tester) {
-  final CustomPaint paint = tester.widget<CustomPaint>(
-    find
-        .descendant(
-          of: find
-              .ancestor(of: find.byKey(_kPaperKey), matching: find.byType(ClipPath))
-              .first,
-          matching: find.byType(CustomPaint),
-        )
-        .first,
-  );
-  return paint.foregroundPainter! as ReaderOpenFoldPainter;
+  return clip.borderRadius.resolve(TextDirection.ltr).topLeft.x;
 }
 
 /// 背景暗化层的 alpha：转场层 `Stack` 的第一个 child（`ColoredBox`）。
@@ -259,11 +193,11 @@ Future<void> pumpFrames(WidgetTester tester, int frames) async {
   }
 }
 
-/// 点开书，并推进到**翻页开始的那一帧**。
+/// 点开书，并推进到**滑入开始的那一帧**。
 ///
 /// 帧序（`readyFrames = r`）两个坑：**点书后第 1 帧纸张还没进树**（`Navigator.push`
 /// 只是让 `Overlay` 重排，转场层与纸张要到下一帧才建）；第 r+2 帧的**帧后回调**
-/// 才报就绪 ⇒ 放行。故共推 `r + 2` 帧；此刻再 `pump(时长)` 才能量到翻开进度。
+/// 才报就绪 ⇒ 放行。故共推 `r + 2` 帧；此刻再 `pump(时长)` 才能量到位移。
 Future<void> openAndStart(WidgetTester tester, {int readyFrames = 0}) async {
   await tester.tap(find.byKey(_kOpenKey));
   await pumpFrames(tester, readyFrames + 2);
@@ -329,8 +263,8 @@ List<Rect> loadingBandsInViewport(WidgetTester tester) {
 void main() {
   capTestTimeout();
 
-  group('开书转场「先按住、就绪后再翻」', () {
-    testWidgets('未就绪就一动不动：纸立在屏外（一像素不露）、一点不压暗书架',
+  group('开书转场「先按住、就绪后再滑」', () {
+    testWidgets('未就绪就一动不动：纸停在屏幕右侧之外、一点不压暗书架',
         (WidgetTester tester) async {
       // 保留路由引用：下面要直接问 `opaque`（见循环末的断言）。
       final ReaderOpenRoute route = ReaderOpenRoute(
@@ -341,15 +275,12 @@ void main() {
 
       await tester.tap(find.byKey(_kOpenKey));
       await tester.pump(); // 帧 1：纸张建立 ⇒ 被按住
-      // 再推 40 帧（≈ 640ms，**刻意超过 380ms 的翻页时长**）：按住期间一帧都不能动。
+      // 再推 40 帧（≈ 640ms，**刻意超过 320ms 的滑入时长**）：按住期间一帧都不能动。
       // 超过时长是有意的——若 `hold()` 没真的冻住进度，控制器会在这一窗口里跑完。
       for (int i = 1; i <= 40; i++) {
         await tester.pump(const Duration(milliseconds: 16));
-        expect(paperOffScreen(tester), isTrue,
-            reason: '第 $i 帧纸的投影回到屏内了（四角 ${paperCorners(tester)}）'
-                '——按住期间它必须一动不动、一像素不露');
-        expect(paperCurl(tester), 0,
-            reason: '第 $i 帧纸被卷起来了——立着的纸必须是**直的**，弯着立在屏外会漏出弯边');
+        expect(paperLeft(tester), offscreenRight(tester),
+            reason: '第 $i 帧纸张不在屏幕右侧之外了——按住期间它必须一动不动');
         expect(scrimAlpha(tester), 0,
             reason: '第 $i 帧书架已被压暗——等待期必须先看到书架原样（这就是「闪一下」的成因）');
         expect(shelfAt(tester), shelf, reason: '第 $i 帧书架被动过');
@@ -363,7 +294,7 @@ void main() {
       expect(find.byKey(_kPaperKey), findsOneWidget);
     });
 
-    testWidgets('先按住、就绪后才翻：信号之前页不动，信号一到立刻起翻',
+    testWidgets('先按住、就绪后才滑：信号之前纸不动，信号一到立刻起滑',
         (WidgetTester tester) async {
       await tester.pumpWidget(const _Host(readyFrames: 2));
       await tester.tap(find.byKey(_kOpenKey));
@@ -372,170 +303,80 @@ void main() {
       // 帧 2~4 = 纸张的第 1~3 帧：第 3 帧的**帧后**才报就绪 ⇒ 之前一帧都不许动。
       for (int i = 1; i <= 3; i++) {
         await tester.pump();
-        expect(paperOffScreen(tester), isTrue,
+        expect(paperLeft(tester), offscreenRight(tester),
             reason: '纸张第 $i 帧就动了？就绪信号只能在自己那一帧的帧后才发');
       }
 
-      // 就绪信号已到 ⇒ 下一帧起真的在掀：纸的左上角离开屏外的铰链线、探进屏内。
-      final Rect box = screenBox(tester);
+      // 就绪信号已到 ⇒ 下一帧起真的在滑。
+      final double width = screenWidth(tester);
       await tester.pump(const Duration(milliseconds: 120));
-      final Offset head = paperHead(tester);
-      expect(head.dx, lessThan(box.right - 20),
-          reason: '就绪信号之后纸必须掀开（左上角仍贴在屏外铰链线上）');
-      expect(head.dy, lessThan(box.bottom - 20),
-          reason: '就绪信号之后纸必须掀开（左上角还没进屏）');
+      expect(paperLeft(tester), lessThan(width - 50),
+          reason: '就绪信号之后纸张必须动起来');
       expect(scrimAlpha(tester), greaterThan(0),
-          reason: '翻页开始后书架才被压暗');
+          reason: '滑入开始后书架才被压暗');
     });
 
-    testWidgets('翻页中：纸从右下角斜向展开、右下角钉住、书架纹丝不动、圆角还是满值',
+    testWidgets('推入中：纸张从右侧进来、书架纹丝不动、背景被压暗、圆角还是满值',
         (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       final double shelfX0 = shelfAt(tester).dx;
 
       await openAndStart(tester);
-      await tester.pump(const Duration(milliseconds: 120)); // 掀页中段
+      await tester.pump(const Duration(milliseconds: 120)); // 滑入中段
 
-      final Rect box = screenBox(tester);
-      // 铰链原点 = 屏幕右下角：绕它翻折 ⇒ 这个点全程不动（「从右下角掀开」的判据）。
-      expect((paperPivot(tester) - box.bottomRight).distance, lessThan(0.5),
-          reason: '右下角必须钉在屏幕右下角——那是翻折原点，动了就是「整页平移」而非「掀开」');
-      // 另三角都已离位：纸还没铺满（左上角在屏内 = 正在斜着展开）。
-      final Offset head = paperHead(tester);
-      expect(head.dx, lessThan(box.right - 20), reason: '中段纸还没铺满');
-      expect(head.dy, lessThan(box.bottom - 20), reason: '中段纸还没铺满');
-      expect(head, isNot(box.topLeft), reason: '中段不该已经落位（那就没有掀页过程了）');
+      final double paper = paperLeft(tester);
+      expect(paper, greaterThan(0), reason: '中段纸张还没铺满');
+      expect(paper, lessThan(screenWidth(tester)), reason: '中段纸张应已进入屏幕');
 
       expect(shelfAt(tester).dx, shelfX0,
-          reason: '书架应纹丝不动——动的是页，不是书架（参考动效里书架静止被压暗）');
+          reason: '书架应纹丝不动——动的是纸，不是书架（参考动效里书架静止被压暗）');
       expect(scrimAlpha(tester), greaterThan(0));
       expect(scrimAlpha(tester), lessThan(kReaderOpenScrimAlpha),
-          reason: '暗化随翻页进度推进，中段还没到终值');
+          reason: '暗化随滑入进度推进，中段还没到终值');
       expect(paperRadius(tester), kReaderPaperRadius,
-          reason: '圆角中段应保持满值——圆角一直 70px 直到平铺到位');
+          reason: '圆角中段应保持满值——参考动效里圆角一直 70px 直到平移到位');
     });
 
-    testWidgets('页面弯曲：中段自由角被卷起，起手与落位都是平直的纸',
-        (WidgetTester tester) async {
-      await tester.pumpWidget(const _Host());
-      await openAndStart(tester);
-      expect(paperCurl(tester), 0, reason: '起手纸必须平直（弯的纸立在屏外会漏边）');
-
-      await tester.pump(kReaderOpenDuration ~/ 2);
-      final double mid = paperCurl(tester);
-      expect(mid, greaterThan(0),
-          reason: '中段纸必须卷起来——否则就是一块硬板在扇，不是纸');
-      expect(mid, lessThanOrEqualTo(kReaderCurlMaxRatio * screenBox(tester).shortestSide),
-          reason: '卷曲量必须被上限卡住，别把角落挖掉一块');
-
-      await tester.pumpAndSettle();
-      expect(paperCurl(tester), 0,
-          reason: '落位时必须完全平直——弯的纸会与静态阅读页的屏幕边不一致');
-    });
-
-    testWidgets('折角纸背：中段画出一片纸背（带投影与折痕），起手与落位一丝不画',
-        (WidgetTester tester) async {
-      await tester.pumpWidget(const _Host());
-      await openAndStart(tester);
-      // 起手：纸立在屏外且是**直的** ⇒ 折角必须为空（弯着立在屏外会漏出弯边）。
-      expect(paperFold(tester).opacity, 0, reason: '起手不许有折角');
-      expect(paperFold(tester).curl, 0, reason: '起手不许有折角');
-
-      await tester.pump(kReaderOpenDuration ~/ 3);
-      final ReaderOpenFoldPainter mid = paperFold(tester);
-      expect(mid.opacity, greaterThan(0.2),
-          reason: '中段必须画出纸背——否则角读成「被剪掉一块的板」');
-      expect(mid.curl, paperCurl(tester),
-          reason: '折角必须与剪影吃同一个卷曲量（两套数字会立刻错位、折痕浮在纸心）');
-      expect(mid.radius, paperRadius(tester),
-          reason: '折角与剪影必须吃同一个圆角');
-
-      // 整段行程里纸背必须**满显过**：卷曲量走 `sin(π·进度)`，峰值只有一瞬，
-      // 采样点撞在半山腰上会误判「纸背一直很淡」。
-      double peak = mid.opacity;
-      for (int i = 0; i < 8; i++) {
-        await tester.pump(kReaderOpenDuration ~/ 24);
-        peak = math.max(peak, paperFold(tester).opacity);
-      }
-      expect(peak, greaterThan(0.95), reason: '纸背全程没有满显过（折角一直半透明）');
-
-      await tester.pumpAndSettle();
-      expect(paperFold(tester).opacity, 0, reason: '落位后纸是平的，不许留折角');
-      expect(paperFold(tester).curl, 0);
-    });
-
-    testWidgets('展开是渐进的：自由角一路向屏内推进，不回弹',
-        (WidgetTester tester) async {
-      await tester.pumpWidget(const _Host());
-      await openAndStart(tester);
-
-      // 「自由角离屏幕左上角的距离」= 还没铺开的部分，它必须单调下降。
-      double gap() {
-        final Offset head = paperHead(tester);
-        return (head - screenBox(tester).topLeft).distance;
-      }
-
-      final List<double> gaps = <double>[];
-      for (int i = 0; i < 4; i++) {
-        await tester.pump(kReaderOpenDuration ~/ 5);
-        gaps.add(gap());
-      }
-      for (int i = 1; i < gaps.length; i++) {
-        expect(gaps[i], lessThan(gaps[i - 1]),
-            reason: '第 $i 个采样点自由角没有更靠近屏角（$gaps）——展开必须单调，不许回弹');
-      }
-    });
-
-    testWidgets('书架全程静止：翻页各时点锚点坐标零位移', (WidgetTester tester) async {
+    testWidgets('书架全程静止：滑入各时点锚点坐标零位移', (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       final Offset base = shelfAt(tester);
 
       await openAndStart(tester);
 
       int elapsed = 0;
-      // 采样点全部落在 380ms 掀页**之内**：落位后书架随路由 `opaque` 转 offstage，
+      // 采样点全部落在 320ms 滑入**之内**：落位后书架随路由 `opaque` 转 offstage，
       // 锚点就量不到了（`find` 默认跳过 offstage）。
-      for (final int target in <int>[60, 120, 180, 240, 300, 360]) {
+      for (final int target in <int>[60, 120, 180, 240, 300]) {
         await tester.pump(Duration(milliseconds: target - elapsed));
         elapsed = target;
         expect(shelfAt(tester), base, reason: '$target ms 时书架锚点动了');
       }
     });
 
-    testWidgets('掀页曲线：起手从静止加速、半程已走掉大部分行程',
+    testWidgets('位移曲线前快后慢：半程已走掉绝大部分位移（easeOutCubic）',
         (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       await openAndStart(tester);
-      await tester.pump(kReaderOpenDuration ~/ 2); // 半程时间点
+      await tester.pump(const Duration(milliseconds: 160)); // 320ms 的一半
 
-      // 暗化层 alpha = 54% × p，直接反映缓动后的进度。
-      expect(scrimAlpha(tester), greaterThan(kReaderOpenScrimAlpha * 0.7),
-          reason: '前半程必须走掉大部分行程（线性 / easeIn 曲线会判红）');
+      final double width = screenWidth(tester);
+      final double moved = width - paperLeft(tester);
+      // easeOutCubic 半程走 87.5%；线性只有 50%，easeIn 只有 12.5%。
+      expect(moved / width, greaterThan(0.7),
+          reason: '前半程必须走掉大部分位移（线性 / easeIn 曲线会判红）');
     });
 
-    test('曲线两端都收力：起手不是全速、落位不硬刹（旧 easeOutCubic 生硬的一半）',
-        () {
-      expect(kReaderOpenCurve.transform(0), 0);
-      expect(kReaderOpenCurve.transform(1), 1);
-      expect(kReaderOpenCurve.transform(0.5), greaterThan(0.7),
-          reason: '半程要走掉大部分行程（前快后慢的观感）');
-      // 起手 5% 的时间几乎不走行程：easeOutCubic 在这里已走掉 14%（起手即全速 = 突兀）。
-      expect(kReaderOpenCurve.transform(0.05), lessThan(0.05),
-          reason: '起手必须从静止加速，不能一上来就全速');
-      expect(kReaderOpenCurve.transform(0.95), greaterThan(0.99),
-          reason: '尾段已贴住终点：软落位，不在最后一帧硬刹');
-    });
-
-    testWidgets('落位：四角贴住屏幕四角（与静态阅读页一致）、圆角收回 0、暗化达终值',
-        (WidgetTester tester) async {
+    testWidgets('落位：纸张铺满、圆角收回 0、暗化达终值', (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       await openAndStart(tester);
       await tester.pumpAndSettle();
 
-      expectPaperFillsScreen(tester);
+      expect(paperLeft(tester), moreOrLessEquals(0, epsilon: 0.01));
+      expect(tester.getTopLeft(find.byKey(_kPaperKey)).dy,
+          moreOrLessEquals(0, epsilon: 0.01));
+      expect(tester.getSize(find.byKey(_kPaperKey)).width, screenWidth(tester));
       expect(paperRadius(tester), 0,
-          reason: '落位后圆角必须收掉——否则屏幕角上会缺一块');
-      expect(paperCurl(tester), 0, reason: '落位后纸必须完全平直');
+          reason: '落位后圆角必须收掉——否则屏幕角上会缺一块（参考动效第 66 帧为 0）');
       expect(scrimAlpha(tester), closeTo(kReaderOpenScrimAlpha, 0.001));
       expect(find.text('正文已上屏'), findsOneWidget);
     });
@@ -545,13 +386,14 @@ void main() {
       await tester.tap(find.byKey(_kOpenKey));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      expect(paperOffScreen(tester), isTrue,
-          reason: '300ms 时还没到超时，纸仍应立在屏外（一像素不露）');
+      expect(paperLeft(tester), offscreenRight(tester),
+          reason: '300ms 时还没到超时，纸仍应停在屏幕外');
 
       await tester.pump(kReaderOpenHoldTimeout); // 闹钟到点
       await tester.pumpAndSettle();
 
-      expectPaperFillsScreen(tester);
+      expect(paperLeft(tester), moreOrLessEquals(0, epsilon: 0.01),
+          reason: '超时必须无条件放行——否则漏报就绪 = 书永远打不开');
       expect(paperRadius(tester), 0);
       expect(scrimAlpha(tester), closeTo(kReaderOpenScrimAlpha, 0.001));
     });
@@ -562,211 +404,41 @@ void main() {
       await tester.tap(find.byKey(_kOpenKey));
       await tester.pump(); // 帧 1：纸张建立 + 被按住
       await tester.pump(); // 帧 2：`find` 从这一帧起能看到纸
-      expect(paperOffScreen(tester), isTrue);
+      expect(paperLeft(tester), offscreenRight(tester));
 
       tester.state<NavigatorState>(find.byType(Navigator)).pop();
       await tester.pumpAndSettle();
 
       // 进度一直停在 0 ⇒ `reverse()` 的剩余比例是 0 ⇒ 零时长返回（`dismissed` 当场
-      // 命中）⇒ 纸随路由一起退场，不该出现「页合回去」的动画。卡住则是状态没到
+      // 命中）⇒ 纸随路由一起退场，不该出现「纸从右侧滑出去」。卡住则是状态没到
       // `dismissed`、路由永远不被 finalize。
       expect(find.byKey(_kPaperKey), findsNothing, reason: '返回后纸张应随路由退场');
       expect(ReaderOpenTransition.isActive, isFalse,
           reason: '返回后门闸必须撤销——否则超时闹钟会替一个已经不存在的转场放行');
     });
 
-    testWidgets('返回：纸沿斜向收回右下角（反向用同一转场，铰链不动）',
-        (WidgetTester tester) async {
+    testWidgets('返回：纸张向右滑出（反向用同一转场）', (WidgetTester tester) async {
       await tester.pumpWidget(const _Host());
       await openAndStart(tester);
       await tester.pumpAndSettle();
-      expectPaperFillsScreen(tester);
+      expect(paperLeft(tester), moreOrLessEquals(0, epsilon: 0.01));
 
-      final Rect box = screenBox(tester);
       tester.state<NavigatorState>(find.byType(Navigator)).pop();
       await tester.pump();
-      await tester.pump(kReaderOpenReverseDuration ~/ 2); // 反向半程
+      await tester.pump(const Duration(milliseconds: 120)); // 反向 240ms 的一半
 
-      // 纸往右下角收：左上角离开屏幕左上角（> 50px 才算真的在动）。
-      final Offset head = paperHead(tester);
-      expect(head.dx, greaterThan(50),
-          reason: '返回时纸应沿斜向收回右下角（左上角离开屏角）');
-      expect(head.dy, greaterThan(50),
-          reason: '返回时纸应沿斜向收回右下角（左上角离开屏角）');
-      expect((paperPivot(tester) - box.bottomRight).distance, lessThan(0.5),
-          reason: '铰链钉在右下角，收合全程不动');
-      expect(paperOffScreen(tester), isFalse,
-          reason: '反向还没播完，纸不应已经整张退回屏外');
+      expect(paperLeft(tester), greaterThan(0), reason: '返回时纸张应向右滑出');
     });
 
-    testWidgets('时长口径 = 380ms / 260ms（斜向掀开行程更长，曲线两端收力）',
+    testWidgets('时长口径 = 320ms（§2.109：参考动效 460ms 实测观感偏慢，提速）',
         (WidgetTester tester) async {
-      expect(kReaderOpenDuration.inMilliseconds, 380);
-      expect(kReaderOpenReverseDuration.inMilliseconds, 260);
+      expect(kReaderOpenDuration.inMilliseconds, 320);
+      expect(kReaderOpenReverseDuration.inMilliseconds, 240);
       expect(kReaderPaperRadius, 70);
       expect(kReaderOpenScrimAlpha, 0.54);
       final ReaderOpenRoute route =
           ReaderOpenRoute(builder: (_) => const SizedBox.shrink());
       expect(route.transitionDuration, kReaderOpenDuration);
-      expect(route.reverseTransitionDuration, kReaderOpenReverseDuration);
-    });
-  });
-
-  // 掀页几何不含任何写死的分辨率：铰链原点 = 视口右下角、轴向 = 反对角线、透视 =
-  // 深度常数 / 视口边长。这一组直接量矩阵（不建 widget 树），把「竖屏手机与横屏
-  // 桌面同一套观感」钉在最便宜的一层；上面那组 widget 用例跑在默认 800×600。
-  group('掀页几何（纯矩阵，手机 ⇄ 桌面）', () {
-    /// 把纸页局部坐标经 [m] 投影到屏幕坐标（含透视除法，与 `Transform` 渲染同口径）。
-    ///
-    /// 齐次坐标 w = m30·x + m31·y + m32·z + m33，纸页在 z = 0 平面上故省掉 z 项；
-    /// (3,2) 位就是透视项（`m32`），不除它就等于正交投影 = 量不出「立起来」。
-    Offset project(Matrix4 m, Offset p) {
-      final double w = m.storage[3] * p.dx + m.storage[7] * p.dy + m.storage[15];
-      return Offset(
-        (m.storage[0] * p.dx + m.storage[4] * p.dy + m.storage[12]) / w,
-        (m.storage[1] * p.dx + m.storage[5] * p.dy + m.storage[13]) / w,
-      );
-    }
-
-    for (final Size size in <Size>[
-      const Size(393, 852), // 竖屏手机
-      const Size(1440, 900), // 横屏桌面窗口
-    ]) {
-      final String tag = '${size.width.toInt()}×${size.height.toInt()}';
-      final List<Offset> corners = <Offset>[
-        Offset.zero,
-        Offset(size.width, 0),
-        Offset(0, size.height),
-        Offset(size.width, size.height),
-      ];
-
-      test('$tag：立起时四角全在屏外（一像素不露）', () {
-        final Matrix4 m = readerOpenPeelTransform(size, 1);
-        for (final Offset c in corners) {
-          final Offset q = project(m, c);
-          expect(q.dx >= size.width - 0.5 || q.dy >= size.height - 0.5, isTrue,
-              reason: '$tag 下 $c 投影到 $q：落在屏内 = 立起时漏出纸边');
-        }
-      });
-
-      test('$tag：右下角是翻折原点，全程钉住', () {
-        final Offset pivot = Offset(size.width, size.height);
-        for (final double tilt in <double>[1, 0.5, 0]) {
-          final Offset q = project(readerOpenPeelTransform(size, tilt), pivot);
-          expect((q - pivot).distance, lessThan(0.01),
-              reason: '$tag 下 tilt=$tilt 时右下角跑了 —— 铰链不在右下角（会退化成整页平移）');
-        }
-      });
-
-      test('$tag：平铺 = 恒等（四角各归屏幕角，布局与正文一丝不动）', () {
-        final Matrix4 m = readerOpenPeelTransform(size, 0);
-        for (final Offset c in corners) {
-          expect((project(m, c) - c).distance, lessThan(0.01),
-              reason: '$tag 下 $c 落位到 ${project(m, c)}：落位后必须与静态阅读页一致');
-        }
-      });
-    }
-
-    test('透视随视口反比缩放：窄屏不压扁、大窗口不退化成正交', () {
-      final double phone = readerOpenPerspective(const Size(393, 852));
-      final double desktop = readerOpenPerspective(const Size(1440, 900));
-      expect(phone, greaterThan(desktop),
-          reason: '窄屏需要更强的透视才看得出「纸立起来」');
-      // 「透视项 × 视口边长」是同一常数 ⇒ 两种尺寸下的立体感同量级。
-      expect(phone * 852, closeTo(desktop * 1440, 0.05));
-    });
-
-    test('弯页曲线：起手 0 → 中段满 → 落位 0（逐渐展开）', () {
-      expect(readerOpenCurl(0), 0, reason: '起手纸必须平直');
-      expect(readerOpenCurl(0.5), closeTo(1, 1e-9), reason: '中段卷得最狠');
-      expect(readerOpenCurl(1), 0, reason: '落位必须完全平直');
-      expect(readerOpenCurl(0.25), closeTo(0.7071, 1e-3));
-      // 幅度按短边缩放：同一比例在手机与桌面上是同一观感。
-      expect(readerOpenCurlAmount(const Size(393, 852), 0.5),
-          closeTo(kReaderCurlMaxRatio * 393, 1e-9));
-      expect(readerOpenCurlAmount(const Size(1440, 900), 0.5),
-          closeTo(kReaderCurlMaxRatio * 900, 1e-9));
-    });
-
-    test('弯页轮廓：平直时是普通圆角矩形，卷起时自由角被吃掉', () {
-      const Size size = Size(393, 852);
-      final Path flat = readerOpenCurlPath(size, radius: 70, curl: 0);
-      final Path curled = readerOpenCurlPath(size, radius: 70, curl: 63);
-
-      // 圆角不改变外接矩形；卷曲也不许把轮廓撑出纸面（负坐标）。
-      expect(flat.getBounds().topLeft, Offset.zero);
-      expect(curled.getBounds().topLeft, Offset.zero);
-      expect(curled.getBounds().bottomRight,
-          Offset(size.width, size.height));
-
-      // 判别点：顶边靠自由角的位置。平直时这里是纸（直边），卷起后已被弧吃进。
-      const Offset probe = Offset(100, 6);
-      expect(flat.contains(probe), isTrue, reason: '平直时顶边是直的，$probe 在纸上');
-      expect(curled.contains(probe), isFalse,
-          reason: '卷起后自由角连同顶边一起内收，$probe 应落在纸外（弧线缺口）');
-      // 纸的中心永远在纸上。
-      expect(curled.contains(const Offset(200, 400)), isTrue);
-    });
-
-    test('折角纸背：外缘与剪影角弧逐点重合（贴住剪口、不越出纸边）', () {
-      const Size size = Size(393, 852);
-      const double curl = 63;
-      final double reach = readerOpenCurlReach(size, radius: 70, curl: curl);
-      final Path fold = readerOpenFoldPath(size, radius: 70, curl: curl);
-      final Path paper = readerOpenCurlPath(size, radius: 70, curl: curl);
-      final Offset center = Offset(reach, reach);
-
-      /// 剪影自由角弧（与生产同一组端点 / 同一段三次贝塞尔）在参数 [t] 处的点。
-      Offset arcAt(double t) {
-        final double u = 1 - t;
-        return Offset(0, reach) * (u * u * u) +
-            Offset(0, reach * kReaderArcK) * (3 * u * u * t) +
-            Offset(reach * kReaderArcK, 0) * (3 * u * t * t) +
-            Offset(reach, 0) * (t * t * t);
-      }
-
-      // 沿弧取三点，各自沿法向往里 / 往外挪 2dp：往里必须在折角上（贴住剪口），
-      // 往外必须不在（折角越出纸边会被 `ClipPath` 削掉半截 = 露出断掉的折痕）。
-      for (final double t in <double>[0.2, 0.5, 0.8]) {
-        final Offset onArc = arcAt(t);
-        final Offset normal = center - onArc;
-        final Offset unit = normal / normal.distance;
-        final Offset inward = onArc + unit * 2;
-        final Offset outward = onArc - unit * 2;
-        expect(paper.contains(inward), isTrue, reason: 't=$t 前提：$inward 应在纸上');
-        expect(fold.contains(inward), isTrue,
-            reason: 't=$t 折角没有贴到剪口（$inward 不在折角上）——'
-                '纸背会读成浮在纸心的一块白斑');
-        expect(paper.contains(outward), isFalse, reason: 't=$t 前提：$outward 应在纸外');
-        expect(fold.contains(outward), isFalse,
-            reason: 't=$t 折角越出了纸边（$outward 仍被画到）——会被削掉半截折痕');
-      }
-    });
-
-    test('折角纸背：尖端指向纸心（不是一条贴边的带子），平直时为空', () {
-      const Size size = Size(393, 852);
-      const double curl = 63;
-      final double reach =
-          readerOpenCurlReach(size, radius: 70, curl: curl);
-      final Path fold = readerOpenFoldPath(size, radius: 70, curl: curl);
-      final double tip = reach * kReaderFoldTipRatio;
-
-      // 沿对角线：剪口弧在 0.414·reach 处，折角必须一直报到尖端附近（0.9·tip）。
-      final Offset nearTip = Offset(tip * 0.9, tip * 0.9);
-      expect(fold.contains(nearTip), isTrue,
-          reason: '折角没有伸进纸心（只是一条贴边的带子）——读不出「翻折过来的一层纸」');
-      // 越过尖端就不再是纸背。
-      expect(fold.contains(Offset(tip * 1.35, tip * 1.35)), isFalse,
-          reason: '折角伸得太远（越过尖端还在画）——会盖住正文');
-
-      // 平直：起手与落位都必须一丝不画。
-      expect(readerOpenFoldPath(size, radius: 70, curl: 0).getBounds().isEmpty,
-          isTrue, reason: '平直的纸没有折角');
-      expect(readerOpenFoldPath(size, radius: 70, curl: 0.4).getBounds().isEmpty,
-          isTrue, reason: '亚像素卷曲也不许画（落位帧会留一条白丝）');
-      expect(
-          readerOpenFoldCrease(size, radius: 70, curl: 0).getBounds().isEmpty,
-          isTrue);
     });
   });
 
