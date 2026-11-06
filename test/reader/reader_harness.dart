@@ -196,10 +196,10 @@ LibraryRepository fakeRepository(AppPaths paths) =>
 /// 收回去）。这样调用方可以无脑在每个顶栏交互前插一行，不必判断当前状态。
 ///
 /// ⚠️ **落点在读数行左缘，不在中心**：底部工具栏是**居中胶囊**（宽 280dp），
-/// 会盖住读数行的中心点；`tester.tap(finder)` 打中心会落进胶囊——胶囊
-/// `HitTestBehavior.opaque` 吃点击、不透传 ⇒ chrome 唤不出来（且会告
-/// 「would not hit test」）。左缘在胶囊之外，命中的是读数行自己（`Opacity(0)`
-/// 不拦指针），与原来同一入口。
+/// 其 `HitTestBehavior.opaque` 吃点击、不透传。§2.119 后胶囊已按读数内容高
+/// 24dp 上移、读数行两态可见（不再 `Opacity(0)`），中心点在多数机型上已能命中；
+/// 但仍取左缘——它恒在胶囊之外，命中的是读数行自己（有系统 inset 时命中同语义
+/// 的 `reader-chrome-toggle-status-gap` 命中层），不受胶囊宽度 / 屏宽档位影响。
 Future<void> showChrome(WidgetTester tester) async {
   if (find.byType(AppBar).evaluate().isNotEmpty) return;
   final Rect status =
