@@ -194,9 +194,17 @@ LibraryRepository fakeRepository(AppPaths paths) =>
 ///
 /// **幂等**：顶栏已在树上时直接返回，不再点（切换是开关语义，重复点会把 chrome
 /// 收回去）。这样调用方可以无脑在每个顶栏交互前插一行，不必判断当前状态。
+///
+/// ⚠️ **落点在读数行左缘，不在中心**：底部工具栏是**居中胶囊**（宽 280dp），
+/// 会盖住读数行的中心点；`tester.tap(finder)` 打中心会落进胶囊——胶囊
+/// `HitTestBehavior.opaque` 吃点击、不透传 ⇒ chrome 唤不出来（且会告
+/// 「would not hit test」）。左缘在胶囊之外，命中的是读数行自己（`Opacity(0)`
+/// 不拦指针），与原来同一入口。
 Future<void> showChrome(WidgetTester tester) async {
   if (find.byType(AppBar).evaluate().isNotEmpty) return;
-  await tester.tap(find.byKey(const Key('reader-chrome-toggle-status')));
+  final Rect status =
+      tester.getRect(find.byKey(const Key('reader-chrome-toggle-status')));
+  await tester.tapAt(Offset(status.left + 4, status.center.dy));
   await tester.pump();
 }
 

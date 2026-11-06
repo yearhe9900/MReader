@@ -3944,22 +3944,6 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _onSettingsChanged(_settings.copyWith(themeMode: next));
   }
 
-  /// 进度滑条落点跳章（拖拽逐帧上抛，**防抖**：停手 200ms 才真跳）。
-  ///
-  /// 滑条按章吸附，拖过全书会逐章回调；每次 [_goToChapter] 都要载入 + 落位，
-  /// 逐帧直跳会把加载队列打满。预览拇指跟手由控制条本地态负责
-  /// （`control_bar._drag`），这里只管落点。
-  Timer? _seekDebounce;
-
-  void _seekToChapter(int index) {
-    _seekDebounce?.cancel();
-    _seekDebounce = Timer(const Duration(milliseconds: 200), () {
-      _seekDebounce = null;
-      if (!mounted || _disposed) return;
-      unawaited(_goToChapter(index));
-    });
-  }
-
   /// 悬浮「听」钮（菜单上方右侧，截图同位）：开读 / 停止。
   ///
   /// Key / tooltip 沿用旧控制条朗读按钮（`reader-control-tts` / 「朗读」/
@@ -4214,8 +4198,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// ⇒ chrome 还开着时跳过去，目标恰好压在顶栏底下（不可命中、看不见）。
   /// 语义上也本该如此：「从弹层里挑一个位置」＝「我要开始读这里」。
   ///
-  /// 只在「控制条上/下一章」这类**就地操作**里保持 chrome（用户正在用控制条，
-  /// 收掉会让他找不到按钮）。
+  /// 只在「上/下一章」这类**就地操作**里保持 chrome（就地切章不落页顶，
+  /// 收掉会打断正在读的位置感；通知栏 / 耳机键切章走的就是这条）。
   void _exitChrome() {
     if (_fullscreen) return;
     setState(() => _fullscreen = true);
@@ -4286,9 +4270,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         percent: _livePercentValue,
         backgroundColor: _pageColor(theme),
         textColor: _textColor(theme),
-        // 只有落在**屏幕底边**（chrome 收起）时才让开系统手势导航条；
-        // 唤出态它整条躲在控制条底下，那一条由控制条自己的 `SafeArea(bottom: true)`
-        // 承担——重复计入会在两者之间留一条 34dp 空带。
+        // 只有落在**屏幕底边**（chrome 收起）时才让开系统手势导航条；唤出态它
+        // 不绘制（`Opacity(0)`，见 build 处口径①），但几何仍要**贴屏幕底边**
+        //（`reader_inset_test` 钉住 `indicator.bottom == 视口底`）——让位改由
+        // 工具栏自己的 `SafeArea(bottom: true)` 承担，重复计入会留一条 34dp 空带。
         bottomInset: _fullscreen ? systemPadding.bottom : 0,
       ),
     );
@@ -4368,28 +4353,29 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                 // 的「设置」「目录」格），顶栏不再重复。
               ],
             ),
-      // 底部层 = 常驻读数（恒在）+ 控制条（chrome 唤出时）。
+      // 底部层 = 常驻读数（恒在）+ 悬浮工具栏（chrome 唤出时）。
       //
-      // 合成**同一个 Stack**、读数排在**下面**（`[读数, 控制条]`）：
-      //   ① 控制条唤出时与读数**同底叠放**、整条盖住读数——读数不再浮在正文
-      //      之上透出文字（口径：唤醒功能栏后底部进度栏应被覆盖）；
-      //   ② 收起 chrome 时栈里只剩读数 ⇒ 自然贴屏幕底边；
+      // 合成**同一个 Stack**、读数排在**下面**（`[读数, 工具栏]`）：
+      //   ① 唤出态读数**不绘制**（`Opacity(0)`，仍在树上）——口径是「唤醒功能栏
+      //      后底部进度栏不透出文字」。原做法靠控制条那块**全宽底板**盖住它；
+      //      底部改成 `MiFloatingToolbar` 胶囊后**没有全宽底板可盖**，改走「不画」
+      //      这条等价路径。`Opacity` 不拦指针 ⇒ 点它仍是收起入口；
+      //   ② 收起 chrome 时栈里只剩读数 ⇒ 自然贴屏幕底边、照常可点；
       //   ③ 配合 `extendBody`，二者只是**覆盖**正文、不参与正文预算 ⇒
-      //      增删控制条不改正文排版区高度（`TYP-09`）。
+      //      增删工具栏不改正文排版区高度（`TYP-09`）。
       //
       // 槽高只认**非 `Positioned`** 的子件（Stack 拿它算尺寸）：收起态读数非
       // 定位、撑起槽高；唤出态读数改走 `Positioned(bottom: 0)` 落到栈底、由
-      // 控制条撑高——「落到底部被盖住」正是靠这条定位切换实现的。
+      // 工具栏撑高——「落到底部不再可见」正是靠这条定位切换实现的。
       //
-      // 读数在栈内**恒在**（`TYP-09` 验收①），收起态直接可点；唤出态它躲在
-      // 控制条之下（仍在树上，几何测试照常可量）。
+      // 读数在栈内**恒在**（`TYP-09` 验收①），收起态直接可点；唤出态它仍在
+      // 原位（仍在树上，几何测试照常可量），只是不画。
       //
-      // 唤出态另铺一层**透明命中层**补回读数行的切换语义：读数被盖住后，
-      // 它原来那条位置（屏幕底缘 + 系统手势 inset）在控制条里是 SafeArea 空档、
-      // 没有任何控件，点它 = 点读数行 = 收起 chrome。高度取 `systemPadding.bottom`
-      // 与控制条 `SafeArea(bottom: true)` 同源 ⇒ 恰好盖住空档、绝不压到上面的
-      // 四格按钮；无系统 inset 时那条位置本就被操作行占住（读数行不可点），
-      // 故此时不铺（铺了会白抢按钮命中）。
+      // 唤出态另铺一层**透明命中层**补回读数行的切换语义：胶囊之下、系统手势
+      // inset 那一条是 `SafeArea` 空档、没有任何控件，点它 = 点读数行 = 收起
+      // chrome。高度取 `systemPadding.bottom` 与工具栏 `SafeArea(bottom: true)`
+      // 同源 ⇒ 恰好盖住空档、绝不压到胶囊；无系统 inset 时那条位置本就被胶囊
+      // 占住（读数行不可点），故此时不铺（铺了会白抢胶囊命中）。
       bottomNavigationBar: ready && !_fullscreen
           ? Stack(
               children: <Widget>[
@@ -4397,16 +4383,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  child: progressStatus,
+                  // 唤出态不画读数（见上方口径①）：胶囊没有全宽底板可盖它。
+                  // 用 `Opacity` 而不是从树里摘掉——`TYP-09` 要求读数**恒在**，
+                  // 且 `Opacity` 不拦指针，点这条带仍是收起入口。
+                  child: Opacity(opacity: 0, child: progressStatus),
                 ),
                 ReaderControlBar(
-                  chapterIndex: _liveIndex,
-                  chapterCount: chapters.length,
-                  canGoPrev: _currentIndex > 0,
-                  canGoNext: _currentIndex < chapters.length - 1,
-                  onPrevChapter: () => unawaited(_goToChapter(_currentIndex - 1)),
-                  onNextChapter: () => unawaited(_goToChapter(_currentIndex + 1)),
-                  onSeek: _seekToChapter,
                   onToc: _openToc,
                   onNight: _toggleNight,
                   nightActive: _settings.themeMode == AppThemeMode.dark,
@@ -5540,12 +5522,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   ),
                 ),
               // `TYP-09`：常驻读数**不在这里**——它在 Scaffold 的底部层
-              // （见 [build] 的 `bottomNavigationBar`），与控制条同槽、上下相邻。
+              // （见 [build] 的 `bottomNavigationBar`），与底部工具栏同槽。
               //
               // 必须放底部层：`extendBody: true` 后正文铺满整屏，读数的
-              // `bottom: 0` 会被控制条整块盖住（`control_bar.dart` 的窄屏让位
-              // 依赖「读数在控制条正上方」）。底部层则两态都正确：chrome 收起时
-              // 它贴屏幕底边，唤出时自动排在控制条之上。
+              // `bottom: 0` 放在 body 里两态都拿不到正确几何（收起态该贴
+              // 屏幕底边、唤出态该与工具栏同槽叠放）。底部层两态都正确：
+              // chrome 收起时贴屏幕底边可点，唤出时与工具栏同槽（此时读数
+              // `Opacity(0)` 不绘制，见 build 处口径①）。
               ],
               ),
             ),
