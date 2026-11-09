@@ -1,17 +1,15 @@
-// 阅读页底部工具栏（mi_like_ui 悬浮工具栏）的**布局契约**。
+// §2.122 阅读页底部 chrome 的**布局契约**：章节选择行 + 六格悬浮工具栏。
 //
-// 形态（负责人 2026-11-06 拍板）：原「上一章 — 进度滑条 — 下一章」那一行
-// **暂时移除**，底部只剩一枚 `MiFloatingToolbar` **胶囊**，内横排
-// 目录 / 夜间 / 设置 / 更多 四格（`MiActionEntry`，64×56 定宽格）。本测试钉住：
-//   ① 工具栏不吞正文高度（覆盖层，盒高 ≤ 80dp；胶囊本体 = 外留白 8×2 + 格高 56 = 72）；
-//   ② 四档屏宽（800/393/360/320）均无溢出；
-//   ③ 四格一个不少（窄屏也不吞控件）；
-//   ④ 胶囊居中、宽 = 4×64 + 外留白 12×2 = 280dp，任何档宽都不越出屏；
-//   ⑤ 「更多」无收纳项时该格不渲染（不留空壳）；
-//   ⑥ 悬浮「听」钮计入盒高（画在盒外会命中告警），但**不给胶囊长高**。
+// 钉住：
+//   ① 四档屏宽（800/393/360/320）六格一个不少、无溢出；胶囊宽 = 屏宽 − 24
+//      （宽屏封顶 6×64 + 24 = 408，仍是胶囊不是横幅）；
+//   ② 章节行在工具栏**上方**，上一章 / 滑条 / 下一章全在、滑条 > 60dp；
+//   ③ 首末章钮降禁用态但**不消失**、单章书滑条禁用；
+//   ④ 拖动滑条显示「章节名 · 进度」气泡、松手收起，落点按章吸附上抛；
+//   ⑤ 「操作」无收纳项时该格降禁用态（不消失）；末格随明暗切「日间 / 夜间」；
+//   ⑥ 盒高是覆盖层常量（≤ 180dp），不给正文排版带来额外预算。
 //
-// 滑条相关口径（滑条宽度 > 60dp、章钮禁用不消失、单章书降禁用）随那一行
-// **一并移除**，恢复滑条时要连同 git 历史里的旧用例一起取回。
+// ⚠️ 期望值用硬编码字面量 / 实测 rect，不用被测常量自证。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/reader/control_bar.dart';
@@ -19,73 +17,65 @@ import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 
 import '../test_config.dart';
 
-/// 胶囊宽 = 4 格 × 64 + 外留白 12×2（与 `MiFloatingToolbarMetrics.outsidePadding`
-/// 同源；改上游外留白 / 格宽要同步这里）。
-const double _kToolbarWidth = 4 * kReaderToolbarCellWidth + 12 * 2;
-
-/// 胶囊高 = 外留白 8×2 + 格高 56（见 [kReaderToolbarCellHeight]）。
-const double _kToolbarHeight = 8 * 2 + kReaderToolbarCellHeight;
-
 void main() {
   capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
 
-  // 按给定屏宽构建阅读页底部工具栏并 settle。
+  final List<int> seeked = <int>[];
+
   Future<void> pumpBar(
     WidgetTester tester,
     int width, {
-    bool withMore = true,
-    Widget? floating,
+    bool withActions = true,
+    bool canGoPrev = true,
+    bool canGoNext = true,
+    int chapterIndex = 42,
+    int chapterCount = 1152,
+    bool nightActive = false,
+    double bottomInset = 0,
   }) async {
+    seeked.clear();
     tester.view.physicalSize = Size(width.toDouble(), 640);
     tester.view.devicePixelRatio = 1.0;
+    tester.view.padding = FakeViewPadding(bottom: bottomInset);
     addTearDown(tester.view.reset);
 
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         bottomNavigationBar: ReaderControlBar(
+          chapterIndex: chapterIndex,
+          chapterCount: chapterCount,
+          canGoPrev: canGoPrev,
+          canGoNext: canGoNext,
+          onPrevChapter: () {},
+          onNextChapter: () {},
+          onSeek: seeked.add,
+          previewLabel: (int index) => '第${index + 1}章 · 21%',
           onToc: () {},
+          onBookmarks: () {},
+          onAppearance: () {},
+          onActions: withActions ? () {} : null,
+          onSearch: () {},
           onNight: () {},
-          nightActive: false,
-          onSettings: () {},
-          onMore: withMore ? () {} : null,
-          floating: floating,
+          nightActive: nightActive,
         ),
       ),
     ));
     await tester.pumpAndSettle();
   }
 
-  group('阅读页底部工具栏（悬浮胶囊形态）', () {
-    testWidgets('不吞正文高度：无听钮盒高 ≤ 80dp（胶囊本体 72）',
-        (WidgetTester tester) async {
-      // 盒高 = 胶囊 72；断言上限而非精确值——真值口径是「不得显著长高」，
-      // 因为工具栏是 `bottomNavigationBar` 覆盖层，长高 1dp 就是正文少 1dp
-      // （`TYP-09` 契约由 inset 测试钉住）。
-      await pumpBar(tester, 800);
-      final double height =
-          tester.getSize(find.byType(ReaderControlBar)).height;
-      expect(height, lessThanOrEqualTo(80), reason: '盒高 $height，胶囊应为 72');
-      expect(height, greaterThanOrEqualTo(_kToolbarHeight),
-          reason: '盒高不得小于胶囊本体（否则胶囊顶部被 `Clip.hardEdge` 削掉）');
-    });
-
-    testWidgets('四档屏宽（800/393/360/320）均无溢出、无重叠',
-        (WidgetTester tester) async {
+  group('§2.122 六格工具栏 + 章节选择行', () {
+    testWidgets('四档屏宽六格一个不少、无溢出', (WidgetTester tester) async {
       for (final int width in <int>[800, 393, 360, 320]) {
         await pumpBar(tester, width);
         expect(tester.takeException(), isNull,
             reason: '${width}dp 宽下不得出现 RenderFlex 溢出');
-      }
-    });
-
-    testWidgets('四格一个不少（窄屏也不吞控件）', (WidgetTester tester) async {
-      for (final int width in <int>[393, 320]) {
-        await pumpBar(tester, width);
         for (final String key in <String>[
           'reader-toc',
-          'reader-night',
+          'reader-bookmarks',
           'reader-appearance',
           'reader-more',
+          'reader-search',
+          'reader-night',
         ]) {
           expect(find.byKey(Key(key)), findsOneWidget,
               reason: '${width}dp 下 $key 不应消失');
@@ -93,62 +83,152 @@ void main() {
       }
     });
 
-    testWidgets('胶囊居中、宽 280dp、不越出屏（四档宽度）',
+    testWidgets('六格文案按截图：目录/书签/外观/操作/查找/夜间（日间）',
         (WidgetTester tester) async {
-      for (final int width in <int>[800, 393, 360, 320]) {
+      await pumpBar(tester, 393);
+      for (final String label in <String>[
+        '目录',
+        '书签',
+        '外观',
+        '操作',
+        '查找',
+        '夜间',
+      ]) {
+        expect(find.text(label), findsOneWidget, reason: '缺格 $label');
+      }
+
+      await pumpBar(tester, 393, nightActive: true);
+      expect(find.text('日间'), findsOneWidget,
+          reason: '夜间态末格文案应是「切到日间」这个动作');
+      expect(find.text('夜间'), findsNothing);
+    });
+
+    testWidgets('胶囊宽 = 屏宽 − 24（宽屏封顶 408）、居中不越屏',
+        (WidgetTester tester) async {
+      for (final int width in <int>[393, 360, 320]) {
         await pumpBar(tester, width);
-        final Rect pill = tester.getRect(find.byType(MiFloatingToolbar));
-        expect(pill.width, moreOrLessEquals(_kToolbarWidth, epsilon: 0.5),
-            reason: '${width}dp 下胶囊宽 ${pill.width}（应为 $_kToolbarWidth）');
-        expect(pill.center.dx, moreOrLessEquals(width / 2, epsilon: 0.5),
-            reason: '${width}dp 下胶囊应水平居中（中心 ${pill.center.dx}）');
-        expect(pill.left, greaterThanOrEqualTo(0), reason: '胶囊不得越出左屏缘');
-        expect(pill.right, lessThanOrEqualTo(width + 0.5),
-            reason: '胶囊不得越出右屏缘（320dp 档最紧）');
-        // 胶囊自身画投影（不引离屏）⇒ 它必须落在工具栏盒内。
-        final Rect bar = tester.getRect(find.byType(ReaderControlBar));
-        expect(pill.top, greaterThanOrEqualTo(bar.top - 0.5),
-            reason: '胶囊顶部不得探出盒外（会被 `Clip.hardEdge` 削掉）');
+        final Rect pill =
+            tester.getRect(find.byKey(const Key('reader-toolbar-pill')));
+        expect(pill.width, moreOrLessEquals(width - 24, epsilon: 0.6),
+            reason: '${width}dp 下胶囊宽 ${pill.width}');
+        expect(pill.center.dx, moreOrLessEquals(width / 2, epsilon: 0.5));
+        expect(pill.left, greaterThanOrEqualTo(0));
+        expect(pill.right, lessThanOrEqualTo(width + 0.5));
+      }
+
+      await pumpBar(tester, 800);
+      final Rect wide =
+          tester.getRect(find.byKey(const Key('reader-toolbar-pill')));
+      expect(wide.width, moreOrLessEquals(6 * 64 + 24, epsilon: 0.6),
+          reason: '宽屏每格封顶 64dp，胶囊仍应是 408dp');
+      expect(wide.center.dx, moreOrLessEquals(400, epsilon: 0.5));
+    });
+
+    testWidgets('章节行在工具栏上方，章钮 + 滑条全在且滑条 > 60dp',
+        (WidgetTester tester) async {
+      for (final int width in <int>[393, 320]) {
+        await pumpBar(tester, width);
+        final Rect row =
+            tester.getRect(find.byKey(const Key('reader-chapter-row')));
+        final Rect pill =
+            tester.getRect(find.byKey(const Key('reader-toolbar-pill')));
+        expect(row.bottom, lessThan(pill.top),
+            reason: '章节行必须悬在工具栏上方');
+        for (final String key in <String>[
+          'reader-control-prev',
+          'reader-control-next',
+          'reader-control-progress',
+        ]) {
+          expect(find.byKey(Key(key)), findsOneWidget);
+        }
+        final double sliderWidth = tester
+            .getSize(find.byKey(const Key('reader-control-progress')))
+            .width;
+        expect(sliderWidth, greaterThan(60),
+            reason: '${width}dp 下滑条宽 $sliderWidth 已不可用');
       }
     });
 
-    testWidgets('「更多」无收纳项 → 该格不渲染；有则在场',
+    testWidgets('首章 / 末章：章钮保留为禁用态（不消失）',
         (WidgetTester tester) async {
-      await pumpBar(tester, 800, withMore: false);
-      expect(find.byKey(const Key('reader-more')), findsNothing,
-          reason: '全不可用时不留空壳格子');
-
-      await pumpBar(tester, 800, withMore: true);
-      expect(find.byKey(const Key('reader-more')), findsOneWidget);
+      await pumpBar(tester, 800, canGoPrev: false, canGoNext: false);
+      for (final String key in <String>[
+        'reader-control-prev',
+        'reader-control-next',
+      ]) {
+        final IconButton button =
+            tester.widget<IconButton>(find.byKey(Key(key)));
+        expect(button.onPressed, isNull, reason: '$key 应为禁用态');
+        expect(find.byKey(Key(key)), findsOneWidget,
+            reason: '禁用不等于消失');
+      }
     });
 
-    testWidgets('悬浮「听」钮计入盒高，且钮落在盒内（不给胶囊长高）',
-        (WidgetTester tester) async {
-      await pumpBar(
-        tester,
-        800,
-        floating: const SizedBox(
-          key: Key('reader-control-tts'),
-          width: 48,
-          height: 48,
-        ),
-      );
-      final Rect bar = tester.getRect(find.byType(ReaderControlBar));
-      final Rect pill = tester.getRect(find.byType(MiFloatingToolbar));
-      final Rect fab =
-          tester.getRect(find.byKey(const Key('reader-control-tts')));
+    testWidgets('单章书：滑条降禁用（无处可跳）', (WidgetTester tester) async {
+      await pumpBar(tester, 800, chapterIndex: 0, chapterCount: 1);
+      final MiSlider slider = tester
+          .widget<MiSlider>(find.byKey(const Key('reader-control-progress')));
+      expect(slider.onChanged, isNull);
+    });
 
-      // 听钮区 = 48 + 间隙 12 ⇒ 盒高 = 72 + 60 = 132。
-      expect(bar.height,
-          moreOrLessEquals(_kToolbarHeight + 48 + 12, epsilon: 0.5),
-          reason: '听钮区必须计入盒高（画在盒外 → 事件穿透到正文 / tap 告警）');
-      expect(fab.bottom, lessThanOrEqualTo(bar.bottom + 0.5),
-          reason: '听钮必须落在盒内');
-      // 听钮在胶囊**上方**（`bottom: 胶囊高 + 间隙`），不给胶囊长高。
-      expect(pill.height, moreOrLessEquals(_kToolbarHeight, epsilon: 0.5),
-          reason: '有听钮时胶囊高仍应是 72');
-      expect(fab.bottom, moreOrLessEquals(pill.top - 12, epsilon: 0.5),
-          reason: '听钮应悬在胶囊上方 12dp 处');
+    testWidgets('「操作」无收纳项 → 该格禁用但不消失',
+        (WidgetTester tester) async {
+      await pumpBar(tester, 800, withActions: false);
+      final MiActionEntry entry =
+          tester.widget<MiActionEntry>(find.byKey(const Key('reader-more')));
+      expect(entry.onPressed, isNull);
+      expect(find.text('操作'), findsOneWidget);
+
+      await pumpBar(tester, 800, withActions: true);
+      expect(
+        tester
+            .widget<MiActionEntry>(find.byKey(const Key('reader-more')))
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('拖动滑条：浮出「章节名 · 进度」，松手收起并按章上抛',
+        (WidgetTester tester) async {
+      await pumpBar(tester, 393);
+      expect(find.byKey(const Key('reader-chapter-preview')), findsNothing,
+          reason: '静止态不显示预览气泡');
+
+      final Rect slider =
+          tester.getRect(find.byKey(const Key('reader-control-progress')));
+      final TestGesture gesture =
+          await tester.startGesture(slider.centerLeft + const Offset(8, 0));
+      await gesture.moveBy(const Offset(60, 0));
+      await tester.pump();
+
+      expect(find.byKey(const Key('reader-chapter-preview')), findsOneWidget,
+          reason: '拖动中必须显示章节名与进度');
+      expect(find.textContaining('· 21%'), findsOneWidget);
+      expect(seeked, isNotEmpty, reason: '落点要按章上抛给宿主');
+      for (final int index in seeked) {
+        expect(index, inInclusiveRange(0, 1151));
+      }
+
+      await gesture.up();
+      await tester.pump();
+      expect(find.byKey(const Key('reader-chapter-preview')), findsNothing,
+          reason: '松手后气泡收起');
+    });
+
+    testWidgets('盒高是覆盖层常量：系统 inset 另计，不吞正文',
+        (WidgetTester tester) async {
+      await pumpBar(tester, 393);
+      final double plain =
+          tester.getSize(find.byType(ReaderControlBar)).height;
+      expect(plain, lessThanOrEqualTo(180));
+      expect(plain, greaterThanOrEqualTo(72 + 8 + 56 + 24),
+          reason: '盒高必须含胶囊 72 + 间隙 8 + 章节行 56 + 气泡预留 24');
+
+      await pumpBar(tester, 393, bottomInset: 34);
+      final double withInset =
+          tester.getSize(find.byType(ReaderControlBar)).height;
+      expect(withInset, moreOrLessEquals(plain + 34, epsilon: 0.5),
+          reason: '系统手势条 inset 应计入盒高，胶囊仍让开它');
     });
   });
 }

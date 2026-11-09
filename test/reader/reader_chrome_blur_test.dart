@@ -7,8 +7,8 @@
 //  ② `Scaffold.body` 恒是正文本体 `LayoutBuilder`，不许再套承载模糊层的
 //     `Stack(Positioned.fill(...), 模糊带)`（两版旧实现都是这么接的）；
 //  ③ 阅读页整棵树零 `BackdropFilter`（正文两态必须全清晰、不糊）；
-//  ④ 顶栏回到**不透明** Material 底（透明底原为顶部模糊让路，模糊撤掉后
-//     标题会直接压在正文首行上）；
+//  ④ 顶栏整条**不透明底色**（§2.122 换成胶囊导航后，盖住正文首行的仍是
+//     AppBar 那层不透明页面底色；胶囊只是叠在它上面的半透明表面）；
 //  ⑤ §2.120 两条用户口径保留：唤出态读数 `Opacity(0)` 隐藏且**恒在树上**
 //    （`TYP-09` 验收①）、胶囊**不上移 24dp**。
 import 'dart:io';
@@ -104,7 +104,7 @@ void main() {
       await closeBook(tester);
     });
 
-    testWidgets('唤出 chrome：仍零模糊带，顶栏回到不透明底',
+    testWidgets('唤出 chrome：仍零模糊带，顶栏底色不透明 + 胶囊导航',
         (WidgetTester tester) async {
       await pumpPhone(tester);
       await showChrome(tester);
@@ -114,10 +114,13 @@ void main() {
       expectCleanBody(tester);
 
       final AppBar appBar = tester.widget<AppBar>(find.byType(AppBar));
-      expect(appBar.backgroundColor, isNull,
-          reason: '顶栏用默认不透明 Material 底；改回 Colors.transparent '
-              '会让标题压在正文首行上');
-      expect(appBar.elevation, isNull);
+      expect(appBar.backgroundColor, isNotNull,
+          reason: '顶栏必须自行铺不透明底，不能透出正文首行');
+      expect(appBar.backgroundColor!.a, 1.0,
+          reason: '改回半透明 / Colors.transparent 会让标题压在正文首行上');
+      expect(appBar.elevation, 0);
+      expect(find.byKey(const Key('reader-top-bar')), findsOneWidget,
+          reason: '§2.122 顶栏是胶囊导航，不是满宽 Material 标题');
       await closeBook(tester);
     });
 

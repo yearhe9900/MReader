@@ -183,10 +183,11 @@ LibraryRepository fakeRepository(AppPaths paths) =>
 /// （`_fullscreen = true`），顶栏与底部控制条只在**点正文**时出现；顶栏里的
 /// 「进入全屏」按钮与全屏时右上角的「退出全屏」浮层按钮均已移除。
 ///
-/// 因此凡是要点 chrome 上的按钮（搜索 `reader-search` / 书签 `reader-bookmarks` /
-/// AI `reader-ai-panel` 在顶栏；设置 `reader-appearance` / 目录 `reader-toc` /
-/// 更多 `reader-more` / 听钮 `reader-control-tts` 在底部菜单）的用例，
-/// **必须先调本函数**，否则按钮不在树上。
+/// 因此凡是要点 chrome 上的按钮（听书 `reader-control-tts` 在**顶栏胶囊右侧**；
+/// 目录 `reader-toc` / 书签 `reader-bookmarks` / 外观 `reader-appearance` /
+/// 操作 `reader-more` / 查找 `reader-search` / 日间夜间 `reader-night` 在**底部
+/// 六格**；AI `reader-ai-panel` 在「操作」抽屉里）的用例，**必须先调本函数**，
+/// 否则按钮不在树上。
 ///
 /// 走**常驻状态行**（`reader-chrome-toggle-status`）而不是点正文：图片页（CBZ/PDF）
 /// 的中央点击被「点页全屏缩放」占用（`FMT-02` 验收②），点正文那条路径在图片页
@@ -195,11 +196,11 @@ LibraryRepository fakeRepository(AppPaths paths) =>
 /// **幂等**：顶栏已在树上时直接返回，不再点（切换是开关语义，重复点会把 chrome
 /// 收回去）。这样调用方可以无脑在每个顶栏交互前插一行，不必判断当前状态。
 ///
-/// ⚠️ **落点在读数行左缘，不在中心**：底部工具栏是**居中胶囊**（宽 280dp），
-/// 其 `HitTestBehavior.opaque` 吃点击、不透传。§2.121 口径下胶囊保持原位、
-/// 唤出态读数 `Opacity(0)` 不绘制（不拦指针）；左缘恒在胶囊之外，命中的是读数行
-/// 自己（有系统 inset 时命中同语义的 `reader-chrome-toggle-status-gap` 命中层），
-/// 不受胶囊宽度 / 屏宽档位影响。
+/// ⚠️ **落点在读数行左缘，不在中心**：底部胶囊（宽 = 屏宽 − 24，左缘 12dp）
+/// 与上方的章节行都是 `HitTestBehavior.opaque` / 不透明表面，会吃掉中间落点。
+/// §2.121 口径下胶囊保持原位、唤出态读数 `Opacity(0)` 不绘制（不拦指针）；
+/// 左缘 x=4 恒在胶囊（左缘 12dp）之外，命中的是读数行自己（有系统 inset 时
+/// 命中同语义的 `reader-chrome-toggle-status-gap` 命中层），不受屏宽档位影响。
 Future<void> showChrome(WidgetTester tester) async {
   if (find.byType(AppBar).evaluate().isNotEmpty) return;
   final Rect status =

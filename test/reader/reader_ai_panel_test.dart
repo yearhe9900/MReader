@@ -12,6 +12,7 @@ import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_ai_panel.dart';
 import 'package:mreader/reader/reader_page.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 
 import 'reader_harness.dart';
 import '../test_config.dart';
@@ -119,7 +120,7 @@ void main() {
       }
     });
 
-    testWidgets('顶栏按钮收纳到 ≤ 6 个（改前 9 个挤掉书名），书名可见',
+    testWidgets('§2.122 顶栏只留胶囊导航；原顶栏入口全部在底部六格',
         (WidgetTester tester) async {
       await tester.pumpWidget(MaterialApp(
         home: ReaderPage(
@@ -133,21 +134,27 @@ void main() {
       await showChrome(tester); // 默认沉浸全屏：顶栏要主动唤出（TYP-09）
 
       final AppBar bar = tester.widget<AppBar>(find.byType(AppBar));
-      // 顶栏动作数上限：搜索/书签/AI/外观/目录 = 5（全屏切换按钮已移除，
-      // 详见 `reader_page._fullscreen` 注释）。
-      expect(bar.actions!.length, lessThanOrEqualTo(5),
-          reason: '顶栏动作过多会把标题挤没（9 × 48dp > 393dp 屏宽）');
+      // §2.122：顶栏动作区清空，返回 / 听书两枚圆钮放进胶囊 title 里。
+      expect(bar.actions, isEmpty,
+          reason: '顶栏动作过多会把中间章节读数挤没');
+      expect(find.byType(MiFloatingActionButton), findsNWidgets(2),
+          reason: '左返回 + 右听书各一枚 MiFloatingActionButton');
+      expect(find.byKey(const Key('reader-top-bar')), findsOneWidget);
 
-      // 书名与副标题都还在（不被挤成 0 宽）。
-      expect(find.text('书架书名'), findsOneWidget);
-      expect(find.textContaining('第1章'), findsWidgets);
+      // 中间只显示「当前章节名 · 进度」；书名已从顶栏下线。
+      expect(find.byKey(const Key('reader-top-title')), findsOneWidget);
+      expect(find.text('书架书名'), findsNothing);
+      expect(find.text('第一章'), findsWidgets);
+      expect(find.textContaining('%'), findsWidgets);
 
-      // 关键入口 Key 全在场。
+      // 关键入口 Key 全在场（原顶栏 4 个已迁到底部六格）。
       for (final String key in <String>[
         'reader-search',
         'reader-bookmarks',
         'reader-appearance',
         'reader-toc',
+        'reader-more',
+        'reader-night',
       ]) {
         expect(find.byKey(Key(key)), findsOneWidget, reason: '缺入口 $key');
       }

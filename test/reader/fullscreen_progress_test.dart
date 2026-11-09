@@ -11,7 +11,7 @@
 // 验收映射（PRD `TYP-09`）：
 //   ① 进阅读页即全屏且全屏切换按钮不存在；点正文可唤出与收起顶栏 / 控制条
 //      ——默认态无 `AppBar`、无 `ReaderControlBar`、两个全屏按钮 key 皆 `findsNothing`，
-//      点 `reader-chrome-toggle` 出现顶栏 + 书名 + 控制条，再点收回；
+//      点 `reader-chrome-toggle` 出现顶栏胶囊 + 章节名/进度 + 控制条，再点收回；
 //   ② 读数随滚动 / 翻页**实时**更新——手势**按住未抬起**时滚动（此时绝无
 //      `ScrollEndNotification`），一帧后读数即变化：排除「只在滚动结束才更新」
 //      的旧路径（显示值语义见 `reader_page._liveIndex` 注释）；
@@ -32,6 +32,7 @@ import 'package:mreader/reader/control_bar.dart';
 import 'package:mreader/reader/pagination/paged_scroller.dart';
 import 'package:mreader/reader/progress_store.dart';
 import 'package:mreader/reader/reader_page.dart';
+import 'package:mreader/ui/reader_control_chrome.dart';
 
 import 'reader_harness.dart';
 import '../test_config.dart';
@@ -97,7 +98,7 @@ void main() {
       // 验收①：默认态没有任何 chrome——顶栏与控制条都不在树上，只有常驻进度指示。
       expect(find.byType(AppBar), findsNothing);
       expect(find.byType(ReaderControlBar), findsNothing);
-      expect(find.text('书架书名'), findsNothing);
+      expect(find.byKey(const Key('reader-top-title')), findsNothing);
       expect(
         find.byKey(const Key('reader-progress-indicator')),
         findsOneWidget,
@@ -112,7 +113,10 @@ void main() {
       await tester.pump();
 
       expect(find.byType(AppBar), findsOneWidget);
-      expect(find.text('书架书名'), findsOneWidget);
+      // §2.122：顶栏中间只显示「当前章节名 · 进度」，书名已下线。
+      expect(find.byKey(const Key('reader-top-title')), findsOneWidget);
+      expect(find.text('书架书名'), findsNothing);
+      expect(find.byType(ReaderTopBar), findsOneWidget);
       expect(find.byType(ReaderControlBar), findsOneWidget);
 
       // 再点一次收回——chrome 是开关，不是单向退出。
@@ -121,7 +125,7 @@ void main() {
 
       expect(find.byType(AppBar), findsNothing);
       expect(find.byType(ReaderControlBar), findsNothing);
-      expect(find.text('书架书名'), findsNothing);
+      expect(find.byKey(const Key('reader-top-title')), findsNothing);
     });
 
     testWidgets('验收②：进度随滚动实时更新（手势未抬起即更新）',

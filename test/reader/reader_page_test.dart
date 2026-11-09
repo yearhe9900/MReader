@@ -229,14 +229,15 @@ void main() {
           ),
         );
 
-    testWidgets('RD-03 副标题为「第N章 · X%」，不含 implId 诊断信息',
+    testWidgets('§2.122 顶栏中段为「章节名 · 进度」，不含书名 / implId',
         (WidgetTester tester) async {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
       await showChrome(tester); // 默认沉浸全屏：顶栏要主动唤出（TYP-09）
 
-      // 标题取书库记录标题（而非内嵌书名）
-      expect(find.text('书架书名'), findsOneWidget);
+      // 书名从顶栏下线（TTS 媒体会话仍用书库记录标题）。
+      expect(find.byKey(const Key('reader-top-title')), findsOneWidget);
+      expect(find.text('书架书名'), findsNothing);
       expect(find.text('内嵌书名'), findsNothing);
 
       // 不含诊断信息（implId `dart-fake` / `N 章 · dart-*`）

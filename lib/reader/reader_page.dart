@@ -644,6 +644,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _seekDebounce?.cancel(); // 滑条防抖：关页后不许再触发跳章
+    _seekDebounce = null;
     // 关闭阅读页：先保存进度（unawaited）再释放资源。控制器到此通常已 detach，
     // `_saveProgress` 会回退 [_lastLocalHint]、不用 null 覆盖已存快照。
     WidgetsBinding.instance.removeObserver(this);
@@ -3889,25 +3891,35 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
   }
 
-  /// 菜单「更多」里可收纳项是否非空（AI 摘要 / 朗读设置任一可用）。
+  /// 菜单「操作」里可收纳项是否非空（AI 面板 / 朗读设置任一可用）。
   ///
-  /// 全不可用时更多入口**不渲染**（`control_bar.dart` 的 `onMore: null`
-  /// 降级口径）——不留一个点开是空壳的格子。
+  /// 全不可用时该格**降禁用态**（不消失、点开不是空壳），见 `control_bar.dart`
+  /// 的 `onActions: null` 口径。
   bool get _hasMoreEntries =>
-      _summaryEnabled || widget.ttsSettings != null;
+      _aiPanelEnabled || widget.ttsSettings != null;
 
-  /// 菜单「更多」操作列表（mi_like 弹出式抽屉；原 MiDialog 纵向列表形态）：
+  /// 菜单「操作」列表（mi_like 弹出式抽屉）：AI 助手 / AI 摘要 / 朗读设置。
   ///
-  /// AI 摘要与朗读设置是**低频入口**，从旧控制条收进本列表（截图形态
-  /// 第二行只有四个格子）。选中即收抽屉并**立刻**执行动作（不等滑出收口，
-  /// 否则白滞后 ~0.4s）。
+  /// 顶栏的 AI 入口与低频项一并收进这里（§2.122 顶栏只留返回 + 听书）。
+  /// 选中即收抽屉并**立刻**执行动作（不等滑出收口，否则白滞后 ~0.4s）。
   void _openMoreMenu() {
     showMiSheet(
       context: context,
-      title: '更多',
+      title: '操作',
       builder: (BuildContext sheetContext, VoidCallback close) => Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
+          if (_aiPanelEnabled)
+            MiSettingsRow(
+              key: const Key('reader-ai-panel'),
+              label: 'AI 助手',
+              leading: const Icon(Icons.auto_awesome, size: 22),
+              chevron: false,
+              onTap: () {
+                close();
+                _openAiPanel();
+              },
+            ),
           if (_summaryEnabled)
             MiSettingsRow(
               label: 'AI 摘要',
@@ -3944,39 +3956,40 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _onSettingsChanged(_settings.copyWith(themeMode: next));
   }
 
-  /// 悬浮「听」钮（菜单上方右侧，截图同位）：开读 / 停止。
+  /// 章节滑条落点跳章（拖拽逐帧上抛，**防抖**：停手 200ms 才真跳）。
+  ///
+  /// 滑条按章吸附，拖过全书会逐章回调；每次 `_goToChapter` 都要载入 + 落位，
+  /// 逐帧直跳会把加载队列打满。预览拇指跟手由控制条本地态负责
+  /// （`control_bar._drag`），这里只管落点。
+  Timer? _seekDebounce;
+
+  void _seekToChapter(int index) {
+    _seekDebounce?.cancel();
+    _seekDebounce = Timer(const Duration(milliseconds: 200), () {
+      _seekDebounce = null;
+      if (!mounted || _disposed) return;
+      unawaited(_goToChapter(index));
+    });
+  }
+
+  /// 顶栏右侧听书圆钮（§2.122：耳机 glyph，开读后切停止）。
   ///
   /// Key / tooltip 沿用旧控制条朗读按钮（`reader-control-tts` / 「朗读」/
-  /// 「停止朗读」），查找口径不变。
-  Widget _buildTtsFab(ThemeData theme) {
+  /// 「停止朗读」），查找口径不变；本体换 `MiFloatingActionButton`。
+  Widget _buildTtsFab(ThemeData theme, MiThemeMode mode) {
     final bool running = _tts?.isRunning ?? false;
     return Tooltip(
       message: running ? '停止朗读' : '朗读',
-      child: Semantics(
-        button: true,
-        label: running ? '停止朗读' : '朗读',
-        child: Material(
-          color: theme.colorScheme.surfaceContainerHighest,
-          shape: const CircleBorder(),
-          child: InkWell(
-            key: const Key('reader-control-tts'),
-            customBorder: const CircleBorder(),
-            onTap: _toggleTts,
-            child: SizedBox(
-              width: 48,
-              height: 48,
-              child: Center(
-                child: running
-                    ? const Icon(Icons.stop, size: 26)
-                    : Text(
-                        '听',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-              ),
-            ),
-          ),
+      child: MiFloatingActionButton(
+        key: const Key('reader-control-tts'),
+        size: kReaderTopBarButtonSize,
+        showShadow: false,
+        color: theme.colorScheme.surfaceContainerHighest,
+        themeMode: mode,
+        onPressed: _toggleTts,
+        child: Semantics(
+          label: running ? '停止朗读' : '朗读',
+          child: Icon(running ? Icons.stop : Icons.headphones, size: 19),
         ),
       ),
     );
@@ -4243,6 +4256,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    // 胶囊导航 / 底部六格走 mi_like 明暗配方，与 `_isNight` 同源（实际生效
+    // 的主题亮度，跟随系统时不读 `_settings.themeMode`）。
+    final MiThemeMode readerMiMode = theme.brightness == Brightness.dark
+        ? MiThemeMode.dark
+        : MiThemeMode.light;
     final List<Chapter>? chapters = _chapters;
     final bool ready = _ready && chapters != null && chapters.isNotEmpty;
     // 正文预算与底部读数**只吃系统 inset**，故取 Scaffold **外层**的 MediaQuery。
@@ -4294,63 +4312,33 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       resizeToAvoidBottomInset: false,
       // `TYP-09` 验收①：默认全屏 ⇒ `_fullscreen` 初值 `true`，此处即 `null`；
       // 点正文唤出 chrome 后顶栏原样出现（验收①「唤出与收起」）。
+      // §2.122：顶栏 = **胶囊导航**（`ReaderTopBar`）。两端圆钮各是一枚
+      // `MiFloatingActionButton`（左返回 / 右听书），中间只显示「当前章名 ·
+      // 进度」；书名、搜索、书签、AI 入口全部从顶栏下线（入口在底部六格与
+      // 「操作」菜单，功能一个不丢）。
+      //
+      // ⚠️ AppBar 底色取**不透明页面底色**：盖住正文首行的始终是这层，胶囊
+      // 只是叠在它上面的半透明表面（§2.121 零 `BackdropFilter`）。改成透明
+      // 会让标题直接压在正文上。
       appBar: _fullscreen
           ? null
           : AppBar(
-              title: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    _title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w600),
-                  ),
-                  Text(
-                    _subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall,
-                  ),
-                ],
-              ),
-              actions: <Widget>[
-                // 分组① 检索与标记：书内搜索（`CNT-06`）、书签（`TYP-06`）。
-                ReaderAppBarGroup(
-                  leadingDivider: false,
-                  children: <Widget>[
-                    IconButton(
-                      key: const Key('reader-search'),
-                      tooltip: '搜索',
-                      icon: const Icon(Icons.search),
-                      onPressed: ready ? _openSearch : null,
-                    ),
-                    IconButton(
-                      key: const Key('reader-bookmarks'),
-                      tooltip: '书签',
-                      icon: const Icon(Icons.bookmark),
-                      onPressed: ready ? _openBookmarks : null,
-                    ),
-                  ],
+              backgroundColor: _pageColor(theme),
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              automaticallyImplyLeading: false,
+              titleSpacing: 0,
+              toolbarHeight: 56,
+              title: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: ReaderTopBar(
+                  statusText: _topStatusText,
+                  onBack: () => Navigator.of(context).maybePop(),
+                  ttsButton: _buildTtsFab(theme, readerMiMode),
+                  mode: readerMiMode,
                 ),
-                // 分组② AI 增强：原 4 个平铺图标（前情回顾 / 摘要 / 问答 / 人物）
-                // 收进单个入口，见 [showReaderAiPanel] 的划分依据。
-                if (_aiPanelEnabled)
-                  ReaderAppBarGroup(
-                    children: <Widget>[
-                      IconButton(
-                        key: const Key('reader-ai-panel'),
-                        tooltip: 'AI 助手',
-                        icon: const Icon(Icons.auto_awesome),
-                        onPressed: ready ? _openAiPanel : null,
-                      ),
-                    ],
-                  ),
-                // 外观 / 目录入口已迁至**底部菜单**（点正文唤出；`control_bar.dart`
-                // 的「设置」「目录」格），顶栏不再重复。
-              ],
+              ),
+              actions: const <Widget>[],
             ),
       // 底部层 = 常驻读数（唤出态隐藏）+ 悬浮工具栏（**保持原位**）。
       //
@@ -4384,12 +4372,23 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   child: Opacity(opacity: 0, child: progressStatus),
                 ),
                 ReaderControlBar(
+                  chapterIndex: _liveIndex,
+                  chapterCount: chapters.length,
+                  canGoPrev: _currentIndex > 0,
+                  canGoNext: _currentIndex < chapters.length - 1,
+                  onPrevChapter: () =>
+                      unawaited(_goToChapter(_currentIndex - 1)),
+                  onNextChapter: () =>
+                      unawaited(_goToChapter(_currentIndex + 1)),
+                  onSeek: _seekToChapter,
+                  previewLabel: _chapterPreviewLabel,
                   onToc: _openToc,
+                  onBookmarks: _openBookmarks,
+                  onAppearance: _openAppearance,
+                  onActions: _hasMoreEntries ? _openMoreMenu : null,
+                  onSearch: _openSearch,
                   onNight: _toggleNight,
                   nightActive: _settings.themeMode == AppThemeMode.dark,
-                  onSettings: _openAppearance,
-                  onMore: _hasMoreEntries ? _openMoreMenu : null,
-                  floating: _buildTtsFab(theme),
                 ),
                 if (systemPadding.bottom > 0)
                   Positioned(
@@ -4467,9 +4466,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
   }
 
-  /// AppBar 主标题：**书库记录标题**（`RD-03`，不依赖格式解析）。
+  /// 书名（**TTS 媒体会话**用；§2.122 顶栏已不显示书名）。
   ///
-  /// 记录标题意外为空时依次回落到解析出的 `BookMeta.title`、再回落「阅读」。
+  /// 取书库记录标题，意外为空时依次回落到 `BookMeta.title`、再回落「阅读」。
   String get _title {
     final String recorded = widget.record.title;
     if (recorded.isNotEmpty) return recorded;
@@ -4477,14 +4476,41 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return parsed.isNotEmpty ? parsed : '阅读';
   }
 
-  /// AppBar 副标题：`第N章 · X%`（`RD-03` 取代 M0 遗留的「N 章 · implId」诊断信息）。
+  /// 顶栏胶囊中段：`当前章节名 · 全书进度`（§2.122；书名已下线）。
   ///
-  /// 取**滚动实时显示值**（`TYP-09` 验收②；显示值语义见 `_liveIndex` 字段注释）。
-  String get _subtitle {
+  /// 取滚动实时显示值（`TYP-09` 验收②）；章标题为空时回落「第N章」。
+  String get _topStatusText {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null) return '载入中…';
     if (chapters.isEmpty) return '无章节';
-    return '第${_liveIndex + 1}章 · $_livePercent%';
+    return '${_chapterName(_liveIndex)} · $_livePercent%';
+  }
+
+  /// 章节滑条拖到 [index] 时的气泡文案（章节名 · 该章起点的全书进度）。
+  ///
+  /// 权重口径与底部读数同（`overallReadingProgress` + `_chapterWeights`）；
+  /// `chapterPos: 0` = 该章起点，避免气泡显示「拖动中」的伪精确值。
+  String _chapterPreviewLabel(int index) {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || chapters.isEmpty) return '载入中…';
+    final int i = index.clamp(0, chapters.length - 1);
+    final double overall = overallReadingProgress(
+      chapterIndex: i,
+      chapterPos: 0,
+      chapterCount: chapters.length,
+      chapterWeights: _chapterWeights,
+    );
+    return '${_chapterName(i)} · ${(overall * 100).floor()}%';
+  }
+
+  /// 章名（空标题回落「第N章」，不把空串拼进读数）。
+  String _chapterName(int index) {
+    final List<Chapter>? chapters = _chapters;
+    if (chapters == null || index < 0 || index >= chapters.length) {
+      return '第${index + 1}章';
+    }
+    final String title = chapters[index].title.trim();
+    return title.isEmpty ? '第${index + 1}章' : title;
   }
 
   // ── 划词选区（`AI-02`/`AI-03`；命中与值对象见 selection_overlay.dart）──
