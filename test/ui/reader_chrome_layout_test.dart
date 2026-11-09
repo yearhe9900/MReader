@@ -134,6 +134,10 @@ void main() {
             tester.getRect(find.byKey(const Key('reader-toolbar-pill')));
         expect(row.bottom, lessThan(pill.top),
             reason: '章节行必须悬在工具栏上方');
+        // 章节行上抬 3dp 后的定稿间隙（硬编码字面量，不引常量）：
+        // 回退 8dp 会在这里判红。
+        expect(pill.top - row.bottom, moreOrLessEquals(11, epsilon: 0.5),
+            reason: '章节行与胶囊间隙应为 11dp（上抬 3dp）');
         for (final String key in <String>[
           'reader-control-prev',
           'reader-control-next',

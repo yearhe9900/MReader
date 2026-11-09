@@ -30,8 +30,8 @@ const double kReaderChromeOuterMargin = 12;
 /// 章节选择行高（dp）。
 const double kReaderChapterRowHeight = 56;
 
-/// 章节行与工具栏的间隙（dp）。
-const double kReaderChapterRowGap = 8;
+/// 章节行与工具栏的间隙（dp）：11 = 8 + 上抬 3（2026-11-09 定稿视觉）。
+const double kReaderChapterRowGap = 11;
 
 /// 章节行上方预留给预览气泡的高度（dp）。
 const double kReaderPreviewHeight = 24;
