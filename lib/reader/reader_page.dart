@@ -78,7 +78,6 @@ import 'image_dimensions.dart';
 import 'highlight_follow.dart';
 import 'link_navigator.dart';
 import 'reader_ai_panel.dart';
-import 'reader_chrome_blur.dart';
 import 'reader_open_transition.dart';
 import 'pagination/incremental_paginator.dart';
 import 'pagination/page_breaker.dart';
@@ -4271,9 +4270,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         percent: _livePercentValue,
         backgroundColor: _pageColor(theme),
         textColor: _textColor(theme),
-        // **两态都让开系统手势导航条**：读数行两态都可见（§2.119），唤出态
-        // 若把 inset 归零，文字会落进手势条里。工具栏的 `SafeArea(bottom: true)`
-        // 抬的是胶囊自己，与读数行这 34dp 各管一段，不重复计入。
+        // **两态同一几何**（24 内容 + 系统 inset）：收起态读数文字要铺到屏底、
+        // 又得让开手势条；唤出态虽 `Opacity(0)` 不绘制，几何仍不变（`TYP-09`
+        // 只改绘制不改布局，`reader_inset_test` 钉住两态 rect 相同）。
         bottomInset: systemPadding.bottom,
       ),
     );
@@ -4298,14 +4297,6 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       appBar: _fullscreen
           ? null
           : AppBar(
-              // 顶栏压在**顶部渐进模糊带**上 ⇒ 底色必须透明，否则模糊全被
-              // `Material` 的不透明 surface 盖住（§2.119）。墨色改取页面正文
-              // 色：换了米黄 / 纯黑背景，标题与图标跟着正文，而不是主题 surface。
-              backgroundColor: Colors.transparent,
-              surfaceTintColor: Colors.transparent,
-              elevation: 0,
-              scrolledUnderElevation: 0,
-              foregroundColor: _textColor(theme),
               title: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -4314,17 +4305,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     _title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: _textColor(theme),
-                    ),
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600),
                   ),
                   Text(
                     _subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: _textColor(theme)),
+                    style: theme.textTheme.bodySmall,
                   ),
                 ],
               ),
@@ -4364,20 +4352,21 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                 // 的「设置」「目录」格），顶栏不再重复。
               ],
             ),
-      // 底部层 = 常驻读数（**两态可见**）+ 悬浮工具栏（chrome 唤出时）。
+      // 底部层 = 常驻读数（唤出态隐藏）+ 悬浮工具栏（**保持原位**）。
       //
-      // §2.119 取代 §2.118 的「唤出态读数 `Opacity(0)` 不绘制」：读数行改为
-      // 始终显示，正文上下缘由渐进模糊带把 chrome 与正文分开（见下方 `body`
-      // 的 [ReaderChromeEdgeBlur]）。胶囊不再需要「盖住」读数，反而要**让开**它：
-      //   ① 读数 `Positioned(bottom: 0)` 贴屏幕底边、仍是收起入口；
-      //   ② 工具栏外包 `Padding(bottom: _kProgressIndicatorReserve)` 上移
-      //      24dp；胶囊自带 `SafeArea(bottom: true)` 再让开系统 inset ⇒
-      //      胶囊底恰好接上读数文字顶，两者不重叠（几何由 `reader_inset_test` 钉住）；
-      //   ③ 配合 `extendBody`，二者只是**覆盖**正文、不参与正文预算 ⇒
+      // 合成**同一个 Stack**、读数排在**下面**（`[读数, 工具栏]`）：
+      //   ① 唤出态读数**不绘制**（`Opacity(0)`，仍在树上）——胶囊没有全宽
+      //      底板可盖它，走「不画」这条等价路径；`Opacity` 不拦指针 ⇒ 点它
+      //      仍是收起入口，`TYP-09`「读数恒在」不破；
+      //   ② 收起 chrome 时栈里只剩读数 ⇒ 自然贴屏幕底边、照常可点；
+      //   ③ `ReaderControlBar` 直接作为非定位子件撑起槽高，几何与 §2.118
+      //      一致（**不上移 24dp**），仍靠自身 `SafeArea` 让开系统手势条；
+      //   ④ 配合 `extendBody`，二者只是**覆盖**正文、不参与正文预算 ⇒
       //      增删工具栏不改正文排版区高度（`TYP-09`）。
       //
-      // 槽高只认**非 `Positioned`** 的子件（Stack 拿它算尺寸）：收起态读数非
-      // 定位、撑起槽高；唤出态由带 padding 的工具栏撑高。
+      // §2.121：**正文上下都不叠渐进模糊层**，唤出态正文保持全清晰；顶栏
+      // 回到不透明 Material 底（透明底原为顶部模糊让路，模糊撤掉后会露出
+      // 正文首行并压住标题）。
       //
       // 唤出态另铺一层**透明命中层**补回手势条空档的切换语义：高度取
       // `systemPadding.bottom`，与工具栏 `SafeArea(bottom: true)` 同源 ⇒
@@ -4389,20 +4378,18 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  // 读数两态可见；`TYP-09` 验收①要求它恒在树上且可点。
-                  child: progressStatus,
+                  // 唤出态不画读数：胶囊没有全宽底板可盖它，改走「不画」。
+                  // 用 `Opacity` 而不是从树里摘掉——`TYP-09` 要求读数**恒在**，
+                  // 且 `Opacity` 不拦指针，点这条带仍是收起入口。
+                  child: Opacity(opacity: 0, child: progressStatus),
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(
-                      bottom: _kProgressIndicatorReserve),
-                  child: ReaderControlBar(
-                    onToc: _openToc,
-                    onNight: _toggleNight,
-                    nightActive: _settings.themeMode == AppThemeMode.dark,
-                    onSettings: _openAppearance,
-                    onMore: _hasMoreEntries ? _openMoreMenu : null,
-                    floating: _buildTtsFab(theme),
-                  ),
+                ReaderControlBar(
+                  onToc: _openToc,
+                  onNight: _toggleNight,
+                  nightActive: _settings.themeMode == AppThemeMode.dark,
+                  onSettings: _openAppearance,
+                  onMore: _hasMoreEntries ? _openMoreMenu : null,
+                  floating: _buildTtsFab(theme),
                 ),
                 if (systemPadding.bottom > 0)
                   Positioned(
@@ -4430,45 +4417,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               child: const Icon(Icons.arrow_back),
             )
           : null,
-      // 正文之上、chrome 之下挂两条**渐进模糊带**（§2.119）：唤出态才在场，
-      // 收起态一条不留（阅读时正文必须干净）。位置按「内容边界」算——
-      //   · 上带从状态栏下沿起（那里才是正文首行），下带从读数行顶缘起；
-      //   · 两条都走 `MiGradientBlurProfile.nominalExtent`（119dp 度量曲线，
-      //     不拉伸）⇒ σ 阶梯与书架顶部渐进模糊同款，边缘最糊、往页心归零。
-      // `Positioned.fill` 给正文**紧约束**（与原先 Scaffold 给 body 的口径一致），
-      // 模糊层 `IgnorePointer` ⇒ `TYP-09` 的九宫格 / 链接 / 滚动手势全不受影响。
-      body: Stack(
-        children: <Widget>[
-          Positioned.fill(
-            child: _buildBody(theme, systemPadding, systemTextScaler),
-          ),
-          if (!_fullscreen) ...<Widget>[
-            Positioned(
-              left: 0,
-              right: 0,
-              top: systemPadding.top,
-              height: MiGradientBlurProfile.nominalExtent,
-              child: ReaderChromeEdgeBlur(
-                key: const ValueKey<String>('reader-chrome-blur-top'),
-                extent: MiGradientBlurProfile.nominalExtent,
-                pageColor: _pageColor(theme),
-              ),
-            ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: _kProgressIndicatorReserve + systemPadding.bottom,
-              height: MiGradientBlurProfile.nominalExtent,
-              child: ReaderChromeEdgeBlur(
-                key: const ValueKey<String>('reader-chrome-blur-bottom'),
-                extent: MiGradientBlurProfile.nominalExtent,
-                pageColor: _pageColor(theme),
-                fromTop: false,
-              ),
-            ),
-          ],
-        ],
-      ),
+      // §2.121：正文两态**都不叠渐进模糊带**，`body` 直接是 `_buildBody` 的
+      // `LayoutBuilder`；换回 `Stack(Positioned.fill(...), 模糊层)` 即判红
+      //（`reader_chrome_blur_test` 钉住 `Scaffold.body is LayoutBuilder`）。
+      body: _buildBody(theme, systemPadding, systemTextScaler),
     );
     // **揭幕闩**（延迟路径）：`_skeletonCover` 期间骨架作为**不透明幕布**盖在
     // **整页**之上——不只正文，还包括底部读数层（章节 / 页 / 百分比）：
@@ -5574,7 +5526,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               // `bottom: 0` 放在 body 里两态都拿不到正确几何（收起态该贴
               // 屏幕底边、唤出态该与工具栏同槽叠放）。底部层两态都正确：
               // chrome 收起时贴屏幕底边可点，唤出时与工具栏同槽（此时读数
-              // 唤出态读数照常可见，工具栏按 24dp 上移让开它，见 build 处口径②）。
+              // `Opacity(0)` 不绘制、几何不变，正文上下都不叠模糊层）。
               ],
               ),
             ),

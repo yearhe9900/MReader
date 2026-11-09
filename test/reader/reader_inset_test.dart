@@ -154,23 +154,32 @@ void main() {
       expect(tester.getRect(chapterHeading('第一章')), heading0,
           reason: '正文里的字两态不许挪位（用户可见口径）');
 
-      // §2.119：读数**两态可见**，唤出 chrome 时胶囊按读数内容高 24dp 上移让开它。
-      // 判据 = 胶囊底恰好接上读数顶（不重叠、不留缝），而不是旧口径「被控制条盖住」。
+      // §2.121（沿用 §2.120 口径）：**胶囊保持原位**（不上移 24dp），唤出态
+      // 读数 `Opacity(0)` 隐藏；正文上下都不叠渐进模糊带。
+      // 判据 = 工具栏盒底与胶囊底都贴回 §2.118 的坐标；重新上移 24dp 会在此判红。
       final Rect indicator =
           tester.getRect(find.byKey(const Key('reader-progress-indicator')));
       final Rect bar = tester.getRect(find.byType(ReaderControlBar));
       final Rect pill = tester.getRect(find.byType(MiFloatingToolbar));
       expect(indicator.bottom, moreOrLessEquals(viewport0.bottom, epsilon: 0.5),
           reason: '读数应贴屏幕底（indicator.bottom=${indicator.bottom}）');
-      expect(bar.bottom,
-          moreOrLessEquals(viewport0.bottom - 24, epsilon: 0.5),
-          reason: '工具栏盒底应让开读数内容高 24dp（bar.bottom=${bar.bottom}）');
-      expect(pill.bottom, moreOrLessEquals(indicator.top, epsilon: 0.5),
-          reason: '胶囊底应接上读数文字顶，互不遮挡'
-              '（pill.bottom=${pill.bottom} indicator.top=${indicator.top}）');
+      expect(bar.bottom, moreOrLessEquals(viewport0.bottom, epsilon: 0.5),
+          reason: '工具栏盒底应贴屏幕下缘（bar.bottom=${bar.bottom}）');
+      expect(pill.bottom, moreOrLessEquals(viewport0.bottom - 34, epsilon: 0.5),
+          reason: '胶囊底应停在 SafeArea 让位处（屏底 − 34），不得再上移 24dp'
+              '（pill.bottom=${pill.bottom}）');
 
-      // 读数**文字**仍在工具栏盒内（两态都不吃第二遍系统 inset）：`bottomInset`
-      // 恒传系统值，唤出态若按旧口径归零，文字会落进手势条 → 本条判红。
+      // 读数隐藏但仍**恒在树上**（`TYP-09` 验收①）：`Opacity` 不拦指针。
+      final Finder hiddenReadout = find.byWidgetPredicate(
+        (Widget w) =>
+            w is Opacity &&
+            w.opacity == 0 &&
+            w.child?.key == const Key('reader-chrome-toggle-status'),
+      );
+      expect(hiddenReadout, findsOneWidget,
+          reason: '唤出态读数应由一层 Opacity(0) 收起');
+
+      // 读数文字几何仍让开 34dp 手势条（隐藏只改绘制、不改布局）。
       final Rect readout =
           tester.getRect(find.byKey(const Key('reader-progress-text')));
       expect(readout.bottom, lessThanOrEqualTo(indicator.bottom - 34 + 0.5),
@@ -180,7 +189,7 @@ void main() {
 
       // 收起：几何回到与初始完全一致。
       //
-      // 读数行两态可见，但手势条那 34dp 上铺着同语义的透明命中层
+      // 手势条那 34dp 上铺着同语义的透明命中层
       //（`reader-chrome-toggle-status-gap`）——按读数行中心落点即命中那层 =
       // 同一个收起入口。用 `tapAt` 而非 `tap(finder)`：命中的不是 finder
       // 自己那个 widget，后者会报 "would not hit test" 警告。

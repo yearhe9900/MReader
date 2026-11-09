@@ -18,10 +18,10 @@
 // 尺寸契约：胶囊 = 外留白 8×2 + 格高 56 = 72dp（**不含**系统 inset）⇒ 覆盖层
 // 不参与正文预算；上限由 `test/ui/reader_chrome_layout_test.dart` 钉住。
 //
-// 与底部读数行的关系（§2.119）：本组件**不再有全宽底板**，读数行改为两态
-// 可见，`reader_page` 把工具栏整体按读数内容高 24dp 上移 ⇒ 胶囊底接上读数顶、
-// 互不遮挡；正文上下缘另铺渐进模糊带把 chrome 与正文分开。胶囊只覆盖自己那
-// 280×72，其余透到正文。
+// 与底部读数行的关系（§2.121）：本组件**保持原位**、不上移 24dp（仍靠自身
+// `SafeArea(bottom: true)` 让开手势条）；唤出 chrome 时读数行 `Opacity(0)`
+// 不绘制，正文上下**不叠任何渐进模糊层**。胶囊只覆盖自己那 280×72，
+// 其余透到正文。
 import 'package:flutter/material.dart';
 
 import '../ui/mi_like_ui/mi_like_ui.dart';
