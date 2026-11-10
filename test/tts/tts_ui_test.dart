@@ -140,6 +140,8 @@ void main() {
       expect(engine.spoken, hasLength(2));
       expect(state.offset, closeTo(before, 1.0));
 
+      // 拖动已按新口径自动收起 chrome（唤起态继续阅读 ⇒ 收）→ 重新唤出再点停。
+      await showChrome(tester);
       await tester.tap(find.byKey(const Key('reader-control-tts')));
       await settle(tester, rounds: 10);
       await closeBook(tester);

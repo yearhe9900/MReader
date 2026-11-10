@@ -1,17 +1,13 @@
-// §2.122 阅读页底部 chrome 的**布局契约**：章节选择行 + 六格悬浮工具栏。
+// 阅读页底部 chrome 的**布局契约**：六格悬浮工具栏（章节选择行已下线）。
 //
 // 钉住：
 //   ① 四档屏宽（800/393/360/320）六格一个不少、无溢出；胶囊宽 = 屏宽 − 24
 //      （宽屏封顶 6×64 + 24 = 408，仍是胶囊不是横幅）；
-//   ② 章节行在工具栏**上方**，上一章 / 滑条 / 下一章全在、滑条 > 60dp；
-//      章节行**高宽复用工具栏可视表面**（等高 56、等宽 6×格宽、封顶 384
-//      同轴；widget 总高/总宽含外留白，不画，不能直接当表面用）；
-//   ③ 首末章钮降禁用态但**不消失**、单章书滑条禁用；
-//   ④ 拖动滑条显示「章节名 · 进度」气泡（16 加粗，明显显示）、松手收起，
-//      落点按章吸附上抛；
-//   ⑤ 「操作」无收纳项时该格降禁用态（不消失）；末格随明暗切「日间 / 夜间」；
-//   ⑥ 盒高是覆盖层常量（钉 72+11+56+24 = 163，≤ 180dp），不给正文排版
-//      带来额外预算。
+//   ② 六格文案按截图：目录/书签/外观/操作/查找/日间（夜间）；
+//   ③ 「操作」无收纳项时该格降禁用态（不消失）；
+//   ④ 章节选择行（上一章 / 滑条 / 下一章）与拖动气泡**已下线**（2026-11-10
+//      负责人口径）——相关 key 一律不在树上，防回潮；
+//   ⑤ 盒高 = 胶囊 72（+ 系统 inset），覆盖层不给正文排版带来额外预算。
 //
 // ⚠️ 期望值用硬编码字面量 / 实测 rect，不用被测常量自证。
 import 'package:flutter/material.dart';
@@ -24,20 +20,13 @@ import '../test_config.dart';
 void main() {
   capTestTimeout(); // 30s 超时兜底（见 test/test_config.dart）。
 
-  final List<int> seeked = <int>[];
-
   Future<void> pumpBar(
     WidgetTester tester,
     int width, {
     bool withActions = true,
-    bool canGoPrev = true,
-    bool canGoNext = true,
-    int chapterIndex = 42,
-    int chapterCount = 1152,
     bool nightActive = false,
     double bottomInset = 0,
   }) async {
-    seeked.clear();
     tester.view.physicalSize = Size(width.toDouble(), 640);
     tester.view.devicePixelRatio = 1.0;
     tester.view.padding = FakeViewPadding(bottom: bottomInset);
@@ -46,14 +35,6 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         bottomNavigationBar: ReaderControlBar(
-          chapterIndex: chapterIndex,
-          chapterCount: chapterCount,
-          canGoPrev: canGoPrev,
-          canGoNext: canGoNext,
-          onPrevChapter: () {},
-          onNextChapter: () {},
-          onSeek: seeked.add,
-          previewLabel: (int index) => '第${index + 1}章 · 21%',
           onToc: () {},
           onBookmarks: () {},
           onAppearance: () {},
@@ -67,7 +48,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  group('§2.122 六格工具栏 + 章节选择行', () {
+  group('六格悬浮工具栏', () {
     testWidgets('四档屏宽六格一个不少、无溢出', (WidgetTester tester) async {
       for (final int width in <int>[800, 393, 360, 320]) {
         await pumpBar(tester, width);
@@ -128,83 +109,19 @@ void main() {
       expect(wide.center.dx, moreOrLessEquals(400, epsilon: 0.5));
     });
 
-    testWidgets('章节行在工具栏上方，章钮 + 滑条全在且滑条 > 60dp',
+    testWidgets('章节选择行已下线：章节行 / 章钮 / 滑条 / 气泡全不在树上',
         (WidgetTester tester) async {
-      for (final int width in <int>[393, 320]) {
-        await pumpBar(tester, width);
-        final Rect row =
-            tester.getRect(find.byKey(const Key('reader-chapter-row')));
-        final Rect pill =
-            tester.getRect(find.byKey(const Key('reader-toolbar-pill')));
-        expect(row.bottom, lessThan(pill.top),
-            reason: '章节行必须悬在工具栏上方');
-        // 章节行上抬 3dp 后的定稿间隙（硬编码字面量，不引常量）：
-        // 回退 8dp 会在这里判红。
-        expect(pill.top - row.bottom, moreOrLessEquals(11, epsilon: 0.5),
-            reason: '章节行与胶囊间隙应为 11dp（上抬 3dp）');
-        for (final String key in <String>[
-          'reader-control-prev',
-          'reader-control-next',
-          'reader-control-progress',
-        ]) {
-          expect(find.byKey(Key(key)), findsOneWidget);
-        }
-        final double sliderWidth = tester
-            .getSize(find.byKey(const Key('reader-control-progress')))
-            .width;
-        expect(sliderWidth, greaterThan(60),
-            reason: '${width}dp 下滑条宽 $sliderWidth 已不可用');
-      }
-    });
-
-    testWidgets('章节行高宽复用工具栏可视表面：等高 56、等宽同轴（封顶 384）',
-        (WidgetTester tester) async {
-      for (final int width in <int>[800, 393, 360, 320]) {
-        await pumpBar(tester, width);
-        final Rect row =
-            tester.getRect(find.byKey(const Key('reader-chapter-row')));
-        final Rect pill =
-            tester.getRect(find.byKey(const Key('reader-toolbar-pill')));
-        // 表面高 = 单格高 56；widget 总高 72 含上下各 8 外留白（不画）。
-        expect(row.height, moreOrLessEquals(56, epsilon: 0.5),
-            reason: '${width}dp 章节行高 ${row.height} 应等于可视表面 56'
-                '（widget 总高 ${pill.height} 不能直接当表面用）');
-        // 表面宽 = widget 宽 − 横向外留白 2×12（不画）。
-        expect(row.width, moreOrLessEquals(pill.width - 24, epsilon: 0.5),
-            reason: '${width}dp 章节行宽 ${row.width} 应等于表面宽 '
-                '${pill.width - 24}（widget 宽 ${pill.width} 含外留白 24）');
-        expect(row.center.dx, moreOrLessEquals(width / 2, epsilon: 0.5),
-            reason: '章节行与胶囊同轴居中');
-      }
-
-      // 宽屏不拉成横幅：随工具栏表面一起封顶 6 × 64 = 384。
-      await pumpBar(tester, 800);
-      final Rect wide =
-          tester.getRect(find.byKey(const Key('reader-chapter-row')));
-      expect(wide.width, moreOrLessEquals(384, epsilon: 0.6),
-          reason: '800dp 下章节行宽 ${wide.width} 应封顶 384（表面）');
-    });
-
-    testWidgets('首章 / 末章：章钮保留为禁用态（不消失）',
-        (WidgetTester tester) async {
-      await pumpBar(tester, 800, canGoPrev: false, canGoNext: false);
+      await pumpBar(tester, 393);
       for (final String key in <String>[
+        'reader-chapter-row',
         'reader-control-prev',
         'reader-control-next',
+        'reader-control-progress',
+        'reader-chapter-preview',
       ]) {
-        final IconButton button =
-            tester.widget<IconButton>(find.byKey(Key(key)));
-        expect(button.onPressed, isNull, reason: '$key 应为禁用态');
-        expect(find.byKey(Key(key)), findsOneWidget,
-            reason: '禁用不等于消失');
+        expect(find.byKey(Key(key)), findsNothing,
+            reason: '$key 属已下线的章节滑条功能，不许回潮');
       }
-    });
-
-    testWidgets('单章书：滑条降禁用（无处可跳）', (WidgetTester tester) async {
-      await pumpBar(tester, 800, chapterIndex: 0, chapterCount: 1);
-      final MiSlider slider = tester
-          .widget<MiSlider>(find.byKey(const Key('reader-control-progress')));
-      expect(slider.onChanged, isNull);
     });
 
     testWidgets('「操作」无收纳项 → 该格禁用但不消失',
@@ -224,53 +141,13 @@ void main() {
       );
     });
 
-    testWidgets('拖动滑条：浮出「章节名 · 进度」，松手收起并按章上抛',
-        (WidgetTester tester) async {
-      await pumpBar(tester, 393);
-      expect(find.byKey(const Key('reader-chapter-preview')), findsNothing,
-          reason: '静止态不显示预览气泡');
-
-      final Rect slider =
-          tester.getRect(find.byKey(const Key('reader-control-progress')));
-      final TestGesture gesture =
-          await tester.startGesture(slider.centerLeft + const Offset(8, 0));
-      await gesture.moveBy(const Offset(60, 0));
-      await tester.pump();
-
-      expect(find.byKey(const Key('reader-chapter-preview')), findsOneWidget,
-          reason: '拖动中必须显示章节名与进度');
-      expect(find.textContaining('· 21%'), findsOneWidget);
-      // 字体放大、明显显示（原 12 常规太弱）。
-      final Text bubbleText = tester.widget<Text>(
-        find.descendant(
-          of: find.byKey(const Key('reader-chapter-preview')),
-          matching: find.byType(Text),
-        ),
-      );
-      expect(bubbleText.style!.fontSize, greaterThanOrEqualTo(16.0),
-          reason: '预览字号 ${bubbleText.style!.fontSize} 应 ≥ 16');
-      expect(bubbleText.style!.fontWeight, FontWeight.w700,
-          reason: '预览要加粗才明显');
-      expect(seeked, isNotEmpty, reason: '落点要按章上抛给宿主');
-      for (final int index in seeked) {
-        expect(index, inInclusiveRange(0, 1151));
-      }
-
-      await gesture.up();
-      await tester.pump();
-      expect(find.byKey(const Key('reader-chapter-preview')), findsNothing,
-          reason: '松手后气泡收起');
-    });
-
-    testWidgets('盒高是覆盖层常量：系统 inset 另计，不吞正文',
+    testWidgets('盒高是覆盖层常量：胶囊 72，系统 inset 另计不吞正文',
         (WidgetTester tester) async {
       await pumpBar(tester, 393);
       final double plain =
           tester.getSize(find.byType(ReaderControlBar)).height;
-      expect(plain, lessThanOrEqualTo(180));
-      expect(plain, moreOrLessEquals(72 + 11 + 56 + 24, epsilon: 0.5),
-          reason: '盒高 = 胶囊 widget 72 + 间隙 11 + 章节行 56（可视表面高）'
-              ' + 气泡预留 24 = 163');
+      expect(plain, moreOrLessEquals(72, epsilon: 0.5),
+          reason: '盒高 = 胶囊（外留白 16 + 单格 56）= 72，实际 $plain');
 
       await pumpBar(tester, 393, bottomInset: 34);
       final double withInset =

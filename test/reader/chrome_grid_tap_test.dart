@@ -17,9 +17,12 @@
 // 正文之上的 chrome UI（顶栏 / 控制条 / 常驻读数行）各有自己的行为、不进九宫格
 // 判定——其中读数行（`reader-chrome-toggle-status`）是设计内的第二切换入口
 // （图片页中央点击被「点页全屏缩放」占用，靠它兜底；`reader_inset_test` 已双向
-// 钉住），**必须保留**。注意显形态时底部层上移、读数行恰好盖住九宫格底排
-// （实测数见 §2.83）⇒ 那几个落点是「点在读数行上」不是「点在正文上」，
-// 用例②显形态段会把这类落点剔出正文格再断言。
+// 钉住），**必须保留**。用例②显形态段按实测 rect 把「点在 chrome UI 上」的
+// 落点剔出正文格再断言（章节行下线后控制条 72dp 不再盖底排，八格全露）。
+//
+// 唤出态**继续阅读**（正文真正滑动越 `kTouchSlop` / 桌面滚轮）⇒ 自动收起
+// chrome（`reader_page._onContentDragMove`）；短滑（≤ slop）不收——与点按
+// 闸门同一哲学，见文末用例。
 //
 // ## 落点换算为什么用 `globalToLocal`
 //
@@ -146,9 +149,10 @@ void main() {
       expect(chromeShown(tester), isTrue);
 
       // ② chrome 显现态：落在**正文上**的格点**也不许收起**（收起同样只认
-      // 中宫）。显形态下底部层（读数行 + 控制条）上移叠进正文带、顶栏也压在
-      // 正文上——点它们是「点 chrome UI」不是「点正文」，不属闸门口径（读数
+      // 中宫）。显形态下 chrome 各层（读数行 / 控制条 / 顶栏）都可能压住
+      // 某些格——点它们是「点 chrome UI」不是「点正文」，不属闸门口径（读数
       // 行更是设计内的切换入口，见文件头），此处按实测 rect 剔出后再断言。
+      // 章节行下线后控制条只剩 72dp：底排 3 格也露在正文上 ⇒ 8 格全剔不出。
       final Rect statusRow = tester
           .getRect(find.byKey(const Key('reader-chrome-toggle-status')));
       final Rect controlBar = tester.getRect(find.byType(ReaderControlBar));
@@ -159,9 +163,9 @@ void main() {
               !controlBar.contains(p) &&
               !appBar.contains(p))
           .toList();
-      expect(surfaceCells, hasLength(5),
-          reason: '显形态的读数行 / 控制条只盖住九宫格底排 3 格，其余 5 格必须'
-              '露在正文上（overlay 几何变了会在此翻红、提醒人工过目）');
+      expect(surfaceCells, hasLength(8),
+          reason: '章节行下线后控制条 72dp 不再盖住底排，八格全部露在正文上'
+              '（overlay 几何变了会在此翻红、提醒人工过目）');
       for (final Offset p in surfaceCells) {
         await tester.tapAt(p);
         await tester.pump();
@@ -315,6 +319,36 @@ void main() {
       await tester.tapAt(center);
       await tester.pump();
       expect(chromeShown(tester), isFalse, reason: '回归：正常点按仍能收起');
+
+      await closeBook(tester);
+    });
+
+    testWidgets('唤出态：正文真正滑动（越 slop）→ 自动收起；短滑不收',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(buildApp());
+      await settle(tester);
+
+      final Offset center = contentRect(tester).center;
+      await tester.tapAt(center);
+      await tester.pump();
+      expect(chromeShown(tester), isTrue, reason: '前置：chrome 已唤出');
+
+      // 短滑（< kTouchSlop 18dp）：手抖 / 翻页起手不算「继续阅读」→ 保持。
+      await swipe(tester, center, const Offset(0, -10));
+      expect(chromeShown(tester), isTrue,
+          reason: '短滑不收（与中宫点按的漂移闸门同一哲学）');
+
+      // 竖向真正滚动 = 继续阅读 → 自动收起。
+      await swipe(tester, center, const Offset(0, -60));
+      expect(chromeShown(tester), isFalse,
+          reason: '唤出态在正文上滚动应自动收起 chrome');
+
+      // 再唤出 → 横向划动（翻页）同样收。
+      await tester.tapAt(center);
+      await tester.pump();
+      expect(chromeShown(tester), isTrue);
+      await swipe(tester, center, const Offset(-60, 0));
+      expect(chromeShown(tester), isFalse, reason: '划动翻页同样自动收起');
 
       await closeBook(tester);
     });

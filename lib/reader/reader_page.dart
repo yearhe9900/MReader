@@ -25,6 +25,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart' show PointerScrollEvent, PointerSignalEvent, kTouchSlop;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -614,6 +615,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// `onTapDown` 记录、`onTapUp` 消费、`onTapCancel` 清空（三处都不 setState）。
   Offset? _chromeTapDownGlobal;
 
+  /// 在途正文拖动的 pointer + 按下点（唤出态继续阅读 ⇒ 收 chrome，
+  /// 见 [_onContentDragMove]）。`null` = 无在途拖动。
+  int? _chromeDragPointer;
+  Offset? _chromeDragDownGlobal;
+
   /// 停稳流程序号：用户再次滚动即作废在途的 async 停稳序列。
   int _pagedStopSeq = 0;
 
@@ -644,8 +650,6 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    _seekDebounce?.cancel(); // 滑条防抖：关页后不许再触发跳章
-    _seekDebounce = null;
     // 关闭阅读页：先保存进度（unawaited）再释放资源。控制器到此通常已 detach，
     // `_saveProgress` 会回退 [_lastLocalHint]、不用 null 覆盖已存快照。
     WidgetsBinding.instance.removeObserver(this);
@@ -3956,22 +3960,6 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _onSettingsChanged(_settings.copyWith(themeMode: next));
   }
 
-  /// 章节滑条落点跳章（拖拽逐帧上抛，**防抖**：停手 200ms 才真跳）。
-  ///
-  /// 滑条按章吸附，拖过全书会逐章回调；每次 `_goToChapter` 都要载入 + 落位，
-  /// 逐帧直跳会把加载队列打满。预览拇指跟手由控制条本地态负责
-  /// （`control_bar._drag`），这里只管落点。
-  Timer? _seekDebounce;
-
-  void _seekToChapter(int index) {
-    _seekDebounce?.cancel();
-    _seekDebounce = Timer(const Duration(milliseconds: 200), () {
-      _seekDebounce = null;
-      if (!mounted || _disposed) return;
-      unawaited(_goToChapter(index));
-    });
-  }
-
   /// 顶栏右侧听书圆钮（§2.122：耳机 glyph，开读后切停止）。
   ///
   /// Key / tooltip 沿用旧控制条朗读按钮（`reader-control-tts` / 「朗读」/
@@ -4204,6 +4192,40 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
   }
 
+  /// 正文 `Listener`：唤出态下正文被**真正拖动**（越过 `kTouchSlop`）⇒ 收 chrome。
+  ///
+  /// 「继续阅读」= 滚动拖拽 / 划动翻页（滑动、覆盖两种翻页模式同为横滑）——
+  /// 工具栏挡视线，直接收。用裸 `Listener` 而不是 drag 识别器：**不进手势
+  /// 竞技场**，不抢正文滚动 / 链接 / 翻页（手势层「不注册 drag」的红线不破）；
+  /// `kTouchSlop`（18dp）内的短滑（手抖 / 翻页起手）不收，与中宫点按的
+  /// 「点按 ≠ 滑动」闸门同一哲学。桌面滚轮同样算继续阅读。
+  void _onContentDragDown(PointerDownEvent event) {
+    _chromeDragPointer = event.pointer;
+    _chromeDragDownGlobal = event.position;
+  }
+
+  void _onContentDragMove(PointerMoveEvent event) {
+    final Offset? down = _chromeDragDownGlobal;
+    if (down == null || event.pointer != _chromeDragPointer) return;
+    if ((event.position - down).distance <= kTouchSlop) return;
+    _chromeDragPointer = null;
+    _chromeDragDownGlobal = null;
+    _exitChrome(); // 已收起时 no-op（自带 `_fullscreen` 闸门）
+  }
+
+  void _onContentDragEnd(PointerEvent event) {
+    if (event.pointer != _chromeDragPointer) return;
+    _chromeDragPointer = null;
+    _chromeDragDownGlobal = null;
+  }
+
+  /// 桌面滚轮：滚轮推进也是「继续阅读」，唤出态下一滚即收。
+  void _onContentScrollSignal(PointerSignalEvent event) {
+    if (event is PointerScrollEvent && event.scrollDelta != Offset.zero) {
+      _exitChrome();
+    }
+  }
+
   /// 从弹层里选定一个位置跳过去后**收起 chrome**（`TYP-09`）。
   ///
   /// chrome 是**覆盖层**（`extendBody*`，见 [build]），顶栏压在正文上沿；而
@@ -4372,16 +4394,6 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   child: Opacity(opacity: 0, child: progressStatus),
                 ),
                 ReaderControlBar(
-                  chapterIndex: _liveIndex,
-                  chapterCount: chapters.length,
-                  canGoPrev: _currentIndex > 0,
-                  canGoNext: _currentIndex < chapters.length - 1,
-                  onPrevChapter: () =>
-                      unawaited(_goToChapter(_currentIndex - 1)),
-                  onNextChapter: () =>
-                      unawaited(_goToChapter(_currentIndex + 1)),
-                  onSeek: _seekToChapter,
-                  previewLabel: _chapterPreviewLabel,
                   onToc: _openToc,
                   onBookmarks: _openBookmarks,
                   onAppearance: _openAppearance,
@@ -4484,32 +4496,6 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (chapters == null) return '载入中…';
     if (chapters.isEmpty) return '无章节';
     return '${_chapterName(_liveIndex)} · $_livePercent%';
-  }
-
-  /// 章节滑条拖到 [index] 时的气泡文案（章节名 · **落地页读数**）。
-  ///
-  /// 落地恒为章起点（`_goToChapter` 跳 `pos: 0`）⇒ 分子 = 该章第 1 页，
-  /// 分母 = 该章总页数；页表与底部读数同源（`_viewPositionAt`）。
-  /// 目标章页表未就绪（分页窗口外 / 占位章 / 滚动模式）→ 回落该章起点的
-  /// 全书百分比（`chapterPos: 0` 不显示拖动中的伪精确值；诚实降级、不显示 0/0）。
-  String _chapterPreviewLabel(int index) {
-    final List<Chapter>? chapters = _chapters;
-    if (chapters == null || chapters.isEmpty) return '载入中…';
-    final int i = index.clamp(0, chapters.length - 1);
-    final ({int viewIndex, int pageIndex})? pos = _viewPositionAt(i, 0.0);
-    if (pos != null && pos.pageIndex >= 0) {
-      final int total = _pageViews[pos.viewIndex].pages.length;
-      if (total > 0) {
-        return '${_chapterName(i)} · ${pos.pageIndex + 1}/$total页';
-      }
-    }
-    final double overall = overallReadingProgress(
-      chapterIndex: i,
-      chapterPos: 0,
-      chapterCount: chapters.length,
-      chapterWeights: _chapterWeights,
-    );
-    return '${_chapterName(i)} · ${(overall * 100).floor()}%';
   }
 
   /// 章名（空标题回落「第N章」，不把空串拼进读数）。
@@ -5478,27 +5464,39 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     // ⚠️ 不注册 drag 类识别器（会抢正文滚动 / 链接）；`kTouchSlop`
                     // (18dp) 内的短滑仍会派发 tap，收紧交给 [_onContentTapUp] 的
                     // 「按下点 + 漂移」闸门，竞技场结构保持不变。
+                    //
+                    // 唤出态「继续阅读 ⇒ 收 chrome」走外层裸 `Listener`
+                    // （[_onContentDragMove]）：指针事件不进竞技场，同样不抢
+                    // 滚动 / 链接 / 翻页。
                     child: KeyedSubtree(
                       key: _chromeToggleKey,
-                      child: GestureDetector(
-                        key: const Key('reader-chrome-toggle'),
-                        behavior: HitTestBehavior.translucent,
-                        onTapDown: _onContentTapDown,
-                        onTapUp: _onContentTapUp,
-                        onTapCancel: _onContentTapCancel,
-                        child: _pagedMode
-                            ? _buildPagedBody()
-                            : ListView.builder(
-                                controller: _controller,
-                                // 进度指示条的占位已由**上方那个 Padding**
-                                // （`reserve`）统一提供，此处只需章节间的呼吸留白。
-                                padding:
-                                    const EdgeInsets.only(top: 8, bottom: 12),
-                                itemCount: chapters.length,
-                                itemBuilder:
-                                    (BuildContext context, int index) =>
-                                        _buildChapterItem(theme, bodyStyle, index),
-                              ),
+                      child: Listener(
+                        onPointerDown: _onContentDragDown,
+                        onPointerMove: _onContentDragMove,
+                        onPointerUp: _onContentDragEnd,
+                        onPointerCancel: _onContentDragEnd,
+                        onPointerSignal: _onContentScrollSignal,
+                        child: GestureDetector(
+                          key: const Key('reader-chrome-toggle'),
+                          behavior: HitTestBehavior.translucent,
+                          onTapDown: _onContentTapDown,
+                          onTapUp: _onContentTapUp,
+                          onTapCancel: _onContentTapCancel,
+                          child: _pagedMode
+                              ? _buildPagedBody()
+                              : ListView.builder(
+                                  controller: _controller,
+                                  // 进度指示条的占位已由**上方那个 Padding**
+                                  // （`reserve`）统一提供，此处只需章节间的呼吸留白。
+                                  padding:
+                                      const EdgeInsets.only(top: 8, bottom: 12),
+                                  itemCount: chapters.length,
+                                  itemBuilder:
+                                      (BuildContext context, int index) =>
+                                          _buildChapterItem(
+                                              theme, bodyStyle, index),
+                                ),
+                        ),
                       ),
                     ),
                   ),
