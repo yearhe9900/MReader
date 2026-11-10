@@ -2,8 +2,9 @@
 //
 // 自下而上：① 一枚 `MiFloatingToolbar` 胶囊，横排 目录 / 书签 / 外观 /
 // 操作 / 查找 / 日间（夜间）六格；② 其上方一条圆角章节行（上一章 —
-// 按章吸附的 `MiSlider` — 下一章）；③ 拖动滑条时章节行上方浮出
-// 「章节名 · 进度」预览气泡。
+// 按章吸附的 `MiSlider` — 下一章），**高宽复用胶囊参数**（等高 72、
+// 宽 = 屏宽 − 24 封顶 408，两行等宽同轴）；③ 拖动滑条时章节行上方浮出
+// 「章节名 · 进度」预览气泡（16 加粗，明显显示）。
 //
 // ⚠️ 红线：整层是**覆盖层**（`extendBody*`），盒高不进正文排版预算；
 // 唤出 chrome 时读数由宿主用 `Opacity(0)` 收起、胶囊**保持原位**不上移。
@@ -27,8 +28,11 @@ const double kReaderToolbarCellHeight = MiActionEntryMetrics.rowHeight;
 /// 胶囊外侧留白（左右各一份；与章节行同边距）。
 const double kReaderChromeOuterMargin = 12;
 
-/// 章节选择行高（dp）。
-const double kReaderChapterRowHeight = 56;
+/// 章节选择行高（dp）：**复用悬浮工具栏胶囊总高**（纵向外留白 + 单格高），
+/// 与胶囊等高堆叠；两处不得各写一套数（`final` 运行期取值，`const` 上下文
+/// 取不到 `EdgeInsets` 属性）。
+final double kReaderChapterRowHeight =
+    MiFloatingToolbarMetrics.outsidePadding.vertical + kReaderToolbarCellHeight;
 
 /// 章节行与工具栏的间隙（dp）：11 = 8 + 上抬 3（2026-11-09 定稿视觉）。
 const double kReaderChapterRowGap = 11;
@@ -137,6 +141,12 @@ class _ReaderControlBarState extends State<ReaderControlBar> {
         .clamp(kReaderToolbarMinCellWidth, kReaderToolbarCellWidth);
   }
 
+  /// 胶囊宽（dp）：屏宽 − 24、宽屏封顶 6 × 64 + 24 = 408。
+  ///
+  /// 与 `_cellWidth` 同一公式，章节行直接复用 ⇒ 两行等宽同轴。
+  static double _pillWidth(BuildContext context) => 6 * _cellWidth(context) +
+      MiFloatingToolbarMetrics.outsidePadding.horizontal;
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -167,12 +177,22 @@ class _ReaderControlBarState extends State<ReaderControlBar> {
             bottom: 0,
             child: SafeArea(top: false, child: _toolbar(mode)),
           ),
+          // 高宽复用胶囊参数：宽 = `_pillWidth`（屏宽 − 24、封顶 408）居中，
+          // 高 = `kReaderChapterRowHeight`（胶囊总高 72）。
           Positioned(
-            left: kReaderChromeOuterMargin,
-            right: kReaderChromeOuterMargin,
+            left: 0,
+            right: 0,
             bottom: chapterBottom,
             height: kReaderChapterRowHeight,
-            child: _chapterRow(mode, t),
+            child: Center(
+              // 显式给高：`Center` 会把 Positioned 的紧约束放宽成松约束，
+              // 不补高行会缩回内容高 48（居中后间隙漂 +12）。
+              child: SizedBox(
+                width: _pillWidth(context),
+                height: kReaderChapterRowHeight,
+                child: _chapterRow(mode, t),
+              ),
+            ),
           ),
           if (_previewVisible)
             Positioned(
@@ -352,14 +372,18 @@ class _ReaderControlBarState extends State<ReaderControlBar> {
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        // 纵向 1：16 字号 + 描边后整片 19.5 ≤ 气泡预留 20，不越盒。
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 1),
         child: Text(
           widget.previewLabel(_previewIndex),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
+          // 拖动预览要**一眼可见**：16 / 加粗（原 12 常规太弱）。
           style: MiTypography.navLabelFor(mode).copyWith(
             color: MiColors.foregroundFor(mode),
-            fontSize: 12,
+            fontSize: 16,
+            height: 1.0,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),
