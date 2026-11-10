@@ -4486,14 +4486,23 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return '${_chapterName(_liveIndex)} · $_livePercent%';
   }
 
-  /// 章节滑条拖到 [index] 时的气泡文案（章节名 · 该章起点的全书进度）。
+  /// 章节滑条拖到 [index] 时的气泡文案（章节名 · **落地页读数**）。
   ///
-  /// 权重口径与底部读数同（`overallReadingProgress` + `_chapterWeights`）；
-  /// `chapterPos: 0` = 该章起点，避免气泡显示「拖动中」的伪精确值。
+  /// 落地恒为章起点（`_goToChapter` 跳 `pos: 0`）⇒ 分子 = 该章第 1 页，
+  /// 分母 = 该章总页数；页表与底部读数同源（`_viewPositionAt`）。
+  /// 目标章页表未就绪（分页窗口外 / 占位章 / 滚动模式）→ 回落该章起点的
+  /// 全书百分比（`chapterPos: 0` 不显示拖动中的伪精确值；诚实降级、不显示 0/0）。
   String _chapterPreviewLabel(int index) {
     final List<Chapter>? chapters = _chapters;
     if (chapters == null || chapters.isEmpty) return '载入中…';
     final int i = index.clamp(0, chapters.length - 1);
+    final ({int viewIndex, int pageIndex})? pos = _viewPositionAt(i, 0.0);
+    if (pos != null && pos.pageIndex >= 0) {
+      final int total = _pageViews[pos.viewIndex].pages.length;
+      if (total > 0) {
+        return '${_chapterName(i)} · ${pos.pageIndex + 1}/$total页';
+      }
+    }
     final double overall = overallReadingProgress(
       chapterIndex: i,
       chapterPos: 0,
