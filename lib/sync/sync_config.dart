@@ -3,28 +3,10 @@
 // 五要素（`SYNC-01`）：`url` / `account` / `password` / 远端目录（默认 `mreader`）
 // / 设备名；**`password` 不在本模型内**（`DATA-02` 结构性保证）——配置 JSON 只存
 // 连接信息，密码经 `SyncPasswordVault` 走 SecureStore，备份包 / 导出搜不到密码。
+// 服务商预设已随「简化设置」移除（2026-11-10 拍板，对齐 Anx Reader）。
 //
 // 远端目录语义（PRD §10.3）：所有远端路径都落在 `{webdavUrl}/{dir}/` 之下；
 // 目录不存在由 `WebdavClient` 逐级 MKCOL 自动创建（`SYNC-01` ③）。
-
-/// 服务商预设（`SYNC-01`：支持多家服务商预设；点选回填服务器地址）。
-class WebdavPreset {
-  /// 创建预设。
-  const WebdavPreset({
-    required this.name,
-    required this.url,
-    required this.hint,
-  });
-
-  /// 展示名（如「坚果云」）。
-  final String name;
-
-  /// 回填的服务器地址。
-  final String url;
-
-  /// 补充说明（组脚注用；自托管类预设需要用户按提示改地址）。
-  final String hint;
-}
 
 /// WebDAV 连接配置（不可变值对象；**不含密码**）。
 class SyncConfig {
@@ -42,26 +24,6 @@ class SyncConfig {
 
   /// 设备名默认值（用于 `backup-{yyyy-MM-dd}-{device}.zip` 命名，§10.3）。
   static const String defaultDeviceName = 'MReader';
-
-  /// 服务商预设（`SYNC-01`）：前两家是 concrete 地址；自托管（Nextcloud /
-  /// 群晖等）给**模板地址**，用户按脚注提示改成自己的域名与用户名。
-  static const List<WebdavPreset> presets = <WebdavPreset>[
-    WebdavPreset(
-      name: '坚果云',
-      url: 'https://dav.jianguoyun.com/dav/',
-      hint: '坚果云 WebDAV 服务，账号密码在坚果云「设置 → 安全选项 → 应用密码」生成。',
-    ),
-    WebdavPreset(
-      name: '坚果云备用',
-      url: 'https://dav2.jianguoyun.com/dav/',
-      hint: '部分账号（企业版 / 旧版）使用备用地址。',
-    ),
-    WebdavPreset(
-      name: 'Nextcloud / 群晖',
-      url: 'https://nas.example.com:5001/remote.php/dav/files/用户名/',
-      hint: '自托管模板：把域名与「用户名」改成你自己的；群晖默认端口 5001。',
-    ),
-  ];
 
   /// 服务器地址（WebDAV 根，如 `https://dav.jianguoyun.com/dav/`）。
   final String url;

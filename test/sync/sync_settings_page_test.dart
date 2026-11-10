@@ -1,5 +1,8 @@
-// `SYNC-01` 五要素界面 / 预设回填 / 测试连接成功与错误可见 `SYNC-07` /
+// `SYNC-01` 三要素界面 / 高级选项折叠 / 测试连接成功与错误可见 `SYNC-07` /
 // `DATA-02` ③ 明文标注 + 设置页入口接线：同步设置页 widget 测试。
+//
+// 页面口径（2026-11-10「简化设置」拍板）：三要素（地址 / 账号 / 密码）+ 测试
+// 连接行同卡；远端目录 / 设备名收进默认收起的「高级选项」；服务商预设已移除。
 //
 // 三条测试口径（沿用既有测试的既定做法）：
 //   ① 宿主钉「关」档（玻璃档浮层在 `flutter test` 软件光栅下每帧数百 ms 真实
@@ -127,70 +130,56 @@ void main() {
   }
 
   group('同步设置页 · 界面与配置（`SYNC-01`）', () {
-    testWidgets('初始：五要素字段与服务商预设在场，未配置', (WidgetTester tester) async {
+    testWidgets('初始：三要素字段在场、预设已移除、高级选项收起、未配置', (
+      WidgetTester tester,
+    ) async {
       tall(tester);
       await tester.pumpWidget(buildApp());
       await tester.pumpAndSettle();
 
       expect(find.text('同步设置'), findsOneWidget);
-      for (final String label in <String>[
-        '服务器地址',
-        '账号',
-        '密码',
-        '远端目录',
-        '设备名',
-      ]) {
+      for (final String label in <String>['服务器地址', '账号', '密码']) {
         expect(find.text(label), findsOneWidget, reason: '缺字段：$label');
       }
-      expect(find.text('服务商预设'), findsOneWidget);
-      expect(find.text('坚果云'), findsOneWidget);
-      expect(find.text('坚果云备用'), findsOneWidget);
-      // 远端目录默认 mreader（`SYNC-01` / PRD §10.3）。
-      expect(
-        tester.widget<TextField>(find.byType(TextField).at(3)).controller!.text,
-        'mreader',
-      );
+      // 服务商预设已随「简化设置」移除（2026-11-10 拍板，对齐 Anx Reader）。
+      expect(find.text('服务商预设'), findsNothing);
+      expect(find.text('坚果云'), findsNothing);
+      expect(find.text('坚果云备用'), findsNothing);
+      // 远端目录 / 设备名收进「高级选项」，默认收起（不在树上）。
+      expect(find.text('高级选项'), findsOneWidget);
+      expect(find.text('远端目录'), findsNothing);
+      expect(find.text('设备名'), findsNothing);
+      expect(find.text('测试连接'), findsOneWidget);
       expect(store.isConfigured, isFalse);
       expect(find.text('删除同步配置'), findsNothing);
     });
 
-    testWidgets('`DATA-02` ③：明文降级时「密码存储」显示明文告知', (WidgetTester tester) async {
+    testWidgets('展开高级选项 → 远端目录默认 mreader（`SYNC-01` / PRD §10.3）', (
+      WidgetTester tester,
+    ) async {
+      tall(tester);
+      await tester.pumpWidget(buildApp());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('高级选项'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('远端目录'), findsOneWidget);
+      expect(find.text('设备名'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField).at(3)).controller!.text,
+        'mreader',
+      );
+    });
+
+    testWidgets('明文降级时服务器组脚注给出明文告知（`DATA-02` ③）', (WidgetTester tester) async {
       tall(tester);
       await tester.pumpWidget(buildApp());
       await tester.pumpAndSettle();
 
       expect(store.vault.isSecure, isFalse);
-      expect(find.text('密码存储'), findsOneWidget);
+      // 明文告知随简化设置并入服务器组脚注（`DATA-02` ③ 仍必须在场）。
       expect(find.textContaining('明文保存'), findsOneWidget);
-    });
-
-    testWidgets('点预设回填服务器地址并选中（`SYNC-01` 多家服务商预设）',
-        (WidgetTester tester) async {
-      tall(tester);
-      await tester.pumpWidget(buildApp());
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('坚果云'));
-      await tester.pumpAndSettle();
-
-      expect(
-        tester.widget<TextField>(find.byType(TextField).at(0)).controller!.text,
-        'https://dav.jianguoyun.com/dav/',
-      );
-      expect(
-        tester
-            .widget<FilterChip>(
-              find.ancestor(
-                of: find.text('坚果云'),
-                matching: find.byType(FilterChip),
-              ),
-            )
-            .selected,
-        isTrue,
-      );
-      // 预设脚注切换为该家服务商的说明（用脚注独有的「安全选项」措辞断言，
-      // 避免与密码字段 hint「应用密码 / 登录密码」撞词）。
-      expect(find.textContaining('安全选项'), findsOneWidget);
     });
 
     testWidgets('空表单点保存 → 中文校验弹窗（`SYNC-01` ②）', (WidgetTester tester) async {
@@ -232,6 +221,9 @@ void main() {
         tester.widget<TextField>(find.byType(TextField).at(1)).controller!.text,
         'u@example.com',
       );
+      // 设备名收在「高级选项」内（默认收起）→ 先展开再断言回填。
+      await tester.tap(find.text('高级选项'));
+      await tester.pumpAndSettle();
       expect(
         tester.widget<TextField>(find.byType(TextField).at(4)).controller!.text,
         '小米',

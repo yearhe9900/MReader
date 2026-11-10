@@ -1,13 +1,13 @@
-// WebDAV 同步设置页（`SYNC-01` 五要素配置 + 测试连接 + `SYNC-07` 失败可见）。
+// WebDAV 同步设置页（`SYNC-01` 连接配置 + 测试连接 + `SYNC-07` 失败可见）。
 //
 // 形制（`UI-04` 红线）：玻璃顶栏（导航层）+ [OpaqueContentSurface] 不透明内容；
 // 分组卡片与行复用 [SettingsGroupCard] / [SettingsTile]（与设置页 / AI 设置页同口径）。
 //
-// 结构（单配置，无列表页）：
-//   · 服务商预设（`SYNC-01`：多家服务商预设，点选回填地址）；
-//   · 服务器组：url / 账号 / 密码 / 远端目录 / 设备名（`SYNC-01` 五要素）；
-//   · 连接组：测试连接（成功 / 分类可读错误 + 可重试，`SYNC-01` ①②③、`SYNC-07`）；
-//   · 安全组：`DATA-02` ③ 非安全存储时**必须**明文告知；
+// 结构（对齐 Anx Reader 极简口径；2026-11-10 拍板「三要素 + 高级折叠、去掉预设」）：
+//   · 服务器组：url / 账号 / 密码三要素 + 测试连接行（成功 / 分类可读错误 +
+//     可重试，`SYNC-01` ①②③、`SYNC-07`）；组脚注承载密码存储告知（`DATA-02` ③：
+//     非安全存储时**必须**明文告知）；
+//   · 高级选项（默认收起）：远端目录（默认 `mreader`）/ 设备名（`SYNC-01` 后两要素）；
 //   · 已配置时的删除（连带删密码，见 [SyncConfigStore.remove]）。
 //
 // `DATA-02` ①：配置落盘 JSON 不含 password（[SyncConfig.toJson] 结构性不含），
@@ -50,6 +50,9 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
   late final TextEditingController _dir;
   late final TextEditingController _device;
 
+  /// 「高级选项」是否展开（默认收起：远端目录 / 设备名对普通用户无需露出）。
+  bool _advancedOpen = false;
+
   /// 是否已有存储的密码（决定「留空保持」提示与删除联动）。
   bool _hasStoredPassword = false;
 
@@ -68,8 +71,6 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
     _dir = TextEditingController(text: c?.dir ?? SyncConfig.defaultDir);
     _device =
         TextEditingController(text: c?.deviceName ?? SyncConfig.defaultDeviceName);
-    // 预设回填 / 手改地址都会重算选中态与脚注。
-    _url.addListener(_onUrlChanged);
     if (c != null) {
       widget.store.readPassword().then((String? password) {
         if (mounted) {
@@ -83,19 +84,12 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
 
   @override
   void dispose() {
-    _url.removeListener(_onUrlChanged);
     _url.dispose();
     _account.dispose();
     _password.dispose();
     _dir.dispose();
     _device.dispose();
     super.dispose();
-  }
-
-  void _onUrlChanged() {
-    if (mounted) {
-      setState(() {});
-    }
   }
 
   /// 由当前表单构造配置（校验由 [SyncConfig.validate] 给出）。
@@ -105,27 +99,6 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
         dir: _dir.text,
         deviceName: _device.text,
       );
-
-  /// 当前 url 命中的预设；无命中返 `null`。
-  WebdavPreset? _matchedPreset() {
-    final String url = _url.text.trim();
-    if (url.isEmpty) {
-      return null;
-    }
-    for (final WebdavPreset preset in SyncConfig.presets) {
-      if (url == preset.url || url == _stripSlash(preset.url)) {
-        return preset;
-      }
-    }
-    return null;
-  }
-
-  static String _stripSlash(String url) => url.replaceAll(RegExp(r'/+$'), '');
-
-  /// 点预设 → 回填地址（`SYNC-01` 多家服务商预设）。
-  void _applyPreset(WebdavPreset preset) {
-    _url.text = preset.url; // 触发 listener → setState 重算选中态。
-  }
 
   /// 保存（校验通过才落盘；密码留空保持已存值）。
   Future<void> _save() async {
@@ -280,11 +253,8 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
             kShellBottomInset,
           ),
           children: <Widget>[
-            _buildPresetGroup(),
             _buildServerGroup(),
-            _buildRemoteGroup(),
-            _buildTestGroup(),
-            _buildSecurityGroup(),
+            _buildAdvancedGroup(),
             if (widget.store.isConfigured)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
@@ -306,42 +276,18 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
     );
   }
 
-  /// 「服务商预设」组（`SYNC-01`：多家服务商预设）。
-  Widget _buildPresetGroup() {
-    final WebdavPreset? matched = _matchedPreset();
-    return SettingsGroupCard(
-      header: '服务商预设',
-      footer: matched?.hint ??
-          '点选预设回填服务器地址；自托管（Nextcloud / 群晖等）请按模板改成自己的域名与用户名。',
-      children: <Widget>[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: <Widget>[
-              for (final WebdavPreset preset in SyncConfig.presets)
-                FilterChip(
-                  label: Text(preset.name),
-                  selected: _url.text.trim() == preset.url ||
-                      _url.text.trim() == _stripSlash(preset.url),
-                  showCheckmark: false,
-                  onSelected: (_) => _applyPreset(preset),
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// 「服务器」组（`SYNC-01` 前三要素：url / 账号 / 密码）。
+  /// 「服务器」组（`SYNC-01` 前三要素 + 测试连接行 + 密码存储脚注，
+  /// `DATA-02` ③ 非安全存储时**必须**明文告知）。
   Widget _buildServerGroup() {
+    final bool secure = widget.store.vault.isSecure;
+    final String notice = secure
+        ? '密码保存在系统安全存储，不进备份、不进日志。'
+        : widget.store.vault.securityNotice;
     return SettingsGroupCard(
       header: '服务器',
       footer: _hasStoredPassword
-          ? '已保存密码；输入框留空则保持不变。密码不进备份、不进日志。'
-          : '密码保存在系统安全存储，不进备份、不进日志。',
+          ? '已保存密码；输入框留空则保持不变。$notice'
+          : notice,
       children: <Widget>[
         _field(
           '服务器地址',
@@ -357,77 +303,71 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
           hint: _hasStoredPassword ? '••••（留空保持不变）' : '应用密码 / 登录密码',
           obscure: true,
         ),
-      ],
-    );
-  }
-
-  /// 「远端目录与设备」组（`SYNC-01` 后两要素：目录默认 `mreader` / 设备名）。
-  Widget _buildRemoteGroup() {
-    return SettingsGroupCard(
-      header: '远端目录与设备',
-      footer: '所有同步数据都存放在 {服务器地址}/{远端目录}/ 下；目录不存在时自动创建。',
-      children: <Widget>[
-        _field('远端目录', _dir, hint: SyncConfig.defaultDir),
         const Divider(height: 1),
-        _field(
-          '设备名',
-          _device,
-          hint: '如 Xiaomi-Phone；用于备份文件命名（backup-日期-设备名.zip）',
-        ),
+        _testTile(),
       ],
     );
   }
 
-  /// 「连接」组：测试按钮 + 结果行（成功 / 分类错误 + 可重试时「重试」，`SYNC-07`）。
-  Widget _buildTestGroup() {
+  /// 测试行（服务器组末行）：结果呈现 + 成功 / 分类错误 + 可重试（`SYNC-07`）。
+  Widget _testTile() {
     final ThemeData theme = Theme.of(context);
-    return SettingsGroupCard(
-      header: '连接',
-      children: <Widget>[
-        ListTile(
-          title: const Text('测试连接'),
-          subtitle: _testing
-              ? const Text('连接中…')
-              : _testOk
-                  ? Text(
-                      '连接成功，远端目录已就绪。',
-                      style: TextStyle(color: theme.colorScheme.primary),
-                    )
-                  : _testError == null
-                      ? const Text('验证地址与凭据，并自动创建缺失的远端目录')
-                      : Text(
-                          _testError!,
-                          style: TextStyle(color: theme.colorScheme.error),
-                        ),
-          trailing: _testing
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+    return ListTile(
+      title: const Text('测试连接'),
+      subtitle: _testing
+          ? const Text('连接中…')
+          : _testOk
+              ? Text(
+                  '连接成功，远端目录已就绪。',
+                  style: TextStyle(color: theme.colorScheme.primary),
                 )
-              : TextButton(
-                  onPressed: _test,
-                  child: Text(_testRetryable ? '重试' : '测试'),
-                ),
-        ),
-      ],
+              : _testError == null
+                  ? const Text('验证地址与凭据，并自动创建缺失的远端目录')
+                  : Text(
+                      _testError!,
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+      trailing: _testing
+          ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : TextButton(
+              onPressed: _test,
+              child: Text(_testRetryable ? '重试' : '测试'),
+            ),
     );
   }
 
-  /// 「安全」组（`DATA-02` ③：非安全存储时**必须**明文告知）。
-  Widget _buildSecurityGroup() {
-    final bool secure = widget.store.vault.isSecure;
+  /// 「高级选项」组（默认收起；展开露出 `SYNC-01` 后两要素：远端目录 / 设备名）。
+  Widget _buildAdvancedGroup() {
     return SettingsGroupCard(
-      header: '安全',
+      footer: _advancedOpen
+          ? '所有同步数据都存放在 {服务器地址}/{远端目录}/ 下；目录不存在时自动创建。'
+          : null,
       children: <Widget>[
         SettingsTile(
-          icon: secure ? Icons.lock_outline : Icons.warning_amber_outlined,
-          accent: secure ? SettingsAccents.green : SettingsAccents.gray,
-          title: '密码存储',
-          subtitle: secure
-              ? '密码写入系统安全存储，不进备份、不进日志'
-              : widget.store.vault.securityNotice,
+          icon: Icons.tune,
+          accent: SettingsAccents.gray,
+          title: '高级选项',
+          subtitle: '远端目录、设备名（一般无需修改）',
+          onTap: () => setState(() => _advancedOpen = !_advancedOpen),
+          trailing: Icon(
+            _advancedOpen ? Icons.expand_less : Icons.expand_more,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
+        if (_advancedOpen) ...<Widget>[
+          const Divider(height: 1),
+          _field('远端目录', _dir, hint: SyncConfig.defaultDir),
+          const Divider(height: 1),
+          _field(
+            '设备名',
+            _device,
+            hint: '如 Xiaomi-Phone；用于备份文件命名（backup-日期-设备名.zip）',
+          ),
+        ],
       ],
     );
   }

@@ -117,16 +117,4 @@ void main() {
       );
     });
   });
-
-  group('服务商预设（`SYNC-01`：多家服务商预设）', () {
-    test('预设至少两家，且每个预设地址都通过 validate', () {
-      expect(SyncConfig.presets.length, greaterThanOrEqualTo(2));
-      for (final WebdavPreset preset in SyncConfig.presets) {
-        expect(preset.name, isNotEmpty, reason: '预设必须有展示名');
-        expect(preset.hint, isNotEmpty, reason: '预设必须有说明脚注');
-        final SyncConfig c = SyncConfig(url: preset.url, account: 'a');
-        expect(c.validate(), isNull, reason: '预设地址必须合法：${preset.url}');
-      }
-    });
-  });
 }
