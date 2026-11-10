@@ -39,8 +39,9 @@
   `rrk_model::lock_recover`；`rrk-cache` 增磁盘配额与 open 索引缓存独立开关；
   `rrk-kernel` 增 `configure_open_index_cache`。
 - **内核 PDF 能力暂停、入口关闭**：`shared_registry()` 不再注册 `PdfAdapter`（crate
-  代码保留），开 PDF 返回「无法识别的格式」。⚠️ 宿主 `DeveloperOptions.pdfUseRustKernel`
-  实验开关随之不可用；默认 pdfrx 固版式 PDF 不受影响。恢复需回上游重新 `register`。
+  代码保留），开 PDF 返回「无法识别的格式」。⚠️ 宿主「PDF 用 Rust 内核文字版阅读」
+  实验开关、子页与分发路径已一并下线，PDF 恒走 pdfrx 固版式。恢复需回上游重新
+  `register` 并重接宿主分发。
 - **ABI 11 → 12 → 13 的出口变化全在 `rrk-ffi` / `rrk-layout` / `bindings`**（内存开书、
   缓存出口、排版参数句柄化），**不在 vendored 集合，宿主 FRB 桥面不变、无需 codegen**。
 
@@ -66,7 +67,8 @@
 
 内核经 `rust_lib_mreader` 的 FRB API（`rust/src/api/kernel.rs`）暴露给 Dart；
 Dart 侧适配层在 `lib/format/rust_kernel_source.dart`（实现 `BookSource` 契约），
-由 `BookRegistry` 分发（内核为**唯一实现**，失败翻译成 `error_messages.dart` 的中文）。
+由 `BookRegistry` 分发（EPUB/TXT/MOBI/CBZ 的唯一实现；CBR/PDF 另走 Dart 源，
+PDF 恒为 pdfrx 固版式；失败翻译成 `error_messages.dart` 的中文）。
 
 **内容级缓存已接线**（`rrk-cache`，上游 issue #12）：
 
@@ -77,4 +79,4 @@ Dart 侧适配层在 `lib/format/rust_kernel_source.dart`（实现 `BookSource` 
 
 - `rust/Cargo.toml` 的 `[workspace.dependencies]` 注册 `rrk-source`（`members = ["vendor/*"]` 自动纳入）；`rust/Cargo.lock` 补齐 format / zip / txt / mobi 四条新依赖边。
 - `rust/src/api/kernel.rs::plain_blocks` 把 `ParagraphRole` 映射回 `RkBlock.indent`（`role.indentable()`）；FRB 镜像、Dart 适配层与生成物**零改动**，无需重新 codegen。
-- 真内核测试前置仍是 `cargo build --release` + `RustLib.init()`；开发者 PDF 开关开启路径待上游恢复注册。
+- 真内核测试前置仍是 `cargo build --release` + `RustLib.init()`；PDF 恒走 pdfrx 固版式，内核文字版路径已下线（防回潮契约见 `test/format/book_source_contract_test.dart` 与 `test/ui/settings_page_test.dart`）。

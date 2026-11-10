@@ -12,7 +12,8 @@
 //     `GlassRuntime`，只是没有 UI 入口）；
 //   · ⑤「我的」页样式对齐上游（2026-10-27 拍板「全跟上游」）→ Mi 页底色、compact
 //     页边距 11.9、卡片 #FFFFFF/#1E1E1E 圆角 20、行 56 / 图标块 38×38 r10、
-//     主文案 16/w400、行尾 ForwardChevronIconPainter、按压整行高亮带 120ms。
+//     主文案 16/w400、行尾 ForwardChevronIconPainter、按压整行高亮带 120ms；
+//   · ⑥「开发者选项」**已移除** → 入口与 PDF 内核开关文案都不在场（PDF 恒走 pdfrx）。
 //
 // 两条测试口径：
 // 1. **宿主钉「关」档**（`glass_off_fallback_test.dart` 的 `host(tier, …)` 同款）：玻璃档
@@ -295,6 +296,19 @@ void main() {
       expect(find.text('降低视觉特效'), findsNothing);
 
       // 本页唯一的开关（降低视觉特效）已随组移除——不留孤立的 Switch。
+      expect(find.byType(Switch), findsNothing);
+    });
+  });
+
+  group('设置页 · 开发者选项已移除（PDF 内核文字版下线）', () {
+    testWidgets('入口与 PDF 内核开关文案都不在页面里', (WidgetTester tester) async {
+      await tester.pumpWidget(host(GlassQualityTier.off, buildPage()));
+      await tester.pumpAndSettle();
+
+      expect(find.text('开发者选项'), findsNothing);
+      expect(find.text('PDF 解析内核 / 实验开关'), findsNothing);
+      expect(find.text('PDF 使用 Rust 内核'), findsNothing);
+      // 子页随入口一并下线，不留孤立开关。
       expect(find.byType(Switch), findsNothing);
     });
   });

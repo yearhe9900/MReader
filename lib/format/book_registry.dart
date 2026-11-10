@@ -18,12 +18,11 @@
 //   · 内核错误码 → 宿主映射统一中文（`rust_reader_kernel#11`）；
 //   · 内容级解析缓存（原三层 Dart 缓存的接任者，`rust_reader_kernel#12`）。
 // **CBR 与 PDF 不在此列**：CBR 内核明确不支持（`FMT-03` 靠 [CbrSource] 给
-// 「识别 + 明确提示」），PDF 渲染走 pdfrx 原生引擎（`FMT-01`）。
+// 「识别 + 明确提示」），PDF 恒走 pdfrx 原生引擎（`FMT-01`；内核文字版实验路径已下线）。
 import 'dart:typed_data';
 
 import '../highperf/high_perf_capability.dart';
 import '../highperf/high_perf_registry.dart';
-import '../settings/developer_options.dart';
 import '../src/rust/api/error.dart' as rk_err;
 import 'book_source.dart';
 import 'cbr_source.dart';
@@ -88,8 +87,8 @@ class BookRegistry {
   ///
   /// 语义：`epub` / `txt` / `mobi` / `cbz` 四档 = **整条解析链走 Rust 内核**
   /// （打开 / 分章 / 正文抽取 / 资源，`rust/vendor/` 的 `rrk-*`），是**唯一实现**；
-  /// `cbr` / `pdf` → **无候选**（CBR 内核明确不支持；PDF 渲染走 `pdfrx` 原生引擎，
-  /// 内核 PDF 视图未接线）；`unsupported` → 无候选。
+  /// `cbr` / `pdf` → **无候选**（CBR 内核明确不支持；PDF 恒走 `pdfrx` 原生引擎，
+  /// 内核 PDF 文字版已下线）；`unsupported` → 无候选。
   HighPerfCapability? capabilityFor(FormatKind kind) => switch (kind) {
         FormatKind.epub => HighPerfCapability.epubDecompress,
         FormatKind.txt => HighPerfCapability.txtChapterize,
@@ -131,15 +130,7 @@ class BookRegistry {
       case FormatKind.cbr:
         return CbrSource(fileName: fileName, bytes: bytes);
       case FormatKind.pdf:
-        // 开发者实验开关：开启时走 rrk-pdf 的 L1 文字重排（与固版式并列）；
-        // capabilityFor(pdf) 为 null ⇒ 不记加速层统计。
-        if (DeveloperOptions.pdfUseRustKernel) {
-          return _openKernel(
-            kind: FormatKind.pdf,
-            fileName: fileName,
-            bytes: bytes,
-          );
-        }
+        // PDF 恒走 pdfrx 固版式；内核文字版（rrk-pdf L1）实验路径已下线。
         return PdfSource(fileName: fileName, bytes: bytes);
       case FormatKind.unsupported:
         throw const MReaderFormatException(FormatErrorCode.unsupportedFormat);
@@ -185,7 +176,7 @@ class BookRegistry {
     final FormatErrorCode code = switch (error.kind) {
       rk_err.HighPerfErrorKind.encrypted => switch (kind) {
         FormatKind.mobi => FormatErrorCode.encryptedMobi,
-        FormatKind.pdf => FormatErrorCode.encryptedPdf,
+        // PDF 恒走 pdfrx（加密分支在 PdfSource），内核路径不可达。
         _ => FormatErrorCode.encryptedEpub,
       },
       rk_err.HighPerfErrorKind.missingContainer =>

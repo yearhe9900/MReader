@@ -270,6 +270,18 @@ void main() {
     await source.dispose();
   });
 
+  // PDF 内核文字版（rrk-pdf L1）已下线：openBook(pdf) 恒分发固版式源。
+  test('openBook 对 PDF 恒分发 pdfrx 固版式源（内核文字版已下线）', () async {
+    final BookSource source = await openBook(
+      fileName: 'contract.pdf',
+      bytes: minimalPdfBytes(),
+    );
+    expect(source.implId, 'pdfrx-pdf');
+    expect(const BookRegistry().capabilityFor(FormatKind.pdf), isNull,
+        reason: 'PDF 不得再挂内核加速层能力');
+    await source.dispose();
+  });
+
   test('搜索可取消：已取消的令牌不产出任何事件', () async {
     final BookSource? source = await openSample(registeredSources().first);
     if (source == null) return;
