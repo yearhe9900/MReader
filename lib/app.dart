@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'settings/settings_store.dart';
 import 'theme/app_theme.dart';
 import 'ui/glass_scope.dart';
+import 'ui/mi_like_ui/mi_like_ui.dart' show MiPopupHost;
 
 /// 应用根组件。
 class MReaderApp extends StatefulWidget {
@@ -88,7 +89,14 @@ class _MReaderAppState extends State<MReaderApp> {
           child: Material(
             type: MaterialType.transparency,
             child: GlassScopeProvider(
-              child: child ?? const SizedBox.shrink(),
+              // 弹层单点渲染层上提到**全路由之上**（`builder` 的 child = Navigator）：
+              // push 出去的页面（阅读页 / 详情 / 统计 / 同步等）不在 HomeShell 子树里，
+              // 找不到壳层那个宿主，`MiSnackbar.show` 会空断言 —— 应用根这层兜住全部
+              // 路由。书架等 HomeShell 内的页面仍命中**最近**的壳层宿主（就近优先），
+              // 行为不变；嵌套宿主各自独立注册表，不互串。
+              child: MiPopupHost(
+                child: child ?? const SizedBox.shrink(),
+              ),
             ),
           ),
         );
