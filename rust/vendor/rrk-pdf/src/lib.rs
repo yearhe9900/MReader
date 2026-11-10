@@ -24,7 +24,7 @@ use objects::{Object, PdfDocument};
 use rrk_cache::{CacheKey, CacheKind};
 use rrk_format::{BookSource, ContentSource, FormatAdapter, IndexCache, NullIndexCache, PagedSource};
 use rrk_model::{
-    fnv1a64, Block, BookMeta, ChapterContent, ChapterEntry, ChapterId, ChapterKind, FormatId,
+    Block, BookMeta, ChapterContent, ChapterEntry, ChapterId, ChapterKind, FormatId,
     Inline, PageEntry, PageKind, PagedContent, RenderResult, Resource, RrkError, RrkResult,
     TextRange, TocNode,
 };
@@ -112,7 +112,7 @@ impl PdfBook {
     /// Catalog 扫描、页面树遍历、逐页权重解引用与 outline 构建（open 期免重建）。
     pub fn parse_with_cache(src: &ContentSource, cache: &dyn IndexCache) -> RrkResult<Self> {
         let bytes = src.read_all()?;
-        let content_hash = fnv1a64(&bytes[..bytes.len().min(1024 * 1024)]);
+        let content_hash = rrk_format::content_fingerprint(&bytes);
         let doc = PdfDocument::open(bytes)?;
 
         // open 索引缓存（校验：页面源对象须在当前文档解出字典）
@@ -208,7 +208,7 @@ impl PdfBook {
 
     /// 抽取单页文本（惰性 + 缓存）。
     fn page_text(&self, index: u32) -> String {
-        if let Some(t) = self.page_texts.lock().unwrap().get(&index) {
+        if let Some(t) = rrk_model::lock_recover(&self.page_texts).get(&index) {
             return t.clone();
         }
         let Some(page) = self.pages.get(index as usize) else {
@@ -222,7 +222,7 @@ impl PdfBook {
             }
         }
         let text = extract_text(&self.doc, &content, page.resources.as_ref());
-        self.page_texts.lock().unwrap().insert(index, text.clone());
+        rrk_model::lock_recover(&self.page_texts).insert(index, text.clone());
         text
     }
 
@@ -289,7 +289,11 @@ fn paragraphs_to_blocks(text: &str) -> Vec<Block> {
                 range: TextRange::new(s as u32, e as u32),
                 style: Default::default(),
             }],
-            indent: trimmed.starts_with('　') || trimmed.starts_with("  "),
+            role: if trimmed.starts_with('　') || trimmed.starts_with("  ") {
+                rrk_model::ParagraphRole::Body
+            } else {
+                rrk_model::ParagraphRole::FirstOfSection
+            },
         });
     }
     blocks

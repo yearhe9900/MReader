@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use rrk_cache::CacheKey;
 use rrk_model::{
-    BookMeta, ChapterContent, ChapterEntry, ChapterId, FormatId, PageEntry, PagedContent, Resource,
-    ResourceKey, RrkError, RrkResult, TocNode,
+    fnv1a64_update, BookMeta, ChapterContent, ChapterEntry, ChapterId, FormatId, PageEntry,
+    PagedContent, Resource, ResourceKey, RrkError, RrkResult, TocNode, FNV_INIT,
 };
 
 // ---------------------------------------------------------------------------
@@ -40,7 +40,37 @@ impl ContentSource {
         }
     }
 
-    /// 读入全部字节（P0 简化实现；mmap 化在 P2 落盘档接入）。
+    /// 转成**按需读取**的源（批次 5）。
+    ///
+    /// - 路径源 → [`rrk_source::FileSource`]：`seek + read` 定位读，
+    ///   **整包不驻留**（2GB CBZ 的 OOM 根因就是 `std::fs::read`）；
+    /// - 内存源 → [`rrk_source::MemSource`]：切片零拷贝。
+    ///
+    /// 指纹改用 [`rrk_source::fingerprint_of`]（流式增量哈希，与整包哈希同值），
+    /// 因此「不整包驻留」与「任意字节变动必失效」两个要求同时成立。
+    pub fn to_source(&self) -> RrkResult<Arc<dyn rrk_source::ByteSource>> {
+        match self {
+            ContentSource::Path(p) => {
+                Ok(Arc::new(rrk_source::FileSource::open(p)?) as Arc<dyn rrk_source::ByteSource>)
+            }
+            ContentSource::Bytes { data, .. } => {
+                Ok(Arc::new(rrk_source::MemSource::new(Arc::clone(data)))
+                    as Arc<dyn rrk_source::ByteSource>)
+            }
+        }
+    }
+
+    /// 内容指纹（**流式**：峰值内存 = 1 MiB 块，与文件大小无关）。
+    ///
+    /// 与 [`content_fingerprint`]（整包）**同值**——路径源与内存源共享缓存键。
+    pub fn content_fingerprint(&self) -> RrkResult<u64> {
+        let src = self.to_source()?;
+        rrk_source::fingerprint_of(src.as_ref())
+    }
+
+    /// 读入全部字节（**整包驻留**，仅小文件/确需整包的场景用）。
+    ///
+    /// ⚠️ 大文件请改用 [`ContentSource::to_source`] + 按需读。
     pub fn read_all(&self) -> RrkResult<Arc<[u8]>> {
         match self {
             ContentSource::Path(p) => {
@@ -75,6 +105,48 @@ impl ContentSource {
 impl From<&Path> for ContentSource {
     fn from(p: &Path) -> Self {
         ContentSource::Path(p.to_path_buf())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 内容版本指纹
+// ---------------------------------------------------------------------------
+
+/// `BookMeta::content_hash` 的**唯一来源**（所有格式统一）。
+///
+/// 与旧口径（只取前 1MB）的区别：**全量参与**。`content_hash` 同时是内容级
+/// 缓存与 open 索引缓存的 key；只采样文件头部时，修改书后半部分的正文不会让
+/// 缓存失效，重开会命中旧章表/旧章文本（用户读到旧内容）。文件此时已由
+/// `read_all` 全量驻留，一次线性 FNV 扫描不引入额外内存，且保证
+/// 「任意字节变动 → 指纹变」。
+///
+/// 长度前缀消除「内容相同但长度不同」的平凡歧义。非密码学用途：只作缓存
+/// 失效键，不作完整性/防篡改校验。EPUB/CBZ 同样走本函数而**不用** zip
+/// 中央目录的 CRC 列表：脏书可能不填或未更新 CRC，会让「改正文但 CRC 不变」
+/// 重新漏判——全量字节是唯一能保证「任意字节变动必失效」的口径。
+pub fn content_fingerprint(data: &[u8]) -> u64 {
+    let h = fnv1a64_update(FNV_INIT, &(data.len() as u64).to_le_bytes());
+    fnv1a64_update(h, data)
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::content_fingerprint;
+
+    #[test]
+    fn tail_edit_changes_fingerprint() {
+        // 旧口径只取前 1MB：这里模拟「1MB 之后改一个字节」必须改变指纹。
+        let mut a = vec![b'x'; 1024 * 1024 + 64];
+        let h0 = content_fingerprint(&a);
+        a[1024 * 1024 + 10] = b'y';
+        assert_ne!(h0, content_fingerprint(&a), "文件尾改动必须让缓存失效");
+    }
+
+    #[test]
+    fn length_is_part_of_fingerprint() {
+        assert_ne!(content_fingerprint(b"abc"), content_fingerprint(b"abc\0"));
+        assert_eq!(content_fingerprint(b""), content_fingerprint(b""));
+        assert_ne!(content_fingerprint(b"a"), content_fingerprint(b"b"));
     }
 }
 
@@ -144,7 +216,7 @@ impl Default for MemIndexCache {
 
 impl IndexCache for MemIndexCache {
     fn load(&self, key: &CacheKey) -> Option<Vec<u8>> {
-        let got = self.map.lock().unwrap().get(key).cloned();
+        let got = rrk_model::lock_recover(&self.map).get(key).cloned();
         if got.is_some() {
             self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         } else {
@@ -153,7 +225,7 @@ impl IndexCache for MemIndexCache {
         got
     }
     fn save(&self, key: &CacheKey, payload: &[u8]) {
-        self.map.lock().unwrap().insert(*key, payload.to_vec());
+        rrk_model::lock_recover(&self.map).insert(*key, payload.to_vec());
     }
 }
 

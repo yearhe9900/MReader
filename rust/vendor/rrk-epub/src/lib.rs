@@ -12,7 +12,7 @@ use rrk_cache::{CacheKey, CacheKind};
 use rrk_format::{BookSource, ContentSource, FormatAdapter, IndexCache, NullIndexCache};
 use rrk_markup::{attr, clean_xhtml, local_name, tokenize, Token};
 use rrk_model::{
-    fnv1a64, Block, BookMeta, ChapterContent, ChapterEntry, ChapterId, ChapterKind, FormatId,
+    Block, BookMeta, ChapterContent, ChapterEntry, ChapterId, ChapterKind, FormatId,
     Inline, Resource, ResourceKey, RrkError, RrkResult, TocNode,
 };
 use rrk_zip::{ZipArchive, ZipEntry};
@@ -139,8 +139,12 @@ impl EpubBook {
     /// open 索引（entries + toc_raw）按内容 key 持久化——重开命中免
     /// nav/NCX 解析、标题回填与正文前缀探测（open 期免重建）。
     pub fn parse_with_cache(src: &ContentSource, cache: &dyn IndexCache) -> RrkResult<Self> {
-        let bytes = src.read_all()?;
-        let zip = Arc::new(ZipArchive::parse(bytes)?);
+        // 批次 5（深审 B1 ②）：**按需读取**——不把整本书读进内存。
+        // - 内容版本指纹走**流式**全量哈希（与整包哈希同值）：任意字节变动
+        //   必失效（保证缓存不读旧内容），但峰值内存只有 1 MiB 块；
+        // - zip 只驻留中央目录，章正文按需读、按需解压。
+        let content_hash = src.content_fingerprint()?;
+        let zip = Arc::new(ZipArchive::open(src.to_source()?)?);
 
         // DRM 探测：正文被加密 → 明确拒绝（字体伪装除外，P0 一律拒绝 EncryptedData）
         if let Some(enc) = zip.entry("META-INF/encryption.xml") {
@@ -167,7 +171,6 @@ impl EpubBook {
         };
 
         let opf = parse_opf(&opf_xml);
-        let content_hash = fnv1a64(&opf_xml.as_bytes()[..opf_xml.len().min(64 * 1024)]);
 
         // spine 章 href 序（建索引不搬内容；同时是缓存章表的校验基线）
         let mut spine_hrefs = Vec::new();
@@ -1279,5 +1282,243 @@ mod tests {
         let items = parse_nav_toc(xml);
         let titles: Vec<_> = items.iter().map(|i| i.title.as_str()).collect();
         assert_eq!(titles, vec!["第一章", "无type宽容"], "landmarks/page-list 应被过滤: {titles:?}");
+    }
+
+    /// 批次 5（深审 B1 ②）：**路径源与内存源的指纹必须同值**——
+    /// 否则同一本书走两条路开会命中不同缓存（读旧内容）。
+    #[test]
+    fn path_and_memory_sources_share_fingerprint() {
+        let bytes = build_zip(&[
+            ("META-INF/container.xml", CONTAINER.as_bytes()),
+            ("OEBPS/content.opf", OPF.as_bytes()),
+            ("OEBPS/text/ch1.xhtml", "<html><body><p>测试</p></body></html>".as_bytes()),
+        ]);
+        let dir = std::env::temp_dir().join("rrk_epub_fp");
+        std::fs::create_dir_all(&dir).unwrap();
+        // 唯一文件名：测试并行跑时同名文件会互相覆盖/抢句柄（Windows 尤甚）
+        let path = dir.join(format!("t_fp_{}.epub", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+
+        let path_src = ContentSource::from_path(&path);
+        let mem_src = ContentSource::from_bytes(
+            Some("t.epub".to_string()),
+            Arc::<[u8]>::from(bytes.clone().into_boxed_slice()),
+        );
+        assert_eq!(
+            path_src.content_fingerprint().unwrap(),
+            mem_src.content_fingerprint().unwrap(),
+            "路径源（流式哈希）与内存源（整包哈希）指纹必须一致"
+        );
+        // 且与整包口径同值
+        assert_eq!(
+            path_src.content_fingerprint().unwrap(),
+            rrk_format::content_fingerprint(&bytes),
+            "流式指纹须与整包指纹同值"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 批次 5：路径开书（按需读）与内存开书的**内容完全一致**。
+    #[test]
+    fn path_and_memory_open_agree() {
+        let bytes = build_zip(&[
+            ("META-INF/container.xml", CONTAINER.as_bytes()),
+            ("OEBPS/content.opf", OPF.as_bytes()),
+            ("OEBPS/text/ch1.xhtml", "<html><body><p>测试正文</p></body></html>".as_bytes()),
+            ("OEBPS/images/pic.png", b"\x89PNG-fake"),
+        ]);
+        let dir = std::env::temp_dir().join("rrk_epub_path");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("t_open_{}.epub", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+
+        let from_path = EpubBook::parse(&ContentSource::from_path(&path)).unwrap();
+        let from_mem = EpubBook::parse(&ContentSource::from_bytes(
+            Some("t.epub".to_string()),
+            Arc::<[u8]>::from(bytes.clone().into_boxed_slice()),
+        ))
+        .unwrap();
+
+        assert_eq!(from_path.meta().content_hash, from_mem.meta().content_hash);
+        assert_eq!(from_path.chapters().unwrap().len(), from_mem.chapters().unwrap().len());
+        let a = from_path.load_chapter(0).unwrap();
+        let b = from_mem.load_chapter(0).unwrap();
+        assert_eq!(a.text, b.text, "路径开书与内存开书的正文必须一致");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 回归（深审 A1）：**OPF 逐字节不变、只改章节正文**时，内容版本指纹必须改变。
+    /// 旧口径只哈希 OPF 前 64KB，两本书会同 key → 重开命中上一本的 open 索引
+    /// 与章文本缓存，用户读到旧内容。
+    #[test]
+    fn body_edit_changes_fingerprint_and_cache_key() {
+        use rrk_format::MemIndexCache;
+
+        fn epub_with_body(body: &str) -> Vec<u8> {
+            let ch1 = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{body}</p></body></html>"#
+            );
+            build_zip(&[
+                ("META-INF/container.xml", CONTAINER.as_bytes()),
+                ("OEBPS/content.opf", OPF.as_bytes()), // 两本书完全相同
+                ("OEBPS/text/ch1.xhtml", ch1.as_bytes()),
+                ("OEBPS/images/pic.png", b"\x89PNG-fake"),
+                ("OEBPS/images/cover.jpg", b"\xff\xd8\xff-fake"),
+            ])
+        }
+
+        let cache = MemIndexCache::new();
+        let mk = |bytes: Vec<u8>| {
+            ContentSource::from_bytes(
+                Some("t.epub".to_string()),
+                Arc::<[u8]>::from(bytes.into_boxed_slice()),
+            )
+        };
+        let a = EpubBook::parse_with_cache(&mk(epub_with_body("原文内容")), &cache).unwrap();
+        let b = EpubBook::parse_with_cache(&mk(epub_with_body("改动之后的正文内容")), &cache).unwrap();
+        assert_ne!(
+            a.meta().content_hash, b.meta().content_hash,
+            "OPF 不变、正文改动也必须让 content_hash 改变"
+        );
+        assert_eq!((cache.hits(), cache.misses()), (0, 2), "改过内容不得命中旧 open 索引");
+    }
+
+    // -----------------------------------------------------------------------
+    // 深审 C4：规模化语料回归（确定性生成，不入库有版权真书）
+    // -----------------------------------------------------------------------
+
+    const CORPUS_CHAPTERS: usize = 200;
+    const CORPUS_PER_VOLUME: usize = 20;
+
+    /// 每章带标题、多段中文正文与一条跨章内链；`extra` 用于构造"只改尾部"变体。
+    fn corpus_chapter(i: usize, extra: &str) -> String {
+        let next = (i + 1) % CORPUS_CHAPTERS;
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<h1 id="ch{i}">第{i}章 标题</h1>
+<p>这是第 {i} 章的正文，用于规模化回归测试。{extra}</p>
+<p>下一段包含<a href="ch{next}.xhtml#note{next}">内部链接</a>与更多中文文本，用来检验字节偏移与内链区间。</p>
+<p id="note{i}">注释段落。</p>
+</body></html>"#
+        )
+    }
+
+    /// 生成 200 章 / 10 卷嵌套 nav 的完整 EPUB 字节（STORED，无外部依赖）。
+    fn corpus_zip(last_extra: &str) -> Vec<u8> {
+        let mut manifest = String::from(
+            r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#,
+        );
+        let mut spine = String::new();
+        for i in 0..CORPUS_CHAPTERS {
+            manifest.push_str(&format!(
+                r#"<item id="c{i}" href="text/ch{i}.xhtml" media-type="application/xhtml+xml"/>"#
+            ));
+            spine.push_str(&format!(r#"<itemref idref="c{i}"/>"#));
+        }
+        let opf = format!(
+            r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>规模化语料</dc:title></metadata>
+  <manifest>{manifest}</manifest>
+  <spine>{spine}</spine>
+</package>"#
+        );
+
+        let mut nav = String::from(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol>"#,
+        );
+        for v in 0..CORPUS_CHAPTERS / CORPUS_PER_VOLUME {
+            let first = v * CORPUS_PER_VOLUME;
+            nav.push_str(&format!(
+                r#"<li><a href="text/ch{first}.xhtml">第{}卷</a><ol>"#,
+                v + 1
+            ));
+            for c in 0..CORPUS_PER_VOLUME {
+                let i = first + c;
+                nav.push_str(&format!(
+                    r#"<li><a href="text/ch{i}.xhtml">第{i}章</a></li>"#
+                ));
+            }
+            nav.push_str("</ol></li>");
+        }
+        nav.push_str("</ol></nav></body></html>");
+
+        let mut owned: Vec<(String, Vec<u8>)> = vec![
+            ("META-INF/container.xml".into(), CONTAINER.as_bytes().to_vec()),
+            ("OEBPS/content.opf".into(), opf.into_bytes()),
+            ("OEBPS/nav.xhtml".into(), nav.into_bytes()),
+        ];
+        for i in 0..CORPUS_CHAPTERS {
+            let extra = if i == CORPUS_CHAPTERS - 1 { last_extra } else { "" };
+            owned.push((
+                format!("OEBPS/text/ch{i}.xhtml"),
+                corpus_chapter(i, extra).into_bytes(),
+            ));
+        }
+        let files: Vec<(&str, &[u8])> = owned
+            .iter()
+            .map(|(n, d)| (n.as_str(), d.as_slice()))
+            .collect();
+        build_zip(&files)
+    }
+
+    fn corpus_src(bytes: Vec<u8>) -> ContentSource {
+        ContentSource::from_bytes(
+            Some("corpus.epub".to_string()),
+            Arc::<[u8]>::from(bytes.into_boxed_slice()),
+        )
+    }
+
+    /// 200 章合成大书：`open → toc → 抽样 load_chapter → 偏移/内链对拍 →
+    /// open 索引缓存往返 → 尾部改动失效`。小样张测不出的「href→章映射 /
+    /// 索引重建 / 多章偏移」回归在这里变红。
+    #[test]
+    fn corpus_scale_open_toc_chapters_and_offsets() {
+        let src = corpus_src(corpus_zip(""));
+        let cache = rrk_format::MemIndexCache::new();
+        let book = EpubBook::parse_with_cache(&src, &cache).unwrap();
+
+        let chapters = book.chapters().unwrap();
+        assert_eq!(chapters.len(), CORPUS_CHAPTERS, "章表必须覆盖全部 spine 条目");
+        assert!(chapters.iter().enumerate().all(|(i, e)| e.id as usize == i));
+
+        let toc = book.toc().unwrap();
+        assert_eq!(toc.len(), CORPUS_CHAPTERS / CORPUS_PER_VOLUME, "顶层应为卷");
+        assert!(toc.iter().all(|n| n.children.len() == CORPUS_PER_VOLUME));
+        assert_eq!(
+            toc[3].children[0].chapter,
+            (3 * CORPUS_PER_VOLUME) as u32,
+            "卷内首章的 href→章映射错位"
+        );
+
+        for id in [0usize, 1, CORPUS_CHAPTERS / 2, CORPUS_CHAPTERS - 1] {
+            let c = book.load_chapter(id as u32).unwrap();
+            assert!(c.text.contains(&format!("第 {id} 章的正文")), "章 #{id} 正文错位");
+            assert!(!c.link_ranges.is_empty(), "章 #{id} 应有内链区间");
+            for l in &c.link_ranges {
+                let (s, e) = (l.range.start as usize, l.range.end as usize);
+                assert!(s <= e && e <= c.text.len(), "章 #{id} 内链区间越界: {s}..{e}");
+                assert!(
+                    c.text.is_char_boundary(s) && c.text.is_char_boundary(e),
+                    "章 #{id} 内链区间落在非法 UTF-8 边界: {s}..{e}"
+                );
+                assert!(l.href.contains(".xhtml"), "href 归一化异常: {}", l.href);
+            }
+            assert!(c.blocks.iter().any(|b| matches!(b, Block::Paragraph { .. })));
+        }
+
+        // open 索引缓存往返：重开命中，章表 / 目录树与冷构建逐字一致
+        let warm = EpubBook::parse_with_cache(&src, &cache).unwrap();
+        assert_eq!(cache.hits(), 1, "重开应命中 open 索引");
+        assert_eq!(book.entries, warm.entries, "缓存章表与冷构建不一致");
+        assert_eq!(book.toc_raw, warm.toc_raw, "缓存目录树与冷构建不一致");
+
+        // 只改最后一章：指纹必须变、缓存必须 miss（A1 在规模化语料上的复核）
+        let misses_before = cache.misses();
+        let tail = EpubBook::parse_with_cache(&corpus_src(corpus_zip("改动尾部")), &cache).unwrap();
+        assert_ne!(book.meta().content_hash, tail.meta().content_hash);
+        assert_eq!(cache.misses(), misses_before + 1, "尾部改动不得命中旧索引");
     }
 }

@@ -17,7 +17,6 @@ use rrk_model::{
     flatten_blocks_spans, Block, BookKind, ChapterContent, ChapterEntry, ChapterKind, Inline,
     RrkError, RrkResult, TocNode,
 };
-use rrk_pdf::PdfAdapter;
 use rrk_search::{search_text, Bm25, Bm25Builder, SearchOptions, SearchPage, SearchSession};
 use rrk_txt::TxtAdapter;
 
@@ -123,6 +122,12 @@ pub struct Kernel {
     /// 内容级缓存（目录/章文本/大纲；key 只含 content_hash，见 issue #12）。
     /// 关闭时以下访问路径退化为原样解析（无缓存语义）。
     content_cache: Option<(DiskStore, MemoryCache)>,
+    /// open 索引缓存的**显式覆盖**（深审 B4：原先 `open_index_cache()` 直接取
+    /// `content_cache` 的 store，两个开关被绑死）。
+    /// - `None` = 未显式配置 → 跟随 `content_cache`（旧宿主行为不变，无性能退化）；
+    /// - `Some(None)` = 显式关闭（关内容级缓存时 open 索引仍可独立开，或反之）；
+    /// - `Some(Some(store))` = 显式指定独立目录。
+    open_index_override: Option<Option<DiskStore>>,
     content_stats: ContentCacheStats,
 }
 
@@ -143,7 +148,10 @@ pub fn shared_registry() -> &'static FormatRegistry {
         registry.register(Box::new(MobiAdapter));
         // 页级格式也进统一句柄：重排视图（页=章）+ 固定版式视图（as_paged）
         registry.register(Box::new(CbzAdapter));
-        registry.register(Box::new(PdfAdapter));
+        // PDF 暂停、入口关闭（核心能力下线）：不注册 PdfAdapter → detect 不命中，
+        // 开 PDF 返回「无法识别的格式」，所有 PDF 能力（open/meta/toc/页级/栅格化/
+        // 资源）随之不可达。rrk-pdf crate 代码保留（暂停非删除）；恢复时在此
+        // 重新 register(Box::new(rrk_pdf::PdfAdapter)) +顶部 use 即可。
         registry
     })
 }
@@ -174,6 +182,7 @@ impl Kernel {
             next_search_id: 0,
             next_index_id: 0,
             content_cache: None,
+            open_index_override: None,
             content_stats: ContentCacheStats::default(),
         }
     }
@@ -192,6 +201,20 @@ impl Kernel {
         } else {
             let store = DiskStore::open(dir)?;
             Some((store, MemoryCache::new(mem_bytes.max(1 << 20))))
+        };
+        Ok(())
+    }
+
+    /// 独立配置 **open 索引缓存**（深审 B4）。
+    ///
+    /// 未调用过本方法时 `open_index_cache()` 仍跟随内容级缓存（向后兼容）；
+    /// 调用后开关与目录完全独立。传空路径 = 显式关闭 open 索引持久化。
+    /// open 索引只走 C2 磁盘层、不占 C1 内存 LRU，故没有 mem_bytes 参数。
+    pub fn configure_open_index_cache(&mut self, dir: &str) -> RrkResult<()> {
+        self.open_index_override = if dir.trim().is_empty() {
+            Some(None)
+        } else {
+            Some(Some(DiskStore::open(dir)?))
         };
         Ok(())
     }
@@ -515,7 +538,12 @@ impl Kernel {
     /// 锁外开书三段式（FFI 重活不持内核锁，深审 §二.4）段 1：
     /// 拿 open 索引缓存句柄（轻量克隆，可在锁外持有）。
     pub fn open_index_cache(&self) -> Option<DiskStore> {
-        self.content_cache.as_ref().map(|(s, _)| s.clone())
+        match &self.open_index_override {
+            // 宿主显式配置过（含显式关闭）：与内容级缓存开关彻底解绑
+            Some(v) => v.clone(),
+            // 未配置：沿用旧行为，跟随内容级缓存的 store（旧宿主无性能退化）
+            None => self.content_cache.as_ref().map(|(s, _)| s.clone()),
+        }
     }
 
     /// 锁外开书三段式段 3：登记已在锁外打开的书 + 归并 open 命中统计。
@@ -1046,12 +1074,12 @@ mod tests {
 
         let iid = k.bm25_open(handle).unwrap();
         let job = k.bm25_job(iid).unwrap();
-        let progress = job.lock().unwrap().step(10_000).unwrap();
+        let progress = rrk_model::lock_recover(&job).step(10_000).unwrap();
         assert!(progress.done, "应一次建完: {progress:?}");
         assert!(progress.terms > 0, "样例书应有词项");
-        let bytes = job.lock().unwrap().bytes().to_vec();
+        let bytes = rrk_model::lock_recover(&job).bytes().to_vec();
         assert!(!bytes.is_empty() && bytes.starts_with(b"RRKI"));
-        let before = job.lock().unwrap().index().unwrap().query("编码", 5);
+        let before = rrk_model::lock_recover(&job).index().unwrap().query("编码", 5);
 
         // 宿主落盘后交回内核
         let iid2 = k.bm25_load(&bytes).unwrap();
@@ -1107,5 +1135,37 @@ mod tests {
         assert_ne!(a, b, "关 A 开 B 拿到同句柄（ABA）：旧句柄会静默指向 B");
         assert!(k.book(a).is_err(), "契约：关闭后用旧句柄必报 InvalidParam");
         k.close(b).unwrap();
+    }
+
+    /// 深审 B4：open 索引缓存的开关/目录必须能与内容级缓存解绑。
+    /// 旧实现 `open_index_cache()` 直接取 content_cache 的 store → 关内容级
+    /// 缓存会连带关掉 open 索引，反之也无法只开 open 索引。
+    #[test]
+    fn open_index_cache_switch_is_independent() {
+        let mut k = Kernel::new();
+        let dir_content =
+            std::env::temp_dir().join(format!("rrk-kernel-cc-{}", std::process::id()));
+        let dir_open =
+            std::env::temp_dir().join(format!("rrk-kernel-oi-{}", std::process::id()));
+        // 1) 未显式配置时跟随内容级缓存（旧宿主行为，无性能退化）
+        assert!(k.open_index_cache().is_none());
+        k.configure_content_cache(dir_content.to_str().unwrap(), 1 << 20).unwrap();
+        assert_eq!(k.open_index_cache().unwrap().root(), dir_content.as_path());
+        // 2) 显式指定独立目录
+        k.configure_open_index_cache(dir_open.to_str().unwrap()).unwrap();
+        assert_eq!(k.open_index_cache().unwrap().root(), dir_open.as_path());
+        // 3) 只关内容级缓存，open 索引仍在
+        k.configure_content_cache("", 1 << 20).unwrap();
+        assert_eq!(
+            k.open_index_cache().unwrap().root(),
+            dir_open.as_path(),
+            "关内容级缓存不得连带关掉 open 索引"
+        );
+        // 4) 显式关 open 索引后，再开内容级缓存也不得把它带回来
+        k.configure_open_index_cache("").unwrap();
+        k.configure_content_cache(dir_content.to_str().unwrap(), 1 << 20).unwrap();
+        assert!(k.open_index_cache().is_none(), "显式关闭后不得被内容级缓存重新启用");
+        let _ = std::fs::remove_dir_all(&dir_content);
+        let _ = std::fs::remove_dir_all(&dir_open);
     }
 }

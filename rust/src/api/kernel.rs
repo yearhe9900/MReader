@@ -213,11 +213,13 @@ fn plain_blocks(text: &str, blocks: &[rrk_model::Block]) -> Vec<RkBlock> {
                 key: None,
                 alt: None,
             },
-            PlainBlock::Paragraph { text, indent } => RkBlock {
+            // 上游 `ParagraphRole`（语义角色）→ FRB 镜像的 `indent: bool`：
+            // 宿主契约不变，缩进判据统一交给 `indentable()`。
+            PlainBlock::Paragraph { text, role } => RkBlock {
                 kind: "p".to_string(),
                 text: text.clone(),
                 level: 0,
-                indent: *indent,
+                indent: (*role).indentable(),
                 key: None,
                 alt: None,
             },
@@ -551,7 +553,7 @@ pub fn kernel_slice_text(
 
 #[cfg(test)]
 mod tests {
-    use rrk_model::{Block, Inline, ResourceKey, StyleFlags, TextRange};
+    use rrk_model::{Block, Inline, ParagraphRole, ResourceKey, StyleFlags, TextRange};
 
     use super::*;
 
@@ -569,7 +571,7 @@ mod tests {
                     text_range(0, 6),
                     Inline::Image { key: ResourceKey("OEBPS/a.png".into()) },
                 ],
-                indent: true,
+                role: ParagraphRole::Body,
             },
             Block::Image {
                 key: ResourceKey("OEBPS/b.png".into()),
@@ -580,7 +582,7 @@ mod tests {
             Block::Quote {
                 blocks: vec![Block::Paragraph {
                     inlines: vec![text_range(6, 9)],
-                    indent: false,
+                    role: ParagraphRole::FirstOfSection,
                 }],
             },
         ];

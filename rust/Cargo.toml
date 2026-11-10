@@ -26,6 +26,7 @@ rrk-model = { path = "vendor/rrk-model" }
 rrk-format = { path = "vendor/rrk-format" }
 rrk-markup = { path = "vendor/rrk-markup" }
 rrk-zip = { path = "vendor/rrk-zip" }
+rrk-source = { path = "vendor/rrk-source" }
 rrk-txt = { path = "vendor/rrk-txt" }
 rrk-epub = { path = "vendor/rrk-epub" }
 rrk-mobi = { path = "vendor/rrk-mobi" }

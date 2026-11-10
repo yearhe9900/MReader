@@ -56,6 +56,11 @@ struct Cleaner {
     last_was_ws: bool,
     /// 未闭合 `<a href>` 栈：(href, 起始字节偏移)。
     link_stack: Vec<(String, u32)>,
+    /// 当前块是否允许首行缩进（正文 `<p>/div/section/article` 为 true；
+    /// 列表/引用/代码/表格为 false）。**flush 一次即清零**：`<br>` 与行内
+    /// `<img>` 会把同一段切成多个 Paragraph，后续切片不得重复缩进。
+    /// 当前块的语义角色（`flush` 一次后归 FirstOfSection，避免续段重复缩进）。
+    block_role: rrk_model::ParagraphRole,
 }
 
 impl Cleaner {
@@ -104,6 +109,10 @@ impl Cleaner {
 
     fn flush(&mut self) {
         self.last_was_ws = false;
+        // 一个块只声明一次语义角色；`<br>` / 行内 `<img>` 切出的续段
+        // 归 FirstOfSection，排版层据此不再二次缩进。
+        let role = self.block_role;
+        self.block_role = rrk_model::ParagraphRole::FirstOfSection;
         if self.pending.is_empty() {
             self.has_content = false;
             return;
@@ -122,7 +131,7 @@ impl Cleaner {
         }
         let block = match self.heading_level.take() {
             Some(level) => Block::Heading { level, inlines },
-            None => Block::Paragraph { inlines, indent: false },
+            None => Block::Paragraph { inlines, role },
         };
         self.out.blocks.push(block);
     }
@@ -144,6 +153,7 @@ pub fn clean_xhtml(html: &str) -> CleanResult {
         has_content: false,
         last_was_ws: false,
         link_stack: Vec::new(),
+        block_role: rrk_model::ParagraphRole::FirstOfSection,
     };
 
     for token in tokenize(html) {
@@ -222,10 +232,24 @@ pub fn clean_xhtml(html: &str) -> CleanResult {
                     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                         c.flush();
                         c.heading_level = Some(n[1..2].parse().unwrap_or(1));
+                        c.block_role = rrk_model::ParagraphRole::FirstOfSection;
                     }
-                    "p" | "div" | "section" | "article" | "li" | "tr" | "td" | "blockquote"
-                    | "header" | "footer" | "pre" | "table" | "ul" | "ol" => {
+                    // 正文块：只声明「Body」，是否首行缩进由排版层按
+                    // StyleSpec.para_indent_em 决定（深审 C5）。
+                    "p" | "div" | "section" | "article" => {
                         c.flush();
+                        c.block_role = rrk_model::ParagraphRole::Body;
+                    }
+                    // 列表/引用/代码/表格：各自带语义角色，排版层默认不缩进。
+                    "li" | "tr" | "td" | "blockquote" | "header" | "footer" | "pre"
+                    | "table" | "ul" | "ol" => {
+                        c.flush();
+                        c.block_role = match n {
+                            "li" | "ul" | "ol" => rrk_model::ParagraphRole::List,
+                            "blockquote" => rrk_model::ParagraphRole::Quote,
+                            "pre" => rrk_model::ParagraphRole::Pre,
+                            _ => rrk_model::ParagraphRole::Caption,
+                        };
                     }
                     "strong" | "b" => c.bold_depth += 1,
                     "em" | "i" => c.italic_depth += 1,
@@ -407,5 +431,39 @@ mod tests {
     fn ruby_annotation_not_in_body() {
         let r = clean_xhtml("<p><ruby>漢<rt>かん</rt></ruby>字</p>");
         assert_eq!(r.text.trim(), "漢字", "注音不得混入正文: {:?}", r.text);
+    }
+
+    /// 回归（深审 A3）：EPUB/MOBI **共用本清洗层**，正文段落必须带
+    /// `indent` 标记，`StyleSpec::para_indent_em` 才真生效；`<br>` / 行内
+    /// `<img>` 切出的后续段不得重复缩进（否则段中换行会再凹一次）。
+    #[test]
+    fn body_paragraphs_carry_indent() {
+        fn indents(html: &str) -> Vec<bool> {
+            clean_xhtml(html)
+                .blocks
+                .iter()
+                .filter_map(|b| match b {
+                    Block::Paragraph { role, .. } => Some(role.indentable()),
+                    _ => None,
+                })
+                .collect()
+        }
+        assert_eq!(indents("<h1>第一章</h1><p>第一段。</p><p>第二段。</p>"), vec![true, true]);
+        // EPUB 章节典型结构：标题 + 正文段 + 行内插图
+        assert_eq!(
+            indents("<html><body><h1>第一章</h1><p>正文<img src=\"a.png\"/>续</p></body></html>"),
+            vec![true, false]
+        );
+        assert_eq!(indents("<p>甲<br/>乙</p>"), vec![true, false], "段中换行不应二次缩进");
+        assert_eq!(
+            indents("<p>前<img src=\"a.png\"/>后</p>"),
+            vec![true, false],
+            "行内图片切段不应二次缩进"
+        );
+        assert_eq!(
+            indents("<ul><li>列表项</li></ul><blockquote>引用</blockquote><pre>代码</pre><p>正文</p>"),
+            vec![false, false, false, true],
+            "列表/引用/代码不缩进，正文缩进"
+        );
     }
 }

@@ -9,7 +9,8 @@
 | `rrk-model` | 统一书籍数据模型（`BookMeta`/`ChapterEntry`/`ChapterContent`/`TocNode`/`LinkRange`/`flatten_blocks` 唯一降维口径） |
 | `rrk-format` | `FormatAdapter`/`BookSource`/`PagedSource` 契约 + 嗅探注册表 + `ContentSource` |
 | `rrk-markup` | XHTML/HTML 清洗（标签白名单、锚点 `id→文本偏移`、内链区间） |
-| `rrk-zip` | zip 随机读（EPUB/CBZ 共用） |
+| `rrk-zip` | zip 随机读（EPUB/CBZ 共用；只驻留中央目录、条目按需 inflate） |
+| `rrk-source` | 内容源按需读取抽象：`ByteSource` trait + `FileSource` / `MemSource`，流式内容指纹 |
 | `rrk-txt` | TXT：编码检测 + 分章 + 逻辑块切分 |
 | `rrk-epub` | EPUB：OPF/NCX + 目录层级/锚点 + 清洗 + 资源管线 + 封面回退 |
 | `rrk-mobi` | MOBI/AZW3：自研 PalmDOC LZ77 + HUFF/CDIC 解压 + 封面回退 |
@@ -20,31 +21,35 @@
 | `rrk-pdf` | PDF：L1 文本抽取/重排 + L2 光栅 |
 | `rrk-kernel` | 会话编排（句柄表 + 格式注册 + 生命周期；`BookKind` 分流重排/页级） |
 
-**同步点**：上游 `rust_reader_kernel@281970a`（v0.4.0/ABI 11 发布批：MOBI
-体验冲刺第三批——EXTH 121 → NCX（DTB navMap）目录解析，KF8/AZW3 书有目录了
-（navPoint 嵌套保留树深、NCX 优先 filepos 回退）；FFI panic 红线门禁 + 排版金样
-测试基建在 `rrk-ffi`/`rrk-layout`——不在 vendored 集合，宿主桥面不变；上游
-workspace 版本 0.3.0 → 0.4.0）。
-前一同步点：`d40f59f`（体验冲刺 + 并发加固：PDF 书签
-递归/命名 Dest、`/Encrypt` 拒绝、`/Differences` 中文解码、Form XObject 递归；
-EPUB nav 只取 toc；HTML 清洗修 `<meta>` 未闭合丢章/行间空格/ruby；内核锁中毒
-自恢复 + 句柄 generation 防 ABA。上游 ABI v10→v11 的增量出口在 `rrk-ffi`/
-`rrk-layout`——不在 vendored 集合，宿主桥面不变）。
-再前一同步点：`46a3010`（畸形输入加固第一批：MOBI record0
-短头越界 panic 改 `opt32` 缺省读取 + 封面偏移饱和、HUFF/CDIC 偏移表夹紧、解压
-炸弹三道闸（单次 32MB / 词典深度 64 层 / 全书 256MB）、PDF 流解码限长（`decode_stream_limited`）+ ObjStm 负 `/N` 夹紧防挂死、MOBI 书名尾 NUL 剔除）。
-再前一同步点：`fa4b4cf`（issue #14：`search_chapter` 的 `done` 语义修复——真正扫完
-为 true、命中被 `max_hits` 截断为 false）。再前一同步点：`d0684b2`（章级/页级缓存持久化：IndexCache
-下沉 adapter + 五格式 open 索引落盘，ABI 10 不变、`ContentCacheStats` 增
-`open_hits/open_misses`）。再前一同步点：`4856780`（v0.3.0，内核 ABI 10，含 issue
-#13 无 TOC 书章标题回填 + 章标题块轻量出口、fuzz 五轮实锤加固（PDF 页面树/
-OOM/zip 解压炸弹）、rrk-image thumbnail 转运行期解码（`image` 补 tiff feature，
-与上游 workspace 白名单同源））。再前一同步点：`f88d589`（v0.1.2，ABI 8，含 issue
-#8 图像 / #9 检索 / #10 CBZ 页表 / #11 稳定错误码 / #12 内容级缓存）。
+**同步点**：上游 `rust_reader_kernel@3c61d88`（`281970a..3c61d88` 共 25 提交，
+2026-11-04~11-10「独立代码深审」批次 1~5）。要点：
+
+- **批次 5 按需读取**（新增 `rrk-source`）：`ByteSource`（`FileSource` seek+read /
+  `MemSource` 零拷贝）+ `ContentSource::to_source()`；zip 只驻留中央目录、条目按需
+  inflate；EPUB/CBZ/TXT/MOBI 全迁该 IO 路径，MOBI `MobiContainer` 原始字节不再整包
+  驻留。大 CBZ 开书 RSS 增量实测 ≈100% → 0.72%。
+- **内容指纹全量化**：`content_hash` 由「只取前 1MB / OPF 前 64KB」改为全量字节 +
+  长度前缀，尾部改动必失效缓存（已落盘旧缓存自动重算一次）。
+- **段落语义角色**：`Block` / `PlainBlock` / `PartBlock::Paragraph` 的
+  `indent: bool` → `ParagraphRole`（7 档）；`flatten_blocks` 口径不变，缩进改由
+  `ParagraphRole::indentable()` 判定。⚠️ 宿主 FRB 镜像 `RkBlock.indent` **保留**，
+  映射落在 `rust/src/api/kernel.rs::plain_blocks`，Dart 契约与 FRB 生成物不变。
+- **正确性与加固**：EPUB/MOBI 正文首行缩进生效（引文/列表/代码不重复缩进）；
+  `Inline` / `Block` 增无通配 `variant_name`；全 workspace 取锁统一
+  `rrk_model::lock_recover`；`rrk-cache` 增磁盘配额与 open 索引缓存独立开关；
+  `rrk-kernel` 增 `configure_open_index_cache`。
+- **内核 PDF 能力暂停、入口关闭**：`shared_registry()` 不再注册 `PdfAdapter`（crate
+  代码保留），开 PDF 返回「无法识别的格式」。⚠️ 宿主 `DeveloperOptions.pdfUseRustKernel`
+  实验开关随之不可用；默认 pdfrx 固版式 PDF 不受影响。恢复需回上游重新 `register`。
+- **ABI 11 → 12 → 13 的出口变化全在 `rrk-ffi` / `rrk-layout` / `bindings`**（内存开书、
+  缓存出口、排版参数句柄化），**不在 vendored 集合，宿主 FRB 桥面不变、无需 codegen**。
+
+前一同步点 `281970a`（v0.4.0/ABI 11 发布批）；更早链条 `d40f59f` → `46a3010` →
+`fa4b4cf` → `d0684b2` → `4856780` → `f88d589`（细节见上游 CHANGELOG / git log）。
 上游 `rrk-ffi` / `rrk-layout` / `rrk-inspect` 三 crate 不在 vendored 集合
 （宿主走 FRB 不走 C ABI；layout / inspect 无宿主消费方），随同步跳过。
 随同步一并带入 `rust/fixtures/`（上游 crate 内测试用的 `sample.{txt,epub,cbz,pdf}`，
-路径按 `vendor/rrk-*/../../fixtures/` 解析）。
+路径按 `vendor/rrk-*/../../fixtures/` 解析）；本次上游 fixtures 无变化。
 
 ## 纪律
 
@@ -67,3 +72,9 @@ Dart 侧适配层在 `lib/format/rust_kernel_source.dart`（实现 `BookSource` 
 
 - 桥：`kernel_toc` / `kernel_chapters` / `kernel_load_chapter` 内部改走 `*_cached`（未配置时行为不变）；另出 `kernel_cache_configure` / `kernel_cache_stats` / `kernel_cache_invalidate`，FRB 绑定已重新生成。
 - 宿主：`main()` 启动时把目录配到 App 私有 `kernel_cache/`（内存上限 32MB）；`LibraryRepository.deleteBook` 用驻留源的内容哈希整本失效（不留删后孤儿条目）；契约用例见 `test/format/rust_kernel_source_test.dart` 的「内容级缓存」组。
+
+**本次同步的宿主接线**：
+
+- `rust/Cargo.toml` 的 `[workspace.dependencies]` 注册 `rrk-source`（`members = ["vendor/*"]` 自动纳入）；`rust/Cargo.lock` 补齐 format / zip / txt / mobi 四条新依赖边。
+- `rust/src/api/kernel.rs::plain_blocks` 把 `ParagraphRole` 映射回 `RkBlock.indent`（`role.indentable()`）；FRB 镜像、Dart 适配层与生成物**零改动**，无需重新 codegen。
+- 真内核测试前置仍是 `cargo build --release` + `RustLib.init()`；开发者 PDF 开关开启路径待上游恢复注册。

@@ -23,7 +23,7 @@ use rrk_cache::{CacheKey, CacheKind};
 use rrk_format::{BookSource, ContentSource, FormatAdapter, IndexCache, NullIndexCache};
 use rrk_markup::{attr, clean_xhtml, local_name, tokenize, CleanResult, Token};
 use rrk_model::{
-    fnv1a64, Block, BookMeta, ChapterContent, ChapterEntry, ChapterId, ChapterKind, FormatId,
+    Block, BookMeta, ChapterContent, ChapterEntry, ChapterId, ChapterKind, FormatId,
     Resource, ResourceKey, RrkError, RrkErrorKind, RrkResult, TocNode,
 };
 use rrk_txt::match_heading;
@@ -70,9 +70,9 @@ fn assemble_text(c: &MobiContainer) -> RrkResult<Vec<u8>> {
         return Err(RrkError::unsupported("MOBI: 加密书籍不支持"));
     }
     let mut huff = if c.compression == COMPRESSION_HUFF_CDIC {
-        let mut h = HuffCdic::load_huff(c.record(c.huffcdic as usize)?)?;
+        let mut h = HuffCdic::load_huff(&c.record(c.huffcdic as usize)?)?;
         for i in 1..c.num_huffcdic as usize {
-            h.load_cdic(c.record(c.huffcdic as usize + i)?)?;
+            h.load_cdic(&c.record(c.huffcdic as usize + i)?)?;
         }
         Some(h)
     } else {
@@ -83,7 +83,7 @@ fn assemble_text(c: &MobiContainer) -> RrkResult<Vec<u8>> {
     let mut decoded = Vec::new();
     for i in 0..c.text_record_count as usize {
         let raw = c.record(i + 1)?;
-        let raw = remove_trailing_entries(raw, c.trailing_flags);
+        let raw = remove_trailing_entries(&raw, c.trailing_flags);
         raw_concat.extend_from_slice(raw);
         let chunk = match c.compression {
             COMPRESSION_NONE => raw.to_vec(),
@@ -417,11 +417,14 @@ impl MobiBook {
     /// 分段扫描、逐章清洗推导标题与 filepos 锚点扫描（open 期免重建；正文
     /// 装配 inflate 仍需逐次做，章内容切片依赖文本本体）。
     pub fn parse_with_cache(src: &ContentSource, cache: &dyn IndexCache) -> RrkResult<Self> {
-        let bytes = src.read_all()?;
-        let container = parse::parse(bytes)?;
+        // 批次 5 深改：内容版本指纹走流式全量哈希（峰值 1 MiB，与整包哈希同值，
+        // 路径/内存源共享缓存键）；MOBI 解析改走按需读——parse::parse(src)
+        // 只驻留 header 字段 + 装配全文，原始字节（含资源记录）按需读、读完即弃，
+        // 不再整包驻留（实测 2× 内容驻留降到 ~1×）。
+        let content_hash = src.content_fingerprint()?;
+        let container = parse::parse(src.to_source()?)?;
         let raw = assemble_text(&container)?;
         let raw_arc: Arc<[u8]> = Arc::from(raw);
-        let content_hash = fnv1a64(&raw_arc[..raw_arc.len().min(1024 * 1024)]);
 
         let key = CacheKey::content(content_hash, CacheKind::OpenMobi);
         let (spans, entries, toc) = match cache
@@ -472,7 +475,7 @@ impl MobiBook {
                 let ncx = container
                     .exth_uint(121)
                     .and_then(|rec| container.record(rec as usize).ok())
-                    .map(|r| parse_ncx_toc(&parse::decode_text(r, container.text_encoding)))
+                    .map(|r| parse_ncx_toc(&parse::decode_text(&r, container.text_encoding)))
                     .filter(|v| !v.is_empty())
                     .unwrap_or_default();
                 let items: Vec<(usize, String, usize)> = if ncx.is_empty() {
@@ -563,7 +566,7 @@ impl MobiBook {
     }
 
     /// 资源记录号 → 记录切片。
-    fn resource_record(&self, index: u32) -> RrkResult<&[u8]> {
+    fn resource_record(&self, index: u32) -> RrkResult<Vec<u8>> {
         self.container.record(index as usize)
     }
 
@@ -573,7 +576,7 @@ impl MobiBook {
         let total = self.container.record_offsets.len();
         for i in start..total {
             if let Ok(d) = self.container.record(i) {
-                if looks_like_image(d) {
+                if looks_like_image(&d) {
                     return Some(i as u32);
                 }
             }
@@ -689,7 +692,7 @@ impl BookSource for MobiBook {
         let data = self.resource_record(index)?;
         Ok(Resource {
             key: key.clone(),
-            mime: sniff_mime(data).to_string(),
+            mime: sniff_mime(&data).to_string(),
             data: Arc::from(data),
         })
     }
@@ -736,6 +739,67 @@ mod tests {
         assert_eq!(book.meta().title, "RRK Seed");
         assert!(!book.chapters().unwrap().is_empty());
         assert!(book.toc().is_ok());
+    }
+
+    /// 批次 5（MOBI）：**路径源与内存源的指纹必须同值**——流式指纹
+    /// （`content_fingerprint`）与整包哈希一致，否则同一本书走两条路开会
+    /// 命中不同缓存（读旧内容）。
+    #[test]
+    fn path_and_memory_sources_share_fingerprint() {
+        let seed = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fuzz/seed-corpus/format_open/seed.mobi"
+        );
+        let Ok(bytes) = std::fs::read(seed) else { return };
+        let dir = std::env::temp_dir().join("rrk_mobi_fp");
+        std::fs::create_dir_all(&dir).unwrap();
+        // 唯一文件名：并行测试不抢句柄（Windows 尤甚）
+        let path = dir.join(format!("t_fp_{}.mobi", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+
+        let path_src = ContentSource::from_path(&path);
+        let mem_src =
+            ContentSource::from_bytes(Some("seed.mobi".into()), Arc::<[u8]>::from(bytes.clone()));
+        assert_eq!(
+            path_src.content_fingerprint().unwrap(),
+            mem_src.content_fingerprint().unwrap(),
+            "路径源（流式哈希）与内存源（整包哈希）指纹必须一致"
+        );
+        assert_eq!(
+            path_src.content_fingerprint().unwrap(),
+            rrk_format::content_fingerprint(&bytes),
+            "流式指纹须与整包指纹同值"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 批次 5（MOBI）：路径开书（按需读路径）与内存开书的**内容完全一致**。
+    #[test]
+    fn path_and_memory_open_agree() {
+        let seed = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fuzz/seed-corpus/format_open/seed.mobi"
+        );
+        let Ok(bytes) = std::fs::read(seed) else { return };
+        let dir = std::env::temp_dir().join("rrk_mobi_path");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("t_open_{}.mobi", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+
+        let from_path = MobiBook::parse(&ContentSource::from_path(&path)).unwrap();
+        let from_mem = MobiBook::parse(&ContentSource::from_bytes(
+            Some("seed.mobi".into()),
+            Arc::<[u8]>::from(bytes.clone()),
+        ))
+        .unwrap();
+
+        assert_eq!(from_path.meta().content_hash, from_mem.meta().content_hash);
+        assert_eq!(
+            from_path.text, from_mem.text,
+            "路径开书与内存开书的装配全文必须一致"
+        );
+        assert_eq!(from_path.entries, from_mem.entries);
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
