@@ -2,8 +2,9 @@
 //
 // 自下而上：① 一枚 `MiFloatingToolbar` 胶囊，横排 目录 / 书签 / 外观 /
 // 操作 / 查找 / 日间（夜间）六格；② 其上方一条圆角章节行（上一章 —
-// 按章吸附的 `MiSlider` — 下一章），**高宽复用胶囊参数**（等高 72、
-// 宽 = 屏宽 − 24 封顶 408，两行等宽同轴）；③ 拖动滑条时章节行上方浮出
+// 按章吸附的 `MiSlider` — 下一章），**高宽复用工具栏可视表面**（等高 56、
+// 等宽 6×格宽，与胶囊同轴；⚠️ 不是 widget 总高/总宽——外留白不画）；
+// ③ 拖动滑条时章节行上方浮出
 // 「章节名 · 进度」预览气泡（16 加粗，明显显示）。
 //
 // ⚠️ 红线：整层是**覆盖层**（`extendBody*`），盒高不进正文排版预算；
@@ -28,11 +29,11 @@ const double kReaderToolbarCellHeight = MiActionEntryMetrics.rowHeight;
 /// 胶囊外侧留白（左右各一份；与章节行同边距）。
 const double kReaderChromeOuterMargin = 12;
 
-/// 章节选择行高（dp）：**复用悬浮工具栏胶囊总高**（纵向外留白 + 单格高），
-/// 与胶囊等高堆叠；两处不得各写一套数（`final` 运行期取值，`const` 上下文
-/// 取不到 `EdgeInsets` 属性）。
-final double kReaderChapterRowHeight =
-    MiFloatingToolbarMetrics.outsidePadding.vertical + kReaderToolbarCellHeight;
+/// 章节选择行高（dp）：复用悬浮工具栏**可视表面**高（= 单格高 56）。
+///
+/// ⚠️ 不是胶囊 widget 总高 72 —— 那含上下各 8dp 外留白（`Padding` 在表面
+/// **之外**、不画），按总高做会比可视胶囊高 16dp（负责人截图判红）。
+const double kReaderChapterRowHeight = kReaderToolbarCellHeight;
 
 /// 章节行与工具栏的间隙（dp）：11 = 8 + 上抬 3（2026-11-09 定稿视觉）。
 const double kReaderChapterRowGap = 11;
@@ -141,11 +142,12 @@ class _ReaderControlBarState extends State<ReaderControlBar> {
         .clamp(kReaderToolbarMinCellWidth, kReaderToolbarCellWidth);
   }
 
-  /// 胶囊宽（dp）：屏宽 − 24、宽屏封顶 6 × 64 + 24 = 408。
+  /// 可视胶囊宽（dp）：6 × 格宽（屏宽 − 48 起步，宽屏封顶 6 × 64 = 384）。
   ///
-  /// 与 `_cellWidth` 同一公式，章节行直接复用 ⇒ 两行等宽同轴。
-  static double _pillWidth(BuildContext context) => 6 * _cellWidth(context) +
-      MiFloatingToolbarMetrics.outsidePadding.horizontal;
+  /// ⚠️ **不含** `MiFloatingToolbar` 的横向外留白 24 —— 外留白在表面之外、
+  /// 不画；加了它章节行会比可视胶囊每边宽 12（截图判红）。与 `_cellWidth`
+  /// 同源 ⇒ 与工具栏表面严格等宽同轴。
+  static double _pillWidth(BuildContext context) => 6 * _cellWidth(context);
 
   @override
   Widget build(BuildContext context) {
@@ -177,8 +179,8 @@ class _ReaderControlBarState extends State<ReaderControlBar> {
             bottom: 0,
             child: SafeArea(top: false, child: _toolbar(mode)),
           ),
-          // 高宽复用胶囊参数：宽 = `_pillWidth`（屏宽 − 24、封顶 408）居中，
-          // 高 = `kReaderChapterRowHeight`（胶囊总高 72）。
+          // 高宽复用工具栏**可视表面**：宽 = `_pillWidth`（6×格宽）居中，
+          // 高 = `kReaderChapterRowHeight`（表面高 56）——与工具栏胶囊同大。
           Positioned(
             left: 0,
             right: 0,

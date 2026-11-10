@@ -4,12 +4,13 @@
 //   ① 四档屏宽（800/393/360/320）六格一个不少、无溢出；胶囊宽 = 屏宽 − 24
 //      （宽屏封顶 6×64 + 24 = 408，仍是胶囊不是横幅）；
 //   ② 章节行在工具栏**上方**，上一章 / 滑条 / 下一章全在、滑条 > 60dp；
-//      章节行**高宽复用胶囊参数**（等高 72、等宽、宽屏封顶 408 同轴）；
+//      章节行**高宽复用工具栏可视表面**（等高 56、等宽 6×格宽、封顶 384
+//      同轴；widget 总高/总宽含外留白，不画，不能直接当表面用）；
 //   ③ 首末章钮降禁用态但**不消失**、单章书滑条禁用；
 //   ④ 拖动滑条显示「章节名 · 进度」气泡（16 加粗，明显显示）、松手收起，
 //      落点按章吸附上抛；
 //   ⑤ 「操作」无收纳项时该格降禁用态（不消失）；末格随明暗切「日间 / 夜间」；
-//   ⑥ 盒高是覆盖层常量（钉 72+11+72+24 = 179，≤ 180dp），不给正文排版
+//   ⑥ 盒高是覆盖层常量（钉 72+11+56+24 = 163，≤ 180dp），不给正文排版
 //      带来额外预算。
 //
 // ⚠️ 期望值用硬编码字面量 / 实测 rect，不用被测常量自证。
@@ -156,7 +157,7 @@ void main() {
       }
     });
 
-    testWidgets('章节行高宽复用胶囊：等高、等宽同轴（宽屏封顶 408）',
+    testWidgets('章节行高宽复用工具栏可视表面：等高 56、等宽同轴（封顶 384）',
         (WidgetTester tester) async {
       for (final int width in <int>[800, 393, 360, 320]) {
         await pumpBar(tester, width);
@@ -164,20 +165,24 @@ void main() {
             tester.getRect(find.byKey(const Key('reader-chapter-row')));
         final Rect pill =
             tester.getRect(find.byKey(const Key('reader-toolbar-pill')));
-        expect(row.height, moreOrLessEquals(pill.height, epsilon: 0.5),
-            reason: '${width}dp 章节行高 ${row.height} 应复用胶囊高 ${pill.height}');
-        expect(row.width, moreOrLessEquals(pill.width, epsilon: 0.5),
-            reason: '${width}dp 章节行宽 ${row.width} 应复用胶囊宽 ${pill.width}');
+        // 表面高 = 单格高 56；widget 总高 72 含上下各 8 外留白（不画）。
+        expect(row.height, moreOrLessEquals(56, epsilon: 0.5),
+            reason: '${width}dp 章节行高 ${row.height} 应等于可视表面 56'
+                '（widget 总高 ${pill.height} 不能直接当表面用）');
+        // 表面宽 = widget 宽 − 横向外留白 2×12（不画）。
+        expect(row.width, moreOrLessEquals(pill.width - 24, epsilon: 0.5),
+            reason: '${width}dp 章节行宽 ${row.width} 应等于表面宽 '
+                '${pill.width - 24}（widget 宽 ${pill.width} 含外留白 24）');
         expect(row.center.dx, moreOrLessEquals(width / 2, epsilon: 0.5),
             reason: '章节行与胶囊同轴居中');
       }
 
-      // 宽屏不再拉成横幅：随胶囊一起封顶 408。
+      // 宽屏不拉成横幅：随工具栏表面一起封顶 6 × 64 = 384。
       await pumpBar(tester, 800);
       final Rect wide =
           tester.getRect(find.byKey(const Key('reader-chapter-row')));
-      expect(wide.width, moreOrLessEquals(408, epsilon: 0.6),
-          reason: '800dp 下章节行宽 ${wide.width} 应封顶 408');
+      expect(wide.width, moreOrLessEquals(384, epsilon: 0.6),
+          reason: '800dp 下章节行宽 ${wide.width} 应封顶 384（表面）');
     });
 
     testWidgets('首章 / 末章：章钮保留为禁用态（不消失）',
@@ -263,9 +268,9 @@ void main() {
       final double plain =
           tester.getSize(find.byType(ReaderControlBar)).height;
       expect(plain, lessThanOrEqualTo(180));
-      expect(plain, moreOrLessEquals(72 + 11 + 72 + 24, epsilon: 0.5),
-          reason: '盒高 = 胶囊 72 + 间隙 11 + 章节行 72（复用胶囊高）'
-              ' + 气泡预留 24 = 179');
+      expect(plain, moreOrLessEquals(72 + 11 + 56 + 24, epsilon: 0.5),
+          reason: '盒高 = 胶囊 widget 72 + 间隙 11 + 章节行 56（可视表面高）'
+              ' + 气泡预留 24 = 163');
 
       await pumpBar(tester, 393, bottomInset: 34);
       final double withInset =
