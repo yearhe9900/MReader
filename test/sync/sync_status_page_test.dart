@@ -35,6 +35,7 @@ import 'package:mreader/sync/sync_trigger.dart';
 import 'package:mreader/sync/webdav_client.dart';
 import 'package:mreader/ui/glass_runtime.dart';
 import 'package:mreader/ui/glass_scope.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart';
 import 'package:mreader/ui/settings_kit.dart';
 import 'package:mreader/ui/settings_page.dart';
 import 'package:mreader/ui/sync_status_page.dart';
@@ -233,13 +234,15 @@ void main() {
     }
   }
 
-  /// 按行标题定位该行内的 Switch（页面有多个开关后 `find.byType` 不唯一）。
+  /// 按行标题定位该行内的 [MiSwitch]（页面有多个开关后 `find.byType` 不唯一）。
+  ///
+  /// 开关已按红线统一为 `MiSwitch`（非 Material `Switch`），定位与取值都走它。
   Finder switchOf(String title) => find.descendant(
         of: find.ancestor(
           of: find.text(title),
           matching: find.byType(SettingsTile),
         ),
-        matching: find.byType(Switch),
+        matching: find.byType(MiSwitch),
       );
 
   Widget buildApp() => host(GlassQualityTier.off, SyncStatusPage(trigger: trigger));
@@ -325,7 +328,7 @@ void main() {
       expect(find.textContaining('默认关闭（不传书籍本体）'), findsOneWidget);
       expect(uploadPrefs.enabled, isFalse);
       expect(
-        tester.widget<Switch>(switchOf('上传书籍文件')).value,
+        tester.widget<MiSwitch>(switchOf('上传书籍文件')).value,
         isFalse,
         reason: '开关默认关',
       );
@@ -337,7 +340,7 @@ void main() {
 
       expect(uploadPrefs.enabled, isTrue);
       expect(
-        tester.widget<Switch>(switchOf('上传书籍文件')).value,
+        tester.widget<MiSwitch>(switchOf('上传书籍文件')).value,
         isTrue,
         reason: 'UI 已重建（setState 落到帧上）',
       );
@@ -359,7 +362,7 @@ void main() {
       expect(find.text('统计数据'), findsOneWidget);
       expect(statsPrefs.enabled, isTrue, reason: '默认开启（缺失即 true）');
       expect(
-        tester.widget<Switch>(switchOf('同步阅读统计')).value,
+        tester.widget<MiSwitch>(switchOf('同步阅读统计')).value,
         isTrue,
         reason: '开关默认开',
       );
@@ -369,7 +372,7 @@ void main() {
 
       expect(statsPrefs.enabled, isFalse);
       expect(
-        tester.widget<Switch>(switchOf('同步阅读统计')).value,
+        tester.widget<MiSwitch>(switchOf('同步阅读统计')).value,
         isFalse,
         reason: 'UI 已重建',
       );
