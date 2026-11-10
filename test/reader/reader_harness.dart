@@ -197,16 +197,19 @@ LibraryRepository fakeRepository(AppPaths paths) =>
 /// 收回去）。这样调用方可以无脑在每个顶栏交互前插一行，不必判断当前状态。
 ///
 /// ⚠️ **落点在读数行左缘，不在中心**：底部胶囊（宽 = 屏宽 − 24，左缘 12dp）
-/// 与上方的章节行都是 `HitTestBehavior.opaque` / 不透明表面，会吃掉中间落点。
+/// 是 `HitTestBehavior.opaque` / 不透明表面，会吃掉中间落点。
 /// §2.121 口径下胶囊保持原位、唤出态读数 `Opacity(0)` 不绘制（不拦指针）；
 /// 左缘 x=4 恒在胶囊（左缘 12dp）之外，命中的是读数行自己（有系统 inset 时
 /// 命中同语义的 `reader-chrome-toggle-status-gap` 命中层），不受屏宽档位影响。
+///
+/// ⚠️ **必须 `pumpAndSettle`**：唤出带 250ms 滑入动画，落位前胶囊在屏幕外——
+/// 调用方紧接着点胶囊按钮会点空。
 Future<void> showChrome(WidgetTester tester) async {
   if (find.byType(AppBar).evaluate().isNotEmpty) return;
   final Rect status =
       tester.getRect(find.byKey(const Key('reader-chrome-toggle-status')));
   await tester.tapAt(Offset(status.left + 4, status.center.dy));
-  await tester.pump();
+  await tester.pumpAndSettle();
 }
 
 /// 正文里的章标题（**排除底部读数左栏那一份**）。

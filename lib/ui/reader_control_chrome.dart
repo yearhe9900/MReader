@@ -15,6 +15,18 @@ const double kReaderTopBarHeight = 48;
 /// 顶栏圆钮直径（dp）。
 const double kReaderTopBarButtonSize = 36;
 
+/// 顶 / 底 chrome 滑入滑出时长（250ms）。
+///
+/// 取 Material 顶底层级的典型时长：足够看清「从边缘滑进来」的位移方向，
+/// 又不拖沓（再长工具栏会显得迟到、再短位移看不清）。
+const Duration kReaderChromeSlideDuration = Duration(milliseconds: 250);
+
+/// 入场曲线（forward = 唤出）：起步快、落位缓 —— 「到位」的观感。
+const Curve kReaderChromeEnterCurve = Curves.easeOutCubic;
+
+/// 退出曲线（reverse = 收起）：起步缓、加速滑出 —— 「离场」的观感。
+const Curve kReaderChromeExitCurve = Curves.easeInCubic;
+
 /// 阅读页顶部胶囊导航。
 class ReaderTopBar extends StatelessWidget {
   const ReaderTopBar({
@@ -90,4 +102,28 @@ class ReaderTopBar extends StatelessWidget {
       ),
     );
   }
+}
+
+/// `appBar:` 槽的滑动包装（槽要求 `PreferredSizeWidget`）：把子件沿
+/// [position] 滑入 / 滑出（`SlideTransition`，位移按子件自身尺寸的比例）。
+///
+/// **纯绘制变换**：不触发布局 ⇒ 正文排版区几何一像素不动（`extendBody*`
+/// 覆盖层语义的延伸）；命中测试随变换走，滑出屏幕外的部分不拦指针。
+class SlidingPreferredSize extends StatelessWidget
+    implements PreferredSizeWidget {
+  const SlidingPreferredSize({
+    super.key,
+    required this.child,
+    required this.position,
+  });
+
+  final Widget child;
+  final Animation<Offset> position;
+
+  @override
+  Size get preferredSize => (child as PreferredSizeWidget).preferredSize;
+
+  @override
+  Widget build(BuildContext context) =>
+      SlideTransition(position: position, child: child);
 }

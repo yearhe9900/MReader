@@ -143,6 +143,8 @@ void main() {
       await tester.tap(find.byKey(const Key('reader-chrome-toggle-status')));
       await tester.pump();
       await settle(tester, rounds: 20);
+      // 入场是 250ms 滑入：`settle(20)` 只推 160ms，量几何前先播到位。
+      await tester.pumpAndSettle();
       expect(find.byType(ReaderControlBar), findsOneWidget,
           reason: '前置：chrome 已唤出');
 
@@ -197,6 +199,8 @@ void main() {
           .getCenter(find.byKey(const Key('reader-chrome-toggle-status'))));
       await tester.pump();
       await settle(tester, rounds: 20);
+      // 退场 250ms 滑出播完才摘树（160ms 的 settle 不够）。
+      await tester.pumpAndSettle();
       expect(find.byType(ReaderControlBar), findsNothing);
       expect(tester.getRect(find.byKey(const Key('reader-viewport'))), viewport0);
       expect(tester.getRect(find.byKey(const Key('reader-content-area'))),

@@ -254,7 +254,8 @@ class ReaderPage extends StatefulWidget {
   State<ReaderPage> createState() => _ReaderPageState();
 }
 
-class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
+class _ReaderPageState extends State<ReaderPage>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   ReaderSettings _settings = const ReaderSettings();
 
   BookMeta? _meta;
@@ -484,7 +485,46 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// chrome 是**覆盖层**（`extendBody*`，见 [build]）：显隐**不改变正文排版区几何**
   /// （护栏 `reader_inset_test.dart`）；跳转类入口（搜索 / 目录 / 书签 / 摘要）落位在
   /// 页顶会被顶栏压住，故跳转后自动收起 chrome（[_exitChrome]）。
+  /// 显隐带 250ms 滑入 / 滑出动画（写入口 [_setChromeShown]，树上挂摘与
+  /// 语义态分离见 [_chromeMounted]）。
   bool _fullscreen = true;
+
+  /// chrome 出入场动画（顶栏自上滑入 / 底栏自下滑入，收起反向滑出；
+  /// 时长与曲线见 `reader_control_chrome.dart` 三常量）。
+  ///
+  /// `forward` = 唤出、`reverse` = 收起；纯绘制变换（`SlideTransition`），
+  /// 不触发布局。`late` 字段初始化器里可以引用 `this`（惰性求值）。
+  late final AnimationController _chromeAnim = AnimationController(
+    vsync: this,
+    duration: kReaderChromeSlideDuration,
+    reverseDuration: kReaderChromeSlideDuration,
+  );
+
+  /// 曲线化的动画值（0 = 完全收起 / 1 = 完全唤出）：进入 easeOutCubic、
+  /// 退出走 `reverseCurve` easeInCubic。读数行的交叉淡入淡出也吃这个值。
+  late final Animation<double> _chromeCurve = CurvedAnimation(
+    parent: _chromeAnim,
+    curve: kReaderChromeEnterCurve,
+    reverseCurve: kReaderChromeExitCurve,
+  );
+
+  /// 顶 / 底 chrome 的滑入滑出位移（begin = 屏幕边缘外，end = 原位）。
+  late final Animation<Offset> _topSlide = Tween<Offset>(
+    begin: const Offset(0, -1),
+    end: Offset.zero,
+  ).animate(_chromeCurve);
+  late final Animation<Offset> _bottomSlide = Tween<Offset>(
+    begin: const Offset(0, 1),
+    end: Offset.zero,
+  ).animate(_chromeCurve);
+
+  /// chrome 是否已挂树（含出 / 入场途中）；`false` = 完全收起、树上没有。
+  ///
+  /// 与 [_fullscreen]（语义态）分离的原因：**退场要播完才摘树**——
+  /// `reverse` 到 `dismissed` 才置 `false`，中途再唤出从当前位续播不闪断；
+  /// 入场则挂树即 `forward`。测试的 presence 断言在动画结束后才翻转
+  /// （harness `showChrome` 已 `pumpAndSettle`）。
+  bool _chromeMounted = false;
 
   /// 滚动**实时显示**用的章索引 / 章内位置（`TYP-09` 验收②）。
   ///
@@ -641,6 +681,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // 落位门闸通过才揭（见 [_skeletonCover]）。
     _skeletonCover = widget.sourceFuture != null;
     WidgetsBinding.instance.addObserver(this);
+    // chrome 退场动画播完（dismissed）才摘树，见 `_chromeMounted` 注释。
+    _chromeAnim.addStatusListener(_onChromeAnimStatus);
     if (widget.statsService != null) {
       _tracker = SessionTracker(bookId: widget.record.bookId);
       _noteReading(); // 进页起表（`STAT-01`：进入阅读页开始计时）
@@ -652,6 +694,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   void dispose() {
     // 关闭阅读页：先保存进度（unawaited）再释放资源。控制器到此通常已 detach，
     // `_saveProgress` 会回退 [_lastLocalHint]、不用 null 覆盖已存快照。
+    _chromeAnim.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
     // 开书滑入窗收尾：摘监听 + 解冻排版（`_open` 采纳调度器时的 `unfreeze()`
@@ -4136,8 +4179,35 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 落点判定见 [_onContentTapUp]）与点常驻读数行（`reader-chrome-toggle-status`，
   /// 图片页里中央点击被「点页全屏缩放」占用，故需要一个模式无关的入口）；
   /// 顶栏与全屏浮层的切换按钮已移除（详见 `_fullscreen` 字段注释）。
-  void _toggleFullscreen() {
-    setState(() => _fullscreen = !_fullscreen);
+  /// 显隐带滑入 / 滑出动画，收口在 [_setChromeShown]。
+  void _toggleFullscreen() => _setChromeShown(_fullscreen);
+
+  /// 唤出 / 收起 chrome（**带动画的唯一写入口**）。
+  ///
+  /// - **显示**：挂树（`_chromeMounted`）+ `forward` —— 顶栏从屏幕上方滑入、
+  ///   底栏从屏幕下方滑入；
+  /// - **隐藏**：`reverse` —— 反向滑出至边缘外，**播到 `dismissed` 才摘树**
+  ///   （[_onChromeAnimStatus] 收口）；退场途中再唤出 = 从当前位续播、不闪断。
+  void _setChromeShown(bool shown) {
+    if (shown) {
+      if (!_fullscreen) return; // 已在展示 / 入场途中
+      setState(() {
+        _fullscreen = false;
+        _chromeMounted = true;
+      });
+      _chromeAnim.forward();
+    } else {
+      if (_fullscreen && !_chromeMounted) return; // 已完全收起（稳态）
+      setState(() => _fullscreen = true);
+      _chromeAnim.reverse();
+    }
+  }
+
+  /// 退场动画到 `dismissed` ⇒ 摘树（稳态下树上不再有 AppBar / 控制条）。
+  void _onChromeAnimStatus(AnimationStatus status) {
+    if (status != AnimationStatus.dismissed) return;
+    if (!mounted || !_fullscreen || !_chromeMounted) return;
+    setState(() => _chromeMounted = false);
   }
 
   /// 记录本次正文 tap 的按下点（点按 ≠ 滑动，见 [_onContentTapUp]）。
@@ -4237,7 +4307,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 收掉会打断正在读的位置感；通知栏 / 耳机键切章走的就是这条）。
   void _exitChrome() {
     if (_fullscreen) return;
-    setState(() => _fullscreen = true);
+    _setChromeShown(false);
   }
 
   /// 外观面板回调（`TYP-07` / `TYP-08`）：排版变化走位置锚定，亮度 / 背景只重绘。
@@ -4342,26 +4412,31 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // ⚠️ AppBar 底色取**不透明页面底色**：盖住正文首行的始终是这层，胶囊
       // 只是叠在它上面的半透明表面（§2.121 零 `BackdropFilter`）。改成透明
       // 会让标题直接压在正文上。
-      appBar: _fullscreen
-          ? null
-          : AppBar(
-              backgroundColor: _pageColor(theme),
-              elevation: 0,
-              scrolledUnderElevation: 0,
-              automaticallyImplyLeading: false,
-              titleSpacing: 0,
-              toolbarHeight: 56,
-              title: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: ReaderTopBar(
-                  statusText: _topStatusText,
-                  onBack: () => Navigator.of(context).maybePop(),
-                  ttsButton: _buildTtsFab(theme, readerMiMode),
-                  mode: readerMiMode,
+      // 出入场：`_chromeMounted` 挂树即从屏幕上方滑入（`_topSlide`）、
+      // 收起反向滑出至边缘外再摘树；位移是纯绘制变换，正文几何不动。
+      appBar: _chromeMounted
+          ? SlidingPreferredSize(
+              position: _topSlide,
+              child: AppBar(
+                backgroundColor: _pageColor(theme),
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                automaticallyImplyLeading: false,
+                titleSpacing: 0,
+                toolbarHeight: 56,
+                title: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: ReaderTopBar(
+                    statusText: _topStatusText,
+                    onBack: () => Navigator.of(context).maybePop(),
+                    ttsButton: _buildTtsFab(theme, readerMiMode),
+                    mode: readerMiMode,
+                  ),
                 ),
+                actions: const <Widget>[],
               ),
-              actions: const <Widget>[],
-            ),
+            )
+          : null,
       // 底部层 = 常驻读数（唤出态隐藏）+ 悬浮工具栏（**保持原位**）。
       //
       // 合成**同一个 Stack**、读数排在**下面**（`[读数, 工具栏]`）：
@@ -4381,44 +4456,68 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       // 唤出态另铺一层**透明命中层**补回手势条空档的切换语义：高度取
       // `systemPadding.bottom`，与工具栏 `SafeArea(bottom: true)` 同源 ⇒
       // 恰好盖住空档、绝不压到胶囊；无系统 inset 时不铺（那里本就是读数行）。
-      bottomNavigationBar: ready && !_fullscreen
+      // 出入场（`_chromeMounted` + `_bottomSlide`）：底栏从屏幕下方滑入 /
+      // 反向滑出至边缘外，播完才摘树；读数与 chrome **反向交叉淡入淡出**
+      // （唤出态 0 不绘制、收起到位 1 —— 摘树瞬间与「只剩读数」稳态同值，
+      // 无缝不闪）。位移与透明度都是绘制层，槽高与正文几何全程不动。
+      bottomNavigationBar: !ready
           ? Stack(
-              children: <Widget>[
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  // 唤出态不画读数：胶囊没有全宽底板可盖它，改走「不画」。
-                  // 用 `Opacity` 而不是从树里摘掉——`TYP-09` 要求读数**恒在**，
-                  // 且 `Opacity` 不拦指针，点这条带仍是收起入口。
-                  child: Opacity(opacity: 0, child: progressStatus),
-                ),
-                ReaderControlBar(
-                  onToc: _openToc,
-                  onBookmarks: _openBookmarks,
-                  onAppearance: _openAppearance,
-                  onActions: _hasMoreEntries ? _openMoreMenu : null,
-                  onSearch: _openSearch,
-                  onNight: _toggleNight,
-                  nightActive: _settings.themeMode == AppThemeMode.dark,
-                ),
-                if (systemPadding.bottom > 0)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    height: systemPadding.bottom,
-                    child: GestureDetector(
-                      key: const Key('reader-chrome-toggle-status-gap'),
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _toggleFullscreen,
-                    ),
-                  ),
-              ],
-            )
-          : Stack(
               children: <Widget>[progressStatus],
-            ),
+            )
+          : _chromeMounted
+              ? AnimatedBuilder(
+                  animation: _chromeCurve,
+                  builder: (BuildContext context, _) => Stack(
+                    children: <Widget>[
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        // 唤出态不画读数：胶囊没有全宽底板可盖它，改走「不画」。
+                        // 用 `Opacity` 而不是从树里摘掉——`TYP-09` 要求读数
+                        // **恒在**，且 `Opacity` 不拦指针，点这条带仍是收起入口。
+                        child: Opacity(
+                          opacity: 1 - _chromeCurve.value,
+                          child: progressStatus,
+                        ),
+                      ),
+                      SlideTransition(
+                        position: _bottomSlide,
+                        child: Stack(
+                          children: <Widget>[
+                            ReaderControlBar(
+                              onToc: _openToc,
+                              onBookmarks: _openBookmarks,
+                              onAppearance: _openAppearance,
+                              onActions:
+                                  _hasMoreEntries ? _openMoreMenu : null,
+                              onSearch: _openSearch,
+                              onNight: _toggleNight,
+                              nightActive:
+                                  _settings.themeMode == AppThemeMode.dark,
+                            ),
+                            if (systemPadding.bottom > 0)
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                height: systemPadding.bottom,
+                                child: GestureDetector(
+                                  key: const Key(
+                                      'reader-chrome-toggle-status-gap'),
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: _toggleFullscreen,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : Stack(
+                  children: <Widget>[progressStatus],
+                ),
       // CNT-04c 验收②：链接返回栈非空时显示「返回」按钮，弹栈恢复原位置；
       // 栈空隐藏（普通 Material，玻璃留给 M2a-T04）。
       floatingActionButton: _linkStack.isNotEmpty

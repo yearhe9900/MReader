@@ -69,6 +69,9 @@ void main() {
       await tester.tapAt(
           tester.getCenter(find.byKey(const Key('reader-chrome-toggle-status'))));
       await tester.pump();
+      // 退场是 250ms 滑出动画：`settle(20)` 只推 160ms，得先 pumpAndSettle
+      // 播完摘树，再走 settle 排空真异步。
+      await tester.pumpAndSettle();
       await settle(tester, rounds: 20);
     }
 
