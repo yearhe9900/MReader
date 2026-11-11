@@ -65,6 +65,7 @@ import 'glass_nav_host.dart' show navThemeModeOf;
 import 'home_shell.dart' show kShellBottomInset;
 import 'mi_like_ui/mi_like_ui.dart'
     show
+        MiColors,
         MiDialog,
         MiDialogAction,
         MiDialogActionStyle,
@@ -824,8 +825,8 @@ class ShelfPageState extends State<ShelfPage>
     final ThemeData theme = Theme.of(context);
     final double topInset = MediaQuery.paddingOf(context).top;
 
-    // `UI-02` 导航层玻璃化：顶栏走 GlassTopBar、壳层走 GlassNavScaffold；
-    // 内容整体不透明（`UI-04`）。
+    // 壳换 mi_like：顶栏走 [MiTopBar] header 槽、页底 Mi 页底色；
+    // 内容整体不透明（`UI-04`，[OpaqueContentSurface] 承载渐变正文不变）。
     //
     // 浮动头部（参考图 = HyperOS 主题商店首页「搜索条 + 分类 chips 压在内容上」）：
     // 搜索胶囊 + 分组 chips 两行；正文 `extendBody: true` 铺满全屏、从头部下穿过，
@@ -871,26 +872,48 @@ class ShelfPageState extends State<ShelfPage>
         animation: _searchAnim,
         builder: (BuildContext context, Widget? body) {
           final (:double t, :double visible) = _searchProgress();
-          return GlassNavScaffold(
-            extendBody: true,
-            appBar: GlassTopBar(
-              title: _buildHeader(t: t, visible: visible),
-              // **靠左不居中**：库的 `_ToolbarLayout` 在 `centerTitle: true`（默认）时
-              // 按整条宽度居中、并把可用宽压成 `size.width - 2 * max(leading, actions)`——
-              // 本页标题是两行头部，居中收缩会破坏「全宽搜索胶囊 + 铺满 chips 行」形态。
-              centerTitle: false,
-              // 搜索态胶囊行退出排版 → 顶栏高度跟着收（搜索栏因此更靠近状态栏，
-              // 与上游分类页搜索态同形）；高度每帧插值，正文不受影响（见上）。
-              toolbarHeight: kShelfSearchRowHeight +
-                  (1 - t) * (kShelfHeaderRowGap + kShelfChipsRowHeight),
+          final double toolbarHeight = kShelfSearchRowHeight +
+              (1 - t) * (kShelfHeaderRowGap + kShelfChipsRowHeight);
+          final MiThemeMode mode = navThemeModeOf(context);
+          // 壳换 mi_like（`settings_page` 同款）：页底 Mi 页底色 + 钉顶
+          // [MiTopBar]；两行浮动头部走 **header 槽**（「材质 + 头部」形态，
+          // 无大标题）。原 `extendBody: true` 的「正文穿顶栏」语义由
+          // `Positioned.fill` 承担（正文从 y=0 起、网格 padding 让位不变）。
+          return ColoredBox(
+            color: MiColors.pageBackgroundFor(mode),
+            child: Material(
+              type: MaterialType.transparency,
+              child: Stack(
+                children: <Widget>[
+                  Positioned.fill(child: body!),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    child: MiTopBar(
+                      // 高度每帧随搜索态进度插值（原 `toolbarHeight` 等价：
+                      // 搜索态胶囊行退出排版 → 顶栏收窄）。
+                      header: _ShelfHeaderBar(
+                        height: toolbarHeight,
+                        child: _buildHeader(t: t, visible: visible),
+                      ),
+                      // 让位 = 状态栏高（原 AppBar = 状态栏 + toolbarHeight
+                      // 同口径；桌面 / 测试 padding=0 → 0，无悬空带）。
+                      headerTopInset: MediaQuery.paddingOf(context).top,
+                      showBlur: true,
+                      showSurface: false, // 头部区不压色（同原玻璃顶栏）
+                    ),
+                  ),
+                ],
+              ),
             ),
-            body: body!,
           );
         },
         child: content,
       ),
     );
   }
+
 
   /// 搜索态正文外壳：打字期间照常随键盘适配，点书后冻结（见 [_openingFrozen]）。
   Widget _buildSearchArea(ThemeData theme, double topInset) {
@@ -1440,3 +1463,19 @@ enum _BookAction {
   delete,
 }
 
+/// 书架浮动头部的 [MiTopBar.header] 槽载体：高度 = 顶栏内容区高
+/// （搜索行 + 收拢的 chips 行），随搜索态进度每帧插值
+/// （原 `GlassTopBar.toolbarHeight` 等价物）。
+class _ShelfHeaderBar extends StatelessWidget implements PreferredSizeWidget {
+  const _ShelfHeaderBar({required this.height, required this.child});
+
+  final double height;
+  final Widget child;
+
+  @override
+  Size get preferredSize => Size.fromHeight(height);
+
+  @override
+  Widget build(BuildContext context) =>
+      SizedBox(height: height, width: double.infinity, child: child);
+}

@@ -136,7 +136,7 @@ const double kShelfChipsRowHeight = 40;
 
 /// 浮动头部总高（**状态栏之下**的部分；GlassAppBar 自带 SafeArea 吃掉状态栏）。
 ///
-/// 同时是 `GlassTopBar.toolbarHeight` 与网格首行顶部留白的组成部分。
+/// 同时是顶栏 header 槽高度（原 `GlassTopBar.toolbarHeight` 等价物）与网格首行顶部留白的组成部分。
 /// 44.1 + 12 + 40 = **96.1**（契约测试按字面量锁）。行高/间距是照参考图估的
 /// 初始值（截图为缩放图，不作精确依据），真机复核后可整体调。
 const double kShelfHeaderHeight =

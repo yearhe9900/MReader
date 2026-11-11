@@ -244,7 +244,7 @@ void main() {
       expect(await tester.runAsync(() => repo.loadBooks()), hasLength(1));
     });
 
-    testWidgets('M2a-T04 书架顶栏为 GlassTopBar、内容层不透明（UI-02/UI-04）',
+    testWidgets('M2a-T04 书架顶栏为 MiTopBar、内容层不透明（UI-02/UI-04）',
         (WidgetTester tester) async {
       await tester.runAsync(
         () => repo.importFile(bytes: _txtBytes('一本'), fileName: 'a.txt'),
@@ -253,12 +253,15 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // 导航层：玻璃壳 + 玻璃顶栏（`UI-02`）。
-      expect(find.byType(GlassNavScaffold), findsOneWidget);
-      expect(find.byType(GlassTopBar), findsOneWidget);
+      // 导航层：mi_like 壳（页底 + 钉顶 [MiTopBar]），玻璃壳 / 玻璃顶栏
+      // 与 Material AppBar 都退场（壳换 mi_like 批次）。
+      expect(find.byType(MiTopBar), findsOneWidget);
+      expect(find.byType(GlassNavScaffold), findsNothing);
+      expect(find.byType(GlassTopBar), findsNothing);
       expect(find.byType(AppBar), findsNothing);
 
-      // 内容层：网格被 OpaqueContentSurface 承载（`UI-04`）；
+      // 内容层：网格被 OpaqueContentSurface 承载（`UI-04`，渐变正文的
+      // 不透明承载件随壳保留）；
       // 书卡（内容层元素）在其**子树内**且不直接是玻璃控件。
       expect(find.byType(OpaqueContentSurface), findsOneWidget);
       expect(
@@ -284,14 +287,11 @@ void main() {
 
       expect(find.text('搜索书名、作者'), findsOneWidget);
 
-      // 机制锁：顶栏须显式关掉居中档（默认 `true` 会走库的「等边距居中」分支，
-      // 两行头部会被收缩）。
-      expect(
-        tester.widget<GlassTopBar>(find.byType(GlassTopBar)).centerTitle,
-        isFalse,
-      );
+      // 机制锁（原 GlassTopBar `centerTitle: false`）随玻璃顶栏退场：
+      // [MiTopBar] 的 header 槽是全宽自绘、无「等边距居中」分支，收缩问题
+      // 在组件层不存在——几何契约（下）继续钉「靠左 + 铺满」。
 
-      // 几何契约：靠左贴顶栏内边距（`GlassAppBar` 默认 horizontal padding = 8）并**铺满可用宽**。
+      // 几何契约：靠左贴顶栏内边距（[MiTopBar] headerInset = 11.9）并**铺满可用宽**。
       // 断言 > 600 留了余量（排序按钮移除后可用宽 ≈ 784）；若退回 `maxWidth: 400` 桌面上限
       // 或居中档立刻红。
       final Finder box = find.byKey(const Key('shelf-search-entry'));
@@ -515,28 +515,24 @@ void main() {
       await tester.pumpWidget(buildApp());
       await _settle(tester);
 
-      // ① 内容 edge-to-edge：壳层显式开 `extendBody`，正文从 y=0 起、滚动时从浮动头部下
-      // 穿过，顶栏下透出磨砂模糊（`UI-02` ②）。
-      expect(
-        tester
-            .widget<GlassNavScaffold>(find.byType(GlassNavScaffold))
-            .extendBody,
-        isTrue,
-        reason: '书架是「全浮动头部」形态：正文必须穿顶栏（拍板 2026-09-29）',
-      );
+      // ① 内容 edge-to-edge：玻璃壳的 `extendBody` 随壳退场，语义由壳的
+      // `Positioned.fill` 承担（正文从 y=0 起、滚动时从浮动头部下穿过，
+      // 顶栏下透出磨砂模糊（`UI-02` ②）；首行保护见 ④ 的网格 padding 断言）。
+      expect(find.byType(GlassNavScaffold), findsNothing);
+      expect(find.byType(MiTopBar), findsOneWidget);
 
-      // ② 头部两行**恒在顶栏内**（搜索胶囊与分组 chips 都在 `GlassTopBar` 子树）：
-      // chips 移回正文 Column 即红。
+      // ② 头部两行**恒在顶栏内**（搜索胶囊与分组 chips 都在 [MiTopBar]
+      // header 槽子树）：chips 移回正文 Column 即红。
       expect(
         find.descendant(
-          of: find.byType(GlassTopBar),
+          of: find.byType(MiTopBar),
           matching: find.byKey(const Key('shelf-search-entry')),
         ),
         findsOneWidget,
       );
       expect(
         find.descendant(
-          of: find.byType(GlassTopBar),
+          of: find.byType(MiTopBar),
           matching: find.byType(MiPillTabBar),
         ),
         findsOneWidget,
@@ -544,8 +540,13 @@ void main() {
 
       // ③ 头部总高 96.1 = 搜索行 44.1（MiSearchBar 栏高）+ 间距 12 + chips 行 40；
       // 按**字面量**锁——引用 `kShelfHeaderHeight` 等于同义反复。
+      // （原 `GlassTopBar.toolbarHeight` 等价物 = header 槽 preferredSize。）
       expect(
-        tester.widget<GlassTopBar>(find.byType(GlassTopBar)).toolbarHeight,
+        tester
+            .widget<MiTopBar>(find.byType(MiTopBar))
+            .header!
+            .preferredSize
+            .height,
         96.1,
       );
 

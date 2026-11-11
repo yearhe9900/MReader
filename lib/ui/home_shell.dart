@@ -4,7 +4,7 @@
 // 结构（参考 anx-reader 的 `page/home_page.dart`）
 // ══════════════════════════════════════════════════════════════════════════════
 // 外层**不是** Scaffold，而是 `Stack`：子页与底栏叠放，底栏浮在最上层。子页各自
-// 持有 [GlassNavScaffold]（含自己的顶栏）——若外层再套一层 Scaffold 就会形成
+// 持有页面自带的 mi_like 壳（含自己的顶栏）——若外层再套一层 Scaffold 就会形成
 // `GlassScaffold` 嵌套 `GlassScaffold`，直接违反 `UI-04`「玻璃控件不可嵌套」；
 // 底栏（[GlassNavHost]）同样脱离 `GlassScaffold` 祖先浮在 Stack 最上层。
 //
@@ -261,7 +261,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     ];
   }
 
-  /// 三个 tab 的内容页。每页**自带** [GlassNavScaffold]（顶栏 + 不透明正文），
+  /// 三个 tab 的内容页。每页**自带** mi_like 壳（顶栏 + 不透明正文），
   /// 本壳层只负责「选哪一页」与「底栏」。**统计页不在其中**（移出底栏）——
   /// 入口收进「我的」页（`SettingsPage.onOpenStats`），从那里推入。
   List<Widget> _buildPages() => <Widget>[
@@ -333,7 +333,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   }
 
   /// push 统计页（统计移出底栏后，「我的」页的唯一入口）。依赖同源（组合根
-  /// 注入的 [StatsService] / [LibraryRepository]）；统计页自带 [GlassNavScaffold]
+  /// 注入的 [StatsService] / [LibraryRepository]）；统计页自带 mi_like 壳
   /// 顶栏与返回键（`canPop` 时显示）。
   Future<void> _openStatsPage() {
     return Navigator.of(context).push<void>(
