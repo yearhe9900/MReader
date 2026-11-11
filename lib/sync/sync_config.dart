@@ -16,6 +16,7 @@ class SyncConfig {
     required this.account,
     String? dir,
     String? deviceName,
+    this.trustSelfSigned = false,
   })  : dir = _normalizeDir(dir),
         deviceName = _normalizeDeviceName(deviceName);
 
@@ -37,6 +38,10 @@ class SyncConfig {
   /// 设备名（备份文件命名等；空回退 [defaultDeviceName]）。
   final String deviceName;
 
+  /// 是否信任自签名证书（**默认关**；仅对 [url] 那个主机生效，由用户在
+  /// 同步设置里显式打开——不写死在客户端，见 `SYNC-01` 连接配置）。
+  final bool trustSelfSigned;
+
   /// 归一远端目录：去首尾 `/`，空则回退 [defaultDir]。
   static String _normalizeDir(String? raw) {
     final String trimmed = (raw ?? '').trim().replaceAll(RegExp(r'^/+|/+$'), '');
@@ -55,6 +60,7 @@ class SyncConfig {
         'account': account,
         'dir': dir,
         'deviceName': deviceName,
+        'trustSelfSigned': trustSelfSigned,
       };
 
   /// 由持久化 JSON 还原；结构异常（缺 url / account）返 `null`。
@@ -73,6 +79,7 @@ class SyncConfig {
       dir: json['dir'] is String ? json['dir'] as String : null,
       deviceName:
           json['deviceName'] is String ? json['deviceName'] as String : null,
+      trustSelfSigned: json['trustSelfSigned'] == true,
     );
   }
 

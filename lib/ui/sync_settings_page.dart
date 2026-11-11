@@ -19,6 +19,7 @@ import '../sync/sync_config_store.dart';
 import '../sync/webdav_client.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
+import 'mi_like_ui/mi_like_ui.dart';
 import 'settings_kit.dart';
 
 /// 页面内容左右留白（与设置页同一左边缘口径）。
@@ -53,6 +54,9 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
   /// 「高级选项」是否展开（默认收起：远端目录 / 设备名对普通用户无需露出）。
   bool _advancedOpen = false;
 
+  /// 「信任自签名证书」开关（默认关；随配置持久化，见 [SyncConfig.trustSelfSigned]）。
+  bool _trustSelfSigned = false;
+
   /// 是否已有存储的密码（决定「留空保持」提示与删除联动）。
   bool _hasStoredPassword = false;
 
@@ -71,6 +75,7 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
     _dir = TextEditingController(text: c?.dir ?? SyncConfig.defaultDir);
     _device =
         TextEditingController(text: c?.deviceName ?? SyncConfig.defaultDeviceName);
+    _trustSelfSigned = c?.trustSelfSigned ?? false;
     if (c != null) {
       widget.store.readPassword().then((String? password) {
         if (mounted) {
@@ -98,6 +103,7 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
         account: _account.text.trim(),
         dir: _dir.text,
         deviceName: _device.text,
+        trustSelfSigned: _trustSelfSigned,
       );
 
   /// 保存（校验通过才落盘；密码留空保持已存值）。
@@ -351,7 +357,7 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
           icon: Icons.tune,
           accent: SettingsAccents.gray,
           title: '高级选项',
-          subtitle: '远端目录、设备名（一般无需修改）',
+          subtitle: '远端目录、设备名、证书信任（一般无需修改）',
           onTap: () => setState(() => _advancedOpen = !_advancedOpen),
           trailing: Icon(
             _advancedOpen ? Icons.expand_less : Icons.expand_more,
@@ -366,6 +372,18 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
             '设备名',
             _device,
             hint: '如 Xiaomi-Phone；用于备份文件命名（backup-日期-设备名.zip）',
+          ),
+          const Divider(height: 1),
+          SettingsTile(
+            icon: Icons.security_outlined,
+            accent: SettingsAccents.orange,
+            title: '信任自签名证书',
+            subtitle: '自建服务器（如老U）证书未受系统信任时打开；仅对当前服务器地址生效',
+            trailing: MiSwitch(
+              value: _trustSelfSigned,
+              onChanged: (bool v) => setState(() => _trustSelfSigned = v),
+            ),
+            onTap: () => setState(() => _trustSelfSigned = !_trustSelfSigned),
           ),
         ],
       ],

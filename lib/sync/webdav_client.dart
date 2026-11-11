@@ -281,6 +281,7 @@ class WebdavClient {
   }) async {
     final Uri uri = _uri(config, under);
     final Duration limit = Duration(seconds: timeoutSeconds);
+    _applyTlsTrust(config);
     try {
       final HttpClientRequest request =
           await _http.openUrl('PUT', uri).timeout(limit);
@@ -350,6 +351,7 @@ class WebdavClient {
   }) async {
     final Uri uri = _uri(config, under);
     final Duration limit = Duration(seconds: timeoutSeconds);
+    _applyTlsTrust(config);
     final File part = File('${target.path}.part');
     try {
       final HttpClientRequest request =
@@ -434,6 +436,22 @@ class WebdavClient {
   // 传输层
   // ───────────────────────────────────────────────────────────────────────────
 
+  /// 按 [SyncConfig.trustSelfSigned] 处理 TLS 证书校验：自有测试服务器（如
+  /// 老U）多为自签名证书，dart:io 默认拒签，握手在发请求前就失败（被归类
+  /// 成「网络不可达」，实际是证书问题）。开关**默认关**（保持系统信任链，
+  /// 防中间人）；打开时也只放行**配置里那个主机**，其余主机仍走默认校验。
+  /// 每次请求前调用（共享单例上开关可变，避免残留上一次的放行状态）。
+  void _applyTlsTrust(SyncConfig config) {
+    if (!config.trustSelfSigned) {
+      _http.badCertificateCallback = null; // 关 → 恢复 dart:io 默认校验。
+      return;
+    }
+    final String host = Uri.tryParse(_noSlash(config.url))?.host ?? '';
+    _http.badCertificateCallback =
+        (X509Certificate cert, String requestHost, int port) =>
+            requestHost == host;
+  }
+
   /// 发一次请求并读完响应体；机制失败（拒连 / 超时 / TLS）在此归类，
   /// **状态码不在此判错**——由调用方按语义用 [_ensureOk] / 特判处理。
   Future<({int status, List<int> body})> _send(
@@ -446,6 +464,7 @@ class WebdavClient {
     String depth = '0',
   }) async {
     final Duration limit = Duration(seconds: timeoutSeconds);
+    _applyTlsTrust(config);
     try {
       final HttpClientRequest request = await _http.openUrl(method, uri)
           .timeout(limit);

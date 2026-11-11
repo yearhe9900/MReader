@@ -69,17 +69,19 @@ void main() {
   });
 
   group('序列化（`DATA-02` ①：密码结构性不进 JSON）', () {
-    test('toJson 键集合精确等于四要素（无 password 键位）', () {
+    test('toJson 键集合精确等于五要素（无 password 键位）', () {
       final SyncConfig c = SyncConfig(
         url: 'https://x/dav/',
         account: 'a',
         dir: 'mreader',
         deviceName: 'd',
+        trustSelfSigned: true,
       );
       expect(
         c.toJson().keys.toList(),
-        <String>['url', 'account', 'dir', 'deviceName'],
+        <String>['url', 'account', 'dir', 'deviceName', 'trustSelfSigned'],
       );
+      expect(c.toJson(), isNot(contains('password')));
     });
 
     test('fromJson 往返一致', () {
@@ -88,6 +90,7 @@ void main() {
         account: 'a@example.com',
         dir: 'sync',
         deviceName: 'PC',
+        trustSelfSigned: true,
       );
       final SyncConfig? back = SyncConfig.fromJson(c.toJson());
       expect(back, isNotNull);
@@ -95,6 +98,7 @@ void main() {
       expect(back.account, c.account);
       expect(back.dir, c.dir);
       expect(back.deviceName, c.deviceName);
+      expect(back.trustSelfSigned, c.trustSelfSigned);
     });
 
     test('缺 dir / deviceName 字段 → 回退默认', () {
