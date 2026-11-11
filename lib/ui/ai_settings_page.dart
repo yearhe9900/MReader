@@ -19,9 +19,19 @@ import 'package:flutter/material.dart';
 import '../ai/ai_client.dart';
 import '../ai/provider_config.dart';
 import '../ai/provider_store.dart';
-import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
-import 'mi_like_ui/mi_like_ui.dart';
+import 'mi_like_ui/mi_like_ui.dart'
+    show
+        MiColors,
+        MiDialog,
+        MiDialogAction,
+        MiDialogActionStyle,
+        MiScrollBinder,
+        MiSwitch,
+        MiThemeMode,
+        MiTopBar,
+        MiTopBarMetrics,
+        showMiDialog;
 import 'settings_kit.dart';
 
 /// 页面内容左右留白（与设置页同一左边缘口径）。
@@ -81,28 +91,45 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final AiPrefs prefs = widget.store.prefs;
-    return GlassNavScaffold(
-      appBar: GlassTopBar(
-        title: const Text('AI 设置'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: '返回',
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-      ),
-      body: OpaqueContentSurface(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(
-            _kPageInset,
-            16,
-            _kPageInset,
-            kShellBottomInset,
+    // 壳换 mi_like（`settings_page` 同款）：push 页返回圆钮；滚动折叠经
+    // [MiScrollBinder] 自动接线。
+    final MiThemeMode mode = Theme.of(context).brightness == Brightness.light
+        ? MiThemeMode.light
+        : MiThemeMode.dark;
+    return ColoredBox(
+      color: MiColors.pageBackgroundFor(mode),
+      child: Material(
+        type: MaterialType.transparency,
+        child: MiScrollBinder(
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(
+                    _kPageInset,
+                    MiTopBarMetrics.contentTopInset,
+                    _kPageInset,
+                    kShellBottomInset,
+                  ),
+                  children: <Widget>[
+                    _buildToggleGroup(prefs),
+                    _buildProviderGroup(prefs),
+                    _buildSecurityGroup(),
+                  ],
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: MiTopBar(
+                  title: 'AI 设置',
+                  showBack: true,
+                  onBack: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+            ],
           ),
-          children: <Widget>[
-            _buildToggleGroup(prefs),
-            _buildProviderGroup(prefs),
-            _buildSecurityGroup(),
-          ],
         ),
       ),
     );
@@ -472,113 +499,139 @@ class _AiProviderEditPageState extends State<AiProviderEditPage> {
 
   @override
   Widget build(BuildContext context) {
-    return GlassNavScaffold(
-      appBar: GlassTopBar(
-        title: Text(widget.config == null ? '添加配置' : '编辑配置'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: '返回',
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: _save,
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-      body: OpaqueContentSurface(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(
-            _kPageInset,
-            16,
-            _kPageInset,
-            kShellBottomInset,
-          ),
-          children: <Widget>[
-            SettingsGroupCard(
-              header: '基本配置',
-              children: <Widget>[
-                _field('配置名称', _name, hint: '如 OpenAI / DeepSeek'),
-                const Divider(height: 1),
-                _field('Base URL', _baseUrl, hint: 'https://api.openai.com/v1'),
-                const Divider(height: 1),
-                _field('模型', _model, hint: '如 gpt-4o-mini'),
-              ],
-            ),
-            SettingsGroupCard(
-              header: 'API Key',
-              footer: _hasStoredKey
-                  ? '已保存密钥；输入框留空则保持不变。密钥不进备份、不进日志。'
-                  : '密钥保存在系统安全存储，不进备份、不进日志（`DATA-02`）。',
-              children: <Widget>[
-                _field(
-                  'API Key',
-                  _apiKey,
-                  hint: _hasStoredKey ? '••••（留空保持不变）' : 'sk-…',
-                  obscure: true,
-                ),
-              ],
-            ),
-            SettingsGroupCard(
-              header: '参数（可选）',
-              children: <Widget>[
-                _field('超时（秒）', _timeout, hint: '60', numeric: true),
-                const Divider(height: 1),
-                _field('最大输出 tokens', _maxTokens, hint: '留空 = 服务端默认', numeric: true),
-                const Divider(height: 1),
-                _field('温度', _temperature, hint: '0~2，留空 = 服务端默认', numeric: true),
-                const Divider(height: 1),
-                _field('自定义请求头（JSON，可选）', _headers, hint: '{"X-Org": "…"}'),
-              ],
-            ),
-            SettingsGroupCard(
-              header: '用途',
-              footer: '翻译 / 摘要等功能从勾选了对应用途的配置中取第一套；TTS 在线引擎复用同一地址与密钥。',
-              children: <Widget>[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: <Widget>[
-                      for (final AiUseCase use in AiUseCase.values)
-                        FilterChip(
-                          label: Text(use.label),
-                          selected: _useFor.contains(use),
-                          showCheckmark: false,
-                          onSelected: (bool selected) {
-                            setState(() {
-                              if (selected) {
-                                _useFor.add(use);
-                              } else {
-                                _useFor.remove(use);
-                              }
-                            });
-                          },
-                        ),
-                    ],
+    // 壳换 mi_like（`settings_page` 同款）：push 页返回圆钮；「保存」经
+    // Stack 叠顶栏右侧（[MiTopBar.actions] 为搜索栏行专用槽），按
+    // `backCenterY` 与返回钮同排对齐。
+    final MiThemeMode mode = Theme.of(context).brightness == Brightness.light
+        ? MiThemeMode.light
+        : MiThemeMode.dark;
+    return ColoredBox(
+      color: MiColors.pageBackgroundFor(mode),
+      child: Material(
+        type: MaterialType.transparency,
+        child: MiScrollBinder(
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(
+                    _kPageInset,
+                    MiTopBarMetrics.contentTopInset,
+                    _kPageInset,
+                    kShellBottomInset,
                   ),
-                ),
-              ],
-            ),
-            _buildTestGroup(),
-            if (widget.config != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: SettingsGroupCard(
                   children: <Widget>[
-                    SettingsTile(
-                      icon: Icons.delete_outline,
-                      accent: SettingsAccents.gray,
-                      title: '删除此配置',
-                      subtitle: '连同其密钥一起删除',
-                      onTap: _delete,
+                    SettingsGroupCard(
+                      header: '基本配置',
+                      children: <Widget>[
+                        _field('配置名称', _name, hint: '如 OpenAI / DeepSeek'),
+                        const Divider(height: 1),
+                        _field('Base URL', _baseUrl, hint: 'https://api.openai.com/v1'),
+                        const Divider(height: 1),
+                        _field('模型', _model, hint: '如 gpt-4o-mini'),
+                      ],
                     ),
+                    SettingsGroupCard(
+                      header: 'API Key',
+                      footer: _hasStoredKey
+                          ? '已保存密钥；输入框留空则保持不变。密钥不进备份、不进日志。'
+                          : '密钥保存在系统安全存储，不进备份、不进日志（`DATA-02`）。',
+                      children: <Widget>[
+                        _field(
+                          'API Key',
+                          _apiKey,
+                          hint: _hasStoredKey ? '••••（留空保持不变）' : 'sk-…',
+                          obscure: true,
+                        ),
+                      ],
+                    ),
+                    SettingsGroupCard(
+                      header: '参数（可选）',
+                      children: <Widget>[
+                        _field('超时（秒）', _timeout, hint: '60', numeric: true),
+                        const Divider(height: 1),
+                        _field('最大输出 tokens', _maxTokens, hint: '留空 = 服务端默认', numeric: true),
+                        const Divider(height: 1),
+                        _field('温度', _temperature, hint: '0~2，留空 = 服务端默认', numeric: true),
+                        const Divider(height: 1),
+                        _field('自定义请求头（JSON，可选）', _headers, hint: '{"X-Org": "…"}'),
+                      ],
+                    ),
+                    SettingsGroupCard(
+                      header: '用途',
+                      footer: '翻译 / 摘要等功能从勾选了对应用途的配置中取第一套；TTS 在线引擎复用同一地址与密钥。',
+                      children: <Widget>[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 4,
+                            children: <Widget>[
+                              for (final AiUseCase use in AiUseCase.values)
+                                FilterChip(
+                                  label: Text(use.label),
+                                  selected: _useFor.contains(use),
+                                  showCheckmark: false,
+                                  onSelected: (bool selected) {
+                                    setState(() {
+                                      if (selected) {
+                                        _useFor.add(use);
+                                      } else {
+                                        _useFor.remove(use);
+                                      }
+                                    });
+                                  },
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    _buildTestGroup(),
+                    if (widget.config != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: SettingsGroupCard(
+                          children: <Widget>[
+                            SettingsTile(
+                              icon: Icons.delete_outline,
+                              accent: SettingsAccents.gray,
+                              title: '删除此配置',
+                              subtitle: '连同其密钥一起删除',
+                              onTap: _delete,
+                            ),
+                          ],
+                        ),
+                      ),
                   ],
                 ),
               ),
-          ],
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: MiTopBar(
+                  title: widget.config == null ? '添加配置' : '编辑配置',
+                  showBack: true,
+                  onBack: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+              Positioned(
+                top: MiTopBarMetrics.backCenterY -
+                    MiTopBarMetrics.backDiameter / 2,
+                right: 12,
+                child: SizedBox(
+                  height: MiTopBarMetrics.backDiameter,
+                  child: Center(
+                    child: TextButton(
+                      onPressed: _save,
+                      child: const Text('保存'),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

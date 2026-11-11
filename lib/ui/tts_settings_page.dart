@@ -16,10 +16,18 @@ import 'package:flutter/material.dart';
 import '../ai/provider_config.dart';
 import '../ai/provider_store.dart';
 import '../tts/online_tts.dart';
-import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'mi_like_ui/mi_like_ui.dart'
-    show MiDialog, MiDialogAction, MiDialogActionStyle, showMiDialog;
+    show
+        MiColors,
+        MiDialog,
+        MiDialogAction,
+        MiDialogActionStyle,
+        MiScrollBinder,
+        MiThemeMode,
+        MiTopBar,
+        MiTopBarMetrics,
+        showMiDialog;
 import 'settings_kit.dart';
 
 /// 页面内容左右留白（与设置页同一左边缘口径）。
@@ -198,41 +206,67 @@ class _TtsSettingsPageState extends State<TtsSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final ProviderStore? aiStore = widget.aiStore;
-    return GlassNavScaffold(
-      appBar: GlassTopBar(
-        title: const Text('在线 TTS'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: '返回',
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: _save,
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-      body: OpaqueContentSurface(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(
-            _kPageInset,
-            16,
-            _kPageInset,
-            kShellBottomInset,
-          ),
-          children: <Widget>[
-            _buildModeGroup(),
-            if (_mode == OnlineTtsMode.urlTemplate) ...<Widget>[
-              _buildTemplateGroup(),
-            ] else ...<Widget>[
-              _buildOpenAiGroup(aiStore),
-              _buildKeyGroup(),
+    // 壳换 mi_like（`settings_page` 同款）：push 页返回圆钮；「保存」经
+    // Stack 叠顶栏右侧（[MiTopBar.actions] 为搜索栏行专用槽），按
+    // `backCenterY` 与返回钮同排对齐。
+    final MiThemeMode mode = Theme.of(context).brightness == Brightness.light
+        ? MiThemeMode.light
+        : MiThemeMode.dark;
+    return ColoredBox(
+      color: MiColors.pageBackgroundFor(mode),
+      child: Material(
+        type: MaterialType.transparency,
+        child: MiScrollBinder(
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(
+                    _kPageInset,
+                    MiTopBarMetrics.contentTopInset,
+                    _kPageInset,
+                    kShellBottomInset,
+                  ),
+                  children: <Widget>[
+                    _buildModeGroup(),
+                    if (_mode == OnlineTtsMode.urlTemplate) ...<Widget>[
+                      _buildTemplateGroup(),
+                    ] else ...<Widget>[
+                      _buildOpenAiGroup(aiStore),
+                      _buildKeyGroup(),
+                    ],
+                    _buildGeneralGroup(),
+                    _buildCacheGroup(),
+                    _buildHintGroup(),
+                  ],
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: MiTopBar(
+                  title: '在线 TTS',
+                  showBack: true,
+                  onBack: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+              Positioned(
+                top: MiTopBarMetrics.backCenterY -
+                    MiTopBarMetrics.backDiameter / 2,
+                right: 12,
+                child: SizedBox(
+                  height: MiTopBarMetrics.backDiameter,
+                  child: Center(
+                    child: TextButton(
+                      onPressed: _save,
+                      child: const Text('保存'),
+                    ),
+                  ),
+                ),
+              ),
             ],
-            _buildGeneralGroup(),
-            _buildCacheGroup(),
-            _buildHintGroup(),
-          ],
+          ),
         ),
       ),
     );

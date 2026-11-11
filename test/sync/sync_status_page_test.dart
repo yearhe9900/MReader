@@ -417,7 +417,8 @@ void main() {
       await tester.tap(find.text('同步状态与备份'));
       await tester.pumpAndSettle();
 
-      expect(find.text('同步与备份'), findsOneWidget, reason: '已推进状态页');
+      // [MiTopBar] 大 / 紧凑两段式标题同文案（恒 2 个）。
+      expect(find.text('同步与备份'), findsNWidgets(2), reason: '已推进状态页');
       expect(find.text('立即同步'), findsOneWidget);
     });
 

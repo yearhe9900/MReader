@@ -55,7 +55,8 @@ void main() {
     tall(tester);
     await tester.pumpWidget(buildApp());
 
-    expect(find.text('AI 设置'), findsOneWidget);
+    // [MiTopBar] 大 / 紧凑两段式标题同文案（恒 2 个，同 settings 口径）。
+    expect(find.text('AI 设置'), findsNWidgets(2));
     expect(find.text('启用 AI 功能'), findsOneWidget);
     expect(find.text('最保守模式'), findsOneWidget);
     expect(find.text('仅发送选中的文本，不携带章节或整书内容'), findsOneWidget);
@@ -120,7 +121,7 @@ void main() {
     await tester.tap(find.text('我的配置'));
     await tester.pumpAndSettle();
 
-    expect(find.text('编辑配置'), findsOneWidget);
+    expect(find.text('编辑配置'), findsNWidgets(2)); // MiTopBar 双段标题
     expect(find.widgetWithText(TextField, '我的配置'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'https://api.example.com/v1'), findsOneWidget);
     // 编辑页 initState 读已存密钥（widget 内真 IO）→ 交替推进排空。

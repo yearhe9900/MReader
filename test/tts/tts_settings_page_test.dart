@@ -93,7 +93,8 @@ void main() {
     tall(tester);
     await openPage(tester);
 
-    expect(find.text('在线 TTS'), findsOneWidget);
+    // [MiTopBar] 大 / 紧凑两段式标题同文案（恒 2 个，同 settings 口径）。
+    expect(find.text('在线 TTS'), findsNWidgets(2));
     expect(find.byKey(const Key('tts-online-mode-url')), findsOneWidget);
     expect(find.byKey(const Key('tts-online-mode-openai')), findsOneWidget);
     expect(

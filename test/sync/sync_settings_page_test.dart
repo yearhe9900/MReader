@@ -137,7 +137,8 @@ void main() {
       await tester.pumpWidget(buildApp());
       await tester.pumpAndSettle();
 
-      expect(find.text('同步设置'), findsOneWidget);
+      // [MiTopBar] 大 / 紧凑两段式标题同文案（恒 2 个）。
+      expect(find.text('同步设置'), findsNWidgets(2));
       for (final String label in <String>['服务器地址', '账号', '密码']) {
         expect(find.text(label), findsOneWidget, reason: '缺字段：$label');
       }

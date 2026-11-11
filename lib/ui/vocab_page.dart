@@ -31,9 +31,17 @@ import '../stats/stats_service.dart';
 import '../sync/sync_trigger.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
-import 'glass_kit.dart';
 import 'mi_like_ui/mi_like_ui.dart'
-    show MiDialog, MiDialogAction, MiDialogActionStyle, showMiDialog;
+    show
+        MiColors,
+        MiDialog,
+        MiDialogAction,
+        MiDialogActionStyle,
+        MiScrollBinder,
+        MiThemeMode,
+        MiTopBar,
+        MiTopBarMetrics,
+        showMiDialog;
 
 /// 生词本页。
 class VocabPage extends StatefulWidget {
@@ -128,28 +136,58 @@ class _VocabPageState extends State<VocabPage> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final List<VocabEntry> entries = _entries;
-    return GlassNavScaffold(
-      appBar: GlassTopBar(
-        centerTitle: false,
-        title: Text('生词本${entries.isEmpty ? '' : ' · ${entries.length}条'}'),
-      ),
-      body: OpaqueContentSurface(
-        child: entries.isEmpty
-            ? _buildEmpty(theme)
-            : Column(
-                children: <Widget>[
-                  if (_opening) const LinearProgressIndicator(minHeight: 2),
-                  Expanded(
-                    child: ListView.separated(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      itemCount: entries.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (BuildContext context, int index) =>
-                          _buildTile(context, entries[index]),
-                    ),
-                  ),
-                ],
+    // 壳换 mi_like（`settings_page` 同款）：本页原 GlassTopBar 无返回钮
+    // （push 页靠系统返回手势回退），保持口径；滚动折叠经 [MiScrollBinder]
+    // 自动接线（空态无滚动 → 大标题常显）。
+    final MiThemeMode mode = Theme.of(context).brightness == Brightness.light
+        ? MiThemeMode.light
+        : MiThemeMode.dark;
+    return ColoredBox(
+      color: MiColors.pageBackgroundFor(mode),
+      child: Material(
+        type: MaterialType.transparency,
+        child: MiScrollBinder(
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: entries.isEmpty
+                    ? _buildEmpty(theme)
+                    : Column(
+                        children: <Widget>[
+                          if (_opening)
+                            const LinearProgressIndicator(minHeight: 2),
+                          Expanded(
+                            child: ListView.separated(
+                              // 顶部让位 [MiTopBarMetrics.contentTopInset]
+                              //（浮顶栏下首行不被盖）。
+                              padding: EdgeInsets.fromLTRB(
+                                0,
+                                MiTopBarMetrics.contentTopInset,
+                                0,
+                                4,
+                              ),
+                              itemCount: entries.length,
+                              separatorBuilder: (_, _) =>
+                                  const Divider(height: 1),
+                              itemBuilder: (BuildContext context, int index) =>
+                                  _buildTile(context, entries[index]),
+                            ),
+                          ),
+                        ],
+                      ),
               ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: MiTopBar(
+                  title:
+                      '生词本${entries.isEmpty ? '' : ' · ${entries.length}条'}',
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

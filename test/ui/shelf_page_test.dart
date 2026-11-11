@@ -969,8 +969,13 @@ void main() {
       expect(find.text('玄幻'), findsWidgets);
       expect(shelfLayout.layout.groups.single.name, '玄幻');
 
-      // 返回书架 → chips 出现「玄幻」。
-      await tester.tap(find.byIcon(Icons.arrow_back));
+      // 返回书架 → chips 出现「玄幻」。返回圆钮为 [MiTopBar] 自绘
+      // （无公共 finder）→ 按度量算圆心点按（backInset + 半径 / backCenterY）。
+      final Rect bar = tester.getRect(find.byType(MiTopBar));
+      await tester.tapAt(Offset(
+        bar.left + MiTopBarMetrics.backInset + MiTopBarMetrics.backDiameter / 2,
+        bar.top + MiTopBarMetrics.backCenterY,
+      ));
       await _settle(tester);
       expect(_chipLabels(tester), <String>['全部', '玄幻']);
     });

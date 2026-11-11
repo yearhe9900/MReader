@@ -14,6 +14,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart' show MiTopBar;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:mreader/format/book_registry.dart';
@@ -504,11 +505,11 @@ void main() {
       // ④ 无简介显示占位而非空白。
       expect(_inDetail(find.text('暂无简介')), findsOneWidget);
 
-      // ③ 玻璃红线：顶栏玻璃属导航层；内容整体不透明、树上无内容层玻璃。
+      // ③ 内容红线：顶栏换 mi_like [MiTopBar]（页底 Mi 页底色不透明承担
+      // 原 OpaqueContentSurface 口径）；树上无内容层玻璃。
       // 范围限定到详情页——书架在栈下也会被 `skipOffstage: false` 数到（全树各 2 个）。
-      expect(_inDetail(find.byType(GlassTopBar, skipOffstage: false)),
+      expect(_inDetail(find.byType(MiTopBar, skipOffstage: false)),
           findsOneWidget);
-      expect(_inDetail(find.byType(OpaqueContentSurface)), findsOneWidget);
       expect(find.byType(GlassCard, skipOffstage: false), findsNothing);
       expect(find.byType(GlassContainer, skipOffstage: false), findsNothing);
       expect(find.byType(GlassListTile, skipOffstage: false), findsNothing);

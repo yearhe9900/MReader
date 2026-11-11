@@ -25,7 +25,6 @@ import '../sync/book_upload.dart';
 import '../sync/restore.dart';
 import '../sync/sync_trigger.dart';
 import '../sync/webdav_client.dart';
-import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'mi_like_ui/mi_like_ui.dart';
 import 'settings_kit.dart';
@@ -364,29 +363,46 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
 
   @override
   Widget build(BuildContext context) {
-    return GlassNavScaffold(
-      appBar: GlassTopBar(
-        title: const Text('同步与备份'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: '返回',
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-      ),
-      body: OpaqueContentSurface(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(
-            _kPageInset,
-            16,
-            _kPageInset,
-            kShellBottomInset,
+    // 壳换 mi_like（`settings_page` 同款）：push 页返回圆钮；滚动折叠经
+    // [MiScrollBinder] 自动接线。
+    final MiThemeMode mode = Theme.of(context).brightness == Brightness.light
+        ? MiThemeMode.light
+        : MiThemeMode.dark;
+    return ColoredBox(
+      color: MiColors.pageBackgroundFor(mode),
+      child: Material(
+        type: MaterialType.transparency,
+        child: MiScrollBinder(
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(
+                    _kPageInset,
+                    MiTopBarMetrics.contentTopInset,
+                    _kPageInset,
+                    kShellBottomInset,
+                  ),
+                  children: <Widget>[
+                    _buildStatusGroup(),
+                    _buildManualGroup(),
+                    _buildStatsGroup(),
+                    _buildBooksGroup(),
+                  ],
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: MiTopBar(
+                  title: '同步与备份',
+                  showBack: true,
+                  onBack: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+            ],
           ),
-          children: <Widget>[
-            _buildStatusGroup(),
-            _buildManualGroup(),
-            _buildStatsGroup(),
-            _buildBooksGroup(),
-          ],
         ),
       ),
     );

@@ -6,11 +6,10 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // 玻璃态红线（PRD §11.2 + `UI-04`）—— 违反即返工
 // ══════════════════════════════════════════════════════════════════════════════
-// · 顶栏 = 导航层 → 玻璃（[GlassTopBar] / [GlassNavScaffold]；**从不手传 premium**，
-//   固定表面档位由库自动提升，见 `GlassKit`）；
-// · **封面区与简介文本区 = 内容层 → 一律不透明**：滚动内容与底部操作区整体由
-//   [OpaqueContentSurface] 承载，内部不出现任何玻璃控件（不玻璃包玻璃、
-//   玻璃不进滚动列表行）。
+// · 顶栏 = mi_like [MiTopBar]（`settings_page` 同款壳：Mi 页底色 + 钉顶），
+//   返回圆钮与编辑入口按 `backCenterY` 同排（actions 为搜索栏行专用槽）；
+// · **封面区与简介文本区 = 内容层 → 一律不透明**：页底取 `MiColors` 不透明
+//   色，内部不出现任何玻璃控件（不玻璃包玻璃、玻璃不进滚动列表行）。
 //
 // 开书管道：**不复制第二份**——书架把带 `_opening` 守卫的 `onOpenBook` 回调注入本页，
 // 底部「继续阅读」只转发；本页 pop 后由书架刷新列表（编辑 / 移出 / 进度都靠它同步）。
@@ -38,7 +37,17 @@ import 'cover_picker.dart';
 import 'default_book_cover.dart';
 import 'glass_kit.dart';
 import 'mi_like_ui/mi_like_ui.dart'
-    show MiDialog, MiDialogAction, MiDialogActionStyle, MiSnackbar, showMiDialog;
+    show
+        MiColors,
+        MiDialog,
+        MiDialogAction,
+        MiDialogActionStyle,
+        MiScrollBinder,
+        MiSnackbar,
+        MiThemeMode,
+        MiTopBar,
+        MiTopBarMetrics,
+        showMiDialog;
 import 'mi_sheet.dart';
 
 /// 书籍详情页（`META-08`）。
@@ -578,43 +587,75 @@ class _BookDetailPageState extends State<BookDetailPage> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return GlassNavScaffold(
-      appBar: GlassTopBar(
-        title: const Text('书籍详情'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: '返回',
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-        actions: <Widget>[
-          // 编辑入口（`META-09`）；编辑态下入口隐藏（底部换「取消 / 保存」）。
-          if (!_editing)
-            IconButton(
-              icon: const Icon(Icons.edit_outlined),
-              tooltip: '编辑元数据',
-              onPressed: _busy ? null : _enterEdit,
-            ),
-        ],
-      ),
-      // 内容层整体不透明（`UI-04`）：滚动区 + 底部操作同在一个 OpaqueContentSurface。
-      body: OpaqueContentSurface(
-        child: Column(
-          children: <Widget>[
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: _buildSections(theme),
+    final MiThemeMode mode = Theme.of(context).brightness == Brightness.light
+        ? MiThemeMode.light
+        : MiThemeMode.dark;
+    // 壳换 mi_like（`settings_page` 同款）：push 页返回圆钮；编辑入口经
+    // Stack 叠在顶栏右侧（[MiTopBar.actions] 为搜索栏行专用槽，非常规顶栏
+    // 动作位）——按 `backCenterY` 与返回钮同排对齐。
+    return ColoredBox(
+      color: MiColors.pageBackgroundFor(mode),
+      child: Material(
+        type: MaterialType.transparency,
+        child: MiScrollBinder(
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: Column(
+                  children: <Widget>[
+                    Expanded(
+                      child: ListView(
+                        // 顶部让位 [MiTopBarMetrics.contentTopInset]（浮顶栏
+                        // 下首行不被盖）；底部留原 16。
+                        padding: EdgeInsets.fromLTRB(
+                          16,
+                          MiTopBarMetrics.contentTopInset,
+                          16,
+                          16,
+                        ),
+                        children: _buildSections(theme),
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    SafeArea(
+                      top: false,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                        child: _buildActions(theme),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const Divider(height: 1),
-            SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                child: _buildActions(theme),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: MiTopBar(
+                  title: '书籍详情',
+                  showBack: true,
+                  onBack: () => Navigator.of(context).maybePop(),
+                ),
               ),
-            ),
-          ],
+              // 编辑入口（`META-09`）；编辑态下入口隐藏（底部换「取消 / 保存」）。
+              if (!_editing)
+                Positioned(
+                  top: MiTopBarMetrics.backCenterY -
+                      MiTopBarMetrics.backDiameter / 2,
+                  right: 12,
+                  child: SizedBox(
+                    height: MiTopBarMetrics.backDiameter,
+                    child: Center(
+                      child: IconButton(
+                        icon: const Icon(Icons.edit_outlined),
+                        tooltip: '编辑元数据',
+                        onPressed: _busy ? null : _enterEdit,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
