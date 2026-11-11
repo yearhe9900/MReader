@@ -77,6 +77,7 @@ import 'mi_like_ui/mi_like_ui.dart'
         MiSearchBar,
         MiSearchCancelButton,
         MiSearchCancelMetrics,
+        MiSnackbar,
         MiThemeMode,
         MiTopBar,
         MiTopBarBlurBand,
@@ -524,12 +525,12 @@ class ShelfPageState extends State<ShelfPage>
       final String msg = errors.isEmpty
           ? '成功导入 $success 本'
           : '成功 $success 本，失败 ${errors.length} 本';
-      // 轻提示走 Overlay（`GlassOverlays.showToast`）：壳层无 Material `Scaffold`，
-      // `ScaffoldMessenger.showSnackBar` 会断言失败。
-      GlassOverlays.showToast(
-        context: context,
+      // 轻提示走 [MiSnackbar]（经壳层 `MiPopupHost` 投放）：壳层无 Material
+      // `Scaffold`，`ScaffoldMessenger.showSnackBar` 会断言失败。
+      // 导入摘要信息量大，保留 3s 常驻（snackbar 默认 2.5s）。
+      MiSnackbar.show(
+        context,
         message: msg,
-        type: errors.isEmpty ? GlassToastType.success : GlassToastType.warning,
         duration: const Duration(seconds: 3),
       );
     }
@@ -816,7 +817,7 @@ class ShelfPageState extends State<ShelfPage>
   }
 
   // 拖拽 / 文件夹相关方法已随「归类改走详情页『分组』行」的拍板整体移除：
-  // 本页仅剩导入结果一处轻提示，直接调 `GlassOverlays.showToast`。
+  // 本页仅剩导入结果一处轻提示，直接调 [MiSnackbar.show]。
 
   @override
   Widget build(BuildContext context) {

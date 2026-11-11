@@ -64,7 +64,6 @@ import '../typography/typeset.dart';
 import '../ui/ask_panel.dart';
 import '../ui/default_book_cover.dart';
 import '../ui/entity_page.dart';
-import '../ui/glass_kit.dart';
 import '../ui/mi_like_ui/mi_like_ui.dart';
 import '../ui/mi_sheet.dart';
 import '../ui/reader_control_chrome.dart';
@@ -4895,10 +4894,9 @@ class _ReaderPageState extends State<ReaderPage>
         // PRD §15.3：无语音引擎（Linux 等）必须中文提示，不得静默失败；
         // `TTS-07` ①：在线引擎失败（未配置 / validate 不过 / init 失败）
         // 换一条对应文案，并丢弃控制器——下次开读按新配置重建重探测。
-        GlassOverlays.showToast(
-          context: context,
+        MiSnackbar.show(
+          context,
           message: _ttsEngineOnline ? '在线 TTS 未配置或配置无效' : '本机未安装语音引擎',
-          type: GlassToastType.error,
         );
       }
       if (_ttsEngineOnline) unawaited(_dropTtsController());
@@ -4953,10 +4951,7 @@ class _ReaderPageState extends State<ReaderPage>
     final TtsController? tts = _tts;
     if (tts != null && tts.isRunning) unawaited(tts.stop());
     if (!mounted || _disposed) return;
-    GlassOverlays.showToast(
-      context: context,
-      message: '定时到了，朗读已停止',
-    );
+    MiSnackbar.show(context, message: '定时到了，朗读已停止');
   }
 
   /// 朗读起点（`TTS-01` ①「从当前段开始」）：视口**中心**命中的段落
@@ -5112,11 +5107,7 @@ class _ReaderPageState extends State<ReaderPage>
   /// 朗读引擎致命错误 → 中文 toast（按钮随 onChanged 复位）。
   void _onTtsError(String message) {
     if (!mounted || _disposed) return;
-    GlassOverlays.showToast(
-      context: context,
-      message: message,
-      type: GlassToastType.error,
-    );
+    MiSnackbar.show(context, message: message);
   }
 
   /// 朗读运行态变化 → 刷按钮；彻底停止时撤高亮。

@@ -108,14 +108,11 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
     if (!mounted) return;
     setState(() => _action = null);
     if (report.wasSkipped) {
-      GlassOverlays.showToast(
-        context: context,
-        message: report.skipReason ?? '未执行',
-      );
+      MiSnackbar.show(context, message: report.skipReason ?? '未执行');
       return;
     }
-    GlassOverlays.showToast(
-      context: context,
+    MiSnackbar.show(
+      context,
       message: report.ok
           ? '同步完成'
           : '同步完成，但有 ${report.failures.length} 项失败',
@@ -130,10 +127,7 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
     if (!mounted) return;
     setState(() => _action = null);
     if (outcome.ok) {
-      GlassOverlays.showToast(
-        context: context,
-        message: '备份完成（${outcome.fileCount} 个文件）',
-      );
+      MiSnackbar.show(context, message: '备份完成（${outcome.fileCount} 个文件）');
     } else {
       await GlassOverlays.showAlert<void>(
         context: context,
@@ -317,7 +311,7 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
       _bookControl = null;
       _bookNote = note;
     });
-    GlassOverlays.showToast(context: context, message: note);
+    MiSnackbar.show(context, message: note);
   }
 
   /// 批量结果 → 一行中文（`SYNC-07`：失败不静默，带条数）。

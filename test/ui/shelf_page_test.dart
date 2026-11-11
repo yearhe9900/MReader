@@ -129,6 +129,11 @@ void main() {
 
     Widget buildApp() {
       return MaterialApp(
+        // `MiPopupHost` 对齐真实 app 结构（`app.dart`：路由之上）——详情页
+        // 「分组」等路径的 `MiSnackbar.show` 经它投放。
+        builder: (BuildContext context, Widget? child) => MiPopupHost(
+          child: child ?? const SizedBox.shrink(),
+        ),
         home: ShelfPage(
           repository: repo,
           coverStore: coverStore,

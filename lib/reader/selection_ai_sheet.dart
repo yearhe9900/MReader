@@ -18,7 +18,7 @@ import '../ai/provider_config.dart';
 import '../ai/provider_store.dart';
 import '../ai/translate.dart';
 import '../ai/vocab_store.dart';
-import '../ui/glass_kit.dart';
+import '../ui/mi_like_ui/mi_like_ui.dart' show MiSnackbar;
 import '../ui/mi_sheet.dart';
 import 'selection_overlay.dart';
 
@@ -211,7 +211,7 @@ class _SelectionAiSheetState extends State<_SelectionAiSheet> {
   void _copy() {
     if (_out.isEmpty) return;
     Clipboard.setData(ClipboardData(text: _out));
-    GlassOverlays.showToast(context: context, message: '译文已复制');
+    MiSnackbar.show(context, message: '译文已复制');
   }
 
   /// 存入生词本（`AI-03` ②：落盘后退出重进仍在）。
@@ -232,7 +232,7 @@ class _SelectionAiSheetState extends State<_SelectionAiSheet> {
     );
     if (!mounted) return;
     setState(() => _saved = true);
-    GlassOverlays.showToast(context: context, message: '已存入生词本');
+    MiSnackbar.show(context, message: '已存入生词本');
   }
 
   /// 本次上下文范围说明（`AI-09` ①：面板常驻可见）。

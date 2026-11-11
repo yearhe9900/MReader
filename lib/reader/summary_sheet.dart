@@ -17,7 +17,7 @@ import '../ai/recap.dart';
 import '../ai/summarize.dart';
 import '../ai/summary_cache.dart';
 import '../model/chapter.dart';
-import '../ui/glass_kit.dart';
+import '../ui/mi_like_ui/mi_like_ui.dart' show MiSnackbar;
 import '../ui/mi_sheet.dart';
 
 /// 面板模式（`AI-04` 章节 / `AI-05` 全书 / `AI-05` 前情回顾）。
@@ -328,7 +328,7 @@ class _SummarySheetState extends State<_SummarySheet> {
   void _copy() {
     if (_out.isEmpty) return;
     Clipboard.setData(ClipboardData(text: _out));
-    GlassOverlays.showToast(context: context, message: '摘要已复制');
+    MiSnackbar.show(context, message: '摘要已复制');
   }
 
   /// 切模式：停掉在途作业，进入新模式的自动发起。

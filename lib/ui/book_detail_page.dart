@@ -37,6 +37,7 @@ import '../settings/shelf_layout_store.dart';
 import 'cover_picker.dart';
 import 'default_book_cover.dart';
 import 'glass_kit.dart';
+import 'mi_like_ui/mi_like_ui.dart' show MiSnackbar;
 
 /// 书籍详情页（`META-08`）。
 class BookDetailPage extends StatefulWidget {
@@ -322,11 +323,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
       final BookMeta? meta = await _reparse();
       if (!mounted) return;
       if (meta == null) {
-        GlassOverlays.showToast(
-          context: context,
-          message: '文件已丢失，无法恢复自动值',
-          type: GlassToastType.error,
-        );
+        MiSnackbar.show(context, message: '文件已丢失，无法恢复自动值');
         return;
       }
 
@@ -362,11 +359,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
       }
     } catch (_) {
       if (mounted) {
-        GlassOverlays.showToast(
-          context: context,
-          message: '恢复自动值失败，请重试',
-          type: GlassToastType.error,
-        );
+        MiSnackbar.show(context, message: '恢复自动值失败，请重试');
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -416,11 +409,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 
   void _showStatsPlaceholder() {
-    GlassOverlays.showToast(
-      context: context,
-      message: '单书统计在后续里程碑开放',
-      type: GlassToastType.info,
-    );
+    MiSnackbar.show(context, message: '单书统计在后续里程碑开放');
   }
 
   // -------------------------------------------------------------------------
@@ -503,7 +492,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
         if (!mounted || name == null) return;
         final String trimmed = name.trim();
         if (trimmed.isEmpty) {
-          _toast('分组名不能为空', type: GlassToastType.warning);
+          _toast('分组名不能为空');
           return;
         }
         await widget.shelfLayout.assignByName(_record.bookId, trimmed);
@@ -554,15 +543,11 @@ class _BookDetailPageState extends State<BookDetailPage> {
     );
   }
 
-  /// 轻提示（`GlassOverlays.showToast`）：壳层无 Material `Scaffold`，
-  /// 不能用 `ScaffoldMessenger.showSnackBar`。
-  void _toast(String message, {GlassToastType type = GlassToastType.success}) {
+  /// 轻提示（[MiSnackbar]）：壳层无 Material `Scaffold`，不能用
+  /// `ScaffoldMessenger.showSnackBar`；经应用根 `MiPopupHost` 投放。
+  void _toast(String message) {
     if (!mounted) return;
-    GlassOverlays.showToast(
-      context: context,
-      message: message,
-      type: type,
-    );
+    MiSnackbar.show(context, message: message);
   }
 
   // -------------------------------------------------------------------------

@@ -19,6 +19,7 @@ import 'package:mreader/reader/reader_page.dart';
 import 'package:mreader/settings/perf_prefs_store.dart';
 import 'package:mreader/ui/glass_runtime.dart';
 import 'package:mreader/ui/glass_scope.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart' show MiPopupHost;
 
 import '../reader/reader_harness.dart';
 import '../test_config.dart';
@@ -53,10 +54,12 @@ void main() {
     });
 
     /// 关档宿主（builder 形制：provider 覆盖路由树，toast 零玻璃开销）。
+    /// `MiPopupHost` 对齐真实 app 结构（`app.dart`：GlassScopeProvider 内、
+    /// 路由之上）—— `MiSnackbar.show` 经它投放（引擎缺失中文提示依赖）。
     Widget buildApp(FakeTtsEngine engine) => MaterialApp(
           builder: (BuildContext context, Widget? child) => GlassScopeProvider(
             config: glassTierConfigFor(GlassQualityTier.off),
-            child: child ?? const SizedBox.shrink(),
+            child: MiPopupHost(child: child ?? const SizedBox.shrink()),
           ),
           home: ReaderPage(
             source: FakeBookSource(),

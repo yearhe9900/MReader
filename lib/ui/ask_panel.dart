@@ -19,7 +19,7 @@ import '../ai/provider_config.dart';
 import '../ai/provider_store.dart';
 import '../ai/rag.dart';
 import '../format/book_source.dart';
-import 'glass_kit.dart';
+import 'mi_like_ui/mi_like_ui.dart' show MiSnackbar;
 import 'mi_sheet.dart';
 
 /// 弹出问答面板（mi_like 抽屉；输入问题 → 检索 → 流式作答）。
@@ -257,7 +257,7 @@ class _AskSheetState extends State<_AskSheet> {
   void _copy() {
     if (_out.isEmpty) return;
     Clipboard.setData(ClipboardData(text: _out));
-    GlassOverlays.showToast(context: context, message: '答案已复制');
+    MiSnackbar.show(context, message: '答案已复制');
   }
 
   /// 本次上下文范围说明（`AI-09` ①：面板常驻可见；F5 原文措辞）。
