@@ -11,8 +11,9 @@
 // 收口是弹簧滑出（~0.4s），等它播完再跳章 / 推面板等于白滞后一拍。为此
 // [showMiSheet] 不返回结果（也不需要）——结果会随「路由被摘除」丢在半路。
 //
-// 与 [GlassOverlays.showSheet] 的分工：玻璃弹层（书签 / 搜索 / AI 面板等）
-// 仍走 glass_kit；本入口只服务已拍板换 mi_like 弹出式的三格菜单。
+// 与 glass_kit 弹层的分工：阅读页三格菜单 / 书签 / 搜索 / AI 面板等已全部
+// 换本入口（mi_like 弹出式抽屉）；glass_kit 的 showSheet/showAlert 仅剩
+// 契约测试直接调用（API 保留，页面零调用）。
 import 'package:flutter/material.dart';
 
 import 'mi_like_ui/mi_like_ui.dart';

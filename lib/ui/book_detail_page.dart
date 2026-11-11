@@ -42,6 +42,8 @@ import 'mi_like_ui/mi_like_ui.dart'
         MiDialog,
         MiDialogAction,
         MiDialogActionStyle,
+        MiDialogItem,
+        MiDialogLayout,
         MiScrollBinder,
         MiSnackbar,
         MiThemeMode,
@@ -468,20 +470,57 @@ class _BookDetailPageState extends State<BookDetailPage> {
     );
   }
 
-  /// 选择 / 新建分组。
+  /// 选择 / 新建分组（mi_like 列表弹框，原玻璃底部选择单退场）。
   ///
   /// 三种结果走 `ShelfLayoutStore` 的三条路径：移出分组、归入已有分组、
   /// 按名新建（`assignByName` 同名的直接并入，不产生重复分组）。
   Future<void> _editGroup() async {
     final ShelfLayout layout = widget.shelfLayout.layout;
     final BookGroup? current = layout.groupOf(_record.bookId);
-    final _GroupPick? pick = await GlassOverlays.showSheet<_GroupPick>(
-      context: context,
-      builder: (BuildContext sheetContext) => _GroupPickerSheet(
-        groups: layout.groups,
-        currentId: current?.id,
+    final List<BookGroup> groups = layout.groups;
+    // 玻璃底部选择单 → mi_like 列表弹框（`MiDialogLayout.list`）：空态引导走
+    // `message`，行按下经 `onPressed` 捕获所选动作（与 items 平行构造）；
+    // 点遮罩 / 返回键 = index null = 取消。原行尾勾号（当前分组）由
+    // subtitle「当前」承接（MiDialogItem 无 trailing 槽）。
+    _GroupPick? chosen;
+    final int? index = await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: '设置分组',
+        message: groups.isEmpty
+            ? '还没有分组。选「新建分组」，书架顶部就会出现对应的筛选标签。'
+            : null,
+        layout: MiDialogLayout.list,
+        items: <MiDialogItem>[
+          MiDialogItem(
+            label: '未分组',
+            subtitle: current == null ? '当前' : null,
+            icon: const Icon(Icons.folder_off_outlined),
+            onPressed: () =>
+                chosen = const _GroupPick(_GroupPickKind.clear),
+          ),
+          for (final BookGroup group in groups)
+            MiDialogItem(
+              label: group.name,
+              subtitle: group.id == current?.id
+                  ? '${group.bookIds.length} 本 · 当前'
+                  : '${group.bookIds.length} 本',
+              icon: Icon(group.id == current?.id
+                  ? Icons.folder_open_outlined
+                  : Icons.folder_outlined),
+              onPressed: () =>
+                  chosen = _GroupPick(_GroupPickKind.existing, group.id),
+            ),
+          MiDialogItem(
+            label: '新建分组…',
+            icon: const Icon(Icons.create_new_folder_outlined),
+            onPressed: () =>
+                chosen = const _GroupPick(_GroupPickKind.createNew),
+          ),
+        ],
       ),
     );
+    final _GroupPick? pick = index == null ? null : chosen;
     if (!mounted || pick == null) return;
 
     switch (pick.kind) {
@@ -1086,8 +1125,8 @@ class _FormatTag extends StatelessWidget {
 
 /// 分组选择的结果（`P2-02`）。
 ///
-/// 用一个小值对象而不是 `String?`：`GlassOverlays.showSheet` 的「取消」也返回
-/// `null`，与「未分组」无法区分。
+/// 用一个小值对象而不是 `String?`：弹框取消（遮罩 / 返回键）返回 `null`，
+/// 与「未分组」（clear）无法区分。
 class _GroupPick {
   const _GroupPick(this.kind, [this.groupId]);
 
@@ -1110,86 +1149,3 @@ enum _GroupPickKind {
   createNew,
 }
 
-/// 分组选择弹层（`P2-02`）。
-///
-/// 由 [GlassOverlays.showSheet] 承载（`UI-03` 浮层玻璃）；玻璃浮层**没有
-/// Material 祖先**（PRD §11.4），`ListTile` 需要一层 → 首层包透明 `Material`。
-class _GroupPickerSheet extends StatelessWidget {
-  const _GroupPickerSheet({required this.groups, required this.currentId});
-
-  /// 现有分组（顺序 = 书架 chips 顺序）。
-  final List<BookGroup> groups;
-
-  /// 当前所属分组 id；`null` = 未分组。
-  final String? currentId;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final Color checkColor = theme.colorScheme.primary;
-    return Material(
-      type: MaterialType.transparency,
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-              child: Text('设置分组', style: theme.textTheme.titleMedium),
-            ),
-            const Divider(height: 1),
-            if (groups.isEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-                child: Text(
-                  '还没有分组。选「新建分组」，书架顶部就会出现对应的筛选标签。',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            // 分组可能很多 → 列表部分限高可滚，标题与「新建」常驻可见。
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
-                children: <Widget>[
-                  ListTile(
-                    leading: const Icon(Icons.folder_off_outlined),
-                    title: const Text('未分组'),
-                    trailing: currentId == null
-                        ? Icon(Icons.check, color: checkColor)
-                        : null,
-                    onTap: () => Navigator.of(context)
-                        .pop(const _GroupPick(_GroupPickKind.clear)),
-                  ),
-                  for (final BookGroup group in groups)
-                    ListTile(
-                      leading: const Icon(Icons.folder_outlined),
-                      title: Text(group.name),
-                      subtitle: Text('${group.bookIds.length} 本'),
-                      trailing: group.id == currentId
-                          ? Icon(Icons.check, color: checkColor)
-                          : null,
-                      onTap: () => Navigator.of(context).pop(
-                        _GroupPick(_GroupPickKind.existing, group.id),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.create_new_folder_outlined),
-              title: const Text('新建分组…'),
-              onTap: () => Navigator.of(context)
-                  .pop(const _GroupPick(_GroupPickKind.createNew)),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-}
