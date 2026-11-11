@@ -4,6 +4,11 @@
          FOREGROUND_SERVICE_MEDIA_PLAYBACK = targetSdk 34+ 前台服务类型声明；
          POST_NOTIFICATIONS = Android 13+ 通知栏权限（媒体控件在快捷开关/
          锁屏不依赖它，声明后系统可在首次前台发通知时自动提示授权）。 -->
+    <!-- 网络权限（`SYNC-01` WebDAV 同步 / AI 请求等）：debug·profile 清单里的
+         INTERNET 只服务开发调试，**release 构建必须在主清单声明**——缺失时
+         release 包所有 socket 在本机即被拒（EACCES → 界面报「网络不可达」，
+         服务端收不到任何包）。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
@@ -12,7 +17,8 @@
     <application
         android:label="阅读M"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
