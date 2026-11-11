@@ -232,7 +232,9 @@ void main() {
     openPage();
     await tester.pumpAndSettle(); // 同步出错态、无 spinner → 可 settle
 
-    expect(find.text('人物与设定'), findsOneWidget);
+    // 壳换 [MiTopBar] 后大标题与紧凑标题同文案（两段式收起的驱动层，恒 2 个，
+    // 同 `settings_page_test` 的「我的」口径）。
+    expect(find.text('人物与设定'), findsNWidgets(2));
     expect(
       find.byKey(const Key('entity-error')),
       findsOneWidget,

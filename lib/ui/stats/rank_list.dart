@@ -13,8 +13,9 @@ import '../../library/library_repository.dart';
 import '../../stats/aggregator.dart';
 import '../../stats/reading_session.dart';
 import '../../stats/streak.dart';
-import '../glass_kit.dart';
 import '../home_shell.dart' show kShellBottomInset;
+import '../mi_like_ui/mi_like_ui.dart'
+    show MiColors, MiScrollBinder, MiThemeMode, MiTopBar, MiTopBarMetrics;
 
 /// 按书时长排行卡片（`STAT-06`：日 / 周 / 月 / 年 / 全部切换）。
 class BookRankCard extends StatefulWidget {
@@ -312,82 +313,104 @@ class BookStatsPage extends StatelessWidget {
     for (final ReadingSession s in list) {
       total += s.duration;
     }
-    return GlassNavScaffold(
-      appBar: GlassTopBar(
-        title: Text(title),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: '返回',
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-      ),
-      body: OpaqueContentSurface(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, kShellBottomInset),
-          children: <Widget>[
-            Material(
-              color: theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(20),
-              clipBehavior: Clip.antiAlias,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+    // 壳换 mi_like（`settings_page` 同款）：push 型子页带返回圆钮；滚动折叠
+    // 经 [MiScrollBinder] 自动接线（Stateless 页免 controller 样板）。
+    final MiThemeMode mode = Theme.of(context).brightness == Brightness.light
+        ? MiThemeMode.light
+        : MiThemeMode.dark;
+    return ColoredBox(
+      color: MiColors.pageBackgroundFor(mode),
+      child: Material(
+        type: MaterialType.transparency,
+        child: MiScrollBinder(
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(
+                    20,
+                    MiTopBarMetrics.contentTopInset,
+                    20,
+                    kShellBottomInset,
+                  ),
                   children: <Widget>[
-                    Text(
-                      '周期内总时长',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+                    Material(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(20),
+                      clipBehavior: Clip.antiAlias,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              '周期内总时长',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              formatReadingDuration(total),
+                              style: theme.textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      formatReadingDuration(total),
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    const SizedBox(height: 12),
+                    if (list.isEmpty)
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 20),
+                          child: Text(
+                            '该周期无阅读记录',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      for (final ReadingSession s in list)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Row(
+                            children: <Widget>[
+                              Expanded(
+                                child: Text(
+                                  '${_dateLabel(s.dayKey)} ${_hm(s.startedAt)}'
+                                  ' – ${_hm(s.endedAt)}',
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                formatReadingDuration(s.duration),
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                   ],
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            if (list.isEmpty)
-              Center(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                  child: Text(
-                    '该周期无阅读记录',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: MiTopBar(
+                  title: title,
+                  showBack: true,
+                  onBack: () => Navigator.of(context).maybePop(),
                 ),
-              )
-            else
-              for (final ReadingSession s in list)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Text(
-                          '${_dateLabel(s.dayKey)} ${_hm(s.startedAt)}'
-                          ' – ${_hm(s.endedAt)}',
-                          style: theme.textTheme.bodyMedium,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        formatReadingDuration(s.duration),
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );

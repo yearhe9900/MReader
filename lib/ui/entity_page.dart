@@ -24,6 +24,8 @@ import '../ai/provider_config.dart';
 import '../ai/provider_store.dart';
 import '../ai/summary_cache.dart';
 import '../model/chapter.dart';
+import 'mi_like_ui/mi_like_ui.dart'
+    show MiColors, MiThemeMode, MiTopBar, MiTopBarMetrics;
 
 /// 生成范围（`AI-07` ③）。
 enum EntityRange {
@@ -263,42 +265,75 @@ class _EntityPageState extends State<EntityPage> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
+    final MiThemeMode mode = Theme.of(context).brightness == Brightness.light
+        ? MiThemeMode.light
+        : MiThemeMode.dark;
+    // 壳换 mi_like（`settings_page` 同款）：ColoredBox 页底 + 钉顶 [MiTopBar]。
+    // 内容是自撑纵列（非滚动主体）→ 顶部让位 [MiTopBarMetrics.contentTopInset]，
+    // 无滚动即无折叠（大标题常显）。
+    return ColoredBox(
+      color: MiColors.pageBackgroundFor(mode),
+      child: Material(
+        // 内容控件（TextButton 等）的 Material 祖先（`app.dart` 同款垫层）。
+        type: MaterialType.transparency,
+        child: Stack(
           children: <Widget>[
-            const Text('人物与设定'),
-            if (_fromCache)
-              Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: Text(
-                  '缓存',
-                  key: const Key('entity-cache-tag'),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.primary,
-                  ),
+            Positioned.fill(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  MiTopBarMetrics.contentTopInset + 12,
+                  16,
+                  12,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            _scopeLine,
+                            key: const Key('entity-scope'),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        // 缓存 tag 原在顶栏 title 行；[MiTopBar] 的 title 是
+                        // 纯文本，移到范围行行尾（Key 与断言语义不变）。
+                        if (_fromCache)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: Text(
+                              '缓存',
+                              key: const Key('entity-cache-tag'),
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    _buildRangeRow(theme),
+                    const SizedBox(height: 8),
+                    Flexible(child: _buildBody(theme)),
+                    const SizedBox(height: 8),
+                    _buildActions(theme),
+                  ],
                 ),
               ),
-          ],
-        ),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              _scopeLine,
-              key: const Key('entity-scope'),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              child: MiTopBar(
+                title: '人物与设定',
+                showBack: true,
+                onBack: () => Navigator.of(context).maybePop(),
               ),
             ),
-            _buildRangeRow(theme),
-            const SizedBox(height: 8),
-            Flexible(child: _buildBody(theme)),
-            const SizedBox(height: 8),
-            _buildActions(theme),
           ],
         ),
       ),

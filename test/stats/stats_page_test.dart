@@ -45,9 +45,11 @@ Future<void> _settle(WidgetTester tester, {int rounds = 40}) async {
 }
 
 /// T11 图表插入后页面高于 800×600：拉高视口让总览 / 图表 / 设置同屏，
-/// 文本断言不跨滚动区（dpr 3 → 逻辑 800×1200）。
+/// 文本断言不跨滚动区（dpr 3 → 逻辑 800×1300）。壳换 [MiTopBar] 后内容
+/// 顶部让位 `contentTopInset`（183dp，原玻璃顶栏避让 ≈106dp），视口相应
+/// 加高，否则末尾「设置」卡片行推出屏外、tap 打空。
 void _tall(WidgetTester tester) {
-  tester.view.physicalSize = const Size(2400, 3600);
+  tester.view.physicalSize = const Size(2400, 3900);
   addTearDown(tester.view.reset);
 }
 

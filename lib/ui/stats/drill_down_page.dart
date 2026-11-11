@@ -2,7 +2,7 @@
 //
 // 过滤用 [sessionsInRange]——与柱聚合**同一谓词**（区间两端含 + since 过滤 +
 // `duration > 0`），求和天然与柱高一致。
-// 形制（`UI-04` 红线）：玻璃顶栏（导航层）+ [OpaqueContentSurface] 承载
+// 形制（`UI-04` 红线）：mi_like 壳（[MiTopBar] 顶栏 + Mi 页底色）承载
 // 不透明明细行；单日柱 → 会话行，年视图月柱 → 按天分组行。
 import 'dart:async';
 
@@ -11,8 +11,9 @@ import 'package:flutter/material.dart';
 import '../../library/library_repository.dart';
 import '../../stats/aggregator.dart';
 import '../../stats/reading_session.dart';
-import '../glass_kit.dart';
 import '../home_shell.dart' show kShellBottomInset;
+import '../mi_like_ui/mi_like_ui.dart'
+    show MiColors, MiScrollBinder, MiThemeMode, MiTopBar, MiTopBarMetrics;
 
 /// 柱下钻明细页。
 class DrillDownPage extends StatefulWidget {
@@ -93,46 +94,68 @@ class _DrillDownPageState extends State<DrillDownPage> {
     }
     final bool singleDay = bar.startDay == bar.endDay;
 
-    return GlassNavScaffold(
-      appBar: GlassTopBar(
-        title: Text(widget.title ?? _deriveTitle(bar)),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: '返回',
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-      ),
-      body: OpaqueContentSurface(
-        child: byDay.isEmpty
-            ? const Center(child: Text('该时段无阅读记录'))
-            : ListView(
-                padding:
-                    const EdgeInsets.fromLTRB(20, 16, 20, kShellBottomInset),
-                children: <Widget>[
-                  for (final MapEntry<String, List<ReadingSession>> e
-                      in byDay.entries) ...<Widget>[
-                    if (!singleDay) ...<Widget>[
-                      const SizedBox(height: 8),
-                      Text(
-                        '${_dayLabel(e.key)} · 合计 '
-                        '${formatReadingDuration(_sum(e.value))}',
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
+    // 壳换 mi_like（`settings_page` 同款）：push 型子页带返回圆钮；
+    // 滚动折叠经 [MiScrollBinder] 自动接线。
+    final MiThemeMode mode = Theme.of(context).brightness == Brightness.light
+        ? MiThemeMode.light
+        : MiThemeMode.dark;
+    return ColoredBox(
+      color: MiColors.pageBackgroundFor(mode),
+      child: Material(
+        type: MaterialType.transparency,
+        child: MiScrollBinder(
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: byDay.isEmpty
+                    ? const Center(child: Text('该时段无阅读记录'))
+                    : ListView(
+                        padding: const EdgeInsets.fromLTRB(
+                          20,
+                          MiTopBarMetrics.contentTopInset,
+                          20,
+                          kShellBottomInset,
+                        ),
+                        children: <Widget>[
+                          for (final MapEntry<String, List<ReadingSession>> e
+                              in byDay.entries) ...<Widget>[
+                            if (!singleDay) ...<Widget>[
+                              const SizedBox(height: 8),
+                              Text(
+                                '${_dayLabel(e.key)} · 合计 '
+                                '${formatReadingDuration(_sum(e.value))}',
+                                style:
+                                    Theme.of(context).textTheme.titleSmall?.copyWith(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                              ),
+                              const SizedBox(height: 4),
+                            ],
+                            for (final ReadingSession s in e.value)
+                              _SessionRow(
+                                timeRange:
+                                    '${_hm(s.startedAt)} – ${_hm(s.endedAt)}',
+                                title: _titles[s.bookId] ?? s.bookId,
+                                duration: formatReadingDuration(s.duration),
+                              ),
+                            const Divider(height: 1),
+                          ],
+                        ],
                       ),
-                      const SizedBox(height: 4),
-                    ],
-                    for (final ReadingSession s in e.value)
-                      _SessionRow(
-                        timeRange:
-                            '${_hm(s.startedAt)} – ${_hm(s.endedAt)}',
-                        title: _titles[s.bookId] ?? s.bookId,
-                        duration: formatReadingDuration(s.duration),
-                      ),
-                    const Divider(height: 1),
-                  ],
-                ],
               ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: MiTopBar(
+                  title: widget.title ?? _deriveTitle(bar),
+                  showBack: true,
+                  onBack: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

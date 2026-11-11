@@ -3,6 +3,7 @@
 // 纯逻辑用固定 [now] 断言窗口 / 排序 / 百分比补余 / 归零口径五验收；
 // widget 级用「全部」周期避开真实时钟（seed 全为固定过去日期）。
 import 'package:flutter/material.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart' show MiTopBar;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/stats/aggregator.dart';
 import 'package:mreader/stats/reading_session.dart';
@@ -280,12 +281,14 @@ void main() {
       await tester.tap(find.text('bookA'));
       await tester.pumpAndSettle();
 
-      expect(find.text('bookA'), findsOneWidget); // 顶栏书名
+      // [MiTopBar] 大 / 紧凑两段式标题同文案（恒 2 个）。
+      expect(find.text('bookA'), findsNWidgets(2)); // 顶栏书名
       expect(find.text('周期内总时长'), findsOneWidget);
       // 两处：总时长 headline + 会话行时长（都是 600s = 10 分钟）。
       expect(find.text('10 分钟'), findsNWidgets(2));
       expect(find.text('9月10日 09:00 – 09:10'), findsOneWidget); // 600s
-      expect(find.byIcon(Icons.arrow_back), findsOneWidget);
+      // 返回圆钮为 [MiTopBar] 自绘（非 Icons.arrow_back）→ 断言 showBack 属性。
+      expect(tester.widget<MiTopBar>(find.byType(MiTopBar)).showBack, isTrue);
     });
 
     testWidgets('StreakCard：今日待读后缀 + 历史最长 + 口径常驻文案（Q13）',

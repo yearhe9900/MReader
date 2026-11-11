@@ -1,6 +1,6 @@
 // 统计页外壳 + 总览（`STAT-03`）。
 //
-// 形制（`UI-04` 红线）：玻璃顶栏（导航层）+ [OpaqueContentSurface] 承载正文，
+// 形制（`UI-04` 红线）：mi_like 壳（[MiTopBar] 顶栏 + Mi 页底色）承载不透明正文，
 // 总览卡片与设置行**一律不透明**——统计图表 / 卡片 / 列表行绝不进玻璃
 // （PRD §6.2 / §11.2：仅操作按钮 / 弹窗 / 菜单可用玻璃）。
 //
@@ -20,10 +20,18 @@ import '../stats/aggregator.dart';
 import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
 import '../stats/streak.dart';
-import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'mi_like_ui/mi_like_ui.dart'
-    show MiDialog, MiDialogAction, MiDialogActionStyle, showMiDialog;
+    show
+        MiColors,
+        MiDialog,
+        MiDialogAction,
+        MiDialogActionStyle,
+        MiScrollBinder,
+        MiThemeMode,
+        MiTopBar,
+        MiTopBarMetrics,
+        showMiDialog;
 import 'settings_kit.dart';
 import 'stats/bar_chart.dart';
 import 'stats/drill_down_page.dart';
@@ -83,78 +91,98 @@ class _StatsPageState extends State<StatsPage> {
   @override
   Widget build(BuildContext context) {
     final StatsService service = widget.service;
-    return GlassNavScaffold(
-      appBar: GlassTopBar(
-        title: const Text('统计'),
-        // 本页只经「我的」页 push 打开 ⇒ `canPop` 时显示返回键（否则不显示）。
-        leading: Navigator.of(context).canPop()
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back),
-                tooltip: '返回',
-                onPressed: () => Navigator.of(context).maybePop(),
-              )
-            : null,
-      ),
-      body: OpaqueContentSurface(
-        child: !service.isLoaded
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, kShellBottomInset),
-                children: <Widget>[
-                  OverviewCard(
-                    overview: service.overview,
-                    sinceDay: service.sinceDay,
-                  ),
-                  const SizedBox(height: 12),
-                  PeriodBarChart(
-                    sessions: service.sessions,
-                    sinceDay: service.sinceDay,
-                    onTapBar: _openDrill,
-                  ),
-                  const SizedBox(height: 12),
-                  ReadingHeatmap(
-                    sessions: service.sessions,
-                    sinceDay: service.sinceDay,
-                    onTapDay: _openDayDetail,
-                  ),
-                  const SizedBox(height: 12),
-                  BookRankCard(
-                    sessions: service.sessions,
-                    sinceDay: service.sinceDay,
-                    repository: widget.repository,
-                    onTapBook: _openBookStats,
-                  ),
-                  const SizedBox(height: 12),
-                  StreakCard(
-                    streak: computeStreak(
-                      service.sessions,
-                      sinceDay: service.sinceDay,
-                      now: DateTime.now(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  SettingsGroupCard(
-                    header: '统计设置',
-                    children: <Widget>[
-                      SettingsTile(
-                        icon: Icons.event,
-                        accent: SettingsAccents.blue,
-                        title: '起始日期',
-                        subtitle: '累计总时长从此日起算，不影响明细记录',
-                        value: service.sinceDay ?? '不限',
-                        onTap: _pickSince,
+    // 壳换 mi_like（`settings_page` 同款）：push 型页面带返回圆钮（`canPop`
+    // 时显示，与原 GlassTopBar leading 同口径）；滚动折叠经 [MiScrollBinder]
+    // 自动接线。
+    final MiThemeMode mode = Theme.of(context).brightness == Brightness.light
+        ? MiThemeMode.light
+        : MiThemeMode.dark;
+    return ColoredBox(
+      color: MiColors.pageBackgroundFor(mode),
+      child: Material(
+        type: MaterialType.transparency,
+        child: MiScrollBinder(
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: !service.isLoaded
+                    ? const Center(child: CircularProgressIndicator())
+                    : ListView(
+                        padding: const EdgeInsets.fromLTRB(
+                          20,
+                          MiTopBarMetrics.contentTopInset,
+                          20,
+                          kShellBottomInset,
+                        ),
+                        children: <Widget>[
+                          OverviewCard(
+                            overview: service.overview,
+                            sinceDay: service.sinceDay,
+                          ),
+                          const SizedBox(height: 12),
+                          PeriodBarChart(
+                            sessions: service.sessions,
+                            sinceDay: service.sinceDay,
+                            onTapBar: _openDrill,
+                          ),
+                          const SizedBox(height: 12),
+                          ReadingHeatmap(
+                            sessions: service.sessions,
+                            sinceDay: service.sinceDay,
+                            onTapDay: _openDayDetail,
+                          ),
+                          const SizedBox(height: 12),
+                          BookRankCard(
+                            sessions: service.sessions,
+                            sinceDay: service.sinceDay,
+                            repository: widget.repository,
+                            onTapBook: _openBookStats,
+                          ),
+                          const SizedBox(height: 12),
+                          StreakCard(
+                            streak: computeStreak(
+                              service.sessions,
+                              sinceDay: service.sinceDay,
+                              now: DateTime.now(),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SettingsGroupCard(
+                            header: '统计设置',
+                            children: <Widget>[
+                              SettingsTile(
+                                icon: Icons.event,
+                                accent: SettingsAccents.blue,
+                                title: '起始日期',
+                                subtitle: '累计总时长从此日起算，不影响明细记录',
+                                value: service.sinceDay ?? '不限',
+                                onTap: _pickSince,
+                              ),
+                              SettingsTile(
+                                icon: Icons.delete_outline,
+                                accent: SettingsAccents.orange,
+                                title: '清空统计数据',
+                                subtitle: '不影响书架、进度、书签与笔记',
+                                onTap: _confirmClear,
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
-                      SettingsTile(
-                        icon: Icons.delete_outline,
-                        accent: SettingsAccents.orange,
-                        title: '清空统计数据',
-                        subtitle: '不影响书架、进度、书签与笔记',
-                        onTap: _confirmClear,
-                      ),
-                    ],
-                  ),
-                ],
               ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: MiTopBar(
+                  title: '统计',
+                  showBack: Navigator.of(context).canPop(),
+                  onBack: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

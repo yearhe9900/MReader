@@ -10,6 +10,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart' show MiTopBar;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/platform/app_paths.dart';
@@ -272,12 +273,14 @@ void main() {
       );
       await settle(tester, rounds: 10);
 
-      expect(find.text('9月10日'), findsOneWidget); // 标题派生
+      // [MiTopBar] 大 / 紧凑两段式标题同文案（恒 2 个，同 settings 口径）。
+      expect(find.text('9月10日'), findsNWidgets(2)); // 标题派生
       expect(find.text('10 分钟'), findsOneWidget);
       expect(find.text('2 分钟'), findsOneWidget);
       expect(find.text('bookA'), findsNWidgets(2)); // 无 repository → 降级
       expect(find.textContaining('· 合计'), findsNothing); // 单日不显分组头
-      expect(find.byIcon(Icons.arrow_back), findsOneWidget);
+      // 返回圆钮为 [MiTopBar] 自绘（非 Icons.arrow_back）→ 断言 showBack 属性。
+      expect(tester.widget<MiTopBar>(find.byType(MiTopBar)).showBack, isTrue);
     });
 
     testWidgets('月柱：按天分组行 + 分组头合计（9月10日/11日）',
@@ -302,7 +305,7 @@ void main() {
       );
       await settle(tester, rounds: 10);
 
-      expect(find.text('9月'), findsOneWidget); // 标题 = 月
+      expect(find.text('9月'), findsNWidgets(2)); // 标题 = 月（MiTopBar 双段）
       expect(find.text('9月10日 · 合计 10 分钟'), findsOneWidget);
       expect(find.text('9月11日 · 合计 5 分钟'), findsOneWidget);
       expect(find.text('bookA'), findsOneWidget);
