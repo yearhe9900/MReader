@@ -129,17 +129,19 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
     if (outcome.ok) {
       MiSnackbar.show(context, message: '备份完成（${outcome.fileCount} 个文件）');
     } else {
-      await GlassOverlays.showAlert<void>(
-        context: context,
-        title: '备份失败',
-        message: outcome.reason ?? '未知错误',
-        actions: <GlassDialogAction>[
-          GlassDialogAction(
-            label: '知道了',
-            isPrimary: true,
-            onPressed: () => Navigator.pop(context),
-          ),
-        ],
+      await showMiDialog(
+        context,
+        dialog: MiDialog(
+          title: '备份失败',
+          message: outcome.reason ?? '未知错误',
+          actions: <MiDialogAction>[
+            MiDialogAction(
+              label: '知道了',
+              style: MiDialogActionStyle.filled,
+              onPressed: () {},
+            ),
+          ],
+        ),
       );
     }
   }
@@ -152,70 +154,77 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
       list = await widget.trigger.listBackups();
     } on SyncException catch (e) {
       if (!mounted) return;
-      await GlassOverlays.showAlert<void>(
-        context: context,
-        title: '无法列出备份',
-        message: e.message,
-        actions: <GlassDialogAction>[
-          GlassDialogAction(
-            label: '知道了',
-            isPrimary: true,
-            onPressed: () => Navigator.pop(context),
-          ),
-        ],
+      await showMiDialog(
+        context,
+        dialog: MiDialog(
+          title: '无法列出备份',
+          message: e.message,
+          actions: <MiDialogAction>[
+            MiDialogAction(
+              label: '知道了',
+              style: MiDialogActionStyle.filled,
+              onPressed: () {},
+            ),
+          ],
+        ),
       );
       return;
     }
     if (!mounted) return;
     if (list.isEmpty) {
-      await GlassOverlays.showAlert<void>(
-        context: context,
-        title: '云端暂无备份',
-        message: '远端目录下没有 backup-*.zip 备份包。先在本机执行一次「立即备份」。',
-        actions: <GlassDialogAction>[
-          GlassDialogAction(
-            label: '知道了',
-            isPrimary: true,
-            onPressed: () => Navigator.pop(context),
-          ),
-        ],
+      await showMiDialog(
+        context,
+        dialog: MiDialog(
+          title: '云端暂无备份',
+          message: '远端目录下没有 backup-*.zip 备份包。先在本机执行一次「立即备份」。',
+          actions: <MiDialogAction>[
+            MiDialogAction(
+              label: '知道了',
+              style: MiDialogActionStyle.filled,
+              onPressed: () {},
+            ),
+          ],
+        ),
       );
       return;
     }
     final BackupEntry newest = list.first; // 清单已按新 → 旧排序。
-    final bool? ok = await GlassOverlays.showAlert<bool>(
-      context: context,
-      title: '从云端恢复',
-      message: '将用云端最新备份覆盖本机的书架、进度、书签、设置与统计？\n\n'
-          '${newest.path}\n（共 ${list.length} 份备份）',
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '取消',
-          onPressed: () => Navigator.pop(context, false),
-        ),
-        GlassDialogAction(
-          label: '恢复',
-          isDestructive: true,
-          onPressed: () => Navigator.pop(context, true),
-        ),
-      ],
+    // mi_like 按钮弹框（`showMiDialog` 返回**按钮下标**；点遮罩 / 返回键 =
+    // null，与原 `barrierDismissible` 关闭语义同判「不恢复」）。
+    final int? picked = await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: '从云端恢复',
+        message: '将用云端最新备份覆盖本机的书架、进度、书签、设置与统计？\n\n'
+            '${newest.path}\n（共 ${list.length} 份备份）',
+        actions: <MiDialogAction>[
+          MiDialogAction(label: '取消', onPressed: () {}),
+          MiDialogAction(
+            label: '恢复',
+            style: MiDialogActionStyle.destructive,
+            onPressed: () {},
+          ),
+        ],
+      ),
     );
-    if (ok != true || !mounted) return;
+    if (picked != 1 || !mounted) return;
     setState(() => _action = 'restore');
     final RestoreOutcome outcome = await widget.trigger.restoreFrom(newest.path);
     if (!mounted) return;
     setState(() => _action = null);
-    await GlassOverlays.showAlert<void>(
-      context: context,
-      title: outcome.ok ? '恢复完成' : '恢复失败',
-      message: outcome.summary,
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '知道了',
-          isPrimary: true,
-          onPressed: () => Navigator.pop(context),
-        ),
-      ],
+    await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: outcome.ok ? '恢复完成' : '恢复失败',
+        message: outcome.summary,
+        actions: <MiDialogAction>[
+          MiDialogAction(
+            label: '知道了',
+            style: MiDialogActionStyle.filled,
+            onPressed: () {},
+          ),
+        ],
+      ),
     );
   }
 

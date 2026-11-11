@@ -32,6 +32,8 @@ import '../sync/sync_trigger.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
 import 'glass_kit.dart';
+import 'mi_like_ui/mi_like_ui.dart'
+    show MiDialog, MiDialogAction, MiDialogActionStyle, showMiDialog;
 
 /// 生词本页。
 class VocabPage extends StatefulWidget {
@@ -228,23 +230,23 @@ class _VocabPageState extends State<VocabPage> {
 
   /// 长按删除（二次确认；确认后落盘 + 列表经监听自刷新）。
   Future<void> _confirmDelete(VocabEntry entry) async {
-    final bool? confirmed = await GlassOverlays.showAlert<bool>(
-      context: context,
-      title: '删除生词',
-      message: '删除「${entry.word}」？删除后不可恢复。',
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '取消',
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        GlassDialogAction(
-          label: '删除',
-          isDestructive: true,
-          onPressed: () => Navigator.of(context).pop(true),
-        ),
-      ],
+    // mi_like 按钮弹框：下标 1 = 删除；点遮罩 / 返回键 = null（同判不删）。
+    final int? picked = await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: '删除生词',
+        message: '删除「${entry.word}」？删除后不可恢复。',
+        actions: <MiDialogAction>[
+          MiDialogAction(label: '取消', onPressed: () {}),
+          MiDialogAction(
+            label: '删除',
+            style: MiDialogActionStyle.destructive,
+            onPressed: () {},
+          ),
+        ],
+      ),
     );
-    if (confirmed == true) {
+    if (picked == 1) {
       unawaited(widget.vocabStore.remove(entry.id));
     }
   }

@@ -10,7 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../meta/cover_store.dart';
 import '../model/book_meta.dart';
-import 'glass_kit.dart';
+import 'mi_sheet.dart';
 
 /// 从本地图片选一张作为封面（`META-09`）：返回图片字节；取消 / 空文件 → `null`。
 ///
@@ -29,8 +29,9 @@ Future<Uint8List?> pickCoverBytes() async {
 
 /// 点封面看大图（`META-08 ①`）：`readFull` **现读后展示**（`PERF-02`）。
 ///
-/// 玻璃弹窗（`UI-03`，[GlassOverlays.showAlert]）+ `InteractiveViewer`；barrier
-/// 可关（tap 外关闭）。非 [StoredCover]（无封面 / 合成封面）与字节缺失时**静默返回**。
+/// 大图查看改形（`MiDialog` 无 content 槽）：mi_like 抽屉（`showMiSheet`）承载
+/// `InteractiveViewer`；点遮罩 / 下拉手柄关闭（同原「tap 外关闭」语义）。
+/// 非 [StoredCover]（无封面 / 合成封面）与字节缺失时**静默返回**。
 Future<void> showCoverFullScreen(
   BuildContext context,
   CoverStore coverStore,
@@ -41,21 +42,13 @@ Future<void> showCoverFullScreen(
   if (bytes == null || bytes.isEmpty) return;
   if (!context.mounted) return;
   final Size size = MediaQuery.sizeOf(context);
-  await GlassOverlays.showAlert<void>(
+  showMiSheet(
     context: context,
-    // 纯看图：只留一个「关闭」（库断言 1–3 个动作，空列表 debug 下直接 AssertionError）。
-    actions: <GlassDialogAction>[
-      GlassDialogAction(
-        label: '关闭',
-        onPressed: () => Navigator.pop(context),
-      ),
-    ],
-    barrierDismissible: true,
-    // 放开到整屏宽，内容自行收边（卡片 padding 20 × 2 + 页边 16 × 2 ≈ 72）。
-    maxWidth: size.width,
-    content: SizedBox(
-      width: size.width - 72,
-      height: size.height * 0.8,
+    // 限高 ≈ 原「弹窗内容 0.8 屏高」口径；宽度撑满抽屉内容区（手机档
+    // 比原 `size.width - 72` 更宽，大图可见区域反而更大）。
+    maxHeightFactor: 0.85,
+    builder: (BuildContext sheetContext, VoidCallback close) => SizedBox(
+      height: size.height * 0.7,
       child: InteractiveViewer(
         child: Image.memory(bytes, fit: BoxFit.contain),
       ),

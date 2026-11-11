@@ -22,6 +22,8 @@ import '../stats/stats_service.dart';
 import '../stats/streak.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
+import 'mi_like_ui/mi_like_ui.dart'
+    show MiDialog, MiDialogAction, MiDialogActionStyle, showMiDialog;
 import 'settings_kit.dart';
 import 'stats/bar_chart.dart';
 import 'stats/drill_down_page.dart';
@@ -191,26 +193,22 @@ class _StatsPageState extends State<StatsPage> {
       ..sort((MapEntry<String, int> a, MapEntry<String, int> b) =>
           b.value.compareTo(a.value));
     final DateTime d = DateTime.parse(dayKey);
-    await GlassOverlays.showAlert<void>(
-      context: context,
-      title: '${d.month}月${d.day}日',
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text('总时长 ${formatReadingDuration(total)}'),
-          const SizedBox(height: 8),
-          if (list.isEmpty) const Text('该天无阅读记录'),
-          for (final MapEntry<String, int> e in rows)
-            Text('${titles[e.key] ?? e.key} · ${formatReadingDuration(e.value)}'),
+    // 内容型明细改形（`MiDialog` 无 content 槽）：按书行拼进多行 message。
+    final String detail = list.isEmpty
+        ? '该天无阅读记录'
+        : rows
+            .map((MapEntry<String, int> e) =>
+                '${titles[e.key] ?? e.key} · ${formatReadingDuration(e.value)}')
+            .join('\n');
+    await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: '${d.month}月${d.day}日',
+        message: '总时长 ${formatReadingDuration(total)}\n\n$detail',
+        actions: <MiDialogAction>[
+          MiDialogAction(label: '关闭', onPressed: () {}),
         ],
       ),
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '关闭',
-          onPressed: () => Navigator.pop(context),
-        ),
-      ],
     );
   }
 
@@ -297,24 +295,23 @@ class _StatsPageState extends State<StatsPage> {
 
   /// 清空确认（`STAT-03` ④：二次确认，明确「不影响书架与进度」）。
   Future<void> _confirmClear() async {
-    final bool? confirmed = await GlassOverlays.showAlert<bool>(
-      context: context,
-      title: '清空统计',
-      message: '确定清空全部阅读统计数据？\n书架、进度、书签与笔记不受影响。',
-      barrierDismissible: true,
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '取消',
-          onPressed: () => Navigator.pop(context, false),
-        ),
-        GlassDialogAction(
-          label: '清空',
-          isDestructive: true,
-          onPressed: () => Navigator.pop(context, true),
-        ),
-      ],
+    // mi_like 按钮弹框：下标 1 = 清空；点遮罩 / 返回键 = null（同判不清空）。
+    final int? picked = await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: '清空统计',
+        message: '确定清空全部阅读统计数据？\n书架、进度、书签与笔记不受影响。',
+        actions: <MiDialogAction>[
+          MiDialogAction(label: '取消', onPressed: () {}),
+          MiDialogAction(
+            label: '清空',
+            style: MiDialogActionStyle.destructive,
+            onPressed: () {},
+          ),
+        ],
+      ),
     );
-    if (confirmed == true && mounted) {
+    if (picked == 1 && mounted) {
       await widget.service.clearAll();
     }
   }

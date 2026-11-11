@@ -358,23 +358,23 @@ class _AiProviderEditPageState extends State<AiProviderEditPage> {
     if (config == null) {
       return;
     }
-    final bool? ok = await GlassOverlays.showAlert<bool>(
-      context: context,
-      title: '删除配置',
-      message: '删除「${config.name}」及其密钥？此操作不可撤销。',
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '取消',
-          onPressed: () => Navigator.pop(context, false),
-        ),
-        GlassDialogAction(
-          label: '删除',
-          isDestructive: true,
-          onPressed: () => Navigator.pop(context, true),
-        ),
-      ],
+    // mi_like 按钮弹框：下标 1 = 删除；遮罩 / 返回键 = null（同判不删）。
+    final int? picked = await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: '删除配置',
+        message: '删除「${config.name}」及其密钥？此操作不可撤销。',
+        actions: <MiDialogAction>[
+          MiDialogAction(label: '取消', onPressed: () {}),
+          MiDialogAction(
+            label: '删除',
+            style: MiDialogActionStyle.destructive,
+            onPressed: () {},
+          ),
+        ],
+      ),
     );
-    if (ok != true || !mounted) {
+    if (picked != 1 || !mounted) {
       return;
     }
     await widget.store.removeConfig(config.id);
@@ -454,17 +454,19 @@ class _AiProviderEditPageState extends State<AiProviderEditPage> {
   }
 
   Future<void> _showError(String title, String message) async {
-    await GlassOverlays.showAlert<void>(
-      context: context,
-      title: title,
-      message: message,
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '知道了',
-          isPrimary: true,
-          onPressed: () => Navigator.pop(context),
-        ),
-      ],
+    await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: title,
+        message: message,
+        actions: <MiDialogAction>[
+          MiDialogAction(
+            label: '知道了',
+            style: MiDialogActionStyle.filled,
+            onPressed: () {},
+          ),
+        ],
+      ),
     );
   }
 

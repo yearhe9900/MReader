@@ -203,10 +203,11 @@ void main() {
     await tester.pumpAndSettle(); // 明细弹窗
 
     expect(find.text('9月10日'), findsOneWidget); // 弹窗标题
-    expect(find.text('总时长 12 分钟'), findsOneWidget); // 720s
+    // 明细行并进 `MiDialog` 的多行 message（单个 Text），改包含匹配。
+    expect(find.textContaining('总时长 12 分钟'), findsOneWidget); // 720s
     // 无 repository → 降级显示 bookId；按书聚合只剩一行。
-    expect(find.text('bookA · 12 分钟'), findsOneWidget);
-    expect(find.text('bookB · 5 分钟'), findsNothing);
+    expect(find.textContaining('bookA · 12 分钟'), findsOneWidget);
+    expect(find.textContaining('bookB · 5 分钟'), findsNothing);
 
     await tester.tap(find.text('关闭'));
     await tester.pumpAndSettle();

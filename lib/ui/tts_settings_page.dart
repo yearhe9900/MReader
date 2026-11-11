@@ -18,6 +18,8 @@ import '../ai/provider_store.dart';
 import '../tts/online_tts.dart';
 import 'glass_kit.dart';
 import 'home_shell.dart' show kShellBottomInset;
+import 'mi_like_ui/mi_like_ui.dart'
+    show MiDialog, MiDialogAction, MiDialogActionStyle, showMiDialog;
 import 'settings_kit.dart';
 
 /// 页面内容左右留白（与设置页同一左边缘口径）。
@@ -134,29 +136,32 @@ class _TtsSettingsPageState extends State<TtsSettingsPage> {
   Future<void> _importFromAi() async {
     final ProviderStore? aiStore = widget.aiStore;
     if (aiStore == null) return;
-    final AiProviderConfig? picked = await GlassOverlays.showAlert<
-        AiProviderConfig?>(
-      context: context,
-      title: '从 AI 配置导入',
-      message: '选择要复用的服务配置：地址与密钥将写入在线 TTS。',
-      actions: <GlassDialogAction>[
-        for (final AiProviderConfig c in aiStore.configs)
-          GlassDialogAction(
-            label: c.name,
-            onPressed: () => Navigator.pop(context, c),
-          ),
-        GlassDialogAction(
-          label: '取消',
-          onPressed: () => Navigator.pop(context, null),
-        ),
-      ],
+    // 多配置选择改形：MiDialog 按钮下标反查（configs.length = 取消行；
+    // 遮罩 / 返回键 = null），与原「点配置取对象、点取消取 null」等价。
+    final List<AiProviderConfig> configs = aiStore.configs;
+    final int? picked = await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: '从 AI 配置导入',
+        message: '选择要复用的服务配置：地址与密钥将写入在线 TTS。',
+        actions: <MiDialogAction>[
+          for (final AiProviderConfig c in configs)
+            MiDialogAction(label: c.name, onPressed: () {}),
+          MiDialogAction(label: '取消', onPressed: () {}),
+        ],
+      ),
     );
-    if (picked == null || !mounted) return;
+    if (picked == null ||
+        picked >= configs.length ||
+        !mounted) {
+      return;
+    }
+    final AiProviderConfig config = configs[picked];
     setState(() {
       _mode = OnlineTtsMode.openaiSpeech;
-      _baseUrl.text = picked.baseUrl;
+      _baseUrl.text = config.baseUrl;
     });
-    final String? key = await aiStore.readApiKey(picked.id);
+    final String? key = await aiStore.readApiKey(config.id);
     if (key != null && key.isNotEmpty) {
       await widget.store.writeApiKey(key);
     }
@@ -174,17 +179,19 @@ class _TtsSettingsPageState extends State<TtsSettingsPage> {
   }
 
   Future<void> _showError(String title, String message) async {
-    await GlassOverlays.showAlert<void>(
-      context: context,
-      title: title,
-      message: message,
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '知道了',
-          isPrimary: true,
-          onPressed: () => Navigator.pop(context),
-        ),
-      ],
+    await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: title,
+        message: message,
+        actions: <MiDialogAction>[
+          MiDialogAction(
+            label: '知道了',
+            style: MiDialogActionStyle.filled,
+            onPressed: () {},
+          ),
+        ],
+      ),
     );
   }
 

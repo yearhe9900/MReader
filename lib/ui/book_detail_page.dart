@@ -37,7 +37,9 @@ import '../settings/shelf_layout_store.dart';
 import 'cover_picker.dart';
 import 'default_book_cover.dart';
 import 'glass_kit.dart';
-import 'mi_like_ui/mi_like_ui.dart' show MiSnackbar;
+import 'mi_like_ui/mi_like_ui.dart'
+    show MiDialog, MiDialogAction, MiDialogActionStyle, MiSnackbar, showMiDialog;
+import 'mi_sheet.dart';
 
 /// 书籍详情页（`META-08`）。
 class BookDetailPage extends StatefulWidget {
@@ -383,24 +385,24 @@ class _BookDetailPageState extends State<BookDetailPage> {
   Future<void> _removeFromShelf() async {
     // `UI-03` 浮层玻璃：玻璃确认框（`M2a-T04`）。返回值语义同原 `showDialog`：
     // 非 `true`（含 barrier 关闭的 null）一律不删。
-    final bool? confirmed = await GlassOverlays.showAlert<bool>(
-      context: context,
-      title: '移出书架',
-      message: '确定将「${_record.title}」移出书架？\n删除后书架不再列出，封面与副本文件一并清理。',
-      barrierDismissible: true,
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '取消',
-          onPressed: () => Navigator.pop(context, false),
-        ),
-        GlassDialogAction(
-          label: '移出',
-          isDestructive: true,
-          onPressed: () => Navigator.pop(context, true),
-        ),
-      ],
+    // mi_like 按钮弹框：下标 1 = 移出；点遮罩 / 返回键 = null（同判不删，
+    // 与原 `barrierDismissible` 关闭语义一致）。
+    final int? picked = await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: '移出书架',
+        message: '确定将「${_record.title}」移出书架？\n删除后书架不再列出，封面与副本文件一并清理。',
+        actions: <MiDialogAction>[
+          MiDialogAction(label: '取消', onPressed: () {}),
+          MiDialogAction(
+            label: '移出',
+            style: MiDialogActionStyle.destructive,
+            onPressed: () {},
+          ),
+        ],
+      ),
     );
-    if (confirmed != true) return;
+    if (picked != 1) return;
     await widget.repository.deleteBook(_record);
     // `LIB-06` 连带清理：删除该书阅读进度文件（缺失时静默成功）。
     await widget.progressStore.remove(_record.bookId);
@@ -488,58 +490,77 @@ class _BookDetailPageState extends State<BookDetailPage> {
         final String? name = widget.shelfLayout.layout.groupById(id)?.name;
         if (name != null) _toast('已归入「$name」');
       case _GroupPickKind.createNew:
-        final String? name = await _askNewGroupName();
-        if (!mounted || name == null) return;
-        final String trimmed = name.trim();
-        if (trimmed.isEmpty) {
-          _toast('分组名不能为空');
-          return;
-        }
-        await widget.shelfLayout.assignByName(_record.bookId, trimmed);
-        _toast('已归入「$trimmed」');
+        // 输入型弹窗改形（`MiDialog` 无 content 槽）：mi_like 抽屉 + 文本框。
+        // `showMiSheet` 不返回结果（契约），确认动作经回调回传；点遮罩 /
+        // 返回键关闭 = 不回调（不落库，同原「取消返回 null」）。
+        _askNewGroupName((String name) async {
+          if (!mounted) return;
+          final String trimmed = name.trim();
+          if (trimmed.isEmpty) {
+            _toast('分组名不能为空');
+            return;
+          }
+          await widget.shelfLayout.assignByName(_record.bookId, trimmed);
+          // 分组名显示读的是 `shelfLayout` 快照，改完需重绘本页。
+          if (mounted) setState(() {});
+          _toast('已归入「$trimmed」');
+        });
     }
-    // 分组名显示读的是 `shelfLayout` 快照，改完需重绘本页。
+    // existing 分支的统一刷新；createNew 走回调自行刷新（此处多刷一次无害）。
     if (mounted) setState(() {});
   }
 
-  /// 询问新分组名（玻璃确认框 + 文本框）。取消 / 空白返回 `null`。
+  /// 询问新分组名（mi_like 抽屉 + 文本框）。确认经 [onConfirm] 回传，
+  /// 取消 / 遮罩关闭不回调。
   ///
   /// controller 的释放见 [_groupNameCtrl] 的注释——**不在本方法内** `dispose()`。
-  Future<String?> _askNewGroupName() {
+  void _askNewGroupName(void Function(String name) onConfirm) {
     _groupNameCtrl?.dispose();
     final TextEditingController controller = TextEditingController();
     _groupNameCtrl = controller;
-    return GlassOverlays.showAlert<String>(
+
+    showMiSheet(
       context: context,
       title: '新建分组',
-      barrierDismissible: true,
-      maxWidth: 320,
-      // 玻璃浮层没有 Material 祖先（PRD §11.4），`TextField` 需要一层；
-      // `MaterialType.transparency` 不画底色，不破坏玻璃观感。
-      content: Material(
-        type: MaterialType.transparency,
-        child: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: '分组名称',
-            hintText: '如：玄幻 / 在读 / 弃坑',
-          ),
-          onSubmitted: (String value) =>
-              Navigator.of(context).pop<String>(value),
+      builder: (BuildContext sheetContext, VoidCallback close) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: '分组名称',
+                hintText: '如：玄幻 / 在读 / 弃坑',
+              ),
+              onSubmitted: (String value) {
+                close();
+                onConfirm(value);
+              },
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: <Widget>[
+                TextButton(
+                  onPressed: close,
+                  child: const Text('取消'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: () {
+                    close();
+                    onConfirm(controller.text);
+                  },
+                  child: const Text('确定'),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
-          label: '取消',
-          onPressed: () => Navigator.of(context).pop<String>(),
-        ),
-        GlassDialogAction(
-          label: '确定',
-          isPrimary: true,
-          onPressed: () => Navigator.of(context).pop<String>(controller.text),
-        ),
-      ],
     );
   }
 

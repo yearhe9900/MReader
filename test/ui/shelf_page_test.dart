@@ -954,6 +954,15 @@ void main() {
       // → **必须用 `_settle`**（runAsync 让出真事件循环），否则此后 `setState` 永不执行。
       await tester.enterText(find.byType(TextField), '玄幻');
       await tester.tap(find.text('确定'));
+      // 抽屉弹簧滑出（~0.5s）收口后路由才摘除；遮罩在树时返回箭头 hit test
+      // 不到（warnIfMissed）。轮询等抽屉表面消失再返回书架。
+      for (int i = 0;
+          i < 60 && find.byKey(MiBottomSheet.surfaceKey).evaluate().isNotEmpty;
+          i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 16)));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
       await _settle(tester);
 
       // 详情页分组行显示新组名（且分组已落盘到共享 store）。
