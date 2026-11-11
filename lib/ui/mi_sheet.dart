@@ -114,20 +114,28 @@ class _MiSheetRouteState extends State<_MiSheetRoute> {
     // 硬件返回不走路由默认 pop（会瞬移抽屉），改走同一条收起动画。
     // 路由层在 [Scaffold] 之上：内容件（ListTile / ChoiceChip / Slider 等）
     // 都要求最近的 Material 祖先。
+    //
+    // 路由**自挂 [MiPopupHost]**（上游 `demo_app.dart` onGenerateRoute 同款，
+    // 弹层包在路由内容里）：抽屉体注册到本宿主而非应用根宿主 —— 否则体画在
+    // Navigator 之上，面板开着时 push 的页面（朗读设置 → 在线引擎配置）会被
+    // 抽屉盖住；面板内投放的 snackbar 也随本路由定界（被上层路由盖住，
+    // 与 Material Scaffold 同语义）。就近优先：本宿主压过应用根那层。
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (bool didPop, void _) {
         if (!didPop) _close();
       },
-      child: MiBottomSheet(
-        show: _show,
-        title: widget.title,
-        onDismissRequest: _close,
-        onDismissed: _removeRoute,
-        // 墨水基座垫在**内容**侧（抽屉表面 DecoratedBox 之内）：ListTile 等
-        // 把背景 / 墨溅画在最近 Material 上，垫在外面会被表面挡色并触发
-        // 「ink may be invisible」断言；透明 Material 只补基座不叠底色。
-        child: Material(type: MaterialType.transparency, child: content),
+      child: MiPopupHost(
+        child: MiBottomSheet(
+          show: _show,
+          title: widget.title,
+          onDismissRequest: _close,
+          onDismissed: _removeRoute,
+          // 墨水基座垫在**内容**侧（抽屉表面 DecoratedBox 之内）：ListTile 等
+          // 把背景 / 墨溅画在最近 Material 上，垫在外面会被表面挡色并触发
+          // 「ink may be invisible」断言；透明 Material 只补基座不叠底色。
+          child: Material(type: MaterialType.transparency, child: content),
+        ),
       ),
     );
   }

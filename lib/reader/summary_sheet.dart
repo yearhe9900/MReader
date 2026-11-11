@@ -18,6 +18,7 @@ import '../ai/summarize.dart';
 import '../ai/summary_cache.dart';
 import '../model/chapter.dart';
 import '../ui/glass_kit.dart';
+import '../ui/mi_sheet.dart';
 
 /// 面板模式（`AI-04` 章节 / `AI-05` 全书 / `AI-05` 前情回顾）。
 enum SummaryMode {
@@ -31,8 +32,11 @@ enum SummaryMode {
   recap,
 }
 
-/// 弹出摘要面板（底部弹窗；章模式 prepare 后自动发起，其余模式进页自动发起）。
-Future<void> showSummarySheet(
+/// 弹出摘要面板（mi_like 抽屉；章模式 prepare 后自动发起，其余模式进页自动发起）。
+///
+/// 关闭钮走 `maybePop` → 路由 `PopScope` → 抽屉滑出收口（与 [showMiSheet] 同一条
+/// 收起动画），无需改传 `close`。
+void showSummarySheet(
   BuildContext context, {
   required SummaryMode initialMode,
   required ProviderStore aiStore,
@@ -43,10 +47,9 @@ Future<void> showSummarySheet(
   required int currentIndex,
   required Future<String> Function(int index) loadText,
 }) {
-  return GlassOverlays.showSheet<void>(
+  showMiSheet(
     context: context,
-    isScrollable: false,
-    builder: (BuildContext sheetContext) => _SummarySheet(
+    builder: (BuildContext sheetContext, VoidCallback close) => _SummarySheet(
       initialMode: initialMode,
       aiStore: aiStore,
       aiClient: aiClient,

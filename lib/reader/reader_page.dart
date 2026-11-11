@@ -3829,50 +3829,39 @@ class _ReaderPageState extends State<ReaderPage>
 
   /// 打开书签弹窗（`TYP-06`：添加当前位置 / 列表查看 / 跳转 / 逐条删除）。
   void _openBookmarks() {
-    // 与 [TocSheet] 同款玻璃底部弹窗（`UI-03` / `UI-04`：列表行垫不透明表面）。
-    GlassOverlays.showSheet<void>(
+    // mi_like 抽屉（`showMiSheet`）：不透明表面 / 安全区 / 限高全由抽屉统一提供
+    // （`UI-04`），内容件只出列表本体。标题行不给抽屉（内容自带
+    // 「书签 + 添加按钮」标题行，抽屉 title 无动作槽会重复）。
+    showMiSheet(
       context: context,
-      isScrollable: false,
-      builder: (BuildContext sheetContext) => ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
-        ),
-        child: OpaqueContentSurface(
-          child: BookmarkSheet(
-            bookmarks: _bookmarks,
-            onCreate: _addBookmarkAtCurrentPosition,
-            onDelete: _removeBookmark,
-            onJump: (Bookmark bookmark) {
-              Navigator.of(sheetContext).pop();
-              _exitChrome(); // 落到目标页顶 ⇒ 必须收起顶栏，否则目标被它压住。
-              unawaited(_goToBookmark(bookmark));
-            },
-          ),
-        ),
+      maxHeightFactor: 0.6,
+      builder: (BuildContext sheetContext, VoidCallback close) => BookmarkSheet(
+        bookmarks: _bookmarks,
+        onCreate: _addBookmarkAtCurrentPosition,
+        onDelete: _removeBookmark,
+        onJump: (Bookmark bookmark) {
+          close(); // 选中即收抽屉，落点跳转不等滑出收口（同目录口径）。
+          _exitChrome(); // 落到目标页顶 ⇒ 必须收起顶栏，否则目标被它压住。
+          unawaited(_goToBookmark(bookmark));
+        },
       ),
     );
   }
 
   /// 打开全书搜索面板（`CNT-06`）：输入关键词 → 「章节名 + 上下文片段」列表 →
-  /// 点击跳转并高亮。与 [BookmarkSheet] 同款玻璃底部弹窗（`UI-03` / `UI-04`）。
+  /// 点击跳转并高亮。与 [BookmarkSheet] 同款 mi_like 抽屉。
   void _openSearch() {
-    GlassOverlays.showSheet<void>(
+    showMiSheet(
       context: context,
-      isScrollable: false,
-      builder: (BuildContext sheetContext) => ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.7,
-        ),
-        child: OpaqueContentSurface(
-          child: SearchSheet(
-            startSearch: _startSearch,
-            onJump: (SearchHit hit, String query) {
-              Navigator.of(sheetContext).pop();
-              _exitChrome(); // 落到目标页顶 ⇒ 必须收起顶栏，否则目标被它压住。
-              unawaited(_jumpToSearchHit(hit, query));
-            },
-          ),
-        ),
+      title: '全书搜索',
+      maxHeightFactor: 0.7,
+      builder: (BuildContext sheetContext, VoidCallback close) => SearchSheet(
+        startSearch: _startSearch,
+        onJump: (SearchHit hit, String query) {
+          close(); // 同 [BookmarkSheet.onJump]：先收抽屉再跳，不等收口。
+          _exitChrome(); // 落到目标页顶 ⇒ 必须收起顶栏，否则目标被它压住。
+          unawaited(_jumpToSearchHit(hit, query));
+        },
       ),
     );
   }
@@ -4035,16 +4024,19 @@ class _ReaderPageState extends State<ReaderPage>
     if (store == null || !mounted || _disposed) return;
     final List<TtsVoice> voices = await _ensureTts().getVoices();
     if (!mounted || _disposed) return;
-    await GlassOverlays.showSheet<void>(
+    // mi_like 抽屉（`showMiSheet`）：标题 / 安全区 / 不透明表面由抽屉统一提供；
+    // 面板内「在线 TTS 配置」push 子页压在抽屉路由之上（抽屉路由自挂宿主，
+    // 子页盖住抽屉体，返回后抽屉仍在）。
+    showMiSheet(
       context: context,
-      builder: (BuildContext sheetContext) => OpaqueContentSurface(
-        child: TtsSettingsSheet(
-          settings: store.value,
-          voices: voices,
-          onChanged: _onTtsSettingsChanged,
-          onlineTts: widget.onlineTts,
-          aiStore: widget.aiStore,
-        ),
+      title: '朗读设置',
+      builder: (BuildContext sheetContext, VoidCallback close) =>
+          TtsSettingsSheet(
+        settings: store.value,
+        voices: voices,
+        onChanged: _onTtsSettingsChanged,
+        onlineTts: widget.onlineTts,
+        aiStore: widget.aiStore,
       ),
     );
   }
@@ -4642,7 +4634,7 @@ class _ReaderPageState extends State<ReaderPage>
   /// 面板内每行 = 原 AppBar 的一个按钮，回调原样传入（[_openSummarySheet] /
   /// [_openAskSheet] / [_openEntityPage]），功能与可用性判定完全不变。
   void _openAiPanel() {
-    unawaited(showReaderAiPanel(
+    showReaderAiPanel(
       context: context,
       onSummary: () => _openSummarySheet(SummaryMode.chapter),
       onAsk: _openAskSheet,
@@ -4655,7 +4647,7 @@ class _ReaderPageState extends State<ReaderPage>
               _openSummarySheet(SummaryMode.recap);
             }
           : null,
-    ));
+    );
   }
 
   /// 递进生成的章文本加载器（`PERF-02`：LRU 未命中才回源，不假设全书常驻）。
@@ -4684,7 +4676,7 @@ class _ReaderPageState extends State<ReaderPage>
     if (mode == SummaryMode.recap) {
       setState(() => _showRecapEntrance = false); // 已进入，本会话不再提示
     }
-    unawaited(showSummarySheet(
+    showSummarySheet(
       context,
       initialMode: mode,
       aiStore: store,
@@ -4694,7 +4686,7 @@ class _ReaderPageState extends State<ReaderPage>
       chapters: chapters,
       currentIndex: _currentIndex.clamp(0, chapters.length - 1),
       loadText: _summaryTextAt,
-    ));
+    );
   }
 
   /// 跟书问答可用性（`AI-06`）：AI 配置 + 客户端 + 索引存储三参齐 +
@@ -4739,19 +4731,18 @@ class _ReaderPageState extends State<ReaderPage>
         chapters.isEmpty) {
       return;
     }
-    unawaited(showAskSheet(
+    showAskSheet(
       context,
       aiStore: store,
       aiClient: client,
       ensureIndex: _ensureRagIndex,
       loadText: _summaryTextAt,
-      // 与 [SearchSheet] 同契约：调用方关弹窗 + 跳转（跳转链路复用
-      // `_jumpToSearchHit` 的段落级对齐）。
+      // 关面板由 [showAskSheet] 内部经抽屉 `close()` 收口（滑出动画后摘路由），
+      // 这里只负责跳转（跳转链路复用 `_jumpToSearchHit` 的段落级对齐）。
       onJump: (SearchHit hit, String query) {
-        Navigator.of(context).pop();
         unawaited(_jumpToSearchHit(hit, query));
       },
-    ));
+    );
   }
 
   // ── 段落朗读（`TTS-01`/`TTS-02`，M3-T06）──────────────────────────────
@@ -5373,7 +5364,7 @@ class _ReaderPageState extends State<ReaderPage>
         }
       }
     }
-    unawaited(showSelectionAiSheet(
+    showSelectionAiSheet(
       context,
       mode: mode,
       selection: sel,
@@ -5384,7 +5375,7 @@ class _ReaderPageState extends State<ReaderPage>
       bookTitle: widget.record.title,
       before: before,
       after: after,
-    ));
+    );
   }
 
   /// 正文容器。

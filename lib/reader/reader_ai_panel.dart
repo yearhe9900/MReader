@@ -7,87 +7,85 @@
 // 功能、文案、回调、Key 均逐条保持原样，只是入口位置从顶栏图标变为 AI 分组 → 面板行。
 //
 // 面板复用设置页的分组卡片组件（`SettingsGroupCard` / `SettingsTile`），与全局
-// 设置页视觉一致；面板经 [GlassOverlays.showSheet] 弹出，跟随玻璃档位。
+// 设置页视觉一致；面板经 [showMiSheet] 弹出（mi_like 弹出式抽屉，标题行由抽屉
+// 承担），行内不再自拼标题。
 import 'package:flutter/material.dart';
 
-import '../ui/glass_kit.dart';
+import '../ui/mi_sheet.dart';
 import '../ui/settings_kit.dart';
 
 /// 弹出阅读页 AI 面板。
 ///
 /// 行按「先摘要后问答、再人物梳理、末位回顾」排列（= 原 AppBar 中的物理顺序），
 /// [onRecap] 为 `null` 时不渲染该行（会话内已进入过回顾，见 `AI-05` ②）。
-Future<void> showReaderAiPanel({
+void showReaderAiPanel({
   required BuildContext context,
   required VoidCallback onSummary,
   required VoidCallback onAsk,
   required VoidCallback onEntities,
   VoidCallback? onRecap,
 }) {
-  return GlassOverlays.showSheet<void>(
+  showMiSheet(
     context: context,
-    builder: (BuildContext sheetContext) => OpaqueContentSurface(
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    title: 'AI 助手',
+    // 内容是自撑纵列（无自带滚动体）：交外层滚动兜底，防小屏溢出。
+    scrollable: true,
+    builder: (BuildContext sheetContext, VoidCallback close) => Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SettingsGroupCard(
             children: <Widget>[
-              Text('AI 助手', style: Theme.of(sheetContext).textTheme.titleMedium),
-              const SizedBox(height: 12),
-              SettingsGroupCard(
-                children: <Widget>[
-                  SettingsTile(
-                    key: const Key('reader-summary'),
-                    icon: Icons.auto_awesome,
-                    accent: SettingsAccents.purple,
-                    title: 'AI 摘要',
-                    subtitle: '生成当前章梗概，可重新生成',
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      onSummary();
-                    },
-                  ),
-                  SettingsTile(
-                    key: const Key('reader-ask'),
-                    icon: Icons.question_mark,
-                    accent: SettingsAccents.blue,
-                    title: 'AI 问答',
-                    subtitle: '基于原文检索作答，附可跳转引用',
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      onAsk();
-                    },
-                  ),
-                  SettingsTile(
-                    key: const Key('reader-entities'),
-                    icon: Icons.people_alt_outlined,
-                    accent: SettingsAccents.green,
-                    title: '人物与设定',
-                    subtitle: '人物关系与专有名词梳理',
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      onEntities();
-                    },
-                  ),
-                  if (onRecap != null)
-                    SettingsTile(
-                      key: const Key('reader-recap'),
-                      icon: Icons.history,
-                      accent: SettingsAccents.orange,
-                      title: '前情回顾',
-                      subtitle: '基于上次读到位置的回顾',
-                      onTap: () {
-                        Navigator.of(sheetContext).pop();
-                        onRecap();
-                      },
-                    ),
-                ],
+              SettingsTile(
+                key: const Key('reader-summary'),
+                icon: Icons.auto_awesome,
+                accent: SettingsAccents.purple,
+                title: 'AI 摘要',
+                subtitle: '生成当前章梗概，可重新生成',
+                onTap: () {
+                  close();
+                  onSummary();
+                },
               ),
+              SettingsTile(
+                key: const Key('reader-ask'),
+                icon: Icons.question_mark,
+                accent: SettingsAccents.blue,
+                title: 'AI 问答',
+                subtitle: '基于原文检索作答，附可跳转引用',
+                onTap: () {
+                  close();
+                  onAsk();
+                },
+              ),
+              SettingsTile(
+                key: const Key('reader-entities'),
+                icon: Icons.people_alt_outlined,
+                accent: SettingsAccents.green,
+                title: '人物与设定',
+                subtitle: '人物关系与专有名词梳理',
+                onTap: () {
+                  close();
+                  onEntities();
+                },
+              ),
+              if (onRecap != null)
+                SettingsTile(
+                  key: const Key('reader-recap'),
+                  icon: Icons.history,
+                  accent: SettingsAccents.orange,
+                  title: '前情回顾',
+                  subtitle: '基于上次读到位置的回顾',
+                  onTap: () {
+                    close();
+                    onRecap();
+                  },
+                ),
             ],
           ),
-        ),
+        ],
       ),
     ),
   );

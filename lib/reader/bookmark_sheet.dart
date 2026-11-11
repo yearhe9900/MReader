@@ -52,73 +52,71 @@ class _BookmarkSheetState extends State<BookmarkSheet> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
 
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
-            child: Row(
-              children: <Widget>[
-                Text('书签', style: theme.textTheme.titleMedium),
-                const Spacer(),
-                TextButton.icon(
-                  key: const Key('bookmark-add'),
-                  icon: const Icon(Icons.bookmark_add, size: 20),
-                  label: const Text('添加当前书签'),
-                  onPressed: () {
-                    final Bookmark? bookmark = widget.onCreate();
-                    if (bookmark != null) {
-                      setState(() => _items.add(bookmark));
-                    }
-                  },
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          if (_items.isEmpty)
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text(
-                '暂无书签，点「添加当前书签」记录当前位置。',
-                style: theme.textTheme.bodyMedium,
-              ),
-            )
-          else
-            Flexible(
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: _items.length,
-                itemBuilder: (BuildContext context, int index) {
-                  final Bookmark bookmark = _items[index];
-                  return ListTile(
-                    key: Key('bookmark-item-$index'),
-                    title: Text(
-                      bookmark.chapterTitle.isNotEmpty
-                          ? bookmark.chapterTitle
-                          : '书签 ${index + 1}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(_subtitle(bookmark)),
-                    trailing: IconButton(
-                      key: Key('bookmark-delete-$index'),
-                      tooltip: '删除书签',
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: () {
-                        widget.onDelete(bookmark);
-                        // 验收③：删除后列表**立即**更新，不等落盘。
-                        setState(() => _items.removeAt(index));
-                      },
-                    ),
-                    onTap: () => widget.onJump(bookmark),
-                  );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
+          child: Row(
+            children: <Widget>[
+              Text('书签', style: theme.textTheme.titleMedium),
+              const Spacer(),
+              TextButton.icon(
+                key: const Key('bookmark-add'),
+                icon: const Icon(Icons.bookmark_add, size: 20),
+                label: const Text('添加当前书签'),
+                onPressed: () {
+                  final Bookmark? bookmark = widget.onCreate();
+                  if (bookmark != null) {
+                    setState(() => _items.add(bookmark));
+                  }
                 },
               ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        if (_items.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              '暂无书签，点「添加当前书签」记录当前位置。',
+              style: theme.textTheme.bodyMedium,
             ),
-        ],
-      ),
+          )
+        else
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: _items.length,
+              itemBuilder: (BuildContext context, int index) {
+                final Bookmark bookmark = _items[index];
+                return ListTile(
+                  key: Key('bookmark-item-$index'),
+                  title: Text(
+                    bookmark.chapterTitle.isNotEmpty
+                        ? bookmark.chapterTitle
+                        : '书签 ${index + 1}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(_subtitle(bookmark)),
+                  trailing: IconButton(
+                    key: Key('bookmark-delete-$index'),
+                    tooltip: '删除书签',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () {
+                      widget.onDelete(bookmark);
+                      // 验收③：删除后列表**立即**更新，不等落盘。
+                      setState(() => _items.removeAt(index));
+                    },
+                  ),
+                  onTap: () => widget.onJump(bookmark),
+                );
+              },
+            ),
+          ),
+      ],
     );
   }
 }

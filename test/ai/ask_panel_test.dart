@@ -209,9 +209,14 @@ void main() {
   }
 
   /// 等提交按钮可用（配置 + 密钥读取完成）。
-  bool submitReady(WidgetTester tester) =>
-      tester.widget<IconButton>(find.byKey(const Key('ask-submit'))).onPressed !=
-      null;
+  ///
+  /// 抽屉体经路由内 `MiPopupHost` 注册上屏**晚一帧**（宿主登记推帧末通知，
+  /// 上游 per-route 宿主同款时序），首帧未在树时返回 false 继续等，不抛错。
+  bool submitReady(WidgetTester tester) {
+    final Finder finder = find.byKey(const Key('ask-submit'));
+    if (finder.evaluate().isEmpty) return false;
+    return tester.widget<IconButton>(finder).onPressed != null;
+  }
 
   testWidgets('无配置：引导文案 + 范围行与输入框在场，不给「重试」',
       (tester) async {

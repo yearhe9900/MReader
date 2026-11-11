@@ -19,6 +19,7 @@ import '../ai/provider_store.dart';
 import '../ai/translate.dart';
 import '../ai/vocab_store.dart';
 import '../ui/glass_kit.dart';
+import '../ui/mi_sheet.dart';
 import 'selection_overlay.dart';
 
 /// 面板模式（翻译 / 释义）。
@@ -30,8 +31,10 @@ enum SelectionAiMode {
   explain,
 }
 
-/// 弹出划词 AI 面板（底部弹窗，自动发起流式请求）。
-Future<void> showSelectionAiSheet(
+/// 弹出划词 AI 面板（mi_like 抽屉，自动发起流式请求）。
+///
+/// 关闭钮走 `maybePop` → 路由 `PopScope` → 抽屉滑出收口（同 [showMiSheet] 口径）。
+void showSelectionAiSheet(
   BuildContext context, {
   required SelectionAiMode mode,
   required ParaSelection selection,
@@ -43,10 +46,9 @@ Future<void> showSelectionAiSheet(
   String? before,
   String? after,
 }) {
-  return GlassOverlays.showSheet<void>(
+  showMiSheet(
     context: context,
-    isScrollable: false,
-    builder: (BuildContext sheetContext) => _SelectionAiSheet(
+    builder: (BuildContext sheetContext, VoidCallback close) => _SelectionAiSheet(
       mode: mode,
       selection: selection,
       aiStore: aiStore,

@@ -144,79 +144,79 @@ class _SearchSheetState extends State<SearchSheet> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
-            child: Row(
-              children: <Widget>[
-                Expanded(
-                  child: TextField(
-                    key: const Key('search-input'),
-                    controller: _input,
-                    autofocus: true,
-                    textInputAction: TextInputAction.search,
-                    decoration: const InputDecoration(
-                      hintText: '输入关键词搜索全书',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    onSubmitted: _start,
+    // 不包 `SafeArea`：安全区（含底部手势条 / 键盘让位）由外层 `MiBottomSheet`
+    // 统一吃掉（`reader_page._openSearch`），再包一层会在抽屉里重复 inset。
+    return Column(
+    mainAxisSize: MainAxisSize.min,
+    children: <Widget>[
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: TextField(
+                  key: const Key('search-input'),
+                  controller: _input,
+                  autofocus: true,
+                  textInputAction: TextInputAction.search,
+                  decoration: const InputDecoration(
+                    hintText: '输入关键词搜索全书',
+                    border: OutlineInputBorder(),
+                    isDense: true,
                   ),
+                  onSubmitted: _start,
                 ),
-                IconButton(
-                  key: const Key('search-submit'),
-                  tooltip: '搜索',
-                  icon: const Icon(Icons.search),
-                  onPressed: () => _start(_input.text),
-                ),
-              ],
+              ),
+              IconButton(
+                key: const Key('search-submit'),
+                tooltip: '搜索',
+                icon: const Icon(Icons.search),
+                onPressed: () => _start(_input.text),
+              ),
+            ],
+          ),
+        ),
+        _buildStatus(theme),
+        const Divider(height: 1),
+        if (_hits.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(_emptyHint, style: theme.textTheme.bodyMedium),
+          )
+        else
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: _hits.length,
+              itemBuilder: (BuildContext context, int index) {
+                final SearchHit hit = _hits[index];
+                return ListTile(
+                  key: Key('search-hit-$index'),
+                  title: Text(
+                    hit.chapterTitle.isNotEmpty
+                        ? hit.chapterTitle
+                        : '第 ${hit.chapterIndex + 1} 节',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  // 上下文片段 = 命中所在整段；命中词叠高亮底色（与正文同款
+                  // `highlightSpans`，口径一致）。
+                  subtitle: Text.rich(
+                    TextSpan(
+                      children: highlightSpans(
+                        <InlineSpan>[TextSpan(text: hit.context)],
+                        _query,
+                      ),
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  onTap: () => widget.onJump(hit, _query),
+                );
+              },
             ),
           ),
-          _buildStatus(theme),
-          const Divider(height: 1),
-          if (_hits.isEmpty)
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text(_emptyHint, style: theme.textTheme.bodyMedium),
-            )
-          else
-            Flexible(
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: _hits.length,
-                itemBuilder: (BuildContext context, int index) {
-                  final SearchHit hit = _hits[index];
-                  return ListTile(
-                    key: Key('search-hit-$index'),
-                    title: Text(
-                      hit.chapterTitle.isNotEmpty
-                          ? hit.chapterTitle
-                          : '第 ${hit.chapterIndex + 1} 节',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    // 上下文片段 = 命中所在整段；命中词叠高亮底色（与正文同款
-                    // `highlightSpans`，口径一致）。
-                    subtitle: Text.rich(
-                      TextSpan(
-                        children: highlightSpans(
-                          <InlineSpan>[TextSpan(text: hit.context)],
-                          _query,
-                        ),
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    onTap: () => widget.onJump(hit, _query),
-                  );
-                },
-              ),
-            ),
-        ],
-      ),
+      ],
     );
   }
 

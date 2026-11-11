@@ -94,150 +94,148 @@ class _TtsSettingsSheetState extends State<TtsSettingsSheet> {
     final List<TtsVoice>? voices = widget.voices;
     final bool hasVoices = voices != null && voices.isNotEmpty;
 
-    return SafeArea(
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text('朗读设置', style: theme.textTheme.titleMedium),
-              const SizedBox(height: 16),
-              // 引擎（`TTS-07`）：store 缺席 = 未接线 → 整区隐藏（诚实降级）。
-              if (widget.onlineTts != null) ...<Widget>[
-                Text('引擎', style: theme.textTheme.labelLarge),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: <Widget>[
-                    ChoiceChip(
-                      key: const Key('tts-engine-system'),
-                      label: Text(TtsEngineKind.system.label),
-                      selected: _settings.engine == TtsEngineKind.system,
-                      onSelected: (_) => _emit(
-                        _settings.copyWith(engine: TtsEngineKind.system),
-                      ),
-                    ),
-                    ChoiceChip(
-                      key: const Key('tts-engine-online'),
-                      label: Text(TtsEngineKind.online.label),
-                      selected: _settings.engine == TtsEngineKind.online,
-                      onSelected: (_) => _emit(
-                        _settings.copyWith(engine: TtsEngineKind.online),
-                      ),
-                    ),
-                  ],
-                ),
-                ListTile(
-                  key: const Key('tts-online-config'),
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  leading: const Icon(Icons.settings_input_component_outlined),
-                  title: const Text('在线 TTS 配置'),
-                  subtitle: const Text('URL 模板 / OpenAI 兼容、请求头与编码'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: _openOnlineConfig,
-                ),
-                const SizedBox(height: 8),
-              ],
-              Text('语速', style: theme.textTheme.labelLarge),
-              Row(
-                children: <Widget>[
-                  const Icon(Icons.slow_motion_video, size: 20),
-                  Expanded(
-                    child: Slider(
-                      key: const Key('tts-rate-slider'),
-                      value: TtsSettings.clampRate(_settings.rate),
-                      min: TtsSettings.minRate,
-                      max: TtsSettings.maxRate,
-                      divisions: 30,
-                      label: _rateLabel(_settings.rate),
-                      // 跟随系统语速时禁用（`TTS-04` 开关语义）。
-                      onChanged: _settings.followSystemRate
-                          ? null
-                          : (double value) =>
-                              _emit(_settings.copyWith(rate: value)),
-                    ),
-                  ),
-                  const Icon(Icons.speed, size: 20),
-                ],
-              ),
-              // 跟随系统语速（`TTS-04` 开关语义）：行 + MiSwitch（点开关即切）。
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: Text(
-                        '跟随系统语速',
-                        style: theme.textTheme.bodyLarge,
-                      ),
-                    ),
-                    MiSwitch(
-                      key: const Key('tts-follow-rate'),
-                      value: _settings.followSystemRate,
-                      onChanged: (bool value) =>
-                          _emit(_settings.copyWith(followSystemRate: value)),
-                    ),
-                  ],
-                ),
-              ),
-              // 音色（`TTS-04`②）：列表为空 = 平台无引擎查询面 → 不摆空区块。
-              if (hasVoices) ...<Widget>[
-                const SizedBox(height: 8),
-                Text('音色', style: theme.textTheme.labelLarge),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: <Widget>[
-                    ChoiceChip(
-                      key: const Key('tts-voice-default'),
-                      label: const Text('系统默认'),
-                      selected: _settings.voiceName == null,
-                      onSelected: (_) => _emitVoice(null),
-                    ),
-                    for (final TtsVoice voice in voices)
-                      ChoiceChip(
-                        label: Text(voice.name.isEmpty
-                            ? voice.locale
-                            : voice.name),
-                        selected: _settings.voiceName == voice.name,
-                        onSelected: (_) => _emitVoice(voice),
-                      ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 16),
-              Text('定时停止', style: theme.textTheme.labelLarge),
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            // 面板大标题由抽屉标题行承担（「朗读设置」，`reader_page._openTtsSettings`），
+            // 与设置面板（`reading_appearance_sheet`）同口径：内容直接从分区起排。
+            // 引擎（`TTS-07`）：store 缺席 = 未接线 → 整区隐藏（诚实降级）。
+            if (widget.onlineTts != null) ...<Widget>[
+              Text('引擎', style: theme.textTheme.labelLarge),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: <Widget>[
                   ChoiceChip(
-                    key: const Key('tts-sleep-off'),
-                    label: const Text('关闭'),
-                    selected: _settings.sleepMinutes == 0,
-                    onSelected: (_) =>
-                        _emit(_settings.copyWith(sleepMinutes: 0)),
+                    key: const Key('tts-engine-system'),
+                    label: Text(TtsEngineKind.system.label),
+                    selected: _settings.engine == TtsEngineKind.system,
+                    onSelected: (_) => _emit(
+                      _settings.copyWith(engine: TtsEngineKind.system),
+                    ),
                   ),
-                  for (int m = TtsSettings.minSleepMinutes;
-                      m <= TtsSettings.maxSleepMinutes;
-                      m += TtsSettings.sleepStepMinutes)
+                  ChoiceChip(
+                    key: const Key('tts-engine-online'),
+                    label: Text(TtsEngineKind.online.label),
+                    selected: _settings.engine == TtsEngineKind.online,
+                    onSelected: (_) => _emit(
+                      _settings.copyWith(engine: TtsEngineKind.online),
+                    ),
+                  ),
+                ],
+              ),
+              ListTile(
+                key: const Key('tts-online-config'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                leading: const Icon(Icons.settings_input_component_outlined),
+                title: const Text('在线 TTS 配置'),
+                subtitle: const Text('URL 模板 / OpenAI 兼容、请求头与编码'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _openOnlineConfig,
+              ),
+              const SizedBox(height: 8),
+            ],
+            Text('语速', style: theme.textTheme.labelLarge),
+            Row(
+              children: <Widget>[
+                const Icon(Icons.slow_motion_video, size: 20),
+                Expanded(
+                  child: Slider(
+                    key: const Key('tts-rate-slider'),
+                    value: TtsSettings.clampRate(_settings.rate),
+                    min: TtsSettings.minRate,
+                    max: TtsSettings.maxRate,
+                    divisions: 30,
+                    label: _rateLabel(_settings.rate),
+                    // 跟随系统语速时禁用（`TTS-04` 开关语义）。
+                    onChanged: _settings.followSystemRate
+                        ? null
+                        : (double value) =>
+                            _emit(_settings.copyWith(rate: value)),
+                  ),
+                ),
+                const Icon(Icons.speed, size: 20),
+              ],
+            ),
+            // 跟随系统语速（`TTS-04` 开关语义）：行 + MiSwitch（点开关即切）。
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      '跟随系统语速',
+                      style: theme.textTheme.bodyLarge,
+                    ),
+                  ),
+                  MiSwitch(
+                    key: const Key('tts-follow-rate'),
+                    value: _settings.followSystemRate,
+                    onChanged: (bool value) =>
+                        _emit(_settings.copyWith(followSystemRate: value)),
+                  ),
+                ],
+              ),
+            ),
+            // 音色（`TTS-04`②）：列表为空 = 平台无引擎查询面 → 不摆空区块。
+            if (hasVoices) ...<Widget>[
+              const SizedBox(height: 8),
+              Text('音色', style: theme.textTheme.labelLarge),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[
+                  ChoiceChip(
+                    key: const Key('tts-voice-default'),
+                    label: const Text('系统默认'),
+                    selected: _settings.voiceName == null,
+                    onSelected: (_) => _emitVoice(null),
+                  ),
+                  for (final TtsVoice voice in voices)
                     ChoiceChip(
-                      key: Key('tts-sleep-$m'),
-                      label: Text('$m 分钟'),
-                      selected: _settings.sleepMinutes == m,
-                      onSelected: (_) =>
-                          _emit(_settings.copyWith(sleepMinutes: m)),
+                      label: Text(voice.name.isEmpty
+                          ? voice.locale
+                          : voice.name),
+                      selected: _settings.voiceName == voice.name,
+                      onSelected: (_) => _emitVoice(voice),
                     ),
                 ],
               ),
             ],
-          ),
+            const SizedBox(height: 16),
+            Text('定时停止', style: theme.textTheme.labelLarge),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                ChoiceChip(
+                  key: const Key('tts-sleep-off'),
+                  label: const Text('关闭'),
+                  selected: _settings.sleepMinutes == 0,
+                  onSelected: (_) =>
+                      _emit(_settings.copyWith(sleepMinutes: 0)),
+                ),
+                for (int m = TtsSettings.minSleepMinutes;
+                    m <= TtsSettings.maxSleepMinutes;
+                    m += TtsSettings.sleepStepMinutes)
+                  ChoiceChip(
+                    key: Key('tts-sleep-$m'),
+                    label: Text('$m 分钟'),
+                    selected: _settings.sleepMinutes == m,
+                    onSelected: (_) =>
+                        _emit(_settings.copyWith(sleepMinutes: m)),
+                  ),
+              ],
+            ),
+          ],
         ),
       ),
     );

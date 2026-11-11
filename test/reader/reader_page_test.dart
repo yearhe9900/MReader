@@ -267,10 +267,12 @@ void main() {
       // （2026-11 拍板：目录 / 设置 / 更多从玻璃 GlassSheet 换 MiBottomSheet）。
       expect(find.byType(MiBottomSheet), findsOneWidget);
       // 列表行垫在抽屉的不透明表面上（`UI-04`「正文不透明」口径延续）。
+      // 祖先锚点用**表面 key** 而非 `MiBottomSheet` 类型：抽屉体经路由内
+      // `MiPopupHost` 渲染（与占位分支为兄弟），类型不再是行的祖先。
       expect(
         find.ancestor(
           of: find.byType(ListTile),
-          matching: find.byType(MiBottomSheet),
+          matching: find.byKey(MiBottomSheet.surfaceKey),
         ),
         findsWidgets,
       );

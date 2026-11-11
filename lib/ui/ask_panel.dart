@@ -20,9 +20,14 @@ import '../ai/provider_store.dart';
 import '../ai/rag.dart';
 import '../format/book_source.dart';
 import 'glass_kit.dart';
+import 'mi_sheet.dart';
 
-/// 弹出问答面板（底部弹窗；输入问题 → 检索 → 流式作答）。
-Future<void> showAskSheet(
+/// 弹出问答面板（mi_like 抽屉；输入问题 → 检索 → 流式作答）。
+///
+/// 引用跳转的关面板由**本函数**经抽屉 `close()` 收口（滑出动画后摘路由），
+/// [onJump] 只负责跳转 —— 与 [SearchSheet.onJump] 的「调用方关面板」契约等价，
+/// 收口动画归抽屉统一播放。
+void showAskSheet(
   BuildContext context, {
   required ProviderStore aiStore,
   required AiClient aiClient,
@@ -30,15 +35,17 @@ Future<void> showAskSheet(
   required Future<String> Function(int) loadText,
   required void Function(SearchHit hit, String query) onJump,
 }) {
-  return GlassOverlays.showSheet<void>(
+  showMiSheet(
     context: context,
-    isScrollable: false,
-    builder: (BuildContext sheetContext) => _AskSheet(
+    builder: (BuildContext sheetContext, VoidCallback close) => _AskSheet(
       aiStore: aiStore,
       aiClient: aiClient,
       ensureIndex: ensureIndex,
       loadText: loadText,
-      onJump: onJump,
+      onJump: (SearchHit hit, String query) {
+        close();
+        onJump(hit, query);
+      },
     ),
   );
 }
