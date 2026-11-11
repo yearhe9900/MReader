@@ -48,7 +48,6 @@ import '../platform/pdf_engine.dart';
 import '../settings/settings_store.dart';
 import '../stats/reading_session.dart';
 import '../stats/stats_service.dart';
-import '../sync/sync_trigger.dart';
 import '../task/search_session.dart';
 import '../tts/audio_session.dart';
 import '../tts/online_tts.dart';
@@ -173,7 +172,6 @@ class ReaderPage extends StatefulWidget {
     this.ttsEngine,
     this.ttsSettings,
     this.onlineTts,
-    this.syncTrigger,
     this.openTrace,
     this.initialJump,
     this.coverStore,
@@ -233,9 +231,6 @@ class ReaderPage extends StatefulWidget {
 
   /// 在线 TTS 配置（URL 模板 / OpenAI 兼容，`TTS-07`）。`null` = 只用系统引擎。
   final OnlineTtsStore? onlineTts;
-
-  /// 同步触发器（`SYNC-06`）：退出阅读页时上报本书进度。`null` = 只落本地盘。
-  final SyncTrigger? syncTrigger;
 
   /// 开书链路追踪（[OpenTrace]）：本页补齐阅读侧段落并输出 `open.total`（按下→首帧）。
   /// `null` = 未接线（测试 / 深链直进）：只打既有 [PerfLog] 分段点。
@@ -716,16 +711,7 @@ class _ReaderPageState extends State<ReaderPage>
     _ttsAudio = null;
     if (ttsAudio != null) unawaited(ttsAudio.end());
     _finishSession(); // 退出阅读页：停止计时并落库（`STAT-01`；写库只在此与切后台）
-    // 先落盘再上报（`SYNC-06`）：进度写完才触发同步，避免云端拿到旧值。
-    final SyncTrigger? trigger = widget.syncTrigger;
-    final Future<void> saved = _saveProgress();
-    if (trigger == null) {
-      unawaited(saved);
-    } else {
-      unawaited(
-        saved.whenComplete(() => trigger.onReaderClosed(widget.record)),
-      );
-    }
+    unawaited(_saveProgress());
     _imageCache.dispose();
     _controller?.dispose();
     _skeletonRevealTimeout?.cancel();

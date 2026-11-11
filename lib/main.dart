@@ -18,7 +18,6 @@ import 'ai/vocab_store.dart';
 import 'app.dart';
 import 'highperf/ffi/high_perf_ffi_engine.dart';
 import 'highperf/high_perf_registry.dart';
-import 'library/book_index.dart';
 import 'format/rust_kernel_source.dart';
 import 'library/library_repository.dart';
 import 'meta/cover_store.dart';
@@ -36,19 +35,7 @@ import 'settings/perf_prefs_store.dart';
 import 'settings/settings_store.dart';
 import 'settings/shelf_layout_store.dart';
 import 'settings/shelf_prefs_store.dart';
-import 'stats/session_store.dart';
 import 'stats/stats_service.dart';
-import 'stats/stats_sync.dart';
-import 'sync/backup.dart';
-import 'sync/book_upload.dart';
-import 'sync/bookmark_sync.dart';
-import 'sync/entry_sync.dart';
-import 'sync/progress_sync.dart';
-import 'sync/restore.dart';
-import 'sync/settings_sync.dart';
-import 'sync/sync_config_store.dart';
-import 'sync/sync_trigger.dart';
-import 'sync/webdav_client.dart';
 import 'tts/online_tts.dart';
 import 'tts/tts_settings.dart';
 import 'ui/glass_material.dart';
@@ -106,22 +93,14 @@ Future<void> main() async {
   // AI 底座（`AI-01`/`AI-08`/`AI-09`）——SecureStore（`DATA-02` 明文降级实现，
   // 后续接系统密钥库）→ 密钥门面 → 配置存储；AiClient 是全 AI 功能共用的
   // 流式 / 取消 / 并发闸出口。三者均为进程内唯一实例。
-  // 同一 SecureStore 实例同时供 AI Key（`ai.key.`）与 WebDAV 密码（`sync.password.`）
-  // 两个命名空间使用（`DATA-02`：凭据统一走安全存储，不散落多份实现）。
   final SecureStore secureStore = FileSecureStore(directory: dataDir);
   final ProviderStore aiStore = ProviderStore(dataDir, AiKeyVault(secureStore));
   final AiClient aiClient = AiClient();
-  // WebDAV 同步通道（`SYNC-01`/`SYNC-07`）——配置存储（密码经同一 SecureStore 的
-  // `sync.password.` 键）+ 纯 dart:io 客户端；进程内唯一实例，测试连接与后续
-  // 同步任务复用同一个 client（通道只做一遍）。
-  final SyncConfigStore syncStore =
-      SyncConfigStore(dataDir, SyncPasswordVault(secureStore));
-  final WebdavClient webdavClient = WebdavClient();
   // 生词本（`AI-03` ②③）——进程内唯一实例，笔记页 / 生词本页 / 阅读页释义面板
   // 共用；词条数很小，加载并入下面的并行等待（不占冷启动串行）。
   final VocabStore vocabStore = VocabStore(dataDir);
   // 摘要缓存（`AI-04`/`AI-05`）——目录 = PRD §10.3 `aiCache/`（全量备份按目录
-  // 整体收；WebDAV 同步默认关，本地缓存是验收硬要求）。
+  // 整体收；本地缓存是验收硬要求）。
   final SummaryCache summaryCache =
       SummaryCache(await appPaths.subDir('aiCache'));
   // 跟书问答索引（`AI-06`，PRD §8.3「索引本地持久化」）——与摘要缓存同目录
@@ -135,12 +114,6 @@ Future<void> main() async {
   // 在线 TTS 配置（`TTS-07`）——URL 模板 / OpenAI 兼容 + 音频缓存
   // （`<dataDir>/tts_audio`）；注入书架 → 阅读页，配置页在朗读设置面板内。
   final OnlineTtsStore onlineTts = OnlineTtsStore(dataDir);
-  // 书籍上传开关（`SYNC-05` ① 默认关）——与其余偏好同一形制，独立文件
-  // `book_upload.json`；加载并入下面的并行等待。
-  final BookUploadPrefsStore bookUploadPrefs = BookUploadPrefsStore(dataDir);
-  // 阅读统计同步开关（`STAT-08` ③ 默认开）——同一形制、独立文件
-  // `stats_sync.json`（缺失即开，fail-open）；加载并入下面的并行等待。
-  final StatsSyncPrefsStore statsSyncPrefs = StatsSyncPrefsStore(dataDir);
   await Future.wait(<Future<void>>[
     _warmUpGlassShaders(),
     settings.load(),
@@ -148,13 +121,10 @@ Future<void> main() async {
     shelfPrefs.load(),
     shelfLayout.load(),
     aiStore.load(),
-    syncStore.load(),
     vocabStore.load(),
     summaryCache.load(),
     ttsSettings.load(),
     onlineTts.load(),
-    bookUploadPrefs.load(),
-    statsSyncPrefs.load(),
     highPerf.warmUp(),
   ]);
 
@@ -198,74 +168,9 @@ Future<void> main() async {
   // 首次载入由统计页 initState 触发，不占冷启动串行等待）。
   final StatsService statsService = StatsService(appPaths);
 
-  // 同步编排链（`SYNC-06`/`SYNC-07`）——书签 / 阅读偏好存储先落（阅读页与条目
-  // 同步共用同一实例），六个引擎 + 触发器全部由组合根构造，进程内唯一实例。
-  // 触发器挂在 HomeShell 生命周期上（启动拉进度、退页 / 退 App 上报），入口页
-  // 是设置页「同步状态与备份」。
+  // 阅读页共用存储（书签 / 阅读偏好）——阅读页与各入口透传同一实例。
   final BookmarkStore bookmarkStore = BookmarkStore(appPaths);
   final ReadingPrefsStore readingPrefsStore = ReadingPrefsStore(appPaths);
-  final ProgressSyncState progressSyncState = ProgressSyncState(dataDir);
-  final ProgressSyncEngine progressSyncEngine = ProgressSyncEngine(
-    client: webdavClient,
-    progressStore: progressStore,
-    configStore: syncStore,
-    state: progressSyncState,
-  );
-  // BookIndex 无状态（load() 每次读盘）：触发器与书库各持一个实例互不干扰。
-  final IndexSync indexSync = IndexSync(
-    client: webdavClient,
-    index: BookIndex(appPaths),
-    configStore: syncStore,
-  );
-  final BookmarkSync bookmarkSync = BookmarkSync(
-    client: webdavClient,
-    store: bookmarkStore,
-    configStore: syncStore,
-  );
-  final SettingsSync settingsSync = SettingsSync(
-    client: webdavClient,
-    prefsStore: readingPrefsStore,
-    configStore: syncStore,
-  );
-  // 阅读统计跨设备并集同步（`STAT-08`）——远端 `stats/` 按月分片镜像本地
-  // SessionStore；开关默认开（缺失即 true），判定先于一切网络请求。
-  final StatsSync statsSync = StatsSync(
-    client: webdavClient,
-    sessionStore: SessionStore(appPaths),
-    configStore: syncStore,
-    prefs: statsSyncPrefs,
-  );
-  final BackupEngine backupEngine = BackupEngine(
-    paths: appPaths,
-    client: webdavClient,
-    configStore: syncStore,
-  );
-  final RestoreEngine restoreEngine = RestoreEngine(
-    paths: appPaths,
-    client: webdavClient,
-    configStore: syncStore,
-  );
-  final BookUploadEngine bookUploadEngine = BookUploadEngine(
-    client: webdavClient,
-    prefs: bookUploadPrefs,
-    configStore: syncStore,
-  );
-  final SyncTrigger syncTrigger = SyncTrigger(
-    progressEngine: progressSyncEngine,
-    indexEngine: indexSync,
-    bookmarkEngine: bookmarkSync,
-    settingsEngine: settingsSync,
-    statsEngine: statsSync,
-    backupEngine: backupEngine,
-    restoreEngine: restoreEngine,
-    bookUploadEngine: bookUploadEngine,
-    uploadPrefsStore: bookUploadPrefs,
-    statsPrefsStore: statsSyncPrefs,
-    syncState: progressSyncState,
-    syncConfig: syncStore,
-    booksLoader: repository.loadBooks,
-    bookFileResolver: repository.bookFile,
-  );
 
   // `UI-01` ②：`brightnessResolver: Theme.maybeBrightnessOf` 让玻璃控件跟随
   // **应用 ThemeMode**（light / dark / system），而非仅系统亮度。
@@ -298,11 +203,8 @@ Future<void> main() async {
           ragStore: ragIndexStore,
           ttsSettings: ttsSettings,
           onlineTts: onlineTts,
-          syncStore: syncStore,
-          syncClient: webdavClient,
           bookmarkStore: bookmarkStore,
           readingPrefsStore: readingPrefsStore,
-          syncTrigger: syncTrigger,
         ),
       ),
       brightnessResolver: Theme.maybeBrightnessOf,

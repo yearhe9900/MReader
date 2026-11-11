@@ -55,7 +55,6 @@ import '../reader/reading_prefs_store.dart';
 import '../settings/shelf_layout_store.dart';
 import '../settings/shelf_prefs_store.dart';
 import '../stats/stats_service.dart';
-import '../sync/sync_trigger.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
 import 'book_card.dart';
@@ -139,7 +138,6 @@ class ShelfPage extends StatefulWidget {
     this.onlineTts,
     this.bookmarkStore,
     this.readingPrefsStore,
-    this.syncTrigger,
     this.onSearchActiveChanged,
   });
 
@@ -184,9 +182,6 @@ class ShelfPage extends StatefulWidget {
 
   /// 阅读偏好存储（透传阅读页）。
   final ReadingPrefsStore? readingPrefsStore;
-
-  /// 同步触发器（透传阅读页：退出阅读页上报进度，`SYNC-06`）。
-  final SyncTrigger? syncTrigger;
 
   /// 搜索态进出通知（上游分类页 `onSearchActiveChanged` 同款）：壳层据此
   /// **卸掉浮动底栏 / 侧栏**——搜索态照参考素材是「整屏无 App 级导航」。
@@ -743,7 +738,6 @@ class ShelfPageState extends State<ShelfPage>
         onlineTts: widget.onlineTts,
         bookmarkStore: widget.bookmarkStore,
         readingPrefsStore: widget.readingPrefsStore,
-        syncTrigger: widget.syncTrigger,
         openTrace: trace,
         coverStore: widget.coverStore, // 骨架幕布显示本书封面（`_CoverSkeleton`）
       ),

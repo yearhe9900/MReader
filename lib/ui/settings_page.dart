@@ -44,17 +44,12 @@ import 'package:flutter/material.dart';
 import '../ai/ai_client.dart';
 import '../ai/provider_store.dart';
 import '../settings/settings_store.dart';
-import '../sync/sync_config_store.dart';
-import '../sync/sync_trigger.dart';
-import '../sync/webdav_client.dart';
 import '../theme/app_theme.dart';
 import 'ai_settings_page.dart';
 import 'home_shell.dart' show kShellBottomInset;
 import 'mi_like_ui/mi_like_ui.dart'
     show MiColors, MiDimens, MiThemeMode, MiTopBar, MiTopBarMetrics, MiViewport;
 import 'settings_kit.dart';
-import 'sync_settings_page.dart';
-import 'sync_status_page.dart';
 
 /// 页面内容的左右留白（上游「我的」页口径：手机档 11.9、宽屏档 32）。
 ///
@@ -71,9 +66,6 @@ class SettingsPage extends StatefulWidget {
     required this.settings,
     required this.aiStore,
     required this.aiClient,
-    this.syncStore,
-    this.syncClient,
-    this.syncTrigger,
     this.onOpenStats,
   });
 
@@ -85,20 +77,6 @@ class SettingsPage extends StatefulWidget {
 
   /// AI 客户端（注入 AI 设置页的测试连接）。
   final AiClient aiClient;
-
-  /// 同步配置存储（`SYNC-01`，「同步备份」组入口）。
-  ///
-  /// `null` = 未接线 → 本页同步组整体隐藏（与 `vocabStore` 等可选依赖
-  /// 同款降级口径）。
-  final SyncConfigStore? syncStore;
-
-  /// WebDAV 客户端（注入同步设置页的测试连接）；与 [syncStore] 同进同退。
-  final WebdavClient? syncClient;
-
-  /// 同步触发器（`SYNC-06/07`）：「同步状态与备份」页入口。
-  ///
-  /// `null` = 未接线 → 该入口不渲染（同步组其余入口不受影响）。
-  final SyncTrigger? syncTrigger;
 
   /// 统计页入口（统计移出底栏后收进本页的唯一入口）。
   ///
@@ -121,8 +99,6 @@ class _SettingsPageState extends State<SettingsPage> {
     super.initState();
     _scrollController.addListener(_syncScrollOffset);
     widget.settings.addListener(_onDepsChanged);
-    // 同步配置可选（`SYNC-01`）：订阅配置增删，「已配置 / 未配置」值不陈旧。
-    widget.syncStore?.addListener(_onDepsChanged);
   }
 
   @override
@@ -131,7 +107,6 @@ class _SettingsPageState extends State<SettingsPage> {
     _scrollController.dispose();
     _scrollOffset.dispose();
     widget.settings.removeListener(_onDepsChanged);
-    widget.syncStore?.removeListener(_onDepsChanged);
     super.dispose();
   }
 
@@ -203,7 +178,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       _buildStatsGroup(),
                       _buildAppearanceGroup(),
                       _buildAiGroup(),
-                      _buildSyncGroup(),
                     ],
                   ),
                 ),
@@ -287,52 +261,6 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
         ),
-      ],
-    );
-  }
-
-  /// 「同步备份」组（`SYNC-01`）：进同步设置页（连接配置 / 测试连接）。
-  ///
-  /// [SettingsPage.syncStore] / [SettingsPage.syncClient] 任一为 `null`
-  /// = 未接线 → 本组整体隐藏（既定降级口径，同 `vocabStore`）。
-  Widget _buildSyncGroup() {
-    final SyncConfigStore? syncStore = widget.syncStore;
-    final WebdavClient? syncClient = widget.syncClient;
-    final SyncTrigger? syncTrigger = widget.syncTrigger;
-    if (syncStore == null || syncClient == null) {
-      return const SizedBox.shrink();
-    }
-    return SettingsGroupCard(
-      children: <Widget>[
-        SettingsTile(
-          icon: Icons.sync_outlined,
-          accent: SettingsAccents.blue,
-          title: 'WebDAV 同步',
-          subtitle: '服务器地址 / 账号 / 测试连接',
-          value: syncStore.isConfigured ? '已配置' : '未配置',
-          onTap: () => Navigator.of(context).push<void>(
-            MaterialPageRoute<void>(
-              builder: (_) => SyncSettingsPage(
-                store: syncStore,
-                client: syncClient,
-              ),
-            ),
-          ),
-        ),
-        // 「同步状态与备份」：手动同步/备份/恢复 + 失败清单（`SYNC-07`）。
-        if (syncTrigger != null)
-          SettingsTile(
-            icon: Icons.cloud_sync_outlined,
-            accent: SettingsAccents.blue,
-            title: '同步状态与备份',
-            subtitle: '立即同步 / 备份 / 从云端恢复',
-            value: syncTrigger.isRunning ? '同步中' : '查看',
-            onTap: () => Navigator.of(context).push<void>(
-              MaterialPageRoute<void>(
-                builder: (_) => SyncStatusPage(trigger: syncTrigger),
-              ),
-            ),
-          ),
       ],
     );
   }
