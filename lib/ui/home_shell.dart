@@ -63,6 +63,7 @@ import '../stats/stats_service.dart';
 import '../tts/online_tts.dart';
 import '../tts/tts_settings.dart';
 import 'glass_nav_host.dart';
+import 'scroll_sigma.dart';
 import 'mi_like_ui/mi_like_ui.dart';
 import 'notes_page.dart';
 import 'nav_icons.dart';
@@ -463,13 +464,20 @@ class _HomeShellState extends State<HomeShell> {
                 ),
                 child: Align(
                   alignment: Alignment.topLeft,
-                  child: GlassSideNavHost(
-                    items: items,
-                    selectedIndex: _index,
-                    onTabSelected: _select,
-                    themeMode: mode,
-                    // 绿色圆钮挂在栏尾下方（选中「书架」时弹出）。
-                    fab: _buildFab(),
+                  child: ValueListenableBuilder<double>(
+                    // 栏体磨砂的 σ 随滚动速度降档（`ScrollSigma.shared`：书架
+                    // 滚动时 backdrop 每帧重算，运动掩蔽下压 σ、停稳回满档）。
+                    valueListenable: ScrollSigma.shared,
+                    builder: (BuildContext context, double sigmaScale, _) =>
+                        GlassSideNavHost(
+                      items: items,
+                      selectedIndex: _index,
+                      onTabSelected: _select,
+                      themeMode: mode,
+                      // 绿色圆钮挂在栏尾下方（选中「书架」时弹出）。
+                      fab: _buildFab(),
+                      sigmaScale: sigmaScale,
+                    ),
                   ),
                 ),
               ),
@@ -489,12 +497,18 @@ class _HomeShellState extends State<HomeShell> {
               left: 0,
               right: 0,
               bottom: kShellNavBarBottomLift,
-              child: GlassNavHost(
-                items: items,
-                selectedIndex: _index,
-                onTabSelected: _select,
-                themeMode: mode,
-                fab: _buildFab(),
+              child: ValueListenableBuilder<double>(
+                // 栏体磨砂的 σ 随滚动速度降档（同侧栏；`ScrollSigma.shared`）。
+                valueListenable: ScrollSigma.shared,
+                builder: (BuildContext context, double sigmaScale, _) =>
+                    GlassNavHost(
+                  items: items,
+                  selectedIndex: _index,
+                  onTabSelected: _select,
+                  themeMode: mode,
+                  fab: _buildFab(),
+                  sigmaScale: sigmaScale,
+                ),
               ),
             ),
         ],

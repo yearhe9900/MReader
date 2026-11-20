@@ -567,9 +567,12 @@ class MiTopBar extends StatefulWidget {
   ///  * σ 缩放量化到 0.05 档 —— [MiFilterCache] 以 σ 为键，连续 σScale 会
   ///    让每帧每段都新建 native filter（缓存形同虚设）；0.05 档在运动中
   ///    仍是渐变观感；
-  ///  * 快速运动（scale ≤ 0.8）把 9 段阶梯**合并成 3 段**（段高加权 σ）：
+  ///  * 快速运动（scale < 1.0）把 9 段阶梯**合并成 3 段**（段高加权 σ）：
   ///    运动掩蔽下曲线细节不可辨，全宽高斯却从 9 趟降到 3 趟（每帧最贵的
-  ///    一块）；停下后 scale 回 1.0，自动恢复完整阶梯。
+  ///    一块）；停下后 scale 回 1.0，自动恢复完整阶梯。阈值从上游的 ≤0.8
+  ///    放宽到「只要在动」（2026-11-20 书架归因压测：慢速滚动时段阶梯
+  ///    σ≈0.85 仍走 9 趟，光栅 p50 ≈14.5ms @2.1M px，是运动中最大单块；
+  ///    阶梯只在**静止**时可辨，而静止时 backdrop 不变、本来就不重算）。
   ///
   /// 几何按 [extent] / [MiHeaderBlurProfile.nominalExtent] 等比拉伸。
   /// 深色开叠色时，α = 1 的实心段之内那段模糊 100% 不可见，照旧跳过
@@ -589,7 +592,7 @@ class MiTopBar extends StatefulWidget {
   }) {
     if (extent <= 0) return const <MiTopBarBlurBand>[];
     final scale = (sigmaScale * 20).roundToDouble() / 20;
-    final fast = scale <= 0.8;
+    final bool fast = scale < 1.0;
     final k = extent / MiHeaderBlurProfile.nominalExtent;
     // 压色实心段下沿：叠色 gradient 的 stop 是比例值，随盒子等比拉长
     final opaque = underSurface

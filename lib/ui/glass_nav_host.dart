@@ -22,6 +22,7 @@ class GlassNavHost extends StatelessWidget {
     required this.onTabSelected,
     required this.themeMode,
     this.fab,
+    this.sigmaScale = 1.0,
     super.key,
   });
 
@@ -39,6 +40,10 @@ class GlassNavHost extends StatelessWidget {
 
   /// 预留空位圆钮（`null` = 不启用）。
   final MiGlassNavFab? fab;
+
+  /// 栏体 backdrop 磨砂的 σ 缩放（1.0 = 满档；宿主按滚动速度下发，
+  /// 见 `ScrollSigma.shared` 运动降档链路）。
+  final double sigmaScale;
 
   @override
   Widget build(BuildContext context) {
@@ -65,6 +70,7 @@ class GlassNavHost extends StatelessWidget {
       onTap: onTabSelected,
       themeMode: themeMode,
       fab: fab,
+      sigmaScale: sigmaScale,
     );
   }
 }
@@ -92,6 +98,7 @@ class GlassSideNavHost extends StatelessWidget {
     required this.onTabSelected,
     required this.themeMode,
     this.fab,
+    this.sigmaScale = 1.0,
     super.key,
   });
 
@@ -109,6 +116,10 @@ class GlassSideNavHost extends StatelessWidget {
 
   /// 预留空位圆钮（`null` = 不启用；侧栏形态挂在**栏尾下方**）。
   final MiGlassNavFab? fab;
+
+  /// 栏体 backdrop 磨砂的 σ 缩放（1.0 = 满档；宿主按滚动速度下发，
+  /// 见 `ScrollSigma.shared` 运动降档链路）。
+  final double sigmaScale;
 
   @override
   Widget build(BuildContext context) {
@@ -137,6 +148,7 @@ class GlassSideNavHost extends StatelessWidget {
       onTap: onTabSelected,
       themeMode: themeMode,
       fab: fab,
+      sigmaScale: sigmaScale,
     );
   }
 }

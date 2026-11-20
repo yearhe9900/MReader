@@ -23,6 +23,14 @@ class ScrollSigma extends ValueNotifier<double> {
   /// 初始值 1.0 = 静止满档。
   ScrollSigma() : super(1.0);
 
+  /// 进程内共享的「当前 σ 缩放」（1.0 = 静止 / 无书架在滚）。
+  ///
+  /// 降档结论**不止头部磨砂要听**：玻璃底栏等不在书架子树内、backdrop 同样
+  /// 每帧随滚动内容重算的磨砂零件也该在运动中降档；它们拿不到书架的
+  /// `ScrollController`，故由 [attach] 的实例把量化后的档位同步到这里
+  /// （进程内单书架；实例销毁时复位 1.0）。
+  static final ValueNotifier<double> shared = ValueNotifier<double>(1.0);
+
   /// 满速参考（dp/s）：常规滑动 600…1500，取 1200 封顶（上游同值）。
   static const double vRef = 1200;
 
@@ -63,11 +71,13 @@ class ScrollSigma extends ValueNotifier<double> {
     final double target = 1 - (1 - minScale) * (_speed / vRef).clamp(0.0, 1.0);
     // 量化只护 filter 缓存；同档不触发通知（换档才重建模糊层）。
     value = (target * 20).roundToDouble() / 20;
+    shared.value = value;
   }
 
   @override
   void dispose() {
     _controller?.removeListener(_onScroll);
+    shared.value = 1.0;
     super.dispose();
   }
 }

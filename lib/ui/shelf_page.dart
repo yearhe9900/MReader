@@ -213,6 +213,13 @@ class ShelfPageState extends State<ShelfPage>
   /// 只重建头部两层零件。
   final ValueNotifier<double> _headerRim = ValueNotifier<double>(0);
 
+  /// 亮边 + 磨砂 σ 降档的合并监听（两路变化都要重建头部零件，见
+  /// `_buildHeader` 的 [ListenableBuilder]）。
+  late final Listenable _headerParts = Listenable.merge(<Listenable>[
+    _headerRim,
+    _headerSigma,
+  ]);
+
   /// 头部磨砂的 σ 缩放（滚动速度 → 0.6…1.0，见 [ScrollSigma]）：运动时降档、
   /// 停稳回满档，避免每帧按满档 9 段铺全宽高斯。
   final ScrollSigma _headerSigma = ScrollSigma();
@@ -894,7 +901,15 @@ class ShelfPageState extends State<ShelfPage>
                       // 让位 = 状态栏高（原 AppBar = 状态栏 + toolbarHeight
                       // 同口径；桌面 / 测试 padding=0 → 0，无悬空带）。
                       headerTopInset: MediaQuery.paddingOf(context).top,
-                      showBlur: true,
+                      // ⚠️ `showBlur: false`——头部磨砂的**唯一**出处是页内
+                      // `_buildHeaderBlur`（`_buildBookGrid` 的 Positioned）。
+                      // 壳迁移 mi_like（711fcaf）时这里叠进了 MiTopBar 自带的
+                      // 同款 `headerBlurBands` 第二栈：同一条9段曲线在同一区域铺
+                      // 两遍 = 每帧 18 趟全宽高斯，是书架滚动丢帧主因（2026-11-20
+                      // 归因压测：仅去重一项，光栅 p50 −17ms @2.1M px）。保留页内栈：
+                      // 它挂着 `ScrollSigma` 运动 σ 降档，且两栈的曲线 / 覆盖区
+                      // （`materialExtent` = `topInset + headerHeight`）本就逐项相同。
+                      showBlur: false,
                       showSurface: false, // 头部区不压色（同原玻璃顶栏）
                     ),
                   ),
@@ -1000,17 +1015,19 @@ class ShelfPageState extends State<ShelfPage>
                 // 搜索胶囊铺满剩余宽（「全宽」形态）；搜索态由右侧取消钮
                 // （宽度随 t 展开）挤出让位，右缘因此平滑左移。
                 Expanded(
-                  child: ValueListenableBuilder<double>(
-                    valueListenable: _headerRim,
-                    builder: (BuildContext context, double rim, _) =>
-                        _BookSearchEntry(
+                  child: ListenableBuilder(
+                    // 内缘亮边随滚动渐亮、玻璃膜 σ 随滚动速度降档（运动掩蔽）——
+                    // 两路变化都要触发重建（合一个 [_headerParts]）。
+                    listenable: _headerParts,
+                    builder: (BuildContext context, _) => _BookSearchEntry(
                       onTap: _enterSearch,
                       searching: _searching,
                       controller: _searchController,
                       focusNode: _searchFocus,
                       onChanged: _onQueryChanged,
                       mode: mode,
-                      rimProgress: rim,
+                      rimProgress: _headerRim.value,
+                      sigmaScale: _headerSigma.value,
                     ),
                   ),
                 ),
@@ -1064,15 +1081,16 @@ class ShelfPageState extends State<ShelfPage>
                   padding: const EdgeInsets.only(top: kShelfHeaderRowGap),
                   child: SizedBox(
                     height: kShelfChipsRowHeight,
-                    child: ValueListenableBuilder<double>(
-                      valueListenable: _headerRim,
-                      builder: (BuildContext context, double rim, _) =>
+                    child: ListenableBuilder(
+                      listenable: _headerParts,
+                      builder: (BuildContext context, _) =>
                           // ⚠️ `visible` 是**搜索态**可见度：常规内容（胶囊行）要取
                           // `1 - visible`——直接用它会让胶囊行在常规态 alpha 归零
                           // （整条分组胶囊行消失）。
                           _buildGroupFilterBar(
-                            rimProgress: rim,
+                            rimProgress: _headerRim.value,
                             fade: 1 - visible,
+                            sigmaScale: _headerSigma.value,
                           ),
                     ),
                   ),
@@ -1107,6 +1125,7 @@ class ShelfPageState extends State<ShelfPage>
   Widget _buildGroupFilterBar({
     double rimProgress = 1.0,
     double fade = 1.0,
+    double sigmaScale = 1.0,
   }) {
     final String? selected = widget.shelfPrefs.prefs.groupId;
     // 选中分组已消失（书被删空）→ 视作「全部」，高亮随之回到「全部」。
@@ -1138,6 +1157,8 @@ class ShelfPageState extends State<ShelfPage>
               themeMode: navThemeModeOf(context),
               // 内缘亮边随滚动渐亮（映射同 `MiTopBarMetrics.rimFadeDistance`）。
               rimProgress: rimProgress,
+              // 磨砂 σ 随滚动速度降档（`ScrollSigma` 运动掩蔽，同头部磨砂）。
+              sigmaScale: sigmaScale,
               // 搜索态淡出（系数乘进各处 alpha，不套 `Opacity`——胶囊行内含
               // backdrop 磨砂，saveLayer 会让磨砂整段消失）。
               fade: fade,
@@ -1289,6 +1310,11 @@ class ShelfPageState extends State<ShelfPage>
   /// 那出自 884×1920 低清素材，压缩软化下不可分辨渐变；1220×2656 原生素材
   /// 逐深度 erf 拟合给出 7.6…9.0 / 3.2…4.4 / ≈0.4dp）。
   ///
+  /// ⚠️ 本层是头部磨砂的**唯一**出处：2026-11-20 归因压测发现壳迁移 mi_like
+  /// （`711fcaf`）叠进的 `MiTopBar(showBlur: true)` 第二栈与本层同曲线、同覆盖区
+  /// （`materialExtent` = `topInset + headerHeight`），已置 `showBlur: false`
+  /// 去重——每帧 18 趟全宽高斯回到 9 趟，光栅 p50 −17ms @2.1M px（桌面压测）。
+  ///
   /// 分段定 σ 阶梯由 `MiTopBar.headerBlurBands` 给出（σ 已量化 0.05 档护
   /// [MiFilterCache]）。
   ///
@@ -1396,6 +1422,7 @@ class _BookSearchEntry extends StatelessWidget {
     this.focusNode,
     this.onChanged,
     this.rimProgress = 1.0,
+    this.sigmaScale = 1.0,
   });
 
   /// 常规态点击回调（进入搜索态）。
@@ -1418,6 +1445,9 @@ class _BookSearchEntry extends StatelessWidget {
   /// `MiTopBarMetrics.rimFadeDistance`）。
   final double rimProgress;
 
+  /// 磨砂 σ 缩放（父级按 [ScrollSigma] 运动降档下发，静止 1.0）。
+  final double sigmaScale;
+
   @override
   Widget build(BuildContext context) {
     return MiSearchBar(
@@ -1438,6 +1468,8 @@ class _BookSearchEntry extends StatelessWidget {
       // 它的「透明模糊属性」——旧口径（顶栏画磨砂时关零件 backdrop）会让
       // 胶囊像不透明色块。
       frosted: true,
+      // 磨砂 σ 随滚动速度降档（运动掩蔽，同头部9段磨砂的 ScrollSigma 链路）。
+      sigmaScale: sigmaScale,
       // 压在书卡上：垫玻璃膜（膜取页底色 ⇒ 静止态观感不变）
       overContent: true,
       rimProgress: rimProgress,

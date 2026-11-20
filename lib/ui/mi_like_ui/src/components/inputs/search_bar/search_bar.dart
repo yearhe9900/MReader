@@ -47,6 +47,7 @@ class MiSearchBar extends StatelessWidget {
     this.onTap,
     this.themeMode,
     this.frosted = true,
+    this.sigmaScale = 1.0,
     this.overContent = false,
     this.rimProgress = 1.0,
     this.editable = false,
@@ -76,6 +77,12 @@ class MiSearchBar extends StatelessWidget {
   /// 既让栏内比周围更糊（与「统一材质」相悖），也多一份每帧全 QUAD 开销。
   /// 只保留半透明填充：平底合成仍等于素材度量实色。
   final bool frosted;
+
+  /// 自绘 backdrop 磨砂的 σ 缩放（默认 1.0 = 满档；[MiTransparencyTokens.frostSigma]）。
+  ///
+  /// 宿主按滚动速度下发（书架 `ScrollSigma` 运动降档链路）：滚动时 backdrop
+  /// 每帧重算，运动掩蔽下 σ 略降不可辨，停稳回 1.0。
+  final double sigmaScale;
 
   /// 是否铺**玻璃膜**（默认 false）—— 压在照片/视频等内容上时开启。
   ///
@@ -139,8 +146,10 @@ class MiSearchBar extends StatelessWidget {
       clipper: const MiSquircleClipper(MiDimens.radiusPill),
       child: frosted
           ? BackdropFilter(
-              // σ 固定 → 复用缓存的 native filter（每帧重建是纯开销）
-              filter: MiFilterCache.blur(MiTransparencyTokens.blurSigma),
+              // σ 档位有限（0.05 量化）→ 复用缓存的 native filter（每帧重建是纯开销）
+              filter: MiFilterCache.blur(
+                MiTransparencyTokens.frostSigma(sigmaScale),
+              ),
               child: _content(palette, fill),
             )
           : _content(palette, fill),

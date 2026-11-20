@@ -62,6 +62,7 @@ class MiGlassSideNavBar extends StatefulWidget {
     this.fab,
     this.themeMode,
     this.expanded = false,
+    this.sigmaScale = 1.0,
   });
   // items 数量、fab 适配与 fab.tabIndex 范围校验均在 initState：const 构造
   // 断言不支持 `.length` / 参数字段求值（放构造器会封死 const 构造，
@@ -85,6 +86,12 @@ class MiGlassSideNavBar extends StatefulWidget {
   /// 明暗模式：决定玻璃材质配方与标签墨色；null = 跟随 [MiTheme]，
   /// 未声明时默认深色（行为与旧版一致）。
   final MiThemeMode? themeMode;
+
+  /// 自绘 backdrop 磨砂的 σ 缩放（默认 1.0 = 满档；[MiTransparencyTokens.frostSigma]）。
+  ///
+  /// 宿主按滚动速度下发（书架 `ScrollSigma` 运动降档链路）：栏下方内容滚动时
+  /// backdrop 每帧重算，运动中压 σ、停稳回满档。
+  final double sigmaScale;
 
   /// 是否**展开**（带文字标签的常驻侧栏，桌面档）。
   ///
@@ -329,8 +336,10 @@ class _MiGlassSideNavBarState extends State<MiGlassSideNavBar>
     Widget glass = ClipPath(
       clipper: const MiSquircleClipper(MiGlassSideNavMetrics.railRadius),
       child: BackdropFilter(
-        // σ 固定 → 复用缓存的 native filter
-        filter: MiFilterCache.blur(MiTransparencyTokens.blurSigma),
+        // σ 档位有限（0.05 量化）→ 复用缓存的 native filter
+        filter: MiFilterCache.blur(
+          MiTransparencyTokens.frostSigma(widget.sigmaScale),
+        ),
         child: Stack(
           fit: StackFit.expand,
           children: [

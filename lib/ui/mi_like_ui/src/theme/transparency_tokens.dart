@@ -33,6 +33,16 @@ class MiTransparencyTokens {
   /// 误当 dp 用（28dp 会糊 3 倍），10.3 / 5.5 是两轮修偏 —— 真值 ≈28px。
   static const double blurSigma = 9.0;
 
+  /// 零件磨砂的**运动降档** σ：σ 缩放（0.6…1.0，`ScrollSigma` 滚动速度链路）
+  /// 乘 [blurSigma]，缩放量化到 0.05 档（护 [MiFilterCache] 的 σ 键缓存——
+  /// 连续缩放会让每帧新建 native filter），只降不升（>1 钳到 1）。
+  ///
+  /// 运动掩蔽下磨砂强度略降不可辨（上游首页高刷实证结论）；静止恒回满档。
+  static double frostSigma(double sigmaScale) {
+    final double scale = (sigmaScale * 20).roundToDouble() / 20;
+    return blurSigma * scale.clamp(0.0, 1.0);
+  }
+
   /// 顶栏渐进曲线的**平台段** σ（dp）。取 10-90% 边缘宽度 42.7px 换算：
   /// σ = 42.7 / 2.563 × 0.32213 = 5.37dp（频谱比法在 67.5dp 给出 4.34dp、
   /// 90dp 处 1.85dp，与衰减曲线一致）。

@@ -49,6 +49,7 @@ class MiPillTabBar extends StatelessWidget {
     this.textInset = MiPillTabMetrics.adaptiveTextInset,
     this.themeMode,
     this.frosted = true,
+    this.sigmaScale = 1.0,
     this.overContent = false,
     this.rimProgress = 1.0,
     this.fade = 1.0,
@@ -56,6 +57,7 @@ class MiPillTabBar extends StatelessWidget {
         assert(minItemWidth > 0),
         assert(maxItemWidth >= minItemWidth),
         assert(textInset >= 0),
+        assert(sigmaScale > 0),
         assert(fade >= 0 && fade <= 1);
   // labels 非空与 selectedIndex 范围校验见 build()：const 构造断言不支持
   // .length 求值（放构造器会封死 const 构造）
@@ -95,6 +97,12 @@ class MiPillTabBar extends StatelessWidget {
   /// `false`：磨砂由顶栏那条渐进曲线统一提供，否则胶囊比周围更糊、且多一份
   /// 每帧全 QUAD 高斯。只保留半透明填充。
   final bool frosted;
+
+  /// 自绘 backdrop 磨砂的 σ 缩放（默认 1.0 = 满档；[MiTransparencyTokens.frostSigma]）。
+  ///
+  /// 宿主按滚动速度下发（书架 `ScrollSigma` 运动降档链路）：行磨砂的 backdrop
+  /// 同样每帧随滚动内容重算，运动中压 σ、停稳回满档。
+  final double sigmaScale;
 
   /// 未选胶囊是否垫**行区玻璃膜带**（默认 false）。
   ///
@@ -249,8 +257,9 @@ class MiPillTabBar extends StatelessWidget {
                       height: MiPillTabMetrics.pillHeight,
                     ),
                     child: BackdropFilter(
-                      filter:
-                          MiFilterCache.blur(MiTransparencyTokens.blurSigma),
+                      filter: MiFilterCache.blur(
+                        MiTransparencyTokens.frostSigma(sigmaScale),
+                      ),
                       child: const SizedBox.expand(),
                     ),
                   ),
