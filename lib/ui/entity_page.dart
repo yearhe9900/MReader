@@ -25,7 +25,15 @@ import '../ai/provider_store.dart';
 import '../ai/summary_cache.dart';
 import '../model/chapter.dart';
 import 'mi_like_ui/mi_like_ui.dart'
-    show MiColors, MiThemeMode, MiTopBar, MiTopBarMetrics;
+    show
+        MiColors,
+        MiDialog,
+        MiDialogAction,
+        MiDialogActionStyle,
+        MiThemeMode,
+        MiTopBar,
+        MiTopBarMetrics,
+        showMiDialog;
 
 /// 生成范围（`AI-07` ③）。
 enum EntityRange {
@@ -105,10 +113,13 @@ class _EntityPageState extends State<EntityPage> {
             widget.aiStore.configFor(AiUseCase.chat);
     if (cfg == null) {
       if (!mounted) return;
+      final String msg =
+          '尚未配置 AI 服务：请先在「设置 → AI 服务」中添加配置并勾选用途';
       setState(() {
         _preparing = false;
-        _err = '尚未配置 AI 服务：请先在「设置 → AI 服务」中添加配置并勾选用途';
+        _err = msg;
       });
+      _showErrorDialog('提示', msg);
       return;
     }
     String? key;
@@ -119,11 +130,13 @@ class _EntityPageState extends State<EntityPage> {
     }
     if (!mounted) return;
     if (key == null || key.isEmpty) {
+      final String msg = '尚未设置 API Key：请在该配置中填写密钥';
       setState(() {
         _config = cfg;
         _preparing = false;
-        _err = '尚未设置 API Key：请在该配置中填写密钥';
+        _err = msg;
       });
+      _showErrorDialog('提示', msg);
       return;
     }
     setState(() {
@@ -140,6 +153,7 @@ class _EntityPageState extends State<EntityPage> {
     _autoStarted.add(_range);
     if (widget.chapters.isEmpty) {
       setState(() => _err = '这本书没有可梳理的章节');
+      _showErrorDialog('提示', '这本书没有可梳理的章节');
       return;
     }
     _start();
@@ -210,13 +224,18 @@ class _EntityPageState extends State<EntityPage> {
             }
           }
         });
+        if (outcome.cancelled && outcome.items.isEmpty) {
+          _showErrorDialog('提示', '已中断且无结果，可点击重试');
+        }
       },
     ).catchError((Object error) {
       if (!mounted) return;
+      final String msg = error is AiException ? error.message : '$error';
       setState(() {
         _running = false;
-        _err = error is AiException ? error.message : '$error';
+        _err = msg;
       });
+      _showErrorDialog('梳理失败', msg);
     });
   }
 
@@ -373,19 +392,34 @@ class _EntityPageState extends State<EntityPage> {
     );
   }
 
+  /// 错误 → 弹框提醒（2026-11-25 取代输出区驻留红字，同 ask_panel）。
+  void _showErrorDialog(String title, String message) {
+    // 错误可能在 initState 的同步链上触发（无配置即同步出错）：路由 push 不能
+    // 发生在 build 期（navigator._debugLocked 断言），推迟到帧后弹。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showMiDialog(
+        context,
+        dialog: MiDialog(
+          title: title,
+          message: message,
+          messageAlign: TextAlign.start,
+          actions: <MiDialogAction>[
+            MiDialogAction(
+              label: '知道了',
+              style: MiDialogActionStyle.filled,
+              onPressed: () {},
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
   /// 输出区：加载 / 错误 / 抽取中 / 空完成 / 清单（含进度与中断提示）五态。
   Widget _buildBody(ThemeData theme) {
     if (_preparing) {
       return _statusRow(theme, '正在准备…');
-    }
-    if (_err != null) {
-      return SingleChildScrollView(
-        child: Text(
-          _err!,
-          key: const Key('entity-error'),
-          style: TextStyle(color: theme.colorScheme.error),
-        ),
-      );
     }
     if (_running && _items.isEmpty) {
       return _statusRow(
@@ -393,9 +427,12 @@ class _EntityPageState extends State<EntityPage> {
         _total > 0 ? '正在抽取（$_done/$_total 段）…' : '正在抽取…',
       );
     }
-    if (_emptyDone) {
+    if (_emptyDone || (_err != null && _items.isEmpty)) {
       return Text(
-        '未抽取到实体，可点击重新生成。',
+        // 无配置/密钥（_canRetry 假）时弹框已带引导，正文只留中性占位。
+        _err != null && !_canRetry
+            ? '暂无内容。'
+            : '未抽取到实体，可点击重新生成。',
         key: const Key('entity-empty'),
         style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
       );

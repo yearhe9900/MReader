@@ -19,7 +19,13 @@ import '../ai/provider_config.dart';
 import '../ai/provider_store.dart';
 import '../ai/rag.dart';
 import '../format/book_source.dart';
-import 'mi_like_ui/mi_like_ui.dart' show MiSnackbar;
+import 'mi_like_ui/mi_like_ui.dart'
+    show
+        MiDialog,
+        MiDialogAction,
+        MiDialogActionStyle,
+        MiSnackbar,
+        showMiDialog;
 import 'mi_sheet.dart';
 
 /// 弹出问答面板（mi_like 抽屉；输入问题 → 检索 → 流式作答）。
@@ -115,10 +121,13 @@ class _AskSheetState extends State<_AskSheet> {
             widget.aiStore.configFor(AiUseCase.summarize);
     if (cfg == null) {
       if (!mounted) return;
+      final String msg =
+          '尚未配置 AI 服务：请先在「设置 → AI 服务」中添加配置并勾选用途';
       setState(() {
         _preparing = false;
-        _err = '尚未配置 AI 服务：请先在「设置 → AI 服务」中添加配置并勾选用途';
+        _err = msg;
       });
+      _showErrorDialog('提示', msg);
       return;
     }
     String? key;
@@ -129,11 +138,13 @@ class _AskSheetState extends State<_AskSheet> {
     }
     if (!mounted) return;
     if (key == null || key.isEmpty) {
+      final String msg = '尚未设置 API Key：请在该配置中填写密钥';
       setState(() {
         _config = cfg;
         _preparing = false;
-        _err = '尚未设置 API Key：请在该配置中填写密钥';
+        _err = msg;
       });
+      _showErrorDialog('提示', msg);
       return;
     }
     setState(() {
@@ -189,6 +200,7 @@ class _AskSheetState extends State<_AskSheet> {
         _retrieving = false;
         _err = '检索失败：$error';
       });
+      _showErrorDialog('问答失败', '检索失败：$error');
       return;
     }
     if (!mounted) return;
@@ -235,15 +247,18 @@ class _AskSheetState extends State<_AskSheet> {
           if (!mounted) return;
           setState(() {
             _running = false;
+            // 「已停止」是用户主动中断的回执、不是错误 → 不弹框（静默回空闲）。
             if (outcome.cancelled && _out.isEmpty) _err = '已停止';
           });
         })
         .catchError((Object error) {
           if (!mounted) return;
+          final String msg = error is AiException ? error.message : '$error';
           setState(() {
             _running = false;
-            _err = error is AiException ? error.message : '$error';
+            _err = msg;
           });
+          _showErrorDialog('问答失败', msg);
         });
   }
 
@@ -356,19 +371,36 @@ class _AskSheetState extends State<_AskSheet> {
     );
   }
 
+  /// 错误 → 弹框提醒（2026-11-25 取代输出区驻留红字：面积大且只能靠重试/
+  /// 关闭才消）。弹框点「知道了」/ 遮罩 / 系统返回即关；[_err] 仍照常记录，
+  /// 驱动底部「重试」钮与空闲态回落。
+  void _showErrorDialog(String title, String message) {
+    // 错误可能在 initState 的同步链上触发（无配置即同步出错）：路由 push 不能
+    // 发生在 build 期（navigator._debugLocked 断言），推迟到帧后弹。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showMiDialog(
+        context,
+        dialog: MiDialog(
+          title: title,
+          message: message,
+          messageAlign: TextAlign.start,
+          actions: <MiDialogAction>[
+            MiDialogAction(
+              label: '知道了',
+              style: MiDialogActionStyle.filled,
+              onPressed: () {},
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
   /// 输出区：准备 / 检索 / 流式 / 错误 / 空闲 五态 + 引用条目。
   Widget _buildBody(ThemeData theme) {
     if (_preparing) {
       return _statusRow(theme, '正在准备…');
-    }
-    if (_err != null) {
-      return SingleChildScrollView(
-        child: Text(
-          _err!,
-          key: const Key('ask-error'),
-          style: TextStyle(color: theme.colorScheme.error),
-        ),
-      );
     }
     if (_retrieving) {
       return _statusRow(theme, '正在检索相关片段…');
@@ -376,7 +408,7 @@ class _AskSheetState extends State<_AskSheet> {
     if (_running && _out.isEmpty) {
       return _statusRow(theme, '正在生成回答…');
     }
-    if (_emptyDone) {
+    if (_emptyDone || (_err != null && _out.isEmpty)) {
       return Text(
         _restricted ? '最保守模式下问答受限，可关闭。' : '输入问题，检索本书作答。',
         style: TextStyle(color: theme.colorScheme.onSurfaceVariant),

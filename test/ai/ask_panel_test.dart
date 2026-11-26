@@ -416,9 +416,15 @@ void main() {
     );
 
     expect(find.text('服务端错误（500）'), findsOneWidget);
-    expect(find.byKey(const Key('ask-error')), findsOneWidget);
+    // 错误改走弹框（2026-11-25 取代输出区驻留红字）。
+    expect(find.text('知道了'), findsOneWidget);
     expect(find.text('重试'), findsOneWidget);
 
+    // 先关弹框（遮罩会挡住底部「重试」）。输入框仍聚焦（光标闪烁）不能
+    // pumpAndSettle，用定帧推进零转场的关框。
+    await tester.tap(find.text('知道了'));
+    await tester.pump();
+    await tester.pump();
     // 输入框仍聚焦（光标闪烁）：不能 pumpAndSettle，直接 tap（画面已静止）。
     await tester.tap(find.text('重试'));
     await settleUntil(

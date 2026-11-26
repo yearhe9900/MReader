@@ -235,10 +235,8 @@ void main() {
     // 壳换 [MiTopBar] 后大标题与紧凑标题同文案（两段式收起的驱动层，恒 2 个，
     // 同 `settings_page_test` 的「我的」口径）。
     expect(find.text('人物与设定'), findsNWidgets(2));
-    expect(
-      find.byKey(const Key('entity-error')),
-      findsOneWidget,
-    );
+    // 错误改走弹框（2026-11-25 取代输出区驻留红字）。
+    expect(find.text('知道了'), findsOneWidget);
     expect(
       find.text('尚未配置 AI 服务：请先在「设置 → AI 服务」中添加配置并勾选用途'),
       findsOneWidget,
@@ -408,11 +406,16 @@ void main() {
 
     final int err = await settleUntil(
       tester,
-      done: () => find.byKey(const Key('entity-error')).evaluate().isNotEmpty,
+      done: () => find.text('知道了').evaluate().isNotEmpty,
     );
     expect(err, lessThan(150));
     expect(find.text('重试'), findsOneWidget);
     expect(find.text('停止'), findsNothing);
+
+    // 先关错误弹框（遮罩挡钮），再点重试。
+    await tester.tap(find.text('知道了'));
+    await tester.pump();
+    await tester.pump();
 
     await tester.tap(find.byKey(const Key('entity-retry')));
     final int ok = await settleUntil(tester, done: runSettled);
@@ -447,7 +450,8 @@ void main() {
     await tester.tap(find.byKey(const Key('entity-stop')));
     final int stopped = await settleUntil(
       tester,
-      done: () => find.byKey(const Key('entity-error')).evaluate().isNotEmpty,
+      done: () =>
+          find.text('已中断且无结果，可点击重试').evaluate().isNotEmpty,
     );
     expect(stopped, lessThan(150));
     expect(find.text('已中断且无结果，可点击重试'), findsOneWidget);

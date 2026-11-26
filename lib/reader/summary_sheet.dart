@@ -17,7 +17,8 @@ import '../ai/recap.dart';
 import '../ai/summarize.dart';
 import '../ai/summary_cache.dart';
 import '../model/chapter.dart';
-import '../ui/mi_like_ui/mi_like_ui.dart' show MiSnackbar;
+import '../ui/mi_like_ui/mi_like_ui.dart'
+    show MiDialog, MiDialogAction, MiDialogActionStyle, MiSnackbar, showMiDialog;
 import '../ui/mi_sheet.dart';
 
 /// 面板模式（`AI-04` 章节 / `AI-05` 全书 / `AI-05` 前情回顾）。
@@ -125,10 +126,13 @@ class _SummarySheetState extends State<_SummarySheet> {
             widget.aiStore.configFor(AiUseCase.chat);
     if (cfg == null) {
       if (!mounted) return;
+      final String msg =
+          '尚未配置 AI 服务：请先在「设置 → AI 服务」中添加配置并勾选用途';
       setState(() {
         _preparing = false;
-        _err = '尚未配置 AI 服务：请先在「设置 → AI 服务」中添加配置并勾选用途';
+        _err = msg;
       });
+      _showErrorDialog('提示', msg);
       return;
     }
     String? key;
@@ -139,11 +143,13 @@ class _SummarySheetState extends State<_SummarySheet> {
     }
     if (!mounted) return;
     if (key == null || key.isEmpty) {
+      final String msg = '尚未设置 API Key：请在该配置中填写密钥';
       setState(() {
         _config = cfg;
         _preparing = false;
-        _err = '尚未设置 API Key：请在该配置中填写密钥';
+        _err = msg;
       });
+      _showErrorDialog('提示', msg);
       return;
     }
     String? text;
@@ -168,6 +174,7 @@ class _SummarySheetState extends State<_SummarySheet> {
     _autoStarted.add(_mode);
     if (widget.chapters.isEmpty) {
       setState(() => _err = '这本书没有可摘要的章节');
+      _showErrorDialog('提示', '这本书没有可摘要的章节');
       return;
     }
     if (_mode == SummaryMode.chapter) {
@@ -182,6 +189,7 @@ class _SummarySheetState extends State<_SummarySheet> {
       final String? text = _chapterText;
       if (text == null || text.trim().isEmpty) {
         setState(() => _err = '本章没有可摘要的正文');
+        _showErrorDialog('提示', '本章没有可摘要的正文');
         return;
       }
     }
@@ -287,28 +295,37 @@ class _SummarySheetState extends State<_SummarySheet> {
     future.then(
       (SummaryOutcome outcome) {
         if (!mounted) return;
+        // 提示文案先算出来：弹框与 [_err] 共用一份，避免两处漂移。
+        final String? errMsg;
+        if (outcome.cancelled) {
+          errMsg = outcome.text.isEmpty && _out.isEmpty
+              ? '已中断（完成 ${outcome.chaptersDone}/${outcome.chaptersTotal} 章），'
+                  '再次生成可从断点续做'
+              : null;
+        } else if (outcome.isEmpty && _out.isEmpty) {
+          errMsg = '未生成内容，可点击重试';
+        } else {
+          errMsg = null;
+        }
         setState(() {
           _running = false;
           if (outcome.text.isNotEmpty) _out = outcome.text;
           _fromCache = outcome.fromCache;
           _done = outcome.chaptersDone;
           _total = outcome.chaptersTotal;
-          if (outcome.cancelled) {
-            _err = outcome.text.isEmpty && _out.isEmpty
-                ? '已中断（完成 ${outcome.chaptersDone}/${outcome.chaptersTotal} 章），'
-                    '再次生成可从断点续做'
-                : null;
-          } else if (outcome.isEmpty && _out.isEmpty) {
-            _err = '未生成内容，可点击重试';
-          }
+          _err = errMsg;
         });
+        // 「已中断可续做 / 未生成内容」也走弹框（2026-11-25 取代驻留红字）。
+        if (errMsg != null) _showErrorDialog('提示', errMsg);
       },
     ).catchError((Object error) {
       if (!mounted) return;
+      final String msg = error is AiException ? error.message : '$error';
       setState(() {
         _running = false;
-        _err = error is AiException ? error.message : '$error';
+        _err = msg;
       });
+      _showErrorDialog('摘要失败', msg);
     });
   }
 
@@ -510,19 +527,34 @@ class _SummarySheetState extends State<_SummarySheet> {
     );
   }
 
+  /// 错误 → 弹框提醒（2026-11-25 取代输出区驻留红字，同 ask_panel）。
+  void _showErrorDialog(String title, String message) {
+    // 错误可能在 initState 的同步链上触发（无配置即同步出错）：路由 push 不能
+    // 发生在 build 期（navigator._debugLocked 断言），推迟到帧后弹。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showMiDialog(
+        context,
+        dialog: MiDialog(
+          title: title,
+          message: message,
+          messageAlign: TextAlign.start,
+          actions: <MiDialogAction>[
+            MiDialogAction(
+              label: '知道了',
+              style: MiDialogActionStyle.filled,
+              onPressed: () {},
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
   /// 输出区：加载 / 流式输出 / 进度 / 错误 / 空完成 五态。
   Widget _buildBody(ThemeData theme) {
     if (_preparing) {
       return _statusRow(theme, '正在准备…');
-    }
-    if (_err != null) {
-      return SingleChildScrollView(
-        child: Text(
-          _err!,
-          key: const Key('summary-error'),
-          style: TextStyle(color: theme.colorScheme.error),
-        ),
-      );
     }
     final bool showProgress = _running &&
         (_mode != SummaryMode.chapter || _out.isEmpty);
@@ -532,9 +564,12 @@ class _SummarySheetState extends State<_SummarySheet> {
           : '正在生成章摘要（$_done/$_total）…';
       return _statusRow(theme, label);
     }
-    if (_emptyDone) {
+    if (_emptyDone || (_err != null && _out.isEmpty)) {
       return Text(
-        '未生成内容，可点击重试。',
+        // 无配置/密钥（_canRetry 假）时弹框已带引导，正文只留中性占位。
+        _err != null && !_canRetry
+            ? '暂无内容。'
+            : '未生成内容，可点击重试。',
         style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
       );
     }

@@ -946,6 +946,32 @@ class _ReaderPageState extends State<ReaderPage>
       setState(() => _error = error);
       // 失败也要放行滑入——转场被「按住」时没有其他退出路径。
       _signalOpenReady();
+      // 打开失败改走错误弹框（2026-11-25 取代整页居中红字：面积大、只能手动
+      // 返回且页面只剩空白）。弹框「知道了」/ 遮罩 / 系统返回关闭后直接退回
+      // 书架；[_buildBody] 的错误分支保留作兑底（正常到不了）。
+      final String message = error is MReaderFormatException
+          ? error.message
+          : '打开失败：$error';
+      // 路由 push 不能发生在 build 期（_debugLocked 断言），推迟到帧后弹。
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await showMiDialog(
+          context,
+          dialog: MiDialog(
+            title: '打开失败',
+            message: message,
+            messageAlign: TextAlign.start,
+            actions: <MiDialogAction>[
+              MiDialogAction(
+                label: '知道了',
+                style: MiDialogActionStyle.filled,
+                onPressed: () {},
+              ),
+            ],
+          ),
+        );
+        if (mounted) Navigator.of(context).maybePop();
+      });
     }
   }
 

@@ -1,0 +1,28 @@
+PODS:
+  - flutter_tts (0.0.1):
+    - FlutterMacOS
+  - FlutterMacOS (1.0.0)
+  - rust_lib_mreader (0.0.1):
+    - FlutterMacOS
+
+DEPENDENCIES:
+  - flutter_tts (from `Flutter/ephemeral/.symlinks/plugins/flutter_tts/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - rust_lib_mreader (from `Flutter/ephemeral/.symlinks/plugins/rust_lib_mreader/macos`)
+
+EXTERNAL SOURCES:
+  flutter_tts:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_tts/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  rust_lib_mreader:
+    :path: Flutter/ephemeral/.symlinks/plugins/rust_lib_mreader/macos
+
+SPEC CHECKSUMS:
+  flutter_tts: ae915565cc6948444b513acc8ee021993281e027
+  FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
+  rust_lib_mreader: cc0e30a0bebc25bfa0323ebc2f8eee2c1644b97b
+
+PODFILE CHECKSUM: 1e95c36afbfd1cb6423ceca4de7a8e1b256fb6ac
+
+COCOAPODS: 1.17.0

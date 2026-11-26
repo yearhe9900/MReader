@@ -5,7 +5,7 @@
 //     + 网格 [BookCard]（封面缩略图 + 书名 + 作者·进度）；
 //   · 内容 edge-to-edge（`extendBody: true`）从头部下穿过、透出磨砂模糊（`UI-02` ②）；
 //     首行保护 = 网格 `padding.top` 留出头部高（[shelfGridPadding]）；
-//   · 导入 = `FilePicker` 多选 → 逐个 `importFile`（进度 + 失败清单）；删除 = 长按书卡
+//   · 导入 = `FilePicker` 多选 → 逐个 `importFile`（进度 + 失败弹框）；删除 = 长按书卡
 //     → 长按弹框 → 删除确认框（均 mi_like_ui `MiDialog`）→ `deleteBook`（`LIB-06`
 //     二次确认）+ 连带清理进度；
 //   · 点击书卡 = **直接进阅读页**；长按「书籍详情」是详情页**唯一**入口（`META-08`）；
@@ -61,7 +61,6 @@ import 'book_card.dart';
 import 'book_detail_page.dart';
 import 'glass_kit.dart';
 import 'glass_nav_host.dart' show navThemeModeOf;
-import 'home_shell.dart' show kShellBottomInset;
 import 'mi_like_ui/mi_like_ui.dart'
     show
         MiColors,
@@ -82,7 +81,8 @@ import 'mi_like_ui/mi_like_ui.dart'
         MiTopBar,
         MiTopBarBlurBand,
         MiTopBarMetrics,
-        MiTopBarPalette;
+        MiTopBarPalette,
+        showMiDialog;
 import 'scroll_sigma.dart';
 import 'shelf_grid.dart';
 
@@ -198,7 +198,6 @@ class ShelfPageState extends State<ShelfPage>
   List<BookRecord> _books = <BookRecord>[];
   bool _loading = true;
   bool _importing = false;
-  List<String> _importErrors = <String>[];
 
   /// 防重复开书：覆盖 **push → 关书**（`route.popped` 即释放）——防连点叠两个
   /// 阅读页；关书即释放，之后首点不被吞。
@@ -474,10 +473,6 @@ class ShelfPageState extends State<ShelfPage>
   /// 「更多」菜单「添加图书」项触发（`HomeShell` 经 GlobalKey 调本方法，
   /// 原顶部加号按钮已移除）；空态引导按钮仍调本方法（`LIB-01` ②）。
   Future<void> pickAndImport() async {
-    setState(() {
-      _importErrors = <String>[];
-    });
-
     final ({FileType type, List<String>? allowedExtensions}) options =
         importPickerOptions();
     final FilePickerResult? result = await FilePicker.platform.pickFiles(
@@ -517,23 +512,23 @@ class ShelfPageState extends State<ShelfPage>
     if (!mounted) return;
     setState(() {
       _importing = false;
-      _importErrors = errors;
     });
 
     // 刷新列表
     await _loadBooks();
 
-    // 显示导入结果摘要
-    if (mounted && (success > 0 || errors.isNotEmpty)) {
-      final String msg = errors.isEmpty
-          ? '成功导入 $success 本'
-          : '成功 $success 本，失败 ${errors.length} 本';
-      // 轻提示走 [MiSnackbar]（经壳层 `MiPopupHost` 投放）：壳层无 Material
-      // `Scaffold`，`ScaffoldMessenger.showSnackBar` 会断言失败。
-      // 导入摘要信息量大，保留 3s 常驻（snackbar 默认 2.5s）。
+    if (!mounted) return;
+    if (errors.isNotEmpty) {
+      // 失败改走错误弹框（2026-11-25）：原「网格下方常驻失败清单」红底通栏、
+      // 面积大，且只能靠下一次导入才清掉，用户无法主动消除。弹框点「知道了」/
+      // 遮罩 / 系统返回即关；明细超卡高时 MiDialog 正文区内部滚动不溢出。
+      await _showImportErrors(success, errors);
+    } else if (success > 0) {
+      // 全部成功仍走轻提示 [MiSnackbar]（经壳层 `MiPopupHost` 投放）：壳层无
+      // Material `Scaffold`，`ScaffoldMessenger.showSnackBar` 会断言失败。
       MiSnackbar.show(
         context,
-        message: msg,
+        message: '成功导入 $success 本',
         duration: const Duration(seconds: 3),
       );
     }
@@ -856,8 +851,6 @@ class ShelfPageState extends State<ShelfPage>
                                 ? _buildNoMatchState(theme)
                                 : _buildBookGrid(topInset),
                           ),
-                          if (_importErrors.isNotEmpty)
-                            _buildErrorList(theme),
                         ],
                       ),
       ),
@@ -1239,10 +1232,6 @@ class ShelfPageState extends State<ShelfPage>
               icon: const Icon(Icons.folder_open),
               label: const Text('导入书籍'),
             ),
-            if (_importErrors.isNotEmpty) ...<Widget>[
-              const SizedBox(height: 16),
-              _buildErrorList(theme),
-            ],
           ],
         ),
       ),
@@ -1363,30 +1352,30 @@ class ShelfPageState extends State<ShelfPage>
     );
   }
 
-  /// 导入失败清单（LIB-04 验收要点 ②）。
+  /// 导入失败 → 错误弹框（mi_like_ui [MiDialog] 按钮形态，2026-11-25 取代原
+  /// 网格下方常驻失败清单）。点「知道了」/ 遮罩 / 系统返回即关，不粘连页面；
+  /// 正文逐条列出失败原因（明细超卡高时正文区内部滚动）。
   ///
-  /// 贴在网格下方，因此也要为壳层浮动胶囊留出底部空白（[kShellBottomInset]），
-  /// 否则清单末行会被胶囊盖住。
-  Widget _buildErrorList(ThemeData theme) {
-    return Container(
-      color: theme.colorScheme.errorContainer,
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8 + kShellBottomInset),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Text(
-            '导入失败 ${_importErrors.length} 项',
-            style: theme.textTheme.labelLarge?.copyWith(
-              color: theme.colorScheme.onErrorContainer,
-            ),
+  /// [success] = 同批成功的本数（混合结果写进首行，全失败省略）。
+  Future<void> _showImportErrors(int success, List<String> errors) async {
+    final String detail = errors.map((String e) => '· $e').join('\n');
+    final String message = success > 0
+        ? '成功 $success 本，失败 ${errors.length} 本\n\n$detail'
+        : detail;
+    await showMiDialog(
+      context,
+      dialog: MiDialog(
+        title: '导入失败 ${errors.length} 项',
+        message: message,
+        // 多行明细左对齐（同长按弹框口径，`messageAlign` 默认居中不读）。
+        messageAlign: TextAlign.start,
+        themeMode: navThemeModeOf(context),
+        actions: <MiDialogAction>[
+          MiDialogAction(
+            label: '知道了',
+            style: MiDialogActionStyle.filled,
+            onPressed: () {},
           ),
-          ..._importErrors.map((String e) => Text(
-                e,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onErrorContainer,
-                ),
-              )),
         ],
       ),
     );

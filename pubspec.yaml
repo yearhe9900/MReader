@@ -105,3 +105,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+dependency_overrides:
+  # image 4.11.0 的 png_decoder 调用 ZLibDecoder.decodeLazy（archive ≥4.4.0 才有），
+  # 与精确锁定的 archive 4.3.0 不兼容 → 降级到不使用该 API 的 4.10.2
+  # （仍满足 pdfrx_engine 的 image ^4.8.0 约束）。待 archive 解锁后可移除。
+  image: 4.10.2

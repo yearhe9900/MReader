@@ -358,7 +358,10 @@ void main() {
     expect(find.text('服务端错误（500）'), findsOneWidget);
     expect(find.text('重试'), findsOneWidget);
 
-    await tester.pumpAndSettle(); // 等入场动画收束，避免 tap 打在动画帧上
+    // 先关错误弹框（遮罩挡钮），再点重试；定帧推进零转场的关框。
+    await tester.tap(find.text('知道了'));
+    await tester.pump();
+    await tester.pump();
     await tester.tap(find.text('重试'));
     await settleUntil(
       tester,
@@ -416,12 +419,18 @@ void main() {
           find.textContaining('已中断（完成 1/3 章）').evaluate().isNotEmpty,
     );
     expect(find.byKey(const Key('summary-stop')), findsNothing);
-    expect(find.byKey(const Key('summary-error')), findsOneWidget);
+    // 中断提示改走弹框（2026-11-25 取代输出区驻留红字）。
+    expect(find.text('知道了'), findsOneWidget);
     expect(
       find.textContaining('已中断（完成 1/3 章）'),
       findsOneWidget,
     );
     expect(chapterCalls, 2);
+
+    // 先关弹框（遮罩挡钮），再点继续。
+    await tester.tap(find.text('知道了'));
+    await tester.pump();
+    await tester.pump();
 
     // 继续：第 1 章命中缓存跳过，只补第 2、3 章 + 合并（`AI-05` ③）。
     holdSecond = false;

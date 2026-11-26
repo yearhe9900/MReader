@@ -327,6 +327,10 @@ void main() {
     expect(find.text('服务端错误（500）'), findsOneWidget);
     expect(find.text('重试'), findsOneWidget);
 
+    // 先关错误弹框（遮罩挡钮），再点重试。
+    await tester.tap(find.text('知道了'));
+    await tester.pump();
+    await tester.pump();
     await tester.tap(find.text('重试'));
     await settleReal(tester);
 
@@ -388,6 +392,11 @@ void main() {
       find.text('本次发送：选中文本 + 前后段落（共 12 字）'),
       findsNothing,
     );
+
+    // 无配置错误改走弹框（2026-11-25）：先关弹框（遮罩挡钮）再关面板。
+    await tester.tap(find.text('知道了'));
+    await tester.pump();
+    await tester.pump();
 
     await tester.tap(find.text('关闭'));
     await tester.pumpAndSettle();
