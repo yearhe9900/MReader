@@ -97,47 +97,55 @@ class ImportService {
     // 4. 副本判据：用**刚落盘副本**的 mtime/size（复用池条目的 key）
     final BookInstanceKey? cacheKey = await _keyFor(bookId, destPath);
 
-    // 5. 解析元数据（内核为唯一实现；产物由调用方入复用池）
-    final BookSource source = await openBook(
-      fileName: fileName,
-      bytes: bytes,
-    );
-    final BookMeta meta;
+    // 5~7. 解析元数据 → 封面物化 → 构造记录。
+    //
+    // **任一步失败都必须同时清掉「刚落盘的副本」与「已建的书源」**：
+    // 批量导入时单本失败若漏清理 = 泄漏一份整本字节 + 一个内核句柄 + 一个
+    // 无索引引用的孤儿文件，几百本累积足以把进程内存吃穿（闪退）。
+    BookSource? source;
     try {
-      meta = await source.load();
+      source = await openBook(
+        fileName: fileName,
+        bytes: bytes,
+      );
+      final BookMeta meta = await source.load();
+
+      // 封面物化（`PendingCover` → `StoredCover`；其它类型原样保留）
+      CoverRef cover = meta.cover;
+      if (cover is PendingCover) {
+        cover = await _coverStore.materialize(bookId: bookId, pending: cover);
+      }
+
+      // 构造记录（带入 intro + 四来源标记：新导入的书来源天然正确，`META-08 ②`）
+      return ImportOutcome(
+        source: source,
+        cacheKey: cacheKey,
+        record: BookRecord(
+          bookId: bookId,
+          fileName: fileName,
+          filePath: destFileName,
+          title: meta.title,
+          author: meta.author,
+          format: format,
+          cover: cover,
+          importedAt: DateTime.now().millisecondsSinceEpoch,
+          intro: meta.intro,
+          titleOrigin: meta.titleOrigin,
+          authorOrigin: meta.authorOrigin,
+          introOrigin: meta.introOrigin,
+          coverOrigin: meta.coverOrigin,
+        ),
+      );
     } catch (_) {
-      // 解析失败：销毁源 + 清掉刚落盘的副本，绝不留无索引引用的孤儿文件。
-      await source.dispose();
+      // 清理失败静默：导入本来就失败，不再叠加新错误。
+      if (source != null) {
+        try {
+          await source.dispose();
+        } catch (_) {}
+      }
       await _deleteQuietly(destPath);
       rethrow;
     }
-
-    // 6. 封面物化（`PendingCover` → `StoredCover`；其它类型原样保留）
-    CoverRef cover = meta.cover;
-    if (cover is PendingCover) {
-      cover = await _coverStore.materialize(bookId: bookId, pending: cover);
-    }
-
-    // 7. 构造记录（带入 intro + 四来源标记：新导入的书来源天然正确，`META-08 ②`）
-    return ImportOutcome(
-      source: source,
-      cacheKey: cacheKey,
-      record: BookRecord(
-        bookId: bookId,
-        fileName: fileName,
-        filePath: destFileName,
-        title: meta.title,
-        author: meta.author,
-        format: format,
-        cover: cover,
-        importedAt: DateTime.now().millisecondsSinceEpoch,
-        intro: meta.intro,
-        titleOrigin: meta.titleOrigin,
-        authorOrigin: meta.authorOrigin,
-        introOrigin: meta.introOrigin,
-        coverOrigin: meta.coverOrigin,
-      ),
-    );
   }
 
   /// 副本判据（`bookId + mtime + size`）；stat 失败 → `null`（不入复用池）。

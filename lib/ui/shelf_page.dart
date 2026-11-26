@@ -28,7 +28,7 @@
 //
 // 状态管理：`StatefulWidget` + `setState`（禁 Riverpod / Provider）。
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -475,10 +475,14 @@ class ShelfPageState extends State<ShelfPage>
   Future<void> pickAndImport() async {
     final ({FileType type, List<String>? allowedExtensions}) options =
         importPickerOptions();
+    // `withData: false`（批量导入闪退修复）：`withData: true` 会在**原生侧**把
+    // 每个选中文件整本读成 `byte[]`（Android 还要再经通道拷一份进 Dart），
+    // 选 N 本书 = 原生堆与 Dart 堆同时被「全部文件字节之和」占满 → OOM 闪退。
+    // 改为只拿路径，循环里**逐本**读盘、用完即弃：峰值内存 = 单本大小。
     final FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: options.type,
       allowedExtensions: options.allowedExtensions,
-      withData: true,
+      withData: false,
       allowMultiple: true,
     );
     if (result == null || result.files.isEmpty) return;
@@ -489,10 +493,21 @@ class ShelfPageState extends State<ShelfPage>
     int success = 0;
     final List<String> errors = <String>[];
     for (final PlatformFile file in result.files) {
-      final Uint8List? bytes = file.bytes;
+      // 逐本现读（`withData: false` 后 `bytes` 恒空 → 按 `path` 读）：本轮读完
+      // 即导入、导入完即失去引用，下一本才读，绝不把整批字节同时握在手里。
+      Uint8List? bytes = file.bytes;
       if (bytes == null || bytes.isEmpty) {
-        errors.add('${file.name}：未能读取文件内容');
-        continue;
+        final String? path = file.path;
+        try {
+          bytes =
+              (path == null || path.isEmpty) ? null : await File(path).readAsBytes();
+        } catch (_) {
+          bytes = null; // 路径失效 / 无权限 / 读到一半失败 → 与「读不到」同口径
+        }
+        if (bytes == null || bytes.isEmpty) {
+          errors.add('${file.name}：未能读取文件内容');
+          continue;
+        }
       }
       try {
         final ImportResult importResult = await widget.repository.importFile(

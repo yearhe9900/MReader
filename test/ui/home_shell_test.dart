@@ -15,6 +15,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mreader/ai/ai_client.dart';
 import 'package:mreader/ai/provider_store.dart';
 import 'package:mreader/ai/secure_key_store.dart';
+import 'package:mreader/library/book_record.dart';
 import 'package:mreader/library/library_repository.dart';
 import 'package:mreader/meta/cover_store.dart';
 import 'package:mreader/platform/secure_store_io.dart';
@@ -28,12 +29,13 @@ import 'package:mreader/ui/home_shell.dart';
 import 'package:mreader/ui/mi_like_ui/mi_like_ui.dart'
     show MiGlassNavMetrics, MiGlassNavBar, MiSearchCancelButton;
 import 'package:mreader/ui/shelf_page.dart'
-    show importPickerOptions, shelfSortLabel;
+    show ShelfPage, ShelfPageState, importPickerOptions, shelfSortLabel;
 
 import '../reader/reader_harness.dart';
 import '../test_config.dart';
 
-/// 假 [FilePicker]：记录 `pickFiles` 调用与关键参数，返回 null（用户取消）。
+/// 假 [FilePicker]：记录 `pickFiles` 调用与关键参数，返回 [result]（默认 null =
+/// 用户取消）。
 ///
 /// ⚠️ 必须 `extends`（不是 `implements`）：`FilePicker.platform` 的 setter 会
 /// `PlatformInterface.verifyToken` 校验实例携带 file_picker 私有 token，只有
@@ -44,6 +46,14 @@ class _RecordingFilePicker extends FilePicker {
   FileType? lastType;
   List<String>? lastAllowedExtensions;
   bool? lastAllowMultiple;
+
+  /// **批量导入闪退回归闸**：必须恒为 `false`——`withData: true` 会在原生侧把
+  /// 整批选中文件读成 `byte[]`，几百本 = 原生堆 + Dart 堆同时被全部字节占满 →
+  /// OOM 闪退。
+  bool? lastWithData;
+
+  /// 非 null 时返回给 `pickFiles` 调用方（模拟选中了文件）。
+  FilePickerResult? result;
 
   @override
   Future<FilePickerResult?> pickFiles({
@@ -64,7 +74,8 @@ class _RecordingFilePicker extends FilePicker {
     lastType = type;
     lastAllowedExtensions = allowedExtensions;
     lastAllowMultiple = allowMultiple;
-    return null;
+    lastWithData = withData;
+    return result;
   }
 }
 
@@ -167,8 +178,52 @@ void main() {
         'azw3',
       ], reason: 'MOBI/AZW3 等已支持格式必须能在导入选择器里选中');
       expect(picker.lastAllowMultiple, isTrue);
+      expect(picker.lastWithData, isFalse,
+          reason: '批量导入闪退根因：withData: true 会在原生侧把整批选中文件'
+              '一次性读成 byte[] → OOM 杀进程；只能拿路径逐本现读');
 
       // 拆树排空（各页 initState 起的真 IO），避免 tearDown 删目录竞态。
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 60)),
+      );
+      await settle(tester, rounds: 10);
+    });
+
+    testWidgets('假选择器只给 path（bytes 为空）→ 按 path 现读也能导入成功',
+        (tester) async {
+      // 钉住 `withData: false` 之后的新读取口径：选择器不再回传字节，导入必须
+      // 改从 `path` 逐本读盘；否则所有导入都落进「未能读取文件内容」的失败分支。
+      tester.view.physicalSize = const Size(393, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(buildShell());
+      await settle(tester, rounds: 30);
+
+      final File book = File('${tempDir.path}${Platform.pathSeparator}批量导入.txt')
+        ..writeAsStringSync('第一行\n第二行\n');
+      picker.result = FilePickerResult(<PlatformFile>[
+        PlatformFile(
+          path: book.path,
+          name: '批量导入.txt',
+          size: book.lengthSync(),
+          // bytes 故意不给：模拟 `withData: false` 的真实返回。
+        ),
+      ]);
+
+      final ShelfPageState shelfState =
+          tester.state<ShelfPageState>(find.byType(ShelfPage));
+      // 读盘 / 判重 / 内核解析 / 落盘都是真 IO，必须在 runAsync 的真实事件循环里跑。
+      await tester.runAsync(() => shelfState.pickAndImport());
+
+      final List<BookRecord> books =
+          (await tester.runAsync(() => repo.loadBooks()))!;
+      expect(books, hasLength(1), reason: 'bytes 为空时按 path 现读必须导入成功');
+      expect(books.single.fileName, '批量导入.txt');
+      expect(picker.lastWithData, isFalse, reason: '同上：不得回退到整批预载字节');
+
+      // 拆树排空（导入链路的真 IO 尾巴），避免 tearDown 删目录竞态。
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 60)),
